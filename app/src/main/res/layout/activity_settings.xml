@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 车机设置（双栏：左菜单 210dp / 右内容）——对照 design/launcher-proto.html。
+     尺寸折算：应用屏超采样 ×1.5 后密度 ≈301dpi，stream 像素 ≈ dp×1.25，故原型 px ÷ 1.25 = dp。
+     右栏内容按菜单切换（管理桌面应用 / 应用超采样）。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="#FF000000">
+
+    <!-- ===================== 左栏：菜单 ===================== -->
+    <LinearLayout
+        android:id="@+id/settingsMenu"
+        android:layout_width="210dp"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingLeft="10dp"
+        android:paddingRight="10dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="12dp">
+
+        <TextView
+            android:id="@+id/btnBack"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?android:attr/selectableItemBackground"
+            android:drawableLeft="@drawable/ic_chevron_left"
+            android:drawablePadding="4dp"
+            android:gravity="center_vertical"
+            android:paddingLeft="4dp"
+            android:paddingTop="6dp"
+            android:paddingRight="10dp"
+            android:paddingBottom="6dp"
+            android:text="桌面"
+            android:textColor="#FF0A84FF"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="8dp"
+            android:layout_marginTop="12dp"
+            android:layout_marginRight="8dp"
+            android:letterSpacing="0.14"
+            android:text="车机设置"
+            android:textColor="#FF636366"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/menuDesktopApps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="7dp"
+            android:background="@drawable/bg_menu_item"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="9dp">
+
+            <ImageView
+                android:layout_width="23dp"
+                android:layout_height="23dp"
+                android:background="@drawable/bg_menu_chip"
+                android:importantForAccessibility="no"
+                android:padding="5dp"
+                android:src="@drawable/ic_menu_grid" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="9dp"
+                android:text="管理桌面应用"
+                android:textColor="#FFF5F5F7"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/menuSupersample"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="9dp">
+
+            <ImageView
+                android:layout_width="23dp"
+                android:layout_height="23dp"
+                android:background="@drawable/bg_menu_chip"
+                android:importantForAccessibility="no"
+                android:padding="5dp"
+                android:src="@drawable/ic_menu_zoom" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="9dp"
+                android:text="应用超采样"
+                android:textColor="#FF8E8E93"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/menuOrientation"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="9dp">
+
+            <ImageView
+                android:layout_width="23dp"
+                android:layout_height="23dp"
+                android:background="@drawable/bg_menu_chip"
+                android:importantForAccessibility="no"
+                android:padding="5dp"
+                android:src="@drawable/ic_screen_rotation" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="9dp"
+                android:text="应用横屏"
+                android:textColor="#FF8E8E93"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/menuDock"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="9dp">
+
+            <ImageView
+                android:layout_width="23dp"
+                android:layout_height="23dp"
+                android:background="@drawable/bg_menu_chip"
+                android:importantForAccessibility="no"
+                android:padding="5dp"
+                android:src="@drawable/ic_menu_dock" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="9dp"
+                android:text="dock 栏设置"
+                android:textColor="#FF8E8E93"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/menuDefaultMap"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="9dp">
+
+            <ImageView
+                android:layout_width="23dp"
+                android:layout_height="23dp"
+                android:background="@drawable/bg_menu_chip"
+                android:importantForAccessibility="no"
+                android:padding="5dp"
+                android:src="@drawable/ic_menu_map" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="9dp"
+                android:text="默认地图"
+                android:textColor="#FF8E8E93"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/menuDisplay"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="9dp">
+
+            <ImageView
+                android:layout_width="23dp"
+                android:layout_height="23dp"
+                android:background="@drawable/bg_menu_chip"
+                android:importantForAccessibility="no"
+                android:padding="5dp"
+                android:src="@drawable/ic_menu_display" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="9dp"
+                android:text="显示"
+                android:textColor="#FF8E8E93"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <View
+        android:layout_width="1px"
+        android:layout_height="match_parent"
+        android:background="#FF1E1E21" />
+
+    <!-- ===================== 右栏：内容（按菜单切换） ===================== -->
+    <FrameLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1">
+
+        <!-- 右栏：内容 Fragment 容器（车机双栏 / 手机二级菜单共用面板） -->
+        <FrameLayout
+            android:id="@+id/settingsContainer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_weight="1" />
+
+        <!-- 轻提示（页内 Toast；淡入淡出由代码控制） -->
+        <TextView
+            android:id="@+id/settingsToast"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="21dp"
+            android:alpha="0"
+            android:background="@drawable/bg_settings_toast"
+            android:paddingLeft="13dp"
+            android:paddingTop="7dp"
+            android:paddingRight="13dp"
+            android:paddingBottom="7dp"
+            android:textColor="#FFE5E5EA"
+            android:textSize="12sp" />
+    </FrameLayout>
+</LinearLayout>

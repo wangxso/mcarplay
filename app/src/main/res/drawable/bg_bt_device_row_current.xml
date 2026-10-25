@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 当前目标所在行的底：淡绿底 + 按压涟漪（与普通行的纯深色底区分，
+     配合右侧实心绿「✓ 当前」胶囊，扫视时一眼能定位） -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#1FFFFFFF">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#1F58C08A" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+</ripple>

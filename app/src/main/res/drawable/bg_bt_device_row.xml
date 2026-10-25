@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 弹窗里的设备行：与设置页应用行同款深色圆角 + 按压涟漪 -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#1FFFFFFF">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#FF151B1C" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+</ripple>

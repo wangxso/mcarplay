@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置页进入：右侧滑入 + 淡入（对照原型 0.3s ease-out） -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shareInterpolator="false">
+    <translate
+        android:duration="240"
+        android:fromXDelta="7%p"
+        android:interpolator="@android:interpolator/decelerate_cubic"
+        android:toXDelta="0" />
+    <alpha
+        android:duration="200"
+        android:fromAlpha="0.0"
+        android:toAlpha="1.0" />
+</set>

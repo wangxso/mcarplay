@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shizuku 状态行图标：与其它行图标同款 24dp 线性风格（盾牌 + 勾）
+     表示「系统级权限通道」——虚拟屏/触摸注入都经它 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M12,3 L19,6 v6.2 c0,4 -2.9,6.9 -7,8.8 c-4.1,-1.9 -7,-4.8 -7,-8.8 V6 z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.8" />
+    <path
+        android:pathData="M9,12 l2.2,2.2 L15.2,10"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.8" />
+</vector>

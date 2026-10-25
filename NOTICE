@@ -1,0 +1,16 @@
+mcarplay
+
+This project builds upon CarDeck:
+https://github.com/shaonialife/cardeck
+
+Upstream copyright notice, retained unchanged:
+Copyright (c) 2026 lizhihua
+
+The upstream MIT license is preserved in LICENSE and
+docs/licenses/CarDeck-MIT.txt.
+
+Modifications in mcarplay include the Xiaomi CarWith/CarLife bridge,
+native media handling, protocol tests, and project/build documentation.
+
+Third-party dependencies and research acknowledgements are listed in
+THIRD_PARTY_NOTICES.md. Their licenses are separate from this notice.

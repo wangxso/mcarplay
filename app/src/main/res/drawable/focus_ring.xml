@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 焦点高亮框（iDrive 旋钮/方向盘方向键导航）：只在获得焦点时画 3dp 描边。
+     作为 View 的 foreground 使用——不覆盖原有 background（图标卡片底色由代码设置）。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#00000000" />
+            <stroke
+                android:width="3dp"
+                android:color="#FF4FC3F7" />
+            <corners android:radius="18dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#00000000" />
+        </shape>
+    </item>
+</selector>

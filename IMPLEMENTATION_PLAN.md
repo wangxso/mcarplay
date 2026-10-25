@@ -1,0 +1,218 @@
+# mcarplay：CarWith 转无线 CarPlay 实施计划
+
+更新：2026-10-26。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+
+首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
+
+## 当前基线与结论
+
+- **10 月 26 日 00:07 更新：音乐音频已打通并获用户听感确认。** 小米原生 9240 INIT 为加密参数、混合模式 MEDIA_DATA 为明文 PCM；修正按帧类型解析，补齐 44.1kHz → 48kHz 双声道重采样、AAC 编码和 RTP 节奏。00:00:46–00:07:23 持续约 6 分 36 秒；DiPlay 解码输出 18,538 个缓冲，累计写入 18,982,912 样本帧，播放游标正常增长，解码丢包、欠载及写入错误均为 0。用户确认“能听到，音调和速度正常”。视频约 20fps、recoveries=0。该结果来自 Pad 仿真；导航提示、暂停恢复专项、完整 10 分钟和真实车机验收仍待完成。
+- **修正前轮音频判断：** 23:51 起已观察到连续 MEDIA 帧，被统一 AES 解密规则拒绝。小米实际走 `RemoteMediaAudioProcessor → CarLifeAudioManager → PcmHoldHelper`；`AppRecorder` 不是这条通路的必经入口。现有 RSA/AES 顺序已与原厂一致，本轮没有增加特性或逆向发送 MD 请求。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+- **20:26 更新：已打通单机 CarWith 出流。** 修复 2.0 鉴权、统计 protobuf 必填字段、加密命令解析和渠道准入时序后，探针两次各收到 40 秒可解码 H.264（1280×720，780 / 437 帧）；第二轮通过 9340 点击进入应用列表，画面变化已核对。两份流均通过 `ffmpeg` 完整解码。
+- **APK 已独立出流。** 用户点击“自检”后，由普通应用 Intent 打开已导出的 `CarlifeAdbActivity`，无需电脑执行启动命令或端口转发。20:17 起首轮超过 40 秒；最新版强制结束 CarWith/CarLife 后重启，超过 100 秒、2041 帧。Pad 接收端及蓝牙辅助服务均关闭，MediaProjection 为 `null`。3 次严格冷启动和 10 次启停统计继续补齐。
+- 当前手机端默认策略恢复为 `EXPORTED_ENTRY`，保留显式 `ATTACH_EXISTING`；界面要求先断开其他接收端。普通 Intent 可用仅在上述测试版本成立，不推断所有 HyperOS/CarWith 版本兼容。
+- 下一步按用户指定，在 Test-HU 安装 DiPlay 0.2.21 验证无线 CarPlay；Pad 仿真不替代真实车机验收。详细证据和旧判断修正见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+以下为早期诊断记录；其中“ADB 入口必然 10 秒失败”和“握手不是第一阻塞”的判断已被本轮成功实验修正：
+
+- 测试机为 `2509FPN0BC`，HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，百度 CarLife 小米组件 `8.8.4`。
+- 七路端口 `7240/8240/9240/9241/9242/9340/9440` 由 CarWith/CarLife 监听，mcarplay 已能作为客户端连接。严格签名鉴权、AES 交换和视频解析已有实现及单测覆盖，但当前 ADB 入口下未走到 `MD_AUTH_RESPONSE`，实机端到端仍未验证。
+- **CarLife 握手不是当前第一阻塞。** 最新一次已确认设备处于解锁、亮屏状态，但 CarWith 自己宣告投屏失败：
+
+```text
+10:09:13.891 CarlinkSM sends MSG_CASTCONTROLLER_CAST_FAILURE delayMillis:10000
+10:09:13.905 CastingActivity onCreate; 10:09:13.978 onDestroy
+10:09:23.906 timeout processed
+10:09:23.918 CastingActivity mode=9, "Casting fail:false"
+10:09:25.986 onStop mCarlifeAdbActivityReOpen=false
+10:09:26.007 completeDisconnect
+```
+
+- 从 `CarlifeAdbActivity` 启动后，10:12:56 七路 TCP 已连接，mcarplay 发出协议版本、前台、设备和鉴权消息；10:13:09 连接被 CarWith 重置。期间没有 `MD_AUTH_RESPONSE`、特性协商、RSA/AES 或视频初始化。七路连接只是传输层证据，不能视为投屏成功。
+- `CarlifeAdbActivity` 是当前可见的导出入口，但会触发上述合成投屏生命周期；正常的 `CastingActivity` 和 `CarLifeConnectActivity` 不导出。CarWith 的 `CarlifeConnService` 只接受匹配的 CarLife UID/包，mcarplay 不能冒充系统 UID。
+- 真实 CarWith 视频依赖 CarWith 的虚拟显示、`prepareCast()` 和编码器 Surface。只启动 CarLife 权限页或连接端口，不足以产生媒体。
+- OcarPlay 的经验只证明“本机 CarLife 七通道 → CarPlay 桥接”这个结构可行；它启动的是 OPPO 原生 Car+，且对 OPPO 包和签名有硬编码检查，不能直接用于小米。其日志也没有把通道连接等同于鉴权或媒体成功。
+- 10:27 复查：CarWith 导出的设置页可进入 `CarLife连接 → 无线连接 → 热点连接`，当前设备提示“未连接任何车机蓝牙”，七口均未监听。`--attach` 探针在建立转发前返回码 `3`；无 H.264。入口与设备证据见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+- 10:48 使用 Android Pad `Test-HU` 模拟车机：Pad 上 `dev.h3bridge.hu` 的 CarLife 接收端 SDK 已启动，但反复连接小米的蓝牙串口失败。debug 专用 `BtAnchorService` 在两机之间建立真实 RFCOMM 链路后，手机已显示 Pad 的经典蓝牙 ACL 连接；此时仍未观察到七口或视频。该辅助链路只用于排查模拟环境，不计入阶段 0A 的无 ADB 验收或实车兼容性证据。
+- 10:55 Pad 通过 CarWith 公开的 WLAN 直连流程成功连接：七路通道均已与 Pad 建立 TCP 连接，CarWith 创建 1280×720 虚拟显示，Pad 解码并显示真实 CarWith 画面。150 秒内解码帧数从 71 增至 3077，丢帧/解码错误为 0。阶段 0A 已有一次成功的仿真证据，但 3 次冷启动的验收尚未完成。CarLife 服务对同名通道的第二个连接会重置整个会话，故不能在 Pad 投屏时直接运行 `--attach`；阶段 0B 的 mcarplay 自行出流仍未通过。脱敏证据见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+- APK 默认改为附着已有 CarWith 会话；首页“设置”打开 CarWith 的导出设置页，“自检”等待已有七口，不再自动请求会 10 秒超时的 ADB 入口。正式链路在首帧前保留手机可见，日志只称“等待已有会话”。此改动已构建和通过本地测试，尚未在真实 CarLife 车机上验收。
+- 19:22 重新核对哈希匹配的 APK/JADX 结果：`SdpBluetoothUtil`、UUID `9f03b326-5d75-46f1-9a39-b71f144d1d97`、`_EasyConn._tcp.local.` 和 10930 属于亿连路径；其客户端主动连接 HU。百度 CarLife 的 `BluetoothClient.ListenThread` 则监听 SPP/SPP_PLUS，且启动受 `isCarLifeApp()` 等条件约束。两条路径必须分别验证；原先将 EasyConn 发现链视作 CarLife 前置的判断撤回。
+- 首页现已接入“副机 HU 模拟”前台服务：真实 SDP 监听、Wi-Fi Direct group owner、P2P 身份、JmDNS 发布和 10930 应答共用一条状态链。纯协议、身份/组就绪和 EasyConn 帧已有 JVM 单测。该入口要求另一台设备扮演 HU；同一部手机的蓝牙适配器不能作为自己的 RFCOMM 对端，因此它不是单机 CarWith 直连方案，也不代表 CarLife 视频或 CarPlay 已出流。
+
+**当前状态：mcarplay 已能通过普通应用入口独立取得真实视频，向 DiPlay 显示 CarWith 并播放原生音乐，用户已确认听感正常。Pad 触控已有前轮证据；真实车机、导航提示、完整稳定性及发布验收仍待完成。**
+
+## 架构与安全边界
+
+```text
+mcarplay 界面 / 受支持的用户入口
+  → CarWith 建立虚拟显示与编码器
+  → 本机七路 CarLife 通道
+  → mcarplay 严格鉴权、解密、解析 H.264/PCM
+  → 蓝牙 iAP2 + Wi-Fi/AirPlay + HID
+  → 无线 CarPlay 车机
+```
+
+不得通过启动未导出 Activity、伪造 UID/包名、绕过锁屏、注入系统授权、跳过协议校验或伪造握手成功来推进验收。当前原厂 2.0 证明使用绑定设备字段及本次随机 nonce 的 MD5 摘要，并非 RSA 身份签名；旧版 RSA 校验保留为独立兼容路径，不因 2.0 校验失败而降级。RSA/AES 媒体交换每次生成新密钥，AES-ECB/PKCS#5 仅用于本次会话。
+
+## 阶段 0A：建立受支持的 CarWith 投屏生命周期
+
+**目标：** 找到普通应用或用户操作可以合法触发的 CarWith 投屏流程，并证明它会建立虚拟显示和编码器 Surface。
+
+**实施：**
+
+1. 枚举 CarWith/CarLife 的导出组件、Intent 参数和用户可达设置页，区分“CarLife 服务启动”“CarWith 车载投屏”“ADB 调试入口”三种状态。
+2. 只测试受支持的用户流程，例如 CarWith 设置/投屏入口、蓝牙配对流程或真实车机触发；ADB 仅用于观察，不作为最终依赖。
+3. 将 APK 启动策略抽象为“用户触发”“观察并附着到已有会话”“诊断入口”三类。诊断工具已有 `--attach`，附着前检查七口监听，不自行启动 CarWith。
+4. 补充时序日志：入口请求、CarWith 进程/服务存活、七口监听、`CastingActivity` 状态、虚拟显示创建、`prepareCast`、编码器 Surface、失败回调和会话断开。只记录脱敏状态，不记录密钥、签名原文或配对材料。
+5. 删除任何以“端口已连接”“Activity 已启动”推导投屏成功的文案。计时观察至少 35 秒，覆盖当前的 10 秒失败点。
+
+**验收：**
+
+- 在解锁、亮屏、未授权特殊系统权限的测试机上，使用普通应用可触发的受支持流程，35 秒内不再出现 `MSG_CASTCONTROLLER_CAST_FAILURE delayMillis:10000`。
+- CarWith 的投屏会话保持活动，虚拟显示和编码器 Surface 已建立；七口会话不因 10 秒超时被重置。
+- 连续冷启动 3 次，至少 2 次完整进入活动状态；失败时保留可定位的脱敏时间线和明确错误。
+- 全程没有直接启动未导出 Activity、伪造 UID/包名、root 或系统权限绕过。
+
+**停止条件：** 若公开入口和普通用户流程都无法建立投屏，且唯一可行方式是系统权限、未导出组件或冒充 CarLife，则阶段 0A 失败。此时停止集成，不以录屏或旧启动器冒充 CarWith。
+
+## 阶段 0B：取得真实 8240 媒体流
+
+**目标：** 证明 CarWith 在稳定投屏状态下确实向本机 8240 输出经鉴权加密的 H.264，并能被 mcarplay 解析。
+
+**实施：**
+
+1. 使用 `tools/carlife_probe.py --attach` 连接由受支持流程启动的会话；探针已使用临时转发端口并只清理自己建立的七口连接。
+2. 在隔离环境安装依赖并保留原始 H.264、脱敏日志和统计：
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install cryptography
+.venv/bin/python tools/carlife_probe.py 192.0.2.10:37123 \
+  --attach --seconds 35 --full --video \
+  --save-h264 /tmp/mcarplay-carwith.h264
+```
+
+3. 核对真实顺序：协议匹配后发送完整统计消息；收到 `MD_INFO` 后发送 HU 信息及 2.0 挑战。特性请求可能先到，需等手机证明校验通过再响应；随后完成 `RSA → AES → ENCRYPT_READY`。4.x 的 `MD_AUTH_RESULT` 在加密就绪后到达，需解密、校验为通过并回 ACK，才允许视频初始化。任何证明、准入或填充错误均失败，不用准入结果反向阻塞必需的 RSA/AES 协商。
+4. 用 `ffprobe`/`ffmpeg` 验证 SPS/PPS、IDR、普通帧、时间戳和解码结果；同时抓取 CarWith 页面变化作为对照，而不是用静态启动器截图代替。
+5. 若 0A 已通过但仍无帧，依次定位：虚拟显示是否绑定编码器、Surface 是否有效、视频初始化是否到达、加密是否匹配、8240 是否被提前关闭。不得先猜协议并修改鉴权。
+
+**验收：**
+
+- 8240 收到可解码的 SPS/PPS、至少一个 IDR、连续非 IDR 帧，时间戳跨度不少于 30 秒。
+- `ffprobe` 能识别 H.264 流，`ffmpeg -v error -i <file> -f null -` 无持续解码错误；画面内容随 CarWith 页面变化。
+- 3 次受控运行中至少 2 次取得满足上述条件的流；日志无重复 `Configured state` 异常。
+- `--full` 的成功只建立在原厂协议的手机证明校验、手机渠道准入和 AES 交换之后；零帧或仅心跳一律判定失败。
+
+**停止条件：** 若 CarWith 仅允许系统 UID 读取视频，或编码器只能在不可获得的系统进程中建立，记录精确断点和证据后暂停项目，不以普通 MediaProjection 录屏替代。
+
+## 阶段 1：把稳定链路集成进 APK
+
+**实施：**
+
+1. 首页自检及正式链路通过普通 Intent 打开 CarWith 已导出的兼容入口，前台服务保持连接；保留附着策略供受控诊断使用。继续补齐冷启动、反复启停及失败提示验收。
+2. 把 0B 的已注册鉴权、AES 解密、视频统计和断线回收接入正式会话；探针与 APK 共用相同协议实现，避免两份逻辑漂移。
+3. 状态至少区分：入口已请求、CarWith 存活、七口已连接、握手进行中、首个媒体字节、30 秒稳定观察、失败原因。
+4. 增加单元测试覆盖启动策略、状态转换、重复连接、部分连接回滚和视频统计；保留并扩展现有 CarLife 测试。
+
+**验收：**
+
+- 安装 APK 后，用户只点击应用内按钮即可完成连接，不运行 `adb shell am`、`adb forward` 或 root 命令。
+- 应用统计到真实 8240 帧，而不是只显示七口 TCP 成功。
+- 连续启动/断开 10 次无端口占用、残留服务、崩溃或误报成功；3 次冷启动均可复现。
+- 缺少 CarWith、版本不匹配、蓝牙/Wi-Fi 未就绪时显示可操作错误，并明确区分“未连接”和“未出流”。
+
+### 阶段 1A：亿连发现诊断（辅助实验）
+
+**目标：** 用第二台 Android 设备验证 CarWith 内亿连客户端的无线发现流程。此阶段独立于百度 CarLife 主线；通过 10930 不作为阶段 0B 的证据。
+
+**实现边界：**
+
+1. Pad 上的 `ExternalHuService` 提供亿连 RFCOMM 监听、P2P group owner、mDNS 与 10930 应答；小米上的亿连客户端作为对端。首页入口现标为“亿连发现诊断”。百度 CarLife 入口不使用这条链，不能据此推断同机 CarLife 媒体可读。
+2. 只有从 `requestDeviceInfo`/`THIS_DEVICE_CHANGED` 取得真实身份，且 `WifiP2pGroup` 与 `WifiP2pInfo` 均确认本机是组主、SSID 与本机 P2P IPv4 接口完整时，才允许发布 SDP 公告；禁止用蓝牙名称、占位 MAC 或猜测 SSID 代替。
+3. JmDNS 必须绑定 P2P IPv4，持有 `MulticastLock` 后发布 `_EasyConn._tcp.local.`；10930 只在同一 P2P 地址监听，只接受 `0x70000010`，返回 `0x70000011` 和字符串 `"true"`。
+4. 首页/日志的“SDP、HU、P2P、mDNS、10930”是逐级证据，不得把任一前序状态显示为“CarPlay 已连接”。
+5. 停止时必须注销 JmDNS、释放 `MulticastLock`、关闭 10930、关闭 RFCOMM、注销广播并按需移除 P2P 组。
+
+**验收：**
+
+- JVM 测试覆盖 SDP 帧、EasyConn 帧、实例名、TXT 字段、P2P 组就绪门槛和错误帧拒绝。
+- 在至少一组已系统蓝牙配对的测试设备上，CarWith 能完成 `BUILD_NET_FINISH`；10930 收到真实请求后，mcarplay 日志记录 `accepted`，且可观察到 mDNS 记录与监听端口。
+- 停止后 10930、RFCOMM、JmDNS 和 P2P 组均释放；再次启动可复现，且无端口占用或残留前台服务。
+- 全流程不启动未导出 Activity、不伪造 UID/包名、不 root、不跳过签名校验。
+- 真实 8240 媒体流仍须按阶段 0B 单独验收；本阶段通过不等于 CarPlay 实车可用。
+
+#### 离线可靠性补强（2026-10-25）
+
+- 已实现：P2P 身份持续轮询、身份/IP/SSID 变化重新发布、失去组主身份立即撤销公告；发布和回收在串行后台线程执行，过期回调不能恢复旧会话。
+- 已实现：10930 每轮监听独立持有客户端，停止时关闭未完成请求并清空 `accepted`；更换绑定失败也关闭旧监听，最多同时处理 8 个客户端。
+- 已实现：mDNS 部分启动失败按逆序回收注册对象和组播锁；P2P 仅移除本轮创建或正在创建的组，等待回调或 2 秒超时后再关闭通道，复用已有组时不主动移组。
+- 离线测试覆盖：真实 loopback 请求、坏帧拒绝、占用端口失败、20 次连续重启、未完成请求回收，以及 P2P 就绪/变化/丢失、异步移组和 mDNS 故障回滚。单测使用临时端口，生产仍固定 10930。
+- 待设备验收：亿连发现真实可达、冷启动稳定性，以及百度 CarLife 主线的真实 8240 视频；两条链分别记录结果。
+
+#### Pad 回归与主线修正（2026-10-25 19:20–19:35）
+
+- 最新 APK 已安装到解锁的 PA2353 / Android 14。修复权限回调仅检查本次请求结果的问题：仅补授 `NEARBY_WIFI_DEVICES`、蓝牙/通知已授权时，服务自动启动，已在 Pad 系统授权弹窗上复现并验证修复。
+- Pad 确实建立 P2P group owner 和 `192.168.49.1`；公开 API 返回的本机 MAC 为隐私占位值，状态明确显示 `mac-redacted`，mDNS/10930 没有发布，未标记成功。
+- 两次应用内停止均收到系统移组成功回调，P2P IPv4 和前台服务消失；该结果只覆盖 Pad 本轮建组/清理。
+
+### 下一优先项：百度 CarLife 无线入口与 8240
+
+1. 小米接入后记录系统、CarWith/CarLife 版本、当前会话和七口状态，先保留已有会话证据。
+2. 从 CarWith 的公开设置进入百度 CarLife WLAN 直连；该用户流程内部以 `startType=4`、`carlife_wireless_type=Baidu_wlan` 启动服务。继续复用已有 Pad 接收端完成阶段 0A 的冷启动复测。
+3. 核对小米 Mix 组件是否实际启动 SPP/SPP_PLUS。通用 CarLife SDK 中的监听受 `ConnectClient.startTcpListener()` 条件限制；没有设备监听证据前，不默认存在可连接的蓝牙串口，也不新增一个相同 UUID 的手机监听器来冒充原厂行为。
+4. 在受控、单客户端条件下由 mcarplay 取得 8240 媒体；若需要实现副机 CarLife HU 建链，应依据百度的 8 字节命令帧及无线 protobuf 消息，独立实现，不能复用亿连的 16 字节 JSON 发现帧。
+
+**验收仍按 0A/0B：** 原厂虚拟显示持续活动，mcarplay 自行收到并严格鉴权解密至少 30 秒可解码、随页面变化的 H.264。蓝牙配对、P2P 建组或亿连 10930 单项通过均不替代此门槛。
+
+## 阶段 2：视频进入 CarPlay
+
+**实施：**
+
+1. 将 `CarLifeVideoParser` 的 Annex B 访问单元接入 `SessionController → VideoSender`，生成正确的 `avcC`、长度前缀和关键帧时序。
+2. 优先直通协商分辨率；只有车机拒绝 profile/level、尺寸或裁剪时才启用 MediaCodec 解码/重编码，并记录决策依据。
+3. 把车机 `forceKeyFrame` 映射到 CarLife 视频控制，处理断开、重连和首帧超时。
+
+**验收：**
+
+- 在至少一台真实无线 CarPlay 车机上显示实际 CarWith 页面；页面切换可见，导航、音乐等应用操作能反映到画面。
+- 从第一个可显示关键帧到车机出现画面不超过 5 秒；连续 10 分钟无黑屏、停帧或非预期断连。
+- 断开后重新连接能再次出画；记录车机型号、固件、分辨率、帧率、首帧耗时及是否重编码。
+
+## 阶段 3：触控与音频
+
+**触控实施：** 将 CarPlay HID 坐标映射到 CarWith 画布，经 9340 发送按下、移动、抬起；断线和退出必须释放触点。
+
+**触控验收：** 5×5 网格点击误差不超过画布短边的 3%；连续 100 次点击/滑动无粘连；返回、导航和媒体控制可用。
+
+**音频实施：** 解析 9240 媒体、9241 TTS、9242 语音通道的真实封装，统一为带时间戳 PCM 或可验证编码后接入 CarPlay 音频；保留导航提示优先级。未解析出真实样本前，不把 `AudioPlaybackCapture` 内录声称为 CarWith 原生音频。
+
+**音频验收：** 音乐和导航提示均从车机扬声器播放；提示打断、恢复和音量变化正常；连续 10 分钟无明显卡顿、重复或失步。车机麦克风上行作为独立后续项。
+
+## 阶段 4：发布门槛
+
+- 将应用名、首页、日志目录和 README 统一为 mcarplay；移除会误导的 OPPO/Car+ 或“自动适配”文案。
+- 启动时提示 CarWith/CarLife 版本、蓝牙、Wi-Fi 和所需权限；CarWith 主链路不得暗依赖 Shizuku。
+- 补充上游 MIT 许可、第三方组件说明和隐私说明；保护签名密钥、配对数据和日志。
+- 发布前在测试机完成 3 次冷启动、30 分钟导航/音乐/触控及断线重连；在真实车机完成相同验证并记录型号与固件。
+
+## 验证、证据与完成定义
+
+每次合入执行：
+
+```bash
+./gradlew spotlessCheck :app:testStandardDebugUnitTest \
+  :app:lintStandardDebug :app:assembleStandardDebug
+```
+
+当前基线：全量 JVM 测试 362 项，0 失败、0 错误、0 跳过；探针 Python 测试 12 项通过；Spotless、lint 和构建通过。新增覆盖小米混合音频保护规则、损坏 INIT 拒绝、PCM 格式和分块重采样时钟，以及外部 PCM 经 RTP 加密后的真实 UDP 回环。APK 为 `app/build/outputs/apk/standard/debug/app-standard-debug.apk`，SHA-256 为 `5f47a15ca07e33bb05b2479432655380c7eacb6afba6455a377e0a51477bd099`。本轮 Gradle 使用 `--offline` 完成上述检查；探针测试命令为 `.venv/bin/python -m unittest discover -s tools -p 'test_*.py'`。音乐稳定性观察使用同一音频实现的前一构建 `94ae9756b71327a3cd991c4c9c007c41194a52e0d0acf4c29c8167c11d133dab`；最终构建另修正原生音频界面无需录屏授权，以及会话中补启声音时的 RECORD 激活。
+
+验收证据统一记录：日期、手机型号与系统、CarWith/CarLife 版本、APK 与 H.264 的 SHA-256、完整命令、脱敏时序日志、`ffprobe` 结果和车机型号/固件。认证签名、AES 密钥、配对材料和个人日志不得入仓。
+
+完成顺序为：
+
+1. 0A 通过：受支持的 CarWith 投屏会话稳定建立。
+2. 0B 通过：8240 取得连续 30 秒可解码 H.264。
+3. 阶段 1–2 通过：应用内无 ADB 连接，CarPlay 实车看到 CarWith 画面。
+4. 阶段 3–4 通过：触控、音频、稳定性、合规和发布材料齐全。
+
+任何阶段失败时，先固定错误证据并更新本计划；不得跳过前序门槛、把端口连接当作媒体成功，或把未测车型写成已适配。

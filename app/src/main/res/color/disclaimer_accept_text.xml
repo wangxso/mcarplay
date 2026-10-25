@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 「接受」按钮文字色：禁用态（倒计时中/未滑到底）用浅色，
+     因为背景在禁用时是极淡的天蓝（#247EDCE6），原来的深色文字几乎看不见。
+     倒计时秒数需要可读，否则用户不知道按钮为何点不动。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:color="#9AB0BEBE"
+        android:state_enabled="false" />
+    <item android:color="@color/m3_on_primary" />
+</selector>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug-only RFCOMM link for a tablet simulating a CarLife head unit. -->
+        <service
+            android:name=".debug.BtAnchorService"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:foregroundServiceType="connectedDevice" />
+    </application>
+</manifest>

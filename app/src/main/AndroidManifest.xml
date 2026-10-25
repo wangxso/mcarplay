@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 无线 CarPlay 全链路：蓝牙 RFCOMM（iAP2 控制通道）+ WiFi（热点加入 / mDNS） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+    <!-- WifiNetworkSpecifier（应用专属网络）在 Android 12/12L（API 31-32）仍要求位置权限；
+         13+ 由 NEARBY_WIFI_DEVICES 取代，运行时不再申请这两个权限。
+         声明层面必须 FINE+COARSE 成对（lint CoarseFineLocation 强制要求）。 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- 目标车机选择里的「扫描未配对设备」：Android 12+ 需单独授权；
+         neverForLocation 表示扫描结果不用于定位（免去定位权限） -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- 音频通道：AudioPlaybackCapture（捕获本机媒体/导航声音上车）必需 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 音频通道激活时静音手机媒体音量（声音只从车机出），断开恢复 -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 暗幕（替代息屏）需要；系统「显示在其他应用上层」列表只收录声明本权限的应用 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+
+    <queries>
+        <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="com.miui.carlink" />
+        <package android:name="com.baidu.carlife.xiaomi" />
+        <package android:name="com.autonavi.amapauto" />
+        <package android:name="com.autonavi.minimap" />
+        <!-- 应用桌面需要枚举全部可启动应用（Android 11+ 包可见性） -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".SenderApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.CarPlaySender">
+
+        <!-- 手机侧操作台自行处理旋转：它是有状态的工具界面（滚动位置、折叠卡、
+             已填热点 SSID、正在显示的弹窗），系统重建会把它们全部丢掉。
+             声明 configChanges 后 Activity 不重建、视图状态原样保留；
+             依赖屏幕尺寸的弹窗窗口在 onConfigurationChanged 里重算。 -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 车机设置（手机侧）：二级菜单页 + 内容 Fragment 宿主（与车机双栏共用面板）。
+             不声明 configChanges：这两页是短暂的工具页，旋转重建无状态损失；
+             首页才是要保留滚动/折叠/已填内容的长驻操作台。 -->
+        <activity
+            android:name=".PhoneSettingsActivity"
+            android:exported="false" />
+        <activity
+            android:name=".SettingsContentActivity"
+            android:exported="false" />
+
+        <service
+            android:name=".service.CarPlayService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|mediaProjection" />
+
+        <service
+            android:name=".service.ExternalHuService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- 静默投屏跳板（自动连接时领 MediaProjection 令牌给音频内录用）：
+             exported=true 让 Shizuku 的 `am start` 能拉起（shell 只有
+             START_ACTIVITIES_FROM_BACKGROUND，没有 START_ANY_ACTIVITY）；
+             noHistory + excludeFromRecents + taskAffinity="" 保证不留痕迹。 -->
+        <activity
+            android:name=".audio.SilentProjectionActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.CarPlaySender.SilentTranslucent" />
+
+        <!-- 上车自动连接：ACL_CONNECTED / ACL_DISCONNECTED 在隐式广播豁免清单里，
+             清单静态注册可在应用进程被杀时把进程拉起来（docs/AUTO-CONNECT.md）。
+             exported=true 是因为系统蓝牙栈以独立 uid 发送；目标车机过滤在接收器里做。 -->
+        <receiver
+            android:name=".bt.CarBluetoothReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 虚拟屏桌面（exported：shell am start 需要可从外部拉起） -->
+        <activity
+            android:name=".launcher.DockActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.CarPlaySender.Launcher" />
+
+        <activity
+            android:name=".launcher.GridActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.CarPlaySender.Launcher" />
+
+        <!-- 通知监听（媒体会话枚举）：音乐卡需要「通知使用权」；
+             Shizuku 在场时可由 cmd notification allow_listener 静默授权 -->
+        <service
+            android:name=".media.MediaListenerService"
+            android:exported="false"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- 车机设置（双栏）：由桌面「车机设置」图标进入，仅应用内使用 -->
+        <activity
+            android:name=".launcher.SettingsActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.CarPlaySender.Settings" />
+
+        <!-- Shizuku（隐形屏模式：am start 指定 display + MotionEvent 直注） -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+    </application>
+</manifest>

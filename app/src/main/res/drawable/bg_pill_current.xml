@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 弹窗设备行的「当前」状态：实心绿胶囊。
+     与可选项（bg_tbtn：透明底 + 青色描边文字）形成「实心 vs 描边」的形态差异，
+     不再只靠色相区分（青色 #7EDCE6 与绿色 #7BD8A5 在小字号下几乎分不清，
+     2026-10-18 用户反馈）。文字配深色保证对比度。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#58C08A" />
+    <corners android:radius="999dp" />
+</shape>

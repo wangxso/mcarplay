@@ -1,0 +1,44 @@
+# Local IDE and build state
+*.iml
+.idea/
+.DS_Store
+/.gradle/
+/.kotlin/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+/local.properties
+
+# Local Python environments
+.venv/
+__pycache__/
+*.py[cod]
+
+# Generated packages and diagnostic captures
+/dist/
+*.apk
+*.aab
+*.apks
+*.log
+*.h264
+*.pcap
+*.pcapng
+
+# Credentials and private material
+.env
+.env.*
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.key
+*.pem
+
+# External reference sources and local session artifacts
+reference/
+.zcode/
+
+# Vehicle replay fixtures can contain device and hotspot identifiers
+app/src/test/resources/carplay/fixtures/*.jsonl

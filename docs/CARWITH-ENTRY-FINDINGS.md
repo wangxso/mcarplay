@@ -1,0 +1,170 @@
+# CarWith 公开入口调查（2026-10-25）
+
+## 样本与环境
+
+- 手机：`2509FPN0BC`，HyperOS `OS4.0.4.0.XPBCNXM`，解锁且亮屏。
+- CarWith `4.0.20-20260923`：APK SHA-256 `85ddab72dfed8cf532c6348aac1313c64373f42bf49915cee4d9e064e07c95b6`。
+- 百度 CarLife 小米组件 `8.8.4`：APK SHA-256 `00df4aaacbbc5837f3a0ef17fc55dfabf038596dd27b652cfb23c9722770a994`。
+- 静态检查使用 JADX `1.5.6` 与设备 `dumpsys package`；动态检查只调用 CarWith 导出的设置页，未更改蓝牙配对。
+
+## 公开入口与限制
+
+| 组件 | 证据 | 作用 |
+| --- | --- | --- |
+| `UCarScreenSettingsActivity` | Manifest `exported=true`；设备上可用显式 `am start` 打开 | 用户可进入 CarWith 的 CarLife 连接设置 |
+| `CarLifeConnectActivity`、`CarLifeWirelessConnectActivity`、`CastingActivity` | Manifest `exported=false` | 只能由 CarWith 自身的 UI 流程启动 |
+| `CarlifeAdbActivity` | Manifest `exported=true`；`onCreate()` 启动 `CarlinkService`，`startType=3` | 调试入口；已实测 10 秒投屏失败并清理 |
+| `CarlinkService` | Manifest 要求 `miui.carlink.permission.START_CARLINKSERVICE`；设备声明为 `signature|privileged` | 第三方 APK 不能直接启动正常服务 |
+| `CarlifeConnService` | Manifest `exported=true`；`i()` 检查 Binder 调用 UID 对应包是否为 `com.baidu.carlife.xiaomi` 或 `com.baidu.carlife` | 第三方 APK 不能直接调用 `prepareCast()` |
+
+JADX 中的用户路径为 `UCarScreenSettingsActivity` 的 `carlife_connect` 项进入 `CarLifeConnectActivity`，再选无线模式。热点、车辆热点、WLAN 直连的正常流程在启动前检查蓝牙连接及网络状态，之后由 CarWith 内部以 `startType=4` 启动服务。静态代码说明设计意图，不等于当前设备已建立投屏。
+
+10 秒定时器也能从静态代码定位：`CarlifeAdbActivity.c()` 以 `startType=3` 启动 `CarlinkService`；该分支的回调调用 `z(null, 10)`，再由 `CarlinkStateMachine.g1(10)` 安排失败消息。`CarlifeConnService.prepareCast()` 收到有效 Surface 后才通知 `CarlinkService` 的投屏状态机，因此单纯启动七口监听不能代替这一步。
+
+## 本次设备观察
+
+通过导出的设置页依次选择 `CarLife连接 → 无线连接 → 热点连接`，页面显示“当前未连接任何车机蓝牙，前往蓝牙设置”。当时 `ss -ltn` 中没有 `7240/8240/9240/9241/9242/9340/9440` 监听；临时 UI XML 已删除。
+
+用户随后确认 `Test-HU` 是用于模拟车机的 Android Pad（PA2353，Android 14）。只读 `dumpsys bluetooth_manager` 显示它已经与小米配对，但 10:36–10:42 间多次经典蓝牙 ACL 连接成功后约 5–13 秒以 `Local Terminated Connection` 断开。Pad 公布 `0x110A`（A2DP Source）、`0x1112`（HSP Audio Gateway）、`0x111F`（HFP Audio Gateway），没有公布 `0x110B`（A2DP Sink）或 `0x111E`（HFP）。UUID 含义依据 [AOSP BluetoothUuid](https://android.googlesource.com/platform/prebuilts/fullsdk/sources/+/refs/heads/androidx-leanback-release/android-35/android/bluetooth/BluetoothUuid.java)。它表现为普通 Android 设备的音频角色，不能靠配对自动建立车载音频连接。
+
+Pad 前台运行 `dev.h3bridge.hu` 0.3.2，内置百度 CarLife 接收端 SDK。其 SDK 使用 `00001101` 的 RFCOMM 串口连接已配对小米；运行日志重复 `BluetoothDeviceDiscover connect device exception ... read ret: -1`。这是接收端主动连接手机的串口失败，不是视频或 CarPlay 握手失败。10:48 新增 debug 专用 `BtAnchorService`：两机各运行一个服务，以独立 UUID 建立空载 RFCOMM 连接。两端都记录 `RFCOMM anchor connected`，小米 `Test-HU` 的 ACL 变为 `BR/EDR:Y`；当时七个 CarLife 端口仍未监听。这个辅助服务只用于排查 Pad 模拟环境，不进入 release APK，也不作为真实车机验收证据。
+
+10:55 用户通过 CarWith 的 WLAN 直连页面连接 Pad；七个 CarLife TCP 通道均与 Pad 的 `192.168.49.1` 建立连接，`CarlinkService`、`CarlifeConnService` 保持运行。`dumpsys display` 出现 CarWith 的 1280×720 虚拟显示。Pad 实际显示 CarWith 地图和音乐界面（含位置的截图仅留在 `/tmp`，不入仓）。Pad 接收端的脱敏指标显示：10:55:36 传输与协议建立，10:55:38 首帧；10:55:41–10:58:11 的 150 秒内解码帧数由 71 增至 3077，`OMX.qcom.video.decoder.avc` 保持 `RUNNING`、丢帧和解码错误均为 0。安全摘要保存于 `/tmp/mcarplay-0a-pad-evidence.json`。这证明一次正常 Pad 仿真流程能建立真实 CarWith 投屏；尚未完成阶段 0A 要求的 3 次冷启动/至少 2 次成功，也未证明 mcarplay 自己能读取视频。
+
+CarLife `ConnectManager.AcceptThread` 收到同名通道的第二个客户端时会调用 `resetConnectManager()`。因此不能在 Pad 正在投屏时运行 `--attach` 探针，否则会破坏已建立的会话。10:55:41 的在线激活返回 `errno=10004`，同一日志标记 `mIgnoreActiviteFail=true`，且 Pad 随后持续出画；这次激活返回没有阻断当前视频，原因仍需按协议独立分析。
+
+测试辅助链路由 debug APK 提供；`Test-HU` 必须先在两机系统蓝牙中完成配对。已安装且授予 `BLUETOOTH_CONNECT` 后，可复现或清理：
+
+```bash
+adb -s PAD_SERIAL shell am start-foreground-service \
+  -n com.mcarplay.app/.debug.BtAnchorService \
+  -a com.mcarplay.app.debug.BT_ANCHOR_SERVER
+adb -s 192.0.2.10:37123 shell am start-foreground-service \
+  -n com.mcarplay.app/.debug.BtAnchorService \
+  -a com.mcarplay.app.debug.BT_ANCHOR_CLIENT --es peerName Test-HU
+# 测试结束时，在两机分别运行：
+adb -s PAD_SERIAL shell am stopservice \
+  -n com.mcarplay.app/.debug.BtAnchorService
+adb -s 192.0.2.10:37123 shell am stopservice \
+  -n com.mcarplay.app/.debug.BtAnchorService
+```
+
+新增的探针命令：
+
+```bash
+.venv/bin/python tools/carlife_probe.py 192.0.2.10:37123 \
+  --attach --seconds 35 --full --video \
+  --save-h264 /tmp/mcarplay-carwith.h264
+```
+
+本次返回码为 `3`，提示七路监听均不存在；检查发生在启动 Activity 与建立 ADB 转发之前。未生成 H.264。探针成功返回还要求签名鉴权、AES 就绪，以及 SPS/PPS、IDR、至少 30 个普通帧、30 秒时间跨度且相邻时间戳间隔不超过 2 秒；最终仍需 `ffmpeg` 解码和画面变化验证。当前结果只证明没有可附着的 CarLife 会话，不能证明正常流程在配对车机后仍会失败。
+
+APK 现默认附着已有 CarWith 会话：首页“设置”打开上述导出设置页，“自检”只等待七口，正式链路也不再自动启动 ADB 调试入口。构建和本地测试已通过；此改动没有提供新的投屏成功证据。
+
+## 下一项实机验证
+
+先保留本轮成功会话证据，再在受控断开 Pad 接收端后由 mcarplay 单独附着 CarLife 通道；若服务随 Pad 断开而停止，需让 mcarplay 实现等效的公开无线 HU 建链流程，不能同时作为第二客户端抢占通道。阶段 0A 还需 3 次冷启动/至少 2 次成功；阶段 0B 必须由 mcarplay 在 8240 获得 30 秒可解码、随页面变化的 H.264。模拟 Pad 的成功仍需真实车机复测。
+
+## 副机 HU 模拟实现（2026-10-25）
+
+**19:22 纠正：** 以下 `_EasyConn`/10930 实现属于亿连发现诊断，不能作为百度 CarLife 无线建链实现。首页已改名，具体源代码依据与本轮设备结果见文末。
+
+APK 新增首页“副机 HU 模拟”，把无线发现链拆成五个可分别验收的状态：
+
+1. `ExternalHuSdpBridge` 监听 CarWith 的 RFCOMM UUID；
+2. `ExternalHuP2pCoordinator` 用 autonomous group 接口建组，只采用系统返回的真实名称、MAC、SSID 和本机 P2P IPv4；组和连接信息均确认组主后才就绪；
+3. `EasyConnMdnsPublisher` 持有 `MulticastLock`，绑定该 P2P IPv4 并通过 JmDNS 发布 `_EasyConn._tcp.local.`；
+4. `CarWithDiscoveryResponder` 只在同一地址监听 10930；
+5. 收到 `0x70000010` 后返回 `0x70000011 {"status":"true"}`，状态才记为 `accepted`。
+
+这一步解决的是 CarWith 的无线发现/建网入口，不是媒体桥接。单部手机的蓝牙适配器不能同时作为自己的 RFCOMM 对端，因此测试必须由 Pad 或另一台手机扮演 HU；该拓扑也不证明真实 CarPlay 车机兼容。当前尚未在设备上完成这一新入口的实际 CarWith 会话，10930 未收到请求前不得标记为通过。
+
+本地验证新增 `CarWithDiscoveryResponderTest` 的 loopback 覆盖：完整请求返回 `0x70000011 {"status":"true"}`，错误命令和带载荷请求不标记成功，停止后可重新绑定 10930。全量 JVM 测试 308 项、CarLife 65 项通过，Spotless、lint 和 APK 构建通过；APK SHA-256 为 `2ea731c3693386c5d9d692ee25090645554f1b2b2f2114c41004b55dad188595`。
+
+2026-10-25 12:03 再次尝试覆盖安装 Pad 失败，系统返回 `INSTALL_FAILED_ABORTED: User rejected permissions`；Pad 仍为 10:48 的旧版 APK。小米测试机 `192.0.2.10:37123` 离线，Pad 停在锁屏，因此本轮没有新增设备侧 SDP、P2P、mDNS 或 10930 证据，阶段 1A 仍未验收。
+
+## 离线生命周期验证（2026-10-25）
+
+本轮增加 P2P 就绪变化与异步清理测试、mDNS 注册/组播锁故障回滚测试，并扩展真实 loopback socket 验证。10930 停止时关闭未完成请求、清空成功状态，旧监听线程不能影响重启后的实例；网络变化或组主丢失时撤销 SDP 公告并回收发现服务。mDNS 发布与回收改在串行后台线程执行，P2P 移组等待系统回调或 2 秒超时后关闭通道。复用的已有 P2P 组不由本轮主动删除。
+
+完整离线检查通过：`./gradlew --offline spotlessCheck :app:testStandardDebugUnitTest :app:lintStandardDebug :app:assembleStandardDebug`，329 项 JVM 测试（CarLife 86 项），0 失败/0 跳过；Python 5 项通过，lint 0 error/0 warning。debug 专用蓝牙诊断服务增加 `android.permission.DUMP` 调用限制。最新 APK SHA-256 为 `f751bb700818947ab4cec80bb6b10b420fe8fe871da8cd8898da71e0952c2471`，Android Debug 签名校验通过。
+
+本轮没有操作测试设备。mDNS 注册/组播锁与 P2P 清理使用注入的测试实现，不能证明无线多播可达或系统实际移组；socket 测试使用本机临时端口，不能证明设备上的固定 10930 可达。历史笔记对 RFCOMM 发起方及服务运行端描述不一致，设备恢复后须先核对该分工，再执行阶段 1A、0B 的验收。
+
+## 协议分支纠正与 Pad 回归（2026-10-25 19:20–19:35）
+
+本轮使用普通 shell 读取此前 JADX 1.5.6 的反编译结果；CarWith 与 CarLife APK 的 SHA-256 均与“样本与环境”一致。REA Android provider 因缺少 `REA_JADX_MCP_JAR` 返回 `capability_unavailable`，未产生新的 REA 分析证据，也未修改工具配置。
+
+| 分支 | 静态依据 | 结论与边界 |
+| --- | --- | --- |
+| 亿连 | `net.easyconn.carman.sdk_communication.SDP.SdpBluetoothUtil.l()` 调用 `createRfcommSocketToServiceRecord(EBT_UUID)` 和 `connect()`；`BluetoothSdpConnectRunnable.run()` 调用该方法 | 该客户端主动连接 HU；现有 RFCOMM 监听、`_EasyConn` 与 10930 属于这一分支。 |
+| 百度 CarLife | `BluetoothClient.ListenThread.run()` 调用 `listenUsingRfcommWithServiceRecord()` 和 `accept()`，UUID 为 `00001101-0000-1000-8000-00805F9B34FB` / `a45bc7e5-bb50-4949-9de1-f78299cf6d78` | SDK 内存在手机监听路径；`ConnectClient.startTcpListener()` 只在 `isCarLifeApp()` 且隐私同意时调用它，小米 Mix 的实际运行仍需设备核对。 |
+| CarWith 公开 CarLife WLAN 入口 | `CarLifeWlanConnectActivity.j1()` 设置 `startType=4`、`carlife_wireless_type=Baidu_wlan` | 继续沿该用户流程验证阶段 0A/0B；不能用 EasyConn 应答替代百度流程。 |
+
+百度 `BluetoothWirlessHelper` 使用 CarLife 命令帧和 protobuf：`MSG_WIRLESS_INFO_REQUEST/RESPONSE` 为 `0x100001/0x108002`，`TARGETINFO_REQUEST/RESPONSE` 为 `0x100004/0x108005`。这与亿连的 16 字节小端 JSON 帧不同。以上是静态观察，未观察到小米本轮执行这些消息。
+
+Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限后服务未启动”：回调错误地把本次结果表中不存在的、先前已授权的权限当作拒绝。改为检查系统当前授权后，19:32:37 仅 `NEARBY_WIFI_DEVICES` 返回 `true` 即自动启动前台服务，未第二次点击启动。
+
+设备日志与网络状态确认：P2P group owner 建立，`p2p0` 为 `192.168.49.1/24`；公开 API 给出的本机 MAC 为隐私占位值，新状态为 `mac-redacted`，因此没有发布 mDNS/10930。19:29:18 和 19:34:31 两次点击停止后约 0.3 秒均收到“本轮 P2P 组已移除”，随后 IPv4 和前台服务消失。没有请求特权 MAC 权限，也没有把 ADB 读到的地址注入应用。
+
+本轮构建、330 项 JVM 测试（CarLife 87 项）及 lint 通过，零失败/零跳过/零 lint warning；APK SHA-256 为 `cd774c62450ee91485ca26a820c5561c3a953bda63aecd52369e541d4f5c4618`。首页将辅助入口标为“亿连发现诊断”，应用标题/版本页脚使用 mcarplay 名称。小米旧 ADB 地址与 Bonjour 广告中的 45381 均返回连接拒绝，双设备协议和媒体验证尚未开始。
+
+## 单机出流与旧判断修正（2026-10-25 19:41–20:27）
+
+用户提供新无线调试端口后，小米恢复连接。19:47 的公开 WLAN 流程再次让 Pad 显示真实 CarWith 视频；本轮未启动 `BtAnchorService`，约 3 分钟解码 3516 帧、丢帧为 0。退出 Pad 接收端后约 0.15 秒七口及虚拟显示均消失，不能把这轮会话直接交给另一个消费者。探针现检查已有 `ESTAB` 通道，拒绝第二消费者。
+
+### 真实握手差异
+
+源码依据仍为前述哈希匹配的 JADX 样本。Pad 原厂接收 SDK 的 `receiver.d.a.a` 在收到 MD_INFO 后发送 HU_INFO 和 `2.0;<nonce>`，不使用旧的 `CarLife_1.0.0`。手机 `PrivateKeyManager.encryptContentProcess()` 的 2.0 分支绑定 `brand + model + sdk + nonce`。本轮还通过 REA/Hopper 观察手机 `libencryption.so`（SHA-256 `09f3b9dc61010b6720cbb0a3fd964b11c43ca5c31382d190dbe86a63254c612e`）：
+
+- `getVerifyResult`，地址 `0x10f40`，Evidence `ev_5e3ac36335947dc1ff32d1ddacf05819345a98fe7f38d96649f9dd217805f253`；
+- `std::string::insert` / MD5 构造与输出调用，Evidence `ev_631edc16f5bd2294b12c28bf771e8efc85dcbf0afd03d9586f875286f86e266b`、`ev_57c3fd816557aff175f855b4ae7c4646fa2d5110e9935096e1bc25ac7fec0643`；
+- 小写十六进制输出，Evidence `ev_1e3b9402e26f9c7a30fad1a6f6ce1c1f0076a4df6a9a56ada279c9bcdbe15b69`。
+
+该分支比较 `MD5("CARLIFE" + brand + model + sdk + nonce)`，不是 RSA 身份签名。Hopper 不能提供完整函数体范围，其伪代码属于静态重建；随后手机真实响应通过独立 Kotlin/Python 实现的校验，补充了运行时证据。mcarplay 每轮使用 128 位随机 nonce，不记录证明原文，不因校验失败降级或发送成功。
+
+另一处阻塞是 `CarlifeStatisticsInfo` 的 proto2 必填字段：旧实现只有 1–4，缺少 5（connectCount）、6（connectSuccessCount）、7（connectTime），手机无法解析。现发送 1 次尝试、0 次成功、0 时长，未借用 Pad 的渠道凭据或认证身份。`FeatureConfigManager.configSyncDone()` 在 AES 就绪后才派发渠道准入，因此只能在手机证明通过后开始特性/RSA/AES 协商，再等待解密后的 `MD_AUTH_RESULT=true` 才初始化视频。原先把准入放在特性响应前会死锁。
+
+### 已完成的运行验证
+
+| 运行 | 结果 |
+| --- | --- |
+| 20:10 探针，单客户端 | 40 秒，780 包，20 IDR / 760 非 IDR，7,028,590 字节，SPS/PPS 完整，最大时间戳间隔 1 秒，退出码 0 |
+| 20:13 探针，9340 点击应用列表 | 40 秒，437 包，11 IDR / 426 非 IDR，3,515,953 字节；解码画面从启动页变为 CarWith 应用列表，退出码 0 |
+| 20:17 APK 内点击“自检” | 普通 Intent 启动 CarWith；1280×720，超过 43 秒 / 841 帧，14 个回环 ESTAB 端点（七对连接），无外部 HU 消费者 |
+| 20:25 最新 APK 严格冷启动第 1 轮 | 强制结束 CarWith / CarLife 后，由应用按钮重启；超过 102 秒 / 2041 帧，未出现 10 秒失败 |
+
+两份探针 H.264 均由 `ffprobe` 识别为 Baseline 1280×720，`ffmpeg -v error -i <file> -f null -` 完整解码无错误。Annex B 文件自身不保留传输层时间戳，其 `r_frame_rate` 不用于实际帧率或时长结论；40 秒来自通道时间戳与墙钟。原始流和含位置的截图仅存于 `/tmp`。APK 运行时 Pad 接收端关闭、两机蓝牙辅助服务均未运行，`dumpsys media_projection` 为 `null`。
+
+**修正早期结论：** `CarlifeAdbActivity` 的类名不意味着 APK 要调用 ADB。它是已导出的普通 Activity；应用用标准 Intent 启动，并由 CarWith 自己检查开关、隐私同意和权限。修复握手后，编码器 Surface 及时建立，早期的 10 秒失败不再复现。默认策略已恢复为 `EXPORTED_ENTRY`，仍保留 `ATTACH_EXISTING` 供受控诊断。未启动非导出组件、未伪造 UID，也未使用系统授权或录屏替代视频。
+
+最新版 APK SHA-256 `3e70adc9e0257aa22f26a75b7b01efa42d9700461da5fa7adaab7ed844250f4d`；338 项 JVM 测试（CarLife 95 项）、12 项 Python 测试及 lint 通过。严格 3 次冷启动、10 次启停和无线 CarPlay 接收端验收继续记录。用户已指定 DiPlay，已从其官方 v0.2.21 发布下载并安装到 Pad，SHA-256 `916c0708beb1022d4ea9678ff6a46dfb6d234f707837a2cbd80d615e8e2bb2e3`，APK 签名校验通过；安装本身不代表 CarPlay 已连通。
+
+## 音频桥接修正与当前卡点（2026-10-25 22:10）
+
+旧实现把 9240/9241/9242 的完整媒体帧交给 AES 解密；CarLife 组件源码和运行时都证明只有 12 字节头后的 body 需要解密。修正 `CarLifeSession.handleAudio()` 后，新会话不再出现连续 `MEDIA 音频解密失败`，并新增 `CarLifeAudioParserTest` 覆盖 Init/PCM/畸形帧。最新 APK SHA-256 `2a148f8308b610158f304f6802190b760d6bbb4db06aa226ff8c7712492f6c2f`；348 项 JVM 测试、lint 与构建通过。
+
+当时正式 CarPlay + 开启声音的实测显示 AirPlay 音频通道已协商成功：AudioSender 选择 t102/media/48000Hz AAC-LC，存活 130 秒并写入车机记忆，但只发出 0 包。该观察窗口没有 `MEDIA 音频初始化` 或 `AUDIO: CarWith 原生 PCM 接入`，系统 RemoteSubmix 输入出现 `mute`。当时据此推测 `AppRecorder.AudioCapture` 未激活。**这一根因推断已由下一节持续 MEDIA 帧和小米混合音频源码修正；不能把该窗口的静音推广为原厂未发送音频。**
+
+**下一步优先级：**
+
+1. 用 DiPlay/真车进入 CarWith 的“应用投屏”或可触发 `AudioCapture.startAudioCapture(MediaProjection)` 的原厂流程，确认 9240 INIT/DATA 与 44.1kHz capture 出流；mcarplay 不能伪造投屏状态。
+2. 等到 9240 有真实 PCM 后，验证 `CarLifeAudioBridge` 到 48kHz AirPlay 通路；需要实现 44.1k→48k 重采样，避免直接把 44.1k PCM 当 48k 发送。
+3. 只有音频 INIT + PCM 连续入队 + 车机有声，才可标记阶段 3 的原生音频通过；`AudioRecordData[mute]` 或零包不算成功。
+
+## 小米原生音乐音频打通（2026-10-25 23:51–10-26 00:07）
+
+23:51 复查时，原 APK 正持续报告 `MEDIA 音频解密失败`，同时视频仍约 20fps。原厂 `com.baidu.carlife.xiaomi` 8.8.4 APK 的 SHA-256 为 `00df4aaacbbc5837f3a0ef17fc55dfabf038596dd27b652cfb23c9722770a994`。本轮使用已有 JADX 输出核对以下静态路径；REA Android provider 缺少 `REA_JADX_MCP_JAR`，因此本轮这些源码观察来自本地 JADX，不标为新增 REA Evidence。
+
+- `RemoteMediaAudioProcessor.onReceiveMediaData()` 调用 `CarLifeAudioManager.onReceiveMedia()`，再到 `PcmHoldHelper.onWriteAudioPcm()`。
+- `PcmHoldHelper.sendMusicInitialParameterPackage()` 通过 `PCMPackageHead.setMusicAudioTrackParameter()` 加密 INIT body；`sendMusicPCMData()` 则直接复制 PCM body，没有 AES。12 字节头始终明文。
+- `NaviAudioManager.write()` 仍显式加密 TTS body，因此明文规则仅用于小米组件的 MEDIA_DATA；解密失败不会重试明文。
+- `EncryptSetupManager.exec()` 由手机发 MD_RSA_REQUEST、HU 回公钥，手机回加密种子，HU ACK 后手机 READY。现有握手方向正确，无需主动发送 MD 请求。MD_INFO 的 sdk 字段实际为 `29`，与内部 `sdk.build.xiaomi` 不同；音频规则依据本会话明确使用的小米组件选择。
+
+实现补齐：每个音频通道独立保存格式；PCM 携带采样率/声道数；有状态整数时钟的线性重采样把 44.1kHz 双声道转换为 48kHz，单声道复制为双声道；外部音频发送器按 1024 样本组织 AAC 帧，初始化编码器后编码并按样本时钟发送 RTP。队列有界，停止时可唤醒等待线程。TTS/VOICE 已有提示优先选择，真实提示打断与恢复尚待验收；线性重采样的音质尚未进行频响测量。
+
+实测时间均为北京时间。00:00:46.682 收到 `MEDIA 音频初始化 44100Hz 2ch 16bit`，随后 `原生 PCM 接入 #1 ... nonzero=true dropped=0`。DiPlay 随即完成 AAC 解密、解码并写入扬声器 AudioTrack。用户明确确认“能听到，音调和速度正常”。至 00:07:23.277（约 6 分 36 秒），DiPlay `outputBuffersTotal=18538`、`totalWrittenFrames=18982912`、`playbackHeadFrames=18968515`，`dropped=0`、`underruns=+0`、`writeErrors=0`、`rebuffers=0`；观察到的认证失败为 0，视频约 20fps、recoveries=0。自然换曲后仍继续出声。本轮尚未完成完整 10 分钟或暂停恢复专项；按用户要求收尾。
+
+稳定性观察构建 SHA-256 为 `94ae9756b71327a3cd991c4c9c007c41194a52e0d0acf4c29c8167c11d133dab`。最终构建另修正原生音频无需录屏授权的提示/启动分支，并为会话中补启声音补发 RECORD；SHA-256 为 `5f47a15ca07e33bb05b2479432655380c7eacb6afba6455a377e0a51477bd099`。362 项 JVM 测试、12 项 Python 测试、格式检查、lint 和构建通过。后续仍需导航提示、暂停恢复、10 分钟专项和真实车机验收。
+
+最终构建已覆盖安装到小米。安装后的自动重连遇到 DiPlay 旧会话 `pair-verify M2 缺少 publicKey`；重启 DiPlay 后重新出视频。新版音频行显示“使用 CarWith 原生声音 · 无需额外录屏授权”，点击“开启”后显示“已开启”，未弹出录屏授权；48kHz AAC-LC SETUP 和补发 RECORD 均成功。这次重连只作安装冒烟检查，不与前轮时长合并计算稳定性。

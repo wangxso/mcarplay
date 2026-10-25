@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置页菜单「显示」图标：显示器 + 支架 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="13dp"
+    android:height="13dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M10,10 h44 a6,6 0 0 1 6,6 v26 a6,6 0 0 1 -6,6 h-44 a6,6 0 0 1 -6,-6 v-26 a6,6 0 0 1 6,-6 z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="5.5" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M32,48 v8 M20,56 h24"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="5.5"
+        android:strokeLineCap="round" />
+</vector>
