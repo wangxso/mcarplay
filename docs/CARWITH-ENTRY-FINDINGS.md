@@ -168,3 +168,24 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 稳定性观察构建 SHA-256 为 `94ae9756b71327a3cd991c4c9c007c41194a52e0d0acf4c29c8167c11d133dab`。最终构建另修正原生音频无需录屏授权的提示/启动分支，并为会话中补启声音补发 RECORD；SHA-256 为 `5f47a15ca07e33bb05b2479432655380c7eacb6afba6455a377e0a51477bd099`。362 项 JVM 测试、12 项 Python 测试、格式检查、lint 和构建通过。后续仍需导航提示、暂停恢复、10 分钟专项和真实车机验收。
 
 最终构建已覆盖安装到小米。安装后的自动重连遇到 DiPlay 旧会话 `pair-verify M2 缺少 publicKey`；重启 DiPlay 后重新出视频。新版音频行显示“使用 CarWith 原生声音 · 无需额外录屏授权”，点击“开启”后显示“已开启”，未弹出录屏授权；48kHz AAC-LC SETUP 和补发 RECORD 均成功。这次重连只作安装冒烟检查，不与前轮时长合并计算稳定性。
+
+## 意外退出排查与心跳修复（2026-10-26）
+
+覆盖安装前保存手机 crash buffer、`dumpsys activity exit-info com.mcarplay.app`、应用日志、DropBox 与 Pad 对应记录；原始记录包含设备信息，仅留在本机临时目录，不纳入源码包。
+
+- 小米仍为 `2509FPN0BC / OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`、CarLife `8.8.4`，接收端为 `PA2353 / Android 14 / DiPlay 0.2.21`。
+- 手机 crash buffer 反复出现 `FATAL EXCEPTION: carlife-video-heartbeat`，堆栈均为停止时 `Thread.sleep()` 抛出的 `InterruptedException`。原全局未捕获处理器吞掉异常，因此 FATAL 日志不等于进程实际退出；00:08 后同一手机进程持续存活，系统退出记录未显示对应的崩溃或 ANR，DropBox 没有本应用崩溃条目。
+- Pad 的 00:24:44 退出记录明确为 `LOW_MEMORY`，描述 `single-cleaner`，PSS 206MB、RSS 347MB。这是接收端被系统清理的证据，不能归因于手机 APK 崩溃，也不足以定位 DiPlay 内存泄漏。
+- 00:38:10 手机隧道和事件连接收到 `Connection reset`，接着视频 `Broken pipe`；Pad 00:38:11 仍输出约 20fps 视频统计，随后记录 `shutdown reason=DiPlay disconnect terminateProcess=false` 并释放无线栈。此时没有接收端崩溃记录；仅凭现有时序无法确定最初的断开触发原因，不能把之前的低内存事件直接套用到这次拆链。
+- 原视频结束回调没有停止 CarLife 源，CarWith 在断开后仍继续生成帧。本轮补齐本轮源、所有权和原生音频桥清理，并以视频发送器身份隔离旧轮回调，避免影响新连接。
+
+心跳现在捕获预期中断、恢复中断标志并正常返回。新增 `CarLifeSessionTest` 直接驱动实际心跳线程：连续 20 次在睡眠中停止不进入未捕获处理器，且停止后晚启动的线程立即结束。全量 364 项 JVM 测试、格式检查、standard debug lint 与构建通过。
+
+修复版（含 mcarplay 品牌与 Mi 风格新图标）SHA-256 为 `c8eb9511c0220f6cce8bc4437f7335ba24ddd0fa9cfdb1e28fc9a46e3f72b14d`，00:49 覆盖安装成功，用户自行接受新版免责声明后完成以下回归：
+
+1. 00:53:14 起向 DiPlay 发送真实 CarWith 视频，1920×1140、约 20fps。00:54:49 有意通过 `am force-stop com.shihab.diplay` 关闭接收端，模拟接收端进程丢失，不计为自然崩溃。
+2. 手机 00:54:49.115 收到视频连接重置，00:54:49.118 已记录七路连接关闭，随后恢复蓝牙探测。继续观察 10 秒，没有新增 CarLife 视频帧，旧实现断开后持续出流的问题未复现。
+3. 重新打开 DiPlay 后，00:55:11.253 再次收到首帧。00:56:13 在手机应用内点击并确认断开，七路通道正常关闭，保活服务停止。
+4. 00:56:24.778 再次出画，至 00:57:31 已收到 1321 帧，界面显示约 20fps。安装后的同一手机进程持续存活，按该进程过滤的 crash buffer 为 0 行，未新增心跳 FATAL。
+
+本轮仅覆盖安装冒烟、接收端丢失清理和重连、应用内手动断开后重连；没有重做音乐听感、导航提示或完整 10 分钟专项，不代表真实车机稳定性验收完成。364 项 JVM 测试、12 项 Python 测试、Spotless、standard debug/release lint 与 standard debug/release、remote debug 构建通过。

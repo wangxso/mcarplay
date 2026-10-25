@@ -2793,6 +2793,8 @@ object SessionController {
                                 var pendingVideoW = 0
                                 var pendingVideoH = 0
                                 var pendingVideoDensity = 0
+                                var carLife: CarLifeSession? = null
+                                lateinit var sessionVideoSender: VideoSender
                                 if (host != null) {
                                     // 「显示」偏好：流画布/虚拟屏按车机分辨率百分比生成。
                                     // 只在会话建立时生效——编码器与虚拟屏尺寸此时定型；
@@ -2846,7 +2848,7 @@ object SessionController {
                                         object : ExternalVideoSource {
                                             override fun requestKeyFrame(): Boolean = currentCarLifeSession?.requestKeyFrame() == true
                                         }
-                                    videoSender =
+                                    sessionVideoSender =
                                         VideoSender(
                                             host = host,
                                             dataPort = screen.dataPort,
@@ -2857,7 +2859,15 @@ object SessionController {
                                             log = { line -> appendLog(line) },
                                             keepAliveWithStats = setup.keepAliveSendStatsAsBody,
                                             externalVideoSource = carLifeSource,
-                                            onEnded = {
+                                            onEnded = onVideoEnded@{
+                                                // Stop this stream's source even if a newer stream already owns the controller.
+                                                carLife?.let {
+                                                    it.stop()
+                                                    releaseCarLifeSession(it)
+                                                }
+                                                if (videoSender !== sessionVideoSender) return@onVideoEnded
+                                                nativeAudioBridge?.stop()
+                                                nativeAudioBridge = null
                                                 // 会话真实结束：解除静默降噪（客户端恢复探测/重连）
                                                 appendLog(">>> CarPlay 会话结束（推流终止）——恢复蓝牙探测")
                                                 BtSessionGate.sessionActive = false
@@ -2884,6 +2894,7 @@ object SessionController {
                                                 attributeAudioTeardown()
                                             },
                                         )
+                                    videoSender = sessionVideoSender
                                     // 先连端口（车机看门狗），编码器等 RECORD 后再启动
                                     videoSender?.openDataPort()
                                 }
@@ -2899,7 +2910,6 @@ object SessionController {
                                     val videoW = pendingVideoW
                                     val videoH = pendingVideoH
                                     val videoDensity = pendingVideoDensity
-                                    var carLife: CarLifeSession? = null
                                     val createdCarLife =
                                         CarLifeSession(
                                             application = context.applicationContext as android.app.Application,

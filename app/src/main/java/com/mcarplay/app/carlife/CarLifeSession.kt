@@ -327,10 +327,15 @@ class CarLifeSession(
         if (heartbeatThread != null) return
         heartbeatThread =
             thread(name = "carlife-video-heartbeat", isDaemon = true) {
-                while (running.get()) {
-                    Thread.sleep(VIDEO_HEARTBEAT_INTERVAL_MS)
-                    if (!running.get()) break
-                    sendVideoHeartbeat()
+                try {
+                    while (running.get()) {
+                        Thread.sleep(VIDEO_HEARTBEAT_INTERVAL_MS)
+                        if (!running.get()) break
+                        sendVideoHeartbeat()
+                    }
+                } catch (_: InterruptedException) {
+                    // stop() interrupts the sleeping worker; cancellation is not a session failure.
+                    Thread.currentThread().interrupt()
                 }
             }
     }

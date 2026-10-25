@@ -6,6 +6,8 @@
 
 ## 当前基线与结论
 
+- **10 月 26 日退出排查：** 已修复 `CarLifeSession` 心跳睡眠被 `stop()` 中断时未捕获 `InterruptedException` 的问题；新增实际心跳线程停止回归，连续 20 次启停不进入未捕获异常处理器。CarPlay 视频结束时现在同时停止本轮 CarLife 源并释放所有权、停止原生音频桥，旧轮回调不得清理新轮状态。覆盖安装前的小米系统退出记录未显示对应时段的崩溃/ANR；Pad 在 00:24 被系统以 `LOW_MEMORY / single-cleaner` 清理，00:38 为链路重置及 DiPlay 主动拆链记录，不能混为一次 mcarplay 进程崩溃。详情见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+- **修复版设备回归：** 覆盖安装并由用户确认免责声明后，在 DiPlay 上恢复 1920×1140、约 20fps 画面；有意关闭接收端后手机关闭七路通道，观察 10 秒无残留视频帧。重新打开接收端可再出画，手机内手动断开后也可再次连接；同一手机进程保持存活，未新增 FATAL。仅为定向回归，不替代 10 分钟/实车验收。
 - **10 月 26 日 00:07 更新：音乐音频已打通并获用户听感确认。** 小米原生 9240 INIT 为加密参数、混合模式 MEDIA_DATA 为明文 PCM；修正按帧类型解析，补齐 44.1kHz → 48kHz 双声道重采样、AAC 编码和 RTP 节奏。00:00:46–00:07:23 持续约 6 分 36 秒；DiPlay 解码输出 18,538 个缓冲，累计写入 18,982,912 样本帧，播放游标正常增长，解码丢包、欠载及写入错误均为 0。用户确认“能听到，音调和速度正常”。视频约 20fps、recoveries=0。该结果来自 Pad 仿真；导航提示、暂停恢复专项、完整 10 分钟和真实车机验收仍待完成。
 - **修正前轮音频判断：** 23:51 起已观察到连续 MEDIA 帧，被统一 AES 解密规则拒绝。小米实际走 `RemoteMediaAudioProcessor → CarLifeAudioManager → PcmHoldHelper`；`AppRecorder` 不是这条通路的必经入口。现有 RSA/AES 顺序已与原厂一致，本轮没有增加特性或逆向发送 MD 请求。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
 - **20:26 更新：已打通单机 CarWith 出流。** 修复 2.0 鉴权、统计 protobuf 必填字段、加密命令解析和渠道准入时序后，探针两次各收到 40 秒可解码 H.264（1280×720，780 / 437 帧）；第二轮通过 9340 点击进入应用列表，画面变化已核对。两份流均通过 `ffmpeg` 完整解码。
@@ -204,7 +206,7 @@ python3 -m venv .venv
   :app:lintStandardDebug :app:assembleStandardDebug
 ```
 
-当前基线：全量 JVM 测试 362 项，0 失败、0 错误、0 跳过；探针 Python 测试 12 项通过；Spotless、lint 和构建通过。新增覆盖小米混合音频保护规则、损坏 INIT 拒绝、PCM 格式和分块重采样时钟，以及外部 PCM 经 RTP 加密后的真实 UDP 回环。APK 为 `app/build/outputs/apk/standard/debug/app-standard-debug.apk`，SHA-256 为 `5f47a15ca07e33bb05b2479432655380c7eacb6afba6455a377e0a51477bd099`。本轮 Gradle 使用 `--offline` 完成上述检查；探针测试命令为 `.venv/bin/python -m unittest discover -s tools -p 'test_*.py'`。音乐稳定性观察使用同一音频实现的前一构建 `94ae9756b71327a3cd991c4c9c007c41194a52e0d0acf4c29c8167c11d133dab`；最终构建另修正原生音频界面无需录屏授权，以及会话中补启声音时的 RECORD 激活。
+当前基线：全量 JVM 测试 364 项，0 失败、0 错误、0 跳过；探针 Python 测试 12 项通过；Spotless、lint 和构建通过。新增覆盖小米混合音频保护规则、损坏 INIT 拒绝、PCM 格式和分块重采样时钟、外部 PCM 经 RTP 加密后的真实 UDP 回环，以及心跳线程正常停止与停止后晚启动。APK 为 `app/build/outputs/apk/standard/debug/app-standard-debug.apk`，SHA-256 为 `c8eb9511c0220f6cce8bc4437f7335ba24ddd0fa9cfdb1e28fc9a46e3f72b14d`。本轮 Gradle 使用 `--offline` 完成上述检查；探针测试命令为 `.venv/bin/python -m unittest discover -s tools -p 'test_*.py'`。音乐稳定性观察使用前一构建 `94ae9756b71327a3cd991c4c9c007c41194a52e0d0acf4c29c8167c11d133dab`，不与后续安装冒烟检查合并计时。
 
 验收证据统一记录：日期、手机型号与系统、CarWith/CarLife 版本、APK 与 H.264 的 SHA-256、完整命令、脱敏时序日志、`ffprobe` 结果和车机型号/固件。认证签名、AES 密钥、配对材料和个人日志不得入仓。
 
