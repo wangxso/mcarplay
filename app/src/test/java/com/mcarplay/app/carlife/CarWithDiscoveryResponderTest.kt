@@ -7,6 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.DataInputStream
 import java.io.IOException
+import java.net.ConnectException
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -203,9 +204,13 @@ class CarWithDiscoveryResponderTest {
     }
 
     private fun assertPortReleased(port: Int) {
-        ServerSocket().use {
-            it.reuseAddress = true
-            it.bind(InetSocketAddress(loopback, port))
+        Socket().use { probe ->
+            try {
+                probe.connect(InetSocketAddress(loopback, port), 1_000)
+                throw AssertionError("Responder still accepts connections on $port")
+            } catch (_: ConnectException) {
+                // The listener is closed. TCP TIME_WAIT can still prevent immediate rebinding.
+            }
         }
     }
 
