@@ -72,11 +72,14 @@ environment. Then run:
 ## Publish a release
 
 1. Update `appVersionName` in `app/build.gradle.kts` for each new version.
-2. Commit that change, then create and push a matching tag, for example `v0.1.0`.
-   A local tag that has not been pushed does not trigger GitHub Actions.
+2. Commit that change, then create and push a matching tag. Use `v0.1.0` for a
+   regular release or `v0.1.0-test.1` for a test prerelease. The base version in
+   either tag must match `appVersionName`. A local tag that has not been pushed
+   does not trigger GitHub Actions.
 3. **Signed APK** checks the tag, tests and lint, builds a signed APK, verifies
    its signature, and publishes it with checksums and a certificate report in
-   GitHub Releases. The tag must exactly equal `v` + `appVersionName`.
+   GitHub Releases. Tags ending in `-test.N` are marked as prereleases; the APK
+   keeps the base `appVersionName`.
 4. Download the APK and check its SHA-256 and certificate before distributing it.
 
 Manual **Signed APK** runs upload artifacts only; they do not create a release
@@ -96,8 +99,8 @@ when testing Android upgrade ordering.
 2. 上传后进入 **Actions → Android CI → 成功运行 → Artifacts**，下载并解压测试 APK。
    此流程无需签名配置。
 3. 如需固定签名，按表格在仓库 **Actions Secrets** 中配置四项，妥善备份自己的私钥。
-4. 修改 `appVersionName` 后推送同版本 `v*` 标签，工作流会生成正式签名 APK 并发布 Release。
-   手动运行正式签名工作流则只保存构建产物。
+4. 修改 `appVersionName` 后推送匹配标签：`v0.1.0` 发布正式 Release，`v0.1.0-test.1`
+   发布测试预览版（GitHub prerelease）。工作流会生成正式签名 APK；手动运行只保存构建产物。
 5. 旧 debug 包与新正式签名不同，首次切换通常需要卸载旧包；本地设置可能随之删除。
 
 GitHub-hosted execution can only be confirmed after uploading this repository and

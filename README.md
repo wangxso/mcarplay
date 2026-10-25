@@ -119,8 +119,9 @@ For stable release signing, add repository secrets under
 | `KEY_PASSWORD` | Signing-key password |
 
 Follow [GitHub setup](docs/GITHUB_SETUP.md) to generate a keystore and publish a tag.
-A tag such as `v0.1.0` must match `appVersionName` in `app/build.gradle.kts`.
-Tag builds publish a GitHub Release; manual runs only upload artifacts.
+A stable tag such as `v0.1.0`, or a test tag such as `v0.1.0-test.1`, must match
+`appVersionName` in `app/build.gradle.kts`; test tags publish as GitHub prereleases.
+Manual runs only upload artifacts.
 Missing secrets fail the signed workflow; it never substitutes a debug certificate.
 Retain the same private signing key for subsequent updates.
 

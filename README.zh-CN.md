@@ -113,8 +113,9 @@ python3 -m venv .venv
 | `KEY_PASSWORD` | 签名密钥密码 |
 
 生成密钥和发布标签的步骤见 [GitHub 上传与发布指南](docs/GITHUB_SETUP.md)。
-`v0.1.0` 等标签须与 `app/build.gradle.kts` 的 `appVersionName` 一致。
-标签构建会发布 GitHub Release，手动运行只上传 Actions 产物。
+正式标签如 `v0.1.0`，或测试标签如 `v0.1.0-test.1`，其基础版本须与
+`app/build.gradle.kts` 的 `appVersionName` 一致；测试标签会发布为 GitHub 预发布版本。
+手动运行只上传 Actions 产物。
 缺少 Secrets 时正式签名工作流明确失败，不会退回 debug 证书。后续更新应始终使用同一私钥。
 
 本地正式签名：复制 `keystore.properties.example` 为 `keystore.properties`，

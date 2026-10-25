@@ -40,8 +40,11 @@ jobs:
           import os, pathlib, re
           source = pathlib.Path('app/build.gradle.kts').read_text()
           version = re.search(r'val appVersionName = "([0-9]+\.[0-9]+\.[0-9]+)"', source).group(1)
-          if os.environ['GITHUB_REF_TYPE'] == 'tag' and os.environ['GITHUB_REF_NAME'] != 'v' + version:
-              raise SystemExit('Tag must match appVersionName: v' + version)
+          tag = os.environ['GITHUB_REF_NAME']
+          base_tag = 'v' + version
+          test_tag = re.fullmatch(re.escape(base_tag) + r'-test\.[0-9]+', tag)
+          if os.environ['GITHUB_REF_TYPE'] == 'tag' and tag != base_tag and not test_tag:
+              raise SystemExit('Tag must be ' + base_tag + ' or ' + base_tag + '-test.N')
           PY
           python -m pip install -r tools/requirements.txt
           python -m unittest discover -s tools -p 'test_*.py'
@@ -96,9 +99,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/release/* \
-            --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "mcarplay $GITHUB_REF_NAME" --generate-notes
+          release_args=(--repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes)
+          if [[ "$GITHUB_REF_NAME" =~ -test\.[0-9]+$ ]]; then
+            release_args+=(--prerelease --title "mcarplay $GITHUB_REF_NAME (test)")
+          else
+            release_args+=(--title "mcarplay $GITHUB_REF_NAME")
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/release/* "${release_args[@]}"
       - name: Remove signing material
         if: always()
         run: rm -f "$RUNNER_TEMP/mcarplay-release.jks"
