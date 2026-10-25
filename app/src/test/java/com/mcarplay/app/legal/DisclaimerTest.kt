@@ -94,7 +94,9 @@ class DisclaimerContentTest {
     fun contentCoversMandatoryTopics() {
         val text = DisclaimerContent.sections.joinToString("\n") { it.title + "\n" + it.body }
         // 分享出去必须讲清的三类内容：测试范围、驾驶风险、系统权限
-        assertTrue(text.contains("已经测试过的组合只有"))
+        assertTrue(text.contains("本轮 CarWith 桥接测试组合"))
+        assertTrue(text.contains("小米 17 Pro Max"))
+        assertTrue(text.contains("真实车机仍待验收"))
         assertTrue(text.contains("驾驶安全"))
         assertTrue(text.contains("Shizuku"))
         // 非官方声明（避免被误认为与 Apple 有关联）
