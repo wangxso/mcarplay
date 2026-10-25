@@ -2,7 +2,17 @@
 
 <img src="docs/branding/mcarplay-icon.png" width="96" height="96" alt="mcarplay app icon">
 
+[![Android CI](https://github.com/wangxso/mcarplay/actions/workflows/android-ci.yml/badge.svg)](https://github.com/wangxso/mcarplay/actions/workflows/android-ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/wangxso/mcarplay?include_prereleases&logo=android)](https://github.com/wangxso/mcarplay/releases)
+[![Release downloads](https://img.shields.io/github/downloads/wangxso/mcarplay/total?logo=github)](https://github.com/wangxso/mcarplay/releases)
+[![Android 12+](https://img.shields.io/badge/Android-12%2B-3DDC84?logo=android&logoColor=white)](#install-and-connect)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Status: experimental](https://img.shields.io/badge/Status-experimental-orange)](#status)
+[![GitHub stars](https://img.shields.io/github/stars/wangxso/mcarplay?style=flat&logo=github)](https://github.com/wangxso/mcarplay/stargazers)
+
 **[English](README.md) | [简体中文](README.zh-CN.md)**
+
+[Changelog](CHANGELOG.md) · [Releases](https://github.com/wangxso/mcarplay/releases)
 
 Bridge Xiaomi CarWith to a wireless CarPlay receiver using an Android APK.
 mcarplay receives native CarWith video and audio on the phone, sends them to the
@@ -122,6 +132,8 @@ Follow [GitHub setup](docs/GITHUB_SETUP.md) to generate a keystore and publish a
 A stable tag such as `v0.1.0`, or a test tag such as `v0.1.0-test.1`, must match
 `appVersionName` in `app/build.gradle.kts`; test tags publish as GitHub prereleases.
 Manual runs only upload artifacts.
+Before pushing a tag, add its exact `## [vX.Y.Z-test.N]` (or stable tag) entry to
+`CHANGELOG.md`; the signed workflow uses that entry as the release description.
 Missing secrets fail the signed workflow; it never substitutes a debug certificate.
 Retain the same private signing key for subsequent updates.
 

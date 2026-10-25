@@ -11,7 +11,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = {
     ".editorconfig", ".gitattributes", ".gitignore", "AGENTS.md", "LICENSE", "NOTICE",
-    "README.md", "README.zh-CN.md", "DISCLAIMER.md", "THIRD_PARTY_NOTICES.md",
+    "README.md", "README.zh-CN.md", "CHANGELOG.md", "DISCLAIMER.md", "THIRD_PARTY_NOTICES.md",
     "IMPLEMENTATION_PLAN.md", "build.gradle.kts",
     "settings.gradle.kts", "gradle.properties", "gradlew", "gradlew.bat",
     "keystore.properties.example", "app/build.gradle.kts", "app/lint-baseline.xml",

@@ -204,14 +204,19 @@ class CarWithDiscoveryResponderTest {
     }
 
     private fun assertPortReleased(port: Int) {
-        Socket().use { probe ->
-            try {
-                probe.connect(InetSocketAddress(loopback, port), 1_000)
-                throw AssertionError("Responder still accepts connections on $port")
-            } catch (_: ConnectException) {
-                // The listener is closed. TCP TIME_WAIT can still prevent immediate rebinding.
+        val deadline = System.nanoTime() + 2_000_000_000L
+        // A blocked native accept may release its listening descriptor shortly after close() returns.
+        while (System.nanoTime() < deadline) {
+            Socket().use { probe ->
+                try {
+                    probe.connect(InetSocketAddress(loopback, port), 200)
+                } catch (_: ConnectException) {
+                    return
+                }
             }
+            Thread.sleep(10)
         }
+        throw AssertionError("Responder still accepts connections on $port after shutdown deadline")
     }
 
     private fun awaitClient(responder: CarWithDiscoveryResponder) {

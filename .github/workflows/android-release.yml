@@ -48,6 +48,11 @@ jobs:
           PY
           python -m pip install -r tools/requirements.txt
           python -m unittest discover -s tools -p 'test_*.py'
+      - name: Prepare changelog release notes
+        if: github.ref_type == 'tag'
+        run: |
+          python tools/release_notes.py --tag "$GITHUB_REF_NAME" \
+            --output "$RUNNER_TEMP/release-notes.md"
       - name: Restore signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -99,7 +104,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          release_args=(--repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes)
+          release_args=(--repo "$GITHUB_REPOSITORY" --verify-tag --notes-file "$RUNNER_TEMP/release-notes.md")
           if [[ "$GITHUB_REF_NAME" =~ -test\.[0-9]+$ ]]; then
             release_args+=(--prerelease --title "mcarplay $GITHUB_REF_NAME (test)")
           else

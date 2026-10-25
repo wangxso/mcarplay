@@ -2,7 +2,17 @@
 
 <img src="docs/branding/mcarplay-icon.png" width="96" height="96" alt="mcarplay 应用图标">
 
+[![Android CI](https://github.com/wangxso/mcarplay/actions/workflows/android-ci.yml/badge.svg)](https://github.com/wangxso/mcarplay/actions/workflows/android-ci.yml)
+[![最新版本](https://img.shields.io/github/v/release/wangxso/mcarplay?include_prereleases&logo=android)](https://github.com/wangxso/mcarplay/releases)
+[![Release 下载量](https://img.shields.io/github/downloads/wangxso/mcarplay/total?logo=github)](https://github.com/wangxso/mcarplay/releases)
+[![Android 12+](https://img.shields.io/badge/Android-12%2B-3DDC84?logo=android&logoColor=white)](#安装和连接)
+[![MIT 许可证](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![实验阶段](https://img.shields.io/badge/Status-experimental-orange)](#当前进度)
+[![GitHub Stars](https://img.shields.io/github/stars/wangxso/mcarplay?style=flat&logo=github)](https://github.com/wangxso/mcarplay/stargazers)
+
 **[English](README.md) | [简体中文](README.zh-CN.md)**
+
+[更新日志](CHANGELOG.md) · [版本下载](https://github.com/wangxso/mcarplay/releases)
 
 用一个 Android APK，把小米 CarWith 桥接到无线 CarPlay 接收端。
 mcarplay 在手机本机接收 CarWith 的原生视频和音频，发送到接收端，再把车机触控回传给
@@ -116,6 +126,8 @@ python3 -m venv .venv
 正式标签如 `v0.1.0`，或测试标签如 `v0.1.0-test.1`，其基础版本须与
 `app/build.gradle.kts` 的 `appVersionName` 一致；测试标签会发布为 GitHub 预发布版本。
 手动运行只上传 Actions 产物。
+推送标签前，在 `CHANGELOG.md` 添加对应的 `## [vX.Y.Z-test.N]`（或正式标签）版本说明；
+签名工作流会提取该节作为 Release 正文。
 缺少 Secrets 时正式签名工作流明确失败，不会退回 debug 证书。后续更新应始终使用同一私钥。
 
 本地正式签名：复制 `keystore.properties.example` 为 `keystore.properties`，

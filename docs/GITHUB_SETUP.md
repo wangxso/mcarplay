@@ -76,6 +76,9 @@ environment. Then run:
    regular release or `v0.1.0-test.1` for a test prerelease. The base version in
    either tag must match `appVersionName`. A local tag that has not been pushed
    does not trigger GitHub Actions.
+   Before committing, add the tag's exact `## [v0.1.0-test.1]` (or stable tag)
+   heading and nonempty release notes to `CHANGELOG.md`. The workflow extracts
+   that entry for the release body and rejects missing or duplicate entries.
 3. **Signed APK** checks the tag, tests and lint, builds a signed APK, verifies
    its signature, and publishes it with checksums and a certificate report in
    GitHub Releases. Tags ending in `-test.N` are marked as prereleases; the APK
@@ -101,6 +104,7 @@ when testing Android upgrade ordering.
 3. 如需固定签名，按表格在仓库 **Actions Secrets** 中配置四项，妥善备份自己的私钥。
 4. 修改 `appVersionName` 后推送匹配标签：`v0.1.0` 发布正式 Release，`v0.1.0-test.1`
    发布测试预览版（GitHub prerelease）。工作流会生成正式签名 APK；手动运行只保存构建产物。
+   提交前须在 `CHANGELOG.md` 添加对应标签的非空版本说明；发布正文自动取自这一节。
 5. 旧 debug 包与新正式签名不同，首次切换通常需要卸载旧包；本地设置可能随之删除。
 
 GitHub-hosted execution can only be confirmed after uploading this repository and
