@@ -1,0 +1,57 @@
+name: Connection problem / 连接问题
+description: Report connection, video, audio or touch problems with a redacted support report.
+title: "[Connection] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reproduce while parked, then tap **导出脱敏诊断报告** on mcarplay's main screen.
+        If the app exited, reopen and export before reinstalling or clearing data.
+        请先复现，再导出报告；不要上传原始抓包、密码、配对密钥或精确位置截图。
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy / 隐私检查
+      options:
+        - label: I reviewed attachments for credentials and private information / 已检查附件不含凭据和隐私信息
+          required: true
+  - type: input
+    id: build
+    attributes:
+      label: App build / 应用版本
+      description: Version, report ID, or APK SHA-256 from the report / 版本、报告编号或 APK SHA-256。
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: Phone and OS / 手机与系统
+      placeholder: Xiaomi model, HyperOS/Android version, CarWith and CarLife versions
+    validations:
+      required: true
+  - type: input
+    id: receiver
+    attributes:
+      label: Receiver / 接收端
+      placeholder: Vehicle/head unit and firmware, or tablet and DiPlay version / 车机与固件，或平板与 DiPlay 版本
+    validations:
+      required: true
+  - type: input
+    id: time
+    attributes:
+      label: Failure time and timezone / 故障时间与时区
+      placeholder: YYYY-MM-DD HH:mm:ss UTC+08:00
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps and observations / 复现步骤与现象
+      description: Include the receiver's message, expected/actual behavior, and video/audio/touch results / 包含接收端提示及画面、声音、触控结果。
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Redacted support report / 脱敏诊断报告
+      description: Drag the exported TXT file here. If export fails, describe the error instead. Do not paste unredacted logcat / 拖入 TXT，无法导出时请说明错误。
+    validations:
+      required: true

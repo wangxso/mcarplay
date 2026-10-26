@@ -1,8 +1,8 @@
 package com.mcarplay.app.util
 
 import android.content.Context
+import com.mcarplay.app.diagnostics.RotatingTextFile
 import java.io.File
-import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -56,7 +56,7 @@ object DebugFileLog {
         currentSessionOnly: Boolean,
     ): String? =
         runCatching {
-            val text = File(context.filesDir, "main_debug.log").readText(Charsets.UTF_8)
+            val text = synchronized(lock) { store(context).read(4_100_000) }
             if (currentSessionOnly) currentSessionSlice(text) else text
         }.getOrNull()
 
@@ -79,6 +79,18 @@ object DebugFileLog {
             }
         }.getOrNull()
 
+    private fun store(context: Context): RotatingTextFile = RotatingTextFile(File(context.filesDir, "main_debug.log"), 2_000_000)
+
+    fun readRecent(
+        context: Context,
+        maxBytes: Int,
+        currentSessionOnly: Boolean,
+    ): String? =
+        runCatching {
+            val text = synchronized(lock) { store(context).read(maxBytes) }
+            if (currentSessionOnly) currentSessionSlice(text) else text
+        }.getOrNull()
+
     /**
      * 取最后一条启动标记之后的内容（纯函数，单测覆盖边界）。
      * 无标记 → 全文：旧版本写入的文件里没有标记，此时全量比空更好。
@@ -93,36 +105,14 @@ object DebugFileLog {
         message: String,
     ) {
         try {
-            synchronized(lock) {
-                val file = File(context.filesDir, "main_debug.log")
-                // 超限直接删会连「本次启动」标记一起丢（导出就退化为全量历史）。
-                // 删后立即重写一条标记，保证截断后的新文件仍能按会话切分。
-                if (file.length() > 2_000_000) {
-                    file.delete()
-                    FileWriter(
-                        file,
-                        true,
-                    ).use {
-                        it
-                            .append('[')
-                            .append(timestamp.format(Date()))
-                            .append("] ")
-                            .append(SESSION_MARKER)
-                            .append('\n')
-                    }
+            val stamped =
+                synchronized(lock) {
+                    val line = "[" + timestamp.format(Date()) + "] " + message
+                    store(context).append(line)
+                    line
                 }
-                FileWriter(file, true).use { writer ->
-                    writer
-                        .append('[')
-                        .append(timestamp.format(Date()))
-                        .append("] ")
-                        .append(message)
-                        .append('\n')
-                }
-            }
             tap?.let { listener ->
-                val line = "[" + timestamp.format(Date()) + "] " + message
-                runCatching { listener(sequence.incrementAndGet(), line) }
+                runCatching { listener(sequence.incrementAndGet(), stamped) }
             }
         } catch (_: Throwable) {
         }

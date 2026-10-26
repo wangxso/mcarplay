@@ -68,6 +68,14 @@ root or Shizuku. Optional display/launcher utilities inherited from CarDeck may
 still use [Shizuku](https://shizuku.rikka.app/).
 If pairing stalls after reinstalling, restart the test receiver to clear its previous session.
 
+## Connection troubleshooting
+
+Tap **导出脱敏诊断报告** on the main connection card, review it, then share the file
+with reproduction steps, failure time and receiver model/firmware. Recent previous
+processes are included automatically; reopen and export after an unexpected exit,
+before reinstalling or clearing app data. No computer or Shizuku is needed, and
+there is no automatic upload. See [diagnostic contents and error codes](docs/DIAGNOSTICS.md).
+
 ## Architecture
 
 ```text
@@ -110,7 +118,7 @@ Workflows work with any repository owner, without changing repository URLs:
 
 | Workflow | Trigger | Output |
 | --- | --- | --- |
-| **Android CI** | Branch push, pull request or manual run | Debug APK, SHA-256 checksum and check reports |
+| **Android CI** | Branch push, pull request or manual run (documentation-only changes are skipped) | Debug APK, SHA-256 checksum and check reports |
 | **Signed APK** | `v*` tag push or manual run | Signed release APK, checksum and signing-certificate report |
 
 **Android CI needs no signing secrets.** Open **Actions → Android CI → a successful

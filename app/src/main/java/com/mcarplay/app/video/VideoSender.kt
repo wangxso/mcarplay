@@ -57,6 +57,7 @@ class VideoSender(
      * frames from the local Surface path.
      */
     private val externalVideoSource: ExternalVideoSource? = null,
+    private val onExternalFrameSent: ((Int) -> Unit)? = null,
 ) {
     @Volatile
     private var width: Int = (width / 2) * 2
@@ -287,6 +288,7 @@ class VideoSender(
                 if (!configSent) continue
                 val packed = packLengthPrefixed(nalUnits)
                 sendPlainFrame(packed, frame.keyFrame, output)
+                runCatching { onExternalFrameSent?.invoke(packed.size) }
                 maybeSendKeepAlive(output)
             }
         } catch (error: Exception) {

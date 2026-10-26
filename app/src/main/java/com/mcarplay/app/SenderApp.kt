@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.util.Log
+import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.launcher.VirtualLauncher
 import com.mcarplay.app.util.DebugFileLog
 
@@ -22,8 +23,9 @@ open class SenderApp : Application() {
         // 之后的部分。必须在这里写（Application 是进程最早入口），晚于任何业务日志
         // 都会让它被算进「历史」。
         DebugFileLog.markSessionStart(this)
-        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        ConnectionDiagnostics.initialize(this)
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching { ConnectionDiagnostics.uncaught(thread, throwable) }
             Log.e(TAG, "未捕获异常（线程 ${thread.name}，已吞掉保进程）", throwable)
             // 不调用 previous：默认处理器会 killProcess 杀死整个 app
         }

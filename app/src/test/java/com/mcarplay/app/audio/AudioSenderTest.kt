@@ -23,6 +23,33 @@ class AudioSenderTest {
         )
 
     @Test
+    fun telemetryObserverCannotInterruptAudioTransport() {
+        DatagramSocket(0).use { receiver ->
+            receiver.soTimeout = 2000
+            val observed = java.util.concurrent.CountDownLatch(2)
+            val sender =
+                AudioSender(
+                    "127.0.0.1",
+                    receiver.localPort,
+                    key,
+                    {},
+                    onPacketSent = {
+                        observed.countDown()
+                        throw IllegalStateException("telemetry failure")
+                    },
+                )
+            try {
+                org.junit.Assert.assertTrue(sender.startExternalSource())
+                sender.submitExternalPcm(ByteArray(AudioSender.PACKET_BYTES * 2))
+                repeat(2) { receiver.receive(DatagramPacket(ByteArray(4096), 4096)) }
+                org.junit.Assert.assertTrue(observed.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            } finally {
+                sender.stopExternalSource()
+            }
+        }
+    }
+
+    @Test
     fun externalPcmIsReassembledAndEncryptedAcrossProducerChunks() {
         DatagramSocket(0).use { receiver ->
             receiver.soTimeout = 2000

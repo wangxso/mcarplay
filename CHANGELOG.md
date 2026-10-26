@@ -3,6 +3,38 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.1-test.1] - 2026-10-26
+
+> Experimental prerelease: diagnostics changes have passed offline checks only;
+> on-device export, permission interactions and Xiaomi connection regression remain pending.
+> 实验性预发布：诊断改动仅完成离线验证，实机导出、权限交互及小米连接回归仍待完成。
+
+### English
+- Add connection-stage IDs, error codes/advice and a main-screen redacted support-report export button.
+- Preserve bounded previous-process logs, critical JSONL events, uncaught stacks and app-only system exit evidence.
+- Distinguish native media input from transport writes; include format and memory samples without per-frame disk logging.
+- Include APK/signing fingerprints, component versions, permissions and network snapshots; redact common credentials, wire dumps and identifiers.
+- Add an offline analyzer and regression tests. No automatic upload is introduced.
+- CI: share one build-setup action, cache pip, skip documentation-only changes and add APK size/SHA-256 job summaries.
+- Signed workflow: reject a wrong keystore password or alias before building, upload reports on failure, and update an existing release when re-run.
+- Validation: 399 JVM tests, 26 Python tests, formatting, Android lint and local APK builds passed. No new vehicle-compatibility claim is made.
+- Android app version advances to `0.1.1` (`versionCode=1010000`); GitHub tag `v0.1.1-test.1` identifies the prerelease. Signed upgrades require the same signing certificate; local debug builds use a different certificate.
+- Diagnostics are evidence, not guaranteed root-cause attribution. Review redacted reports before sharing; no automatic upload is introduced.
+
+### 简体中文
+- 新增连接阶段/会话编号、错误码与处置提示，首页可直接导出脱敏诊断报告。
+- 有界保留最近进程日志、关键 JSONL 事件、堆栈及本应用系统退出证据。
+- 区分原生媒体输入和实际发送计数，补充格式与内存采样，避免逐帧写盘。
+- 报告包含 APK/签名指纹、组件版本、权限和网络快照，处理常见凭据、原始报文和标识信息。
+- 新增离线分析器和回归测试，不会自动上传日志。
+- CI：两个工作流共用构建环境配置，缓存 pip，仅改文档时跳过构建，并在运行摘要中显示 APK 大小与 SHA-256。
+- 签名工作流：构建前即校验 keystore 密码与别名，失败时上传报告，重跑时更新已存在的 Release 而非报错。
+- 验证：399 项 JVM 测试、26 项 Python 测试、格式、Android lint 和本地 APK 构建通过；不新增实车适配声明。
+- Android 应用版本升级为 `0.1.1`（`versionCode=1010000`），GitHub 标签为 `v0.1.1-test.1`。正式签名覆盖更新需使用同一证书；本地 debug 包使用不同证书。
+- 诊断报告只表明已记录的事实，不能保证还原所有根因；分享前仍须检查脱敏结果，不会自动上传。
+
+Full changes / 完整变更: [v0.1.0-test.4...v0.1.1-test.1](https://github.com/wangxso/mcarplay/compare/v0.1.0-test.4...v0.1.1-test.1)
+
 ## [v0.1.0-test.4] - 2026-10-26
 
 ### English
@@ -60,4 +92,5 @@ Full changes / 完整变更: [v0.1.0-test.3...v0.1.0-test.4](https://github.com/
 - 本地验证：364 项 JVM 测试、12 项 Python 测试、格式检查、lint 和构建通过；GitHub 签名 APK 流程成功。
 
 [v0.1.0-test.4]: https://github.com/wangxso/mcarplay/releases/tag/v0.1.0-test.4
+[v0.1.1-test.1]: https://github.com/wangxso/mcarplay/releases/tag/v0.1.1-test.1
 [v0.1.0-test.3]: https://github.com/wangxso/mcarplay/releases/tag/v0.1.0-test.3

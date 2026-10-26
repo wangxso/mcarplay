@@ -15,7 +15,7 @@ plugins {
  * Optional signed build suffix: -Pmcarplay.buildNumber=N.
  * Tagged releases use the base version; update it before publishing a new tag.
  */
-val appVersionName = "0.1.0"
+val appVersionName = "0.1.1"
 val appVersionCode =
     appVersionName
         .split(".")

@@ -270,6 +270,30 @@
                     android:textSize="11.5sp"
                     android:textStyle="bold"
                     android:visibility="gone" />
+                <TextView
+                    android:id="@+id/diagnosticStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center"
+                    android:text="@string/diagnostic_empty"
+                    android:textColor="@color/m3_on_var"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/btnExportDiagnostics"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_icon_tile"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:minHeight="44dp"
+                    android:paddingHorizontal="16dp"
+                    android:text="@string/export_diagnostics"
+                    android:textColor="@color/m3_primary"
+                    android:textSize="12sp" />
             </LinearLayout>
 
             <!-- ==================== 详情列（横屏时成为右栏） ==================== -->
@@ -1332,7 +1356,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginEnd="4dp"
-                            android:text="监听日志"
+                            android:text="显示日志"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -1355,7 +1379,7 @@
                             android:layout_width="36dp"
                             android:layout_height="36dp"
                             android:background="@drawable/bg_ripple_circle"
-                            android:contentDescription="清除日志"
+                            android:contentDescription="清空界面日志"
                             android:padding="9dp"
                             android:src="@drawable/ic_trash" />
 

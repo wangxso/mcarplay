@@ -32,6 +32,9 @@ import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.ExternalHuController
+import com.mcarplay.app.diagnostics.ConnectionDiagnostics
+import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.diagnostics.DiagnosticRedactor
 import com.mcarplay.app.input.TouchRouter
 import com.mcarplay.app.launcher.VirtualLauncher
 import com.mcarplay.app.launcher.settings.AppOrientationCompat
@@ -163,7 +166,7 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             log("BLUETOOTH_CONNECT 授权: $granted")
             if (granted && pendingStartAfterBtPermission.compareAndSet(true, false)) {
-                showAudioChoiceDialog()
+                ensureBluetoothReady { showAudioChoiceDialog() }
             }
         }
 
@@ -295,10 +298,25 @@ class MainActivity : AppCompatActivity() {
      * 任一不满足都弹窗引导（蓝牙关闭时可一键跳系统蓝牙设置），通过后回调继续。
      */
     private fun ensureBluetoothReady(onReady: () -> Unit) {
+        if (!CarLifeLauncher.isAvailable(this)) {
+            ConnectionDiagnostics.precheck(DiagnosticCode.CARWITH_FAILED)
+            DarkMessageDialog.show(
+                this,
+                title = "CarWith 组件未就绪",
+                message = "当前桥接需要小米 CarWith 与小米 CarLife 组件。请先检查系统车联设置；此提示不代表所有 Android 手机均可使用。",
+                actions =
+                    listOf(
+                        DarkMessageDialog.Action("导出诊断报告") { exportLogFile() },
+                        DarkMessageDialog.Action("关闭") {},
+                    ),
+            )
+            return
+        }
         val granted =
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) ==
                 PackageManager.PERMISSION_GRANTED
         if (!granted) {
+            ConnectionDiagnostics.precheck(DiagnosticCode.BT_PERMISSION)
             pendingStartAfterBtPermission.set(true)
             permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
             return
@@ -313,6 +331,7 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
             if (!on) {
+                ConnectionDiagnostics.precheck(DiagnosticCode.BT_DISABLED)
                 DarkMessageDialog.show(
                     activity = this,
                     title = "蓝牙未开启",
@@ -343,6 +362,12 @@ class MainActivity : AppCompatActivity() {
      */
     private fun ensureWifiLocationReady(onReady: () -> Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
+                ConnectionDiagnostics.precheck(DiagnosticCode.WIFI_JOIN_FAILED)
+                pendingStartAfterLocationPermission.set(true)
+                locationPermissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+                return
+            }
             onReady()
             return
         }
@@ -350,6 +375,7 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
         if (!granted) {
+            ConnectionDiagnostics.precheck(DiagnosticCode.LOCATION_REQUIRED)
             pendingStartAfterLocationPermission.set(true)
             locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             return
@@ -362,6 +388,7 @@ class MainActivity : AppCompatActivity() {
                 true
             }
         if (!locationOn) {
+            ConnectionDiagnostics.precheck(DiagnosticCode.LOCATION_REQUIRED)
             DarkMessageDialog.show(
                 activity = this,
                 title = "需要开启位置服务",
@@ -394,9 +421,9 @@ class MainActivity : AppCompatActivity() {
 
     private val locationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            log("ACCESS_FINE_LOCATION 授权: $granted")
+            log("WIFI: 所需权限授权: $granted")
             if (granted && pendingStartAfterLocationPermission.compareAndSet(true, false)) {
-                showAudioChoiceDialog()
+                ensureBluetoothReady { showAudioChoiceDialog() }
             }
         }
 
@@ -898,7 +925,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnShellReset).setOnClickListener { resetShellState() }
         refreshShellState(startupCheck = true)
 
-        // ---- 日志开关（默认开；关闭后不采集、不渲染；选择持久化） ----
+        // UI display only; private file diagnostics remain available for support reports.
         var logEnabled = preferences.getBoolean("logEnabled", true)
         SessionController.logEnabled = logEnabled
         switchLog.isChecked = logEnabled
@@ -915,17 +942,18 @@ class MainActivity : AppCompatActivity() {
             renderConsole(SessionController.logText())
         }
         findViewById<ImageView>(R.id.btnCopyLog).setOnClickListener {
-            val text = SessionController.logText()
+            val text = DiagnosticRedactor(diagnosticNames()).redact(SessionController.logText())
             if (text.isEmpty()) {
                 snack("日志为空")
                 return@setOnClickListener
             }
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(ClipData.newPlainText("mcarplay 日志", text))
-            snack("已复制 ${text.length} 字符日志")
+            snack("已复制 ${text.length} 字符脱敏日志；完整信息请导出诊断报告")
         }
         findViewById<ImageView>(R.id.btnExportLog).setOnClickListener { exportLogFile() }
-        // 长按导全部历史：默认只导本次启动，历史日志量大时按需手动取
+        findViewById<View>(R.id.btnExportDiagnostics).setOnClickListener { exportLogFile() }
+        // Long-press includes the larger retained history; every export still applies redaction.
         findViewById<ImageView>(R.id.btnExportLog).setOnLongClickListener {
             exportLogFile(LogExporter.Scope.ALL)
             true
@@ -988,9 +1016,11 @@ class MainActivity : AppCompatActivity() {
     // ==================== 英雄卡状态机 ====================
 
     private fun tickHero() {
+        val diagnosis = ConnectionDiagnostics.timeline.snapshot()
+        findViewById<TextView>(R.id.diagnosticStatus).text = diagnosis?.summary() ?: getString(R.string.diagnostic_empty)
         val s =
             when {
-                SessionController.videoSender?.isRunning == true -> HeroState.CONNECTED
+                SessionController.videoSender?.let { it.isRunning && it.framesSentTotal > 0 } == true -> HeroState.CONNECTED
                 SessionController.isSessionRunning() || SessionController.sessionStarting.get() ->
                     HeroState.CONNECTING
                 else -> HeroState.IDLE
@@ -1003,6 +1033,10 @@ class MainActivity : AppCompatActivity() {
         // 连接中：副标题跟随阶段提示（英雄卡内即可见，不必划到底部看日志）
         if (s == HeroState.CONNECTING) {
             heroSubline.text = SessionController.phaseHint ?: DEFAULT_CONNECTING_HINT
+        }
+        if (s != HeroState.CONNECTED && diagnosis?.status == "failed") {
+            heroStateText.text = if (s == HeroState.CONNECTING) "等待重连" else "连接未完成"
+            heroSubline.text = diagnosis.code?.advice
         }
         // 启动残留屏检查进行中：状态与副标题临时切换为检查提示
         if (s == HeroState.IDLE && startupCheckRunning) {
@@ -1026,6 +1060,7 @@ class MainActivity : AppCompatActivity() {
             log("CARLIFE: 自检已停止")
         } else {
             if (!CarLifeLauncher.isAvailable(this)) {
+                ConnectionDiagnostics.precheck(DiagnosticCode.CARWITH_FAILED)
                 snack("未安装 CarWith 或 CarLife 组件")
                 return
             }
@@ -1902,17 +1937,18 @@ class MainActivity : AppCompatActivity() {
     /**
      * 导出日志到「下载/mcarplay/」并弹窗告知位置。
      *
-     * 默认只导**本次进程启动之后**的日志（历史轮次对排查是噪音，动辄几百 KB）；
-     * 长按导出按钮导全部历史（[LogExporter.Scope.ALL]）。
+     * 默认导出诊断摘要与最近历史；进程重启后仍能反馈前一轮问题。
+     * 长按导出按钮包含更大的最近运行日志（[LogExporter.Scope.ALL]），仍会脱敏。
      * 为什么必须弹窗而不是 snack：snack 只在页面底部浮 2.4s，用户点了导出后
      * 往往正在看日志区、根本注意不到；且失败时也必须有明确反馈（写文件可能因
      * 存储满/媒体库异常失败）。
      */
-    private fun exportLogFile(scope: LogExporter.Scope = LogExporter.Scope.CURRENT_SESSION) {
-        snack(if (scope == LogExporter.Scope.ALL) "正在导出全部日志…" else "正在导出本次启动的日志…")
+    private fun exportLogFile(scope: LogExporter.Scope = LogExporter.Scope.SUPPORT) {
+        snack("正在生成脱敏诊断报告…")
         val fallback = SessionController.logText()
+        val knownNames = diagnosticNames()
         Bg.run("export-log") {
-            val result = LogExporter.export(applicationContext, fallback, scope)
+            val result = LogExporter.export(applicationContext, fallback, scope, knownNames)
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 if (result == null) {
@@ -1921,17 +1957,20 @@ class MainActivity : AppCompatActivity() {
                 }
                 log("日志已导出（${scope.label}）: ${result.displayPath}（${result.bytes} 字节）")
                 val scopeNote =
-                    if (scope == LogExporter.Scope.CURRENT_SESSION) {
+                    if (scope == LogExporter.Scope.SUPPORT) {
+                        "包含环境、连接阶段、媒体计数、异常、系统退出记录及最近历史。运行日志尾部最多 512KB，关键事件最多 256KB。"
+                    } else if (scope == LogExporter.Scope.CURRENT_SESSION) {
                         "仅含本次 App 启动之后的日志。需要更早的历史，请长按导出按钮。"
                     } else {
-                        "包含历史日志（文件上限 2MB，超出时只保留最近一段）。"
+                        "包含最近两段历史日志（最多约 4MB），更早记录可能已滚动覆盖。"
                     }
                 DarkMessageDialog.show(
                     this,
-                    title = "日志已导出",
+                    title = "脱敏诊断报告已导出",
                     message =
                         "文件位置：\n${result.displayPath}\n\n" +
-                            "大小：${formatBytes(result.bytes)}\n$scopeNote\n\n" +
+                            "报告编号：${result.reportId.take(8)}\n大小：${formatBytes(result.bytes)}\n$scopeNote\n\n" +
+                            "已自动处理常见敏感字段；分享前仍请检查。请同时说明复现步骤、故障时间、接收端型号和屏幕提示。\n\n" +
                             "可在「文件管理 → 下载 → mcarplay」中找到，也可直接分享给开发者排查问题。",
                     actions =
                         listOf(
@@ -1950,6 +1989,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun diagnosticNames(): List<String> =
+        listOfNotNull(
+            ssidInput.text?.toString()?.takeIf { it.isNotBlank() },
+            SessionController.lastCarWifiSsid,
+            TargetDevicePrefs.get(this)?.name,
+        )
 
     /** 人类可读大小：<1KB 显示字节（整数除法会显示成误导性的「0 KB」）。 */
     private fun formatBytes(bytes: Long): String =
@@ -2073,7 +2119,7 @@ class MainActivity : AppCompatActivity() {
         // 改文本前已在底部（或用户上翻阅读中）：决定本次是否自动跟底
         val follow = consoleAtBottom()
         logText.text =
-            if (SessionController.logEnabled) text else "日志采集已关闭（打开「监听日志」开关恢复）"
+            if (SessionController.logEnabled) text else "界面日志已隐藏；文件诊断仍在记录，可直接导出报告"
         logText.post {
             if (follow) scrollConsoleToBottom() else updateLogBottomButton()
         }

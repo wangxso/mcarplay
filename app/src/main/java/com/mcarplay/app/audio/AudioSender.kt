@@ -61,6 +61,7 @@ class AudioSender(
      * 发一个 [AudioSyncPacket] 建立 RTP↔NTP 锚点；0 = 车机没给（旧车机），只发音频。
      */
     private val controlPort: Int = 0,
+    private val onPacketSent: (() -> Unit)? = null,
 ) {
     companion object {
         const val CHANNELS = 2
@@ -622,6 +623,7 @@ class AudioSender(
         val client = socket ?: return false
         return try {
             client.send(DatagramPacket(wire, wire.size))
+            runCatching { onPacketSent?.invoke() }
             packetsSent++
             bytesSent += wire.size
             true

@@ -2,11 +2,15 @@ package com.mcarplay.app.carlife
 
 import android.content.Context
 import com.mcarplay.app.SessionController
+import com.mcarplay.app.diagnostics.ConnectionDiagnostics
+import com.mcarplay.app.diagnostics.ConnectionStage
+import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.service.CarPlayService
 
 /** Standalone CarWith connectivity check, independent of the CarPlay transport. */
 object CarLifeDiagnostics {
     private var session: CarLifeSession? = null
+    private var diagnosticAttempt: String? = null
 
     @Synchronized
     fun start(context: Context): Boolean {
@@ -17,11 +21,13 @@ object CarLifeDiagnostics {
         }
         val appContext = context.applicationContext as android.app.Application
         var created: CarLifeSession? = null
+        var attempt: String? = null
         var loggedFormat: Pair<Int, Int>? = null
         created =
             CarLifeSession(
                 application = appContext,
                 onAccessUnit = { frame ->
+                    attempt?.let { ConnectionDiagnostics.timeline.sourceFrame(it) }
                     frame.dimensions()?.let { (width, height) ->
                         if (loggedFormat != width to height) {
                             loggedFormat = width to height
@@ -30,6 +36,7 @@ object CarLifeDiagnostics {
                     }
                 },
                 onEnded = { reason ->
+                    attempt?.let { ConnectionDiagnostics.timeline.finish(it, DiagnosticCode.CARWITH_FAILED, true, reason) }
                     log("CARLIFE: 自检结束 - $reason")
                     created?.let {
                         SessionController.releaseCarLifeSession(it)
@@ -48,6 +55,9 @@ object CarLifeDiagnostics {
             return false
         }
         session = candidate
+        attempt = ConnectionDiagnostics.begin("carwith_self_test")
+        diagnosticAttempt = attempt
+        ConnectionDiagnostics.timeline.stage(requireNotNull(attempt), ConnectionStage.SELF_TEST)
         return try {
             candidate.start()
         } catch (error: Exception) {
@@ -60,6 +70,7 @@ object CarLifeDiagnostics {
 
     @Synchronized
     fun stop() {
+        diagnosticAttempt?.let { ConnectionDiagnostics.timeline.finish(it, DiagnosticCode.USER_STOP, false) }
         session?.let { active ->
             active.stop()
             release(active)

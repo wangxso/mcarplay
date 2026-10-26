@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="diagnostic_empty">遇到连接问题？导出诊断报告反馈，无需电脑或 Shizuku。</string>
+    <string name="export_diagnostics">导出脱敏诊断报告</string>
     <!-- 应用名**不含** CarPlay：它既是 Apple 的商标，用「CarPlay」作产品名会构成
          商标性使用（且容易被误认为官方产品）。兼容关系写在副标题/README 里，
          那属于描述性引用。详见仓库根目录 DISCLAIMER.md 与 README「非官方声明」。 -->

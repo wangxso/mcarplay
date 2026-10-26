@@ -23,17 +23,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-      - name: Install Android SDK packages
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
+      - uses: ./.github/actions/setup-build
       - name: Check tag and test tools
         run: |
           python - <<'PY'
@@ -46,7 +36,6 @@ jobs:
           if os.environ['GITHUB_REF_TYPE'] == 'tag' and tag != base_tag and not test_tag:
               raise SystemExit('Tag must be ' + base_tag + ' or ' + base_tag + '-test.N')
           PY
-          python -m pip install -r tools/requirements.txt
           python -m unittest discover -s tools -p 'test_*.py'
       - name: Prepare changelog release notes
         if: github.ref_type == 'tag'
@@ -67,7 +56,21 @@ jobs:
             fi
           done
           umask 077
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/mcarplay-release.jks"
+          keystore="$RUNNER_TEMP/mcarplay-release.jks"
+          if ! printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"; then
+            echo "::error::KEYSTORE_BASE64 is not valid Base64"
+            exit 1
+          fi
+          # Fail in seconds instead of after the build when a secret is wrong.
+          if ! keytool -list -keystore "$keystore" -storepass:env KEYSTORE_PASSWORD -alias "$KEY_ALIAS" > /dev/null; then
+            echo "::error::KEYSTORE_PASSWORD is wrong or KEY_ALIAS is not in the keystore"
+            exit 1
+          fi
+          if ! keytool -certreq -keystore "$keystore" -storepass:env KEYSTORE_PASSWORD -alias "$KEY_ALIAS" \
+              -keypass:env KEY_PASSWORD -file /dev/null > /dev/null; then
+            echo "::error::KEY_PASSWORD cannot unlock key $KEY_ALIAS"
+            exit 1
+          fi
           printf 'MCARPLAY_KEYSTORE_FILE=%s\n' "$RUNNER_TEMP/mcarplay-release.jks" >> "$GITHUB_ENV"
       - name: Check and assemble signed release
         env:
@@ -75,7 +78,6 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          chmod +x gradlew
           ./gradlew --no-daemon --console=plain -Pmcarplay.requireReleaseSigning=true \
             spotlessCheck :app:testStandardDebugUnitTest :app:lintStandardRelease :app:assembleStandardRelease
       - name: Verify and package signed APK
@@ -93,24 +95,67 @@ jobs:
           cd dist/release
           sha256sum ./*.apk > SHA256SUMS.txt
       - name: Upload signed APK
+        id: upload-apk
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mcarplay-signed-${{ github.run_number }}
           path: dist/release/
           if-no-files-found: error
           retention-days: 30
+      - name: Write job summary
+        env:
+          ARTIFACT_URL: ${{ steps.upload-apk.outputs.artifact-url }}
+        run: |
+          {
+            echo '### Signed APK'
+            echo
+            echo '| File | Size | SHA-256 |'
+            echo '| --- | --- | --- |'
+            for apk in dist/release/*.apk; do
+              echo "| \`$(basename "$apk")\` | $(du -h "$apk" | cut -f1) | \`$(sha256sum "$apk" | cut -d' ' -f1)\` |"
+            done
+            echo
+            echo '```'
+            grep -E '^Signer #1 certificate (DN|SHA-256)' dist/release/signing-certificate.txt || true
+            echo '```'
+            echo
+            echo "[Download artifact]($ARTIFACT_URL)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload check reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: check-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/tests/testStandardDebugUnitTest/
+            app/build/reports/lint-results-standardRelease.*
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Publish tagged release
         if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          release_args=(--repo "$GITHUB_REPOSITORY" --verify-tag --notes-file "$RUNNER_TEMP/release-notes.md")
           if [[ "$GITHUB_REF_NAME" =~ -test\.[0-9]+$ ]]; then
-            release_args+=(--prerelease --title "mcarplay $GITHUB_REF_NAME (test)")
+            title="mcarplay $GITHUB_REF_NAME (test)"
+            prerelease=true
           else
-            release_args+=(--title "mcarplay $GITHUB_REF_NAME")
+            title="mcarplay $GITHUB_REF_NAME"
+            prerelease=false
           fi
-          gh release create "$GITHUB_REF_NAME" dist/release/* "${release_args[@]}"
+          # A re-run updates the existing release instead of failing on "already exists".
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/release/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" --prerelease="$prerelease"
+          else
+            release_args=(--repo "$GITHUB_REPOSITORY" --verify-tag --title "$title" --notes-file "$RUNNER_TEMP/release-notes.md")
+            if [[ "$prerelease" == true ]]; then
+              release_args+=(--prerelease)
+            fi
+            gh release create "$GITHUB_REF_NAME" dist/release/* "${release_args[@]}"
+          fi
+          echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
       - name: Remove signing material
         if: always()
         run: rm -f "$RUNNER_TEMP/mcarplay-release.jks"

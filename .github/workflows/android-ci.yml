@@ -3,7 +3,14 @@ name: Android CI
 on:
   push:
     branches: ['**']
+    paths-ignore: &docs-only
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - 'LICENSE'
+      - 'NOTICE'
   pull_request:
+    paths-ignore: *docs-only
   workflow_dispatch:
 
 permissions:
@@ -22,26 +29,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: ./.github/actions/setup-build
         with:
-          distribution: temurin
-          java-version: '21'
-      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-      - name: Install Android SDK packages
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
-        with:
-          cache-read-only: ${{ github.event_name == 'pull_request' }}
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
+          gradle-cache-read-only: ${{ github.event_name == 'pull_request' }}
       - name: Test diagnostic tools
-        run: |
-          python -m pip install -r tools/requirements.txt
-          python -m unittest discover -s tools -p 'test_*.py'
+        run: python -m unittest discover -s tools -p 'test_*.py'
       - name: Check and assemble
         run: |
-          chmod +x gradlew
           ./gradlew --no-daemon --console=plain spotlessCheck \
             :app:testStandardDebugUnitTest :app:lintStandardDebug :app:assembleStandardDebug
       - name: Package APK and checksum
@@ -52,12 +46,28 @@ jobs:
           cd dist/debug
           sha256sum ./*.apk > SHA256SUMS.txt
       - name: Upload debug APK
+        id: upload-apk
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mcarplay-debug-${{ github.run_number }}
           path: dist/debug/
           if-no-files-found: error
           retention-days: 14
+      - name: Write job summary
+        env:
+          ARTIFACT_URL: ${{ steps.upload-apk.outputs.artifact-url }}
+        run: |
+          {
+            echo '### Debug APK'
+            echo
+            echo '| File | Size | SHA-256 |'
+            echo '| --- | --- | --- |'
+            for apk in dist/debug/*.apk; do
+              echo "| \`$(basename "$apk")\` | $(du -h "$apk" | cut -f1) | \`$(sha256sum "$apk" | cut -d' ' -f1)\` |"
+            done
+            echo
+            echo "[Download artifact]($ARTIFACT_URL) (expires in 14 days)"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload check reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
