@@ -48,9 +48,8 @@ class CarLifeChannelConnector(
                 if (remaining > 0) sleep(minOf(retryDelayMs, remaining))
             }
         }
-        throw IOException(
-            if (closed.get()) "CarLife connection cancelled" else "CarLife listener wait deadline: $lastError",
-        )
+        if (closed.get()) throw IOException("CarLife connection cancelled")
+        throw CarLifeListenerTimeoutException("CarLife listener wait deadline: $lastError")
     }
 
     fun socket(channel: CarLifeChannel): Socket? =
@@ -83,3 +82,8 @@ enum class CarLifeChannel(
         fun fromPort(port: Int): CarLifeChannel? = entries.firstOrNull { it.port == port }
     }
 }
+
+/** CarWith 的七路监听在等待期内未全部就绪。 */
+class CarLifeListenerTimeoutException(
+    message: String,
+) : IOException(message)

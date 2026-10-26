@@ -206,6 +206,8 @@ class WifiCarPlayConnector(
         quickFallback: (() -> Network?)? = null,
         /** 重发窗也无回调后的深度兜底（connect-network，10s 量级——本轮窗口已过，为下一轮省时间）。 */
         deepFallback: (() -> Network?)? = null,
+        /** 参数为请求发出时刻（uptimeMillis）；返回 true 表示系统选择框正等用户选择。 */
+        userChoicePending: ((Long) -> Boolean)? = null,
     ): JoinResult {
         val specifier =
             buildSpecifier(ssid, passphrase, securityType)
@@ -230,12 +232,14 @@ class WifiCarPlayConnector(
         //     已过，价值是让手机先挂上热点，下一轮（车机 0.17s 即重连 BT）走「已连着」近路。
         // 旧 20s 首窗的教训：第 1 轮首窗没走完车机就拆链（15.2s），排在首窗**之后**的
         // 任何兜底都轮不到执行；第 2 轮 20s+1.6s=21.6s 入网时 7000 端口已拒绝连接。
-        // 已知代价：首次连接的系统授权弹窗若被用户攥过 5s，本轮请求会被撤回重发、
-        // 弹窗重出一次——一次性 UX 代价，远小于整车连接失败。
+        // 系统选择框正在等用户时不按首窗撤回：挂起形态没有选择框，重发才有意义；框在屏
+        // 时重发只会撤掉用户正在看的框（提示「该应用已取消选择设备的请求」）再弹一次，
+        // 2026-10-27 小米实测。此时首窗延长到用户选择或关闭框，最长 timeoutMillis。
         val firstWindowMs = minOf(timeoutMillis, 5_000L)
         val secondWindowMs = minOf(timeoutMillis - firstWindowMs, 20_000L).coerceAtLeast(0)
         val unavailable = AtomicBoolean(false)
-        var network = requestAndAwait(ssid, request, firstWindowMs, isCancelled, unavailable)
+        var network =
+            requestAndAwait(ssid, request, firstWindowMs, isCancelled, unavailable, userChoicePending, timeoutMillis)
         // 系统明确拒绝（onUnavailable：用户拒了授权框/热点不在范围）后重发无意义，
         // 只会再拒一次——与挂起（零回调）必须区分开。
         if (network == null && !isCancelled() && !unavailable.get() && secondWindowMs > 0) {
@@ -278,6 +282,8 @@ class WifiCarPlayConnector(
         timeoutMillis: Long,
         isCancelled: () -> Boolean,
         unavailable: AtomicBoolean,
+        userChoicePending: ((Long) -> Boolean)? = null,
+        holdLimitMillis: Long = timeoutMillis,
     ): Network? {
         val latch = CountDownLatch(1)
         val result = AtomicReference<Network?>(null)
@@ -316,6 +322,7 @@ class WifiCarPlayConnector(
         binding.replaceRequest(newCallback)?.let {
             runCatching { connectivityManager.unregisterNetworkCallback(it) }
         }
+        val requestedAt = SystemClock.uptimeMillis()
         val accepted =
             try {
                 connectivityManager.requestNetwork(request, newCallback)
@@ -329,8 +336,17 @@ class WifiCarPlayConnector(
                 false
             }
         if (!accepted) return null
-        val deadline = SystemClock.uptimeMillis() + timeoutMillis
-        while (SystemClock.uptimeMillis() < deadline) {
+        val deadline = requestedAt + timeoutMillis
+        val holdDeadline = requestedAt + maxOf(timeoutMillis, holdLimitMillis)
+        var holdLogged = false
+        while (true) {
+            val now = SystemClock.uptimeMillis()
+            val holding = userChoicePending?.invoke(requestedAt) == true
+            if (!shouldKeepWaiting(now, deadline, holdDeadline, holding)) break
+            if (holding && now >= deadline && !holdLogged) {
+                holdLogged = true
+                log("WiFi: 系统选择框正等待用户选择——继续等待，不撤回重发")
+            }
             if (isCancelled()) return null
             try {
                 if (latch.await(200, TimeUnit.MILLISECONDS)) break
@@ -484,6 +500,22 @@ class WifiCarPlayConnector(
         binding.replaceRequest(null)?.let {
             runCatching { connectivityManager.unregisterNetworkCallback(it) }
         }
+    }
+
+    companion object {
+        /** 窗口内继续等；窗口已过但选择框仍在等用户时，等到 [holdDeadline]。 */
+        internal fun shouldKeepWaiting(
+            now: Long,
+            deadline: Long,
+            holdDeadline: Long,
+            userChoicePending: Boolean,
+        ): Boolean = now < deadline || (userChoicePending && now < holdDeadline)
+
+        /** 本应用界面在请求发出后才被盖住，才视为系统选择框在等用户（之前已离开则无法区分）。 */
+        internal fun isUserChoicePending(
+            uiPausedAtMs: Long?,
+            requestedAtMs: Long,
+        ): Boolean = uiPausedAtMs != null && uiPausedAtMs >= requestedAtMs
     }
 }
 
