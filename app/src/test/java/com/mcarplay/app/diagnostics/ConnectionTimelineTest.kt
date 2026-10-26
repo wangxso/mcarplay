@@ -5,8 +5,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 class ConnectionTimelineTest {
     private var now = 0L
@@ -132,5 +134,114 @@ class ConnectionTimelineTest {
         assertTrue(executor.awaitTermination(3, TimeUnit.SECONDS))
         assertEquals(1000L, timeline.snapshot()!!.videoFrames)
         assertEquals(10_000L, timeline.snapshot()!!.videoBytes)
+    }
+
+    @Test
+    fun bluetoothLinkDropDuringWifiJoinIsNotRecordedAsUserStop() {
+        val id = timeline.begin("receiver")
+        timeline.stage(id, ConnectionStage.WIFI)
+        // onSenderLinkClosed: issue BT_LINK_CLOSED, then set connectCancelled
+        timeline.issue(id, DiagnosticCode.BT_LINK_CLOSED)
+        timeline.abandon(id, cancelled = true, fallback = DiagnosticCode.WIFI_JOIN_FAILED)
+        assertEquals(DiagnosticCode.BT_LINK_CLOSED, timeline.snapshot()!!.code)
+        assertEquals("failed", timeline.snapshot()!!.status)
+    }
+
+    @Test
+    fun realCancelIsUserStopAndUncancelledJoinFailureUsesFallback() {
+        val cancelled = timeline.begin("receiver")
+        timeline.abandon(cancelled, cancelled = true, fallback = DiagnosticCode.WIFI_JOIN_FAILED)
+        assertEquals(DiagnosticCode.USER_STOP, timeline.snapshot()!!.code)
+        assertEquals("stopped", timeline.snapshot()!!.status)
+
+        val failed = timeline.begin("receiver")
+        timeline.abandon(failed, cancelled = false, fallback = DiagnosticCode.WIFI_JOIN_FAILED)
+        assertEquals(DiagnosticCode.WIFI_JOIN_FAILED, timeline.snapshot()!!.code)
+        assertEquals("failed", timeline.snapshot()!!.status)
+    }
+
+    @Test
+    fun exceptionKeepsStageSpecificCode() {
+        val id = timeline.begin("receiver")
+        timeline.stage(id, ConnectionStage.SETUP)
+        // catch only notes the exception; finally classifies the attempt
+        timeline.note(id, "EXCEPTION java.net.SocketException: reset")
+        assertEquals("waiting", timeline.snapshot()!!.status)
+        timeline.abandon(id, cancelled = false)
+        assertEquals(DiagnosticCode.SETUP_FAILED, timeline.snapshot()!!.code)
+        assertTrue(records.any { JSONObject(it).getString("detail").startsWith("EXCEPTION") })
+    }
+
+    @Test
+    fun exceptionAfterBluetoothLinkClosedStaysBtLinkClosed() {
+        val id = timeline.begin("receiver")
+        timeline.stage(id, ConnectionStage.PAIRING)
+        timeline.issue(id, DiagnosticCode.BT_LINK_CLOSED)
+        timeline.note(id, "EXCEPTION java.io.IOException")
+        timeline.abandon(id, cancelled = true)
+        assertEquals(DiagnosticCode.BT_LINK_CLOSED, timeline.snapshot()!!.code)
+    }
+
+    @Test
+    fun videoEndAfterStreamingIsNormalButEndBeforeAnyFrameIsFailure() {
+        val streamed = timeline.begin("receiver")
+        timeline.media(streamed, true, 100)
+        timeline.videoEnded(streamed)
+        assertEquals(DiagnosticCode.VIDEO_CLOSED, timeline.snapshot()!!.code)
+        assertEquals("stopped", timeline.snapshot()!!.status)
+
+        val never = timeline.begin("receiver")
+        timeline.videoEnded(never)
+        assertEquals("failed", timeline.snapshot()!!.status)
+    }
+
+    @Test
+    fun slowSinkDoesNotBlockSnapshotOrFrameCounting() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        var blocking = false
+        val slow =
+            ConnectionTimeline(sink = {
+                if (blocking) {
+                    entered.countDown()
+                    release.await(5, TimeUnit.SECONDS)
+                }
+            })
+        val id = slow.begin("receiver")
+        slow.media(id, true, 100)
+        blocking = true
+        val writer = thread { slow.stage(id, ConnectionStage.PAIRING) }
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        val counter = thread { repeat(100) { slow.media(id, true, 100) } }
+        counter.join(1_000)
+        val stillRunning = counter.isAlive
+        val frames = slow.snapshot()!!.videoFrames
+        release.countDown()
+        writer.join(2_000)
+        counter.join(2_000)
+        assertTrue("frame counting waited for the sink", !stillRunning)
+        assertEquals(101L, frames)
+    }
+
+    @Test
+    fun recordsStayInOrderAndCarryTrack() {
+        val id = timeline.begin("receiver")
+        timeline.stage(id, ConnectionStage.WIFI)
+        timeline.stage(id, ConnectionStage.DISCOVERY)
+        timeline.finish(id, DiagnosticCode.USER_STOP, false)
+        assertEquals(listOf("BEGIN", "STAGE", "STAGE", "END"), records.map { JSONObject(it).getString("event") })
+        assertTrue(records.all { JSONObject(it).getString("track") == "carplay" })
+    }
+
+    @Test
+    fun separateTracksDoNotSupersedeEachOther() {
+        val selfTest = ConnectionTimeline(sink = { records.add(it) }, track = "self_test")
+        val carPlay = timeline.begin("user_start")
+        val check = selfTest.begin("carwith_self_test")
+        selfTest.stage(check, ConnectionStage.SELF_TEST)
+        timeline.finish(carPlay, DiagnosticCode.PAIRING_FAILED, true)
+        assertEquals(DiagnosticCode.PAIRING_FAILED, timeline.snapshot()!!.code)
+        assertEquals("waiting", selfTest.snapshot()!!.status)
+        assertTrue(records.none { JSONObject(it).optString("code") == "SUPERSEDED" })
     }
 }

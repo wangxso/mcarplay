@@ -32,12 +32,11 @@ object SupportReport {
         knownNames: List<String> = emptyList(),
     ): String {
         val log = DebugFileLog.readRecent(context, maxLogBytes, currentSessionOnly).orEmpty()
-        val state = ConnectionDiagnostics.timeline.snapshot()
         val summary =
-            state?.let {
-                it.summary() + "\nEXPORT_SNAPSHOT sourceVideoFrames=${it.sourceFrames} videoFramesSent=${it.videoFrames} " +
-                    "nativeAudioChunks=${it.audioChunks} audioPacketsSent=${it.audioPackets} lastVideoMsAgo=${it.lastVideoMsAgo}"
-            } ?: "本进程尚无连接尝试；请复现问题后再导出"
+            listOfNotNull(
+                ConnectionDiagnostics.timeline.snapshot()?.let { "CarPlay 连接：" + exportSummary(it) },
+                ConnectionDiagnostics.selfTest.snapshot()?.let { "CarWith 自检：" + exportSummary(it) },
+            ).joinToString("\n\n").ifEmpty { "本进程尚无连接尝试；请复现问题后再导出" }
         return render(
             reportId = reportId,
             environment = environment(context),
@@ -50,6 +49,10 @@ object SupportReport {
             knownNames = knownNames,
         )
     }
+
+    private fun exportSummary(state: ConnectionTimeline.Snapshot): String =
+        state.summary() + "\nEXPORT_SNAPSHOT sourceVideoFrames=${state.sourceFrames} videoFramesSent=${state.videoFrames} " +
+            "nativeAudioChunks=${state.audioChunks} audioPacketsSent=${state.audioPackets} lastVideoMsAgo=${state.lastVideoMsAgo}"
 
     internal fun render(
         reportId: String,

@@ -2382,11 +2382,7 @@ object SessionController {
         // 等车机 ctrl 邀请（车机已发现我们的权威信号）。
         val continueWithNetwork: (Boolean) -> Unit = proceed@{ bound ->
             if (!bound) {
-                ConnectionDiagnostics.timeline.finish(
-                    diagnosticAttempt,
-                    if (connectCancelled) DiagnosticCode.USER_STOP else DiagnosticCode.WIFI_JOIN_FAILED,
-                    !connectCancelled,
-                )
+                ConnectionDiagnostics.timeline.abandon(diagnosticAttempt, connectCancelled, DiagnosticCode.WIFI_JOIN_FAILED)
                 phaseHint = "手机不在车机热点——请到 WLAN 设置加入 ${endpoint.ssid}"
                 appendLog(">>> [$source] 手机当前不在该热点——请到 设置>WLAN 加入 \"${endpoint.ssid}\" 后断开重连")
                 sessionStarting.set(false)
@@ -2899,7 +2895,7 @@ object SessionController {
                                                 ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
                                             },
                                             onEnded = onVideoEnded@{
-                                                ConnectionDiagnostics.timeline.finish(diagnosticAttempt, DiagnosticCode.VIDEO_CLOSED, true)
+                                                ConnectionDiagnostics.timeline.videoEnded(diagnosticAttempt)
                                                 // Stop this stream's source even if a newer stream already owns the controller.
                                                 carLife?.let {
                                                     it.stop()
@@ -3054,36 +3050,15 @@ object SessionController {
                 } catch (error: Throwable) {
                     // 配对线程任何异常都不能留下「已有会话在处理中」的卡死状态
                     appendLog("AIRPLAY: 配对线程异常 - ${error.message ?: error.javaClass.simpleName}")
-                    ConnectionDiagnostics.timeline.finish(
-                        diagnosticAttempt,
-                        DiagnosticCode.CONNECTION_INCOMPLETE,
-                        true,
-                        error.stackTraceToString(),
-                    )
+                    // 只记异常，不在此结束本轮：finally 按阶段/取消原因统一判定结果
+                    ConnectionDiagnostics.timeline.note(diagnosticAttempt, "EXCEPTION ${error.stackTraceToString()}")
                 } finally {
                     sessionStarting.set(false)
                     // 配对未成功建立推流（fail/异常/start 失败提前退出）时解除静默降噪，
                     // 否则 BT-C 会永久停在门闸外、连真车路径失效。
                     // 推流活跃时保持关闭，由 VideoSender.onEnded（推流终止）负责解除。
                     if (videoSender?.isRunning != true) {
-                        val diagnosticState = ConnectionDiagnostics.timeline.snapshot()
-                        val stage = diagnosticState?.stage
-                        val code =
-                            if (connectCancelled) {
-                                if (diagnosticState?.code == DiagnosticCode.BT_LINK_CLOSED) {
-                                    DiagnosticCode.BT_LINK_CLOSED
-                                } else {
-                                    DiagnosticCode.USER_STOP
-                                }
-                            } else {
-                                when (stage) {
-                                    ConnectionStage.PAIRING -> DiagnosticCode.PAIRING_FAILED
-                                    ConnectionStage.SETUP -> DiagnosticCode.SETUP_FAILED
-                                    ConnectionStage.CARWITH -> DiagnosticCode.CARWITH_FAILED
-                                    else -> DiagnosticCode.CONNECTION_INCOMPLETE
-                                }
-                            }
-                        ConnectionDiagnostics.timeline.finish(diagnosticAttempt, code, code != DiagnosticCode.USER_STOP)
+                        ConnectionDiagnostics.timeline.abandon(diagnosticAttempt, connectCancelled)
                         BtSessionGate.sessionActive = false
                         // 收尾竞态：晚到 0x4301 若恰好在「配对已失败、互斥尚未释放」的
                         // 窗口内到达，会被暂存但没人消费。此处补投一次——车机等 15s

@@ -27,7 +27,7 @@ object CarLifeDiagnostics {
             CarLifeSession(
                 application = appContext,
                 onAccessUnit = { frame ->
-                    attempt?.let { ConnectionDiagnostics.timeline.sourceFrame(it) }
+                    attempt?.let { ConnectionDiagnostics.selfTest.sourceFrame(it) }
                     frame.dimensions()?.let { (width, height) ->
                         if (loggedFormat != width to height) {
                             loggedFormat = width to height
@@ -36,7 +36,7 @@ object CarLifeDiagnostics {
                     }
                 },
                 onEnded = { reason ->
-                    attempt?.let { ConnectionDiagnostics.timeline.finish(it, DiagnosticCode.CARWITH_FAILED, true, reason) }
+                    attempt?.let { ConnectionDiagnostics.selfTest.finish(it, DiagnosticCode.CARWITH_FAILED, true, reason) }
                     log("CARLIFE: 自检结束 - $reason")
                     created?.let {
                         SessionController.releaseCarLifeSession(it)
@@ -55,9 +55,9 @@ object CarLifeDiagnostics {
             return false
         }
         session = candidate
-        attempt = ConnectionDiagnostics.begin("carwith_self_test")
+        attempt = ConnectionDiagnostics.selfTest.begin("carwith_self_test")
         diagnosticAttempt = attempt
-        ConnectionDiagnostics.timeline.stage(requireNotNull(attempt), ConnectionStage.SELF_TEST)
+        ConnectionDiagnostics.selfTest.stage(requireNotNull(attempt), ConnectionStage.SELF_TEST)
         return try {
             candidate.start()
         } catch (error: Exception) {
@@ -70,7 +70,7 @@ object CarLifeDiagnostics {
 
     @Synchronized
     fun stop() {
-        diagnosticAttempt?.let { ConnectionDiagnostics.timeline.finish(it, DiagnosticCode.USER_STOP, false) }
+        diagnosticAttempt?.let { ConnectionDiagnostics.selfTest.finish(it, DiagnosticCode.USER_STOP, false) }
         session?.let { active ->
             active.stop()
             release(active)

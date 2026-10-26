@@ -26,6 +26,7 @@ enum class DiagnosticCode(
     ENDPOINT_PENDING("蓝牙已连接，仍在等待接收端提供热点和地址信息"),
     LOCATION_REQUIRED("Android 12 需允许位置权限并开启位置服务以加入热点"),
     WIFI_LOST("车机网络已丢失，请检查接收端热点及手机 WLAN 后重连"),
+    WIFI_PERMISSION("请允许「附近 WLAN 设备」权限后重试"),
     WIFI_JOIN_FAILED("未能绑定车机网络，请检查 WLAN、附近设备权限及系统加入确认框"),
     PAIRING_FAILED("未完成 AirPlay 配对，请检查接收端提示，必要时重启接收端后重试"),
     SETUP_FAILED("CarPlay 会话未建立，请提供诊断报告核对接收端响应"),
@@ -39,15 +40,23 @@ enum class DiagnosticCode(
     SUPERSEDED("新的连接尝试替代了上一轮"),
 }
 
-/** Pure, generation-scoped state. Old callbacks cannot overwrite a replacement attempt. */
+/**
+ * Pure, generation-scoped state. Old callbacks cannot overwrite a replacement attempt.
+ *
+ * Records are built under the state lock but handed to [sink] outside it, in order, so a slow
+ * sink (disk) never stalls media threads counting frames or the UI thread reading [snapshot].
+ * Each [track] is an independent timeline: a CarWith self-test cannot supersede a CarPlay attempt.
+ */
 class ConnectionTimeline(
     private val wallTime: () -> Long = System::currentTimeMillis,
     private val elapsedTime: () -> Long = { System.nanoTime() / 1_000_000 },
     private val idFactory: () -> String = { UUID.randomUUID().toString().take(8) },
     private val sink: (String) -> Unit,
+    private val track: String = "carplay",
 ) {
     data class Snapshot(
         val id: String,
+        val startedAtMs: Long,
         val stage: ConnectionStage,
         val status: String,
         val elapsedMs: Long,
@@ -84,7 +93,17 @@ class ConnectionTimeline(
                 )
     }
 
+    private class Pending(
+        val record: JSONObject,
+        val detail: String,
+    )
+
+    private val lock = Any()
+    private val deliveryLock = Any()
+    private val outbox = ArrayDeque<Pending>()
+
     private var id: String? = null
+    private var startedAtMs = 0L
     private var stage = ConnectionStage.PRECHECK
     private var status = "waiting"
     private var code: DiagnosticCode? = null
@@ -99,78 +118,102 @@ class ConnectionTimeline(
     private var audioPackets = 0L
     private var endedAt: Long? = null
 
-    @Synchronized
-    fun begin(source: String): String {
-        id?.let { if (active()) finish(it, DiagnosticCode.SUPERSEDED, false) }
-        id = idFactory()
-        stage = ConnectionStage.PRECHECK
-        status = "waiting"
-        code = null
-        started = elapsedTime()
-        endedAt = null
-        frames = 0
-        videoBytes = 0
-        chunks = 0
-        audioBytes = 0
-        lastVideo = null
-        sourceFrames = 0
-        audioPackets = 0
-        lastSample = started
-        emit("BEGIN", source)
-        return requireNotNull(id)
-    }
+    fun begin(source: String): String =
+        mutate {
+            id?.let { if (active()) end(it, DiagnosticCode.SUPERSEDED, false, "") }
+            id = idFactory()
+            startedAtMs = wallTime()
+            stage = ConnectionStage.PRECHECK
+            status = "waiting"
+            code = null
+            started = elapsedTime()
+            endedAt = null
+            frames = 0
+            videoBytes = 0
+            chunks = 0
+            audioBytes = 0
+            lastVideo = null
+            sourceFrames = 0
+            audioPackets = 0
+            lastSample = started
+            emit("BEGIN", source)
+            requireNotNull(id)
+        }
 
-    @Synchronized
     fun stage(
         attempt: String,
         next: ConnectionStage,
-    ) {
-        if (id != attempt || !active() || stage == next) return
+    ) = mutate {
+        if (id != attempt || !active() || stage == next) return@mutate
         stage = next
         if (code == DiagnosticCode.ENDPOINT_PENDING) code = null
         emit("STAGE")
     }
 
-    @Synchronized
     fun issue(
         attempt: String,
         issue: DiagnosticCode,
         detail: String = "",
-    ) {
-        if (id != attempt || !active()) return
+    ) = mutate {
+        if (id != attempt || !active()) return@mutate
         code = issue
         emit("WARNING", detail)
     }
 
-    @Synchronized
     fun note(
         attempt: String,
         detail: String,
-    ) {
+    ) = mutate {
         if (id == attempt && active()) emit("NOTE", detail)
     }
 
-    @Synchronized
     fun finish(
         attempt: String,
         reason: DiagnosticCode,
         failed: Boolean,
         detail: String = "",
-    ) {
-        if (id != attempt || !active()) return
-        code = reason
-        status = if (failed) "failed" else "stopped"
-        endedAt = elapsedTime()
-        emit("END", detail)
+    ) = mutate { end(attempt, reason, failed, detail) }
+
+    /**
+     * Ends an attempt that stopped before streaming, on every exit path (join failure, exception, cleanup).
+     * A cancellation caused by the Bluetooth link closing stays [DiagnosticCode.BT_LINK_CLOSED]; only a real
+     * user cancel is [DiagnosticCode.USER_STOP]. Otherwise [fallback], or the code for the stage reached.
+     */
+    fun abandon(
+        attempt: String,
+        cancelled: Boolean,
+        fallback: DiagnosticCode? = null,
+        detail: String = "",
+    ) = mutate {
+        if (id != attempt || !active()) return@mutate
+        val reason =
+            when {
+                cancelled && code == DiagnosticCode.BT_LINK_CLOSED -> DiagnosticCode.BT_LINK_CLOSED
+                cancelled -> DiagnosticCode.USER_STOP
+                fallback != null -> fallback
+                stage == ConnectionStage.PAIRING -> DiagnosticCode.PAIRING_FAILED
+                stage == ConnectionStage.SETUP -> DiagnosticCode.SETUP_FAILED
+                stage == ConnectionStage.CARWITH -> DiagnosticCode.CARWITH_FAILED
+                else -> DiagnosticCode.CONNECTION_INCOMPLETE
+            }
+        end(attempt, reason, reason != DiagnosticCode.USER_STOP, detail)
     }
 
-    @Synchronized
+    /**
+     * The video transport closed. After frames were sent this is the normal end of a session (receiver
+     * switched off, stream torn down) and is not counted as a failure; with no frames sent it is one.
+     */
+    fun videoEnded(attempt: String) =
+        mutate {
+            if (id == attempt && active()) end(attempt, DiagnosticCode.VIDEO_CLOSED, frames == 0L, "")
+        }
+
     fun media(
         attempt: String,
         video: Boolean,
         bytes: Int,
-    ) {
-        if (id != attempt || !active() || bytes < 0) return
+    ) = mutate {
+        if (id != attempt || !active() || bytes < 0) return@mutate
         if (video) {
             frames++
             videoBytes += bytes
@@ -192,26 +235,28 @@ class ConnectionTimeline(
         }
     }
 
-    @Synchronized
-    fun sourceFrame(attempt: String) {
-        if (id != attempt || !active()) return
-        sourceFrames++
-        if (stage == ConnectionStage.SELF_TEST) status = "receiving_source"
-        if (sourceFrames == 1L) emit("FIRST_CARWITH_VIDEO")
-    }
+    fun sourceFrame(attempt: String) =
+        mutate {
+            if (id != attempt || !active()) return@mutate
+            sourceFrames++
+            if (stage == ConnectionStage.SELF_TEST) status = "receiving_source"
+            if (sourceFrames == 1L) emit("FIRST_CARWITH_VIDEO")
+        }
 
-    @Synchronized
-    fun audioPacket(attempt: String) {
-        if (id != attempt || !active()) return
-        audioPackets++
-        if (audioPackets == 1L) emit("FIRST_AUDIO_PACKET")
-    }
+    fun audioPacket(attempt: String) =
+        mutate {
+            if (id != attempt || !active()) return@mutate
+            audioPackets++
+            if (audioPackets == 1L) emit("FIRST_AUDIO_PACKET")
+        }
 
-    @Synchronized
-    fun snapshot(): Snapshot? =
+    fun snapshot(): Snapshot? = synchronized(lock) { state() }
+
+    private fun state(): Snapshot? =
         id?.let {
             Snapshot(
                 it,
+                startedAtMs,
                 stage,
                 status,
                 ((endedAt ?: elapsedTime()) - started).coerceAtLeast(0),
@@ -228,15 +273,36 @@ class ConnectionTimeline(
 
     private fun active(): Boolean = status == "waiting" || status == "streaming" || status == "receiving_source"
 
+    private inline fun <T> mutate(block: () -> T): T {
+        val result = synchronized(lock) { block() }
+        deliver()
+        return result
+    }
+
+    private fun end(
+        attempt: String,
+        reason: DiagnosticCode,
+        failed: Boolean,
+        detail: String,
+    ) {
+        if (id != attempt || !active()) return
+        code = reason
+        status = if (failed) "failed" else "stopped"
+        endedAt = elapsedTime()
+        emit("END", detail)
+    }
+
+    /** Called under [lock]: queues the record; [deliver] writes it once the lock is released. */
     private fun emit(
         event: String,
         detail: String = "",
     ) {
-        val state = snapshot() ?: return
+        val state = state() ?: return
         val record =
             JSONObject()
                 .put("schema", 1)
                 .put("timeMs", wallTime())
+                .put("track", track)
                 .put("attempt", state.id)
                 .put("event", event)
                 .put("stage", state.stage.name)
@@ -250,10 +316,20 @@ class ConnectionTimeline(
                 .put("lastVideoMsAgo", state.lastVideoMsAgo ?: JSONObject.NULL)
                 .put("sourceVideoFrames", state.sourceFrames)
                 .put("audioPacketsSent", state.audioPackets)
-                .put(
-                    "detail",
-                    DiagnosticRedactor().redact(detail).replace(Regex("<(?:IP|MAC|NAME)-[0-9]+>"), "<redacted-at-source>").take(2_000),
-                )
-        runCatching { sink(record.toString()) }
+        outbox.addLast(Pending(record, detail))
+    }
+
+    /** Drains queued records in order. Threads with nothing queued (most frames) never wait on the sink. */
+    private fun deliver() {
+        if (synchronized(lock) { outbox.isEmpty() }) return
+        synchronized(deliveryLock) {
+            while (true) {
+                val next = synchronized(lock) { outbox.removeFirstOrNull() } ?: return
+                runCatching {
+                    next.record.put("detail", DiagnosticRedactor.scrubAtSource(next.detail).take(2_000))
+                    sink(next.record.toString())
+                }
+            }
+        }
     }
 }

@@ -165,8 +165,9 @@ class MainActivity : AppCompatActivity() {
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             log("BLUETOOTH_CONNECT 授权: $granted")
-            if (granted && pendingStartAfterBtPermission.compareAndSet(true, false)) {
-                ensureBluetoothReady { showAudioChoiceDialog() }
+            if (pendingStartAfterBtPermission.compareAndSet(true, false)) {
+                ConnectionDiagnostics.permissionResult(granted, DiagnosticCode.BT_PERMISSION)
+                if (granted) ensureBluetoothReady { showAudioChoiceDialog() }
             }
         }
 
@@ -316,7 +317,6 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) ==
                 PackageManager.PERMISSION_GRANTED
         if (!granted) {
-            ConnectionDiagnostics.precheck(DiagnosticCode.BT_PERMISSION)
             pendingStartAfterBtPermission.set(true)
             permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
             return
@@ -363,7 +363,6 @@ class MainActivity : AppCompatActivity() {
     private fun ensureWifiLocationReady(onReady: () -> Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
-                ConnectionDiagnostics.precheck(DiagnosticCode.WIFI_JOIN_FAILED)
                 pendingStartAfterLocationPermission.set(true)
                 locationPermissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
                 return
@@ -375,7 +374,6 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
         if (!granted) {
-            ConnectionDiagnostics.precheck(DiagnosticCode.LOCATION_REQUIRED)
             pendingStartAfterLocationPermission.set(true)
             locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             return
@@ -422,8 +420,18 @@ class MainActivity : AppCompatActivity() {
     private val locationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             log("WIFI: 所需权限授权: $granted")
-            if (granted && pendingStartAfterLocationPermission.compareAndSet(true, false)) {
-                ensureBluetoothReady { showAudioChoiceDialog() }
+            if (pendingStartAfterLocationPermission.compareAndSet(true, false)) {
+                ConnectionDiagnostics.permissionResult(
+                    granted,
+                    if (Build.VERSION.SDK_INT >=
+                        Build.VERSION_CODES.TIRAMISU
+                    ) {
+                        DiagnosticCode.WIFI_PERMISSION
+                    } else {
+                        DiagnosticCode.LOCATION_REQUIRED
+                    },
+                )
+                if (granted) ensureBluetoothReady { showAudioChoiceDialog() }
             }
         }
 
@@ -1017,7 +1025,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun tickHero() {
         val diagnosis = ConnectionDiagnostics.timeline.snapshot()
-        findViewById<TextView>(R.id.diagnosticStatus).text = diagnosis?.summary() ?: getString(R.string.diagnostic_empty)
+        findViewById<TextView>(R.id.diagnosticStatus).text =
+            ConnectionDiagnostics.latestSnapshot()?.summary() ?: getString(R.string.diagnostic_empty)
         val s =
             when {
                 SessionController.videoSender?.let { it.isRunning && it.framesSentTotal > 0 } == true -> HeroState.CONNECTED
@@ -1060,7 +1069,7 @@ class MainActivity : AppCompatActivity() {
             log("CARLIFE: 自检已停止")
         } else {
             if (!CarLifeLauncher.isAvailable(this)) {
-                ConnectionDiagnostics.precheck(DiagnosticCode.CARWITH_FAILED)
+                ConnectionDiagnostics.precheck(DiagnosticCode.CARWITH_FAILED, ConnectionDiagnostics.selfTest)
                 snack("未安装 CarWith 或 CarLife 组件")
                 return
             }

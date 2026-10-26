@@ -92,4 +92,30 @@ class DiagnosticRedactorTest {
             assertFalse(safe.contains(it))
         }
     }
+
+    @Test
+    fun knownNameIsReplacedOnlyAsWholeToken() {
+        val safe = DiagnosticRedactor(listOf("CarPlay")).redact("CarPlayService started\nconnecting CarPlay now")
+        assertTrue(safe.contains("CarPlayService started"))
+        assertTrue(safe.contains("connecting <NAME-1> now"))
+    }
+
+    @Test
+    fun nameLabelInsideIdentifierAndAppConstantsAreNotAliased() {
+        val safe =
+            DiagnosticRedactor().redact(
+                "广播 _carplay-ctrl._tcp name=sender id=x\nVideoSender: sender ready\nserviceName=Lobby lobby",
+            )
+        assertTrue(safe.contains("name=sender"))
+        assertTrue(safe.contains("VideoSender: sender ready"))
+        assertTrue(safe.contains("serviceName=Lobby"))
+        assertFalse(safe.contains("<NAME-"))
+    }
+
+    @Test
+    fun sourceScrubUsesGenericPlaceholders() {
+        assertEquals("", DiagnosticRedactor.scrubAtSource(""))
+        val safe = DiagnosticRedactor.scrubAtSource("peer 10.0.0.1 ssid=Home")
+        assertEquals("peer <redacted-at-source> ssid=<redacted-at-source>", safe)
+    }
 }

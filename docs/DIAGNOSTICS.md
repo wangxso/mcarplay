@@ -50,10 +50,14 @@ python3 tools/analyze_diagnostics.py /path/to/mcarplay-log-...-diagnostics.txt
 
 The offline tool summarizes the last five retained attempts. Correlate `process`,
 `attempt`, `stage`, `elapsedMs`, `code` and counters with logs and user observations.
+`track` separates CarPlay attempts (`carplay`) from CarWith self-tests (`self_test`);
+the two never supersede each other. Showing a permission dialog is not recorded;
+only a denial is.
 
 | Code | Next check |
 | --- | --- |
-| `BT_PERMISSION`, `BT_DISABLED` | Bluetooth permission and switch. |
+| `BT_PERMISSION`, `BT_DISABLED` | Bluetooth permission denied, or Bluetooth switched off. |
+| `WIFI_PERMISSION` | Android 13+ nearby-WLAN-devices permission denied. |
 | `LOCATION_REQUIRED` | Android 12 WLAN permission/location-service prerequisite. |
 | `ENDPOINT_PENDING` | Awaiting receiver information; not a terminal failure. |
 | `BT_LINK_CLOSED` | Control link ended before session establishment. |
@@ -62,11 +66,11 @@ The offline tool summarizes the last five retained attempts. Correlate `process`
 | `SETUP_FAILED` | SETUP status and advertised capabilities. |
 | `CARWITH_FAILED` | Component versions, entry, original permissions, handshake and source video. |
 | `CARWITH_BUSY` | Stop the standalone self-test before starting a formal CarPlay connection. |
-| `VIDEO_CLOSED` | Transport ended; reset/broken pipe alone does not establish receiver crash. |
+| `VIDEO_CLOSED` | Transport ended. Status `stopped` after frames were sent (normal end, e.g. receiver off); `failed` if none were sent. Reset/broken pipe alone does not establish receiver crash. |
 | `AUDIO_UNAVAILABLE` | Audio setup failed; video may continue. Inspect format and input/output counts. |
 | `UNCAUGHT_EXCEPTION` | Captured stack; worker exception does not necessarily mean process death. |
 | `USER_STOP`, `SUPERSEDED` | Expected user stop or replacement, not a connection defect. |
-| `CONNECTION_INCOMPLETE` | Recorded stage and exception; no more specific cause established. |
+| `CONNECTION_INCOMPLETE` | Ended before pairing with no more specific cause; an `EXCEPTION` note carries any stack. |
 
 A missing END may mean an active session, abrupt termination or truncated records.
 No exit records does not prove no previous exit. Do not attribute an old low-memory

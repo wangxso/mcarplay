@@ -48,19 +48,6 @@ object DebugFileLog {
     }
 
     /**
-     * 读取日志正文。[currentSessionOnly] = true 时只返回最后一条 [SESSION_MARKER]
-     * 之后的内容（无标记时返回全文——首次安装/旧版本文件都属这种情形）。
-     */
-    fun read(
-        context: Context,
-        currentSessionOnly: Boolean,
-    ): String? =
-        runCatching {
-            val text = synchronized(lock) { store(context).read(4_100_000) }
-            if (currentSessionOnly) currentSessionSlice(text) else text
-        }.getOrNull()
-
-    /**
      * 读文件尾部原始字节（远程调试桥 `log_file.req` 用，最大 [maxBytes]）。
      * 与写线程并发安全：只读不写；文件不存在返回 null。
      */
@@ -79,8 +66,16 @@ object DebugFileLog {
             }
         }.getOrNull()
 
-    private fun store(context: Context): RotatingTextFile = RotatingTextFile(File(context.filesDir, "main_debug.log"), 2_000_000)
+    /** 进程内唯一实例（在 [lock] 内惰性创建）：每行日志不再新建 File/RotatingTextFile。 */
+    private var store: RotatingTextFile? = null
 
+    private fun store(context: Context): RotatingTextFile =
+        store ?: RotatingTextFile(File(context.filesDir, "main_debug.log"), 2_000_000).also { store = it }
+
+    /**
+     * 读取最近 [maxBytes] 的日志正文。[currentSessionOnly] = true 时只返回最后一条 [SESSION_MARKER]
+     * 之后的内容（无标记时返回全文——首次安装/旧版本文件都属这种情形）。
+     */
     fun readRecent(
         context: Context,
         maxBytes: Int,

@@ -3,6 +3,32 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.1-test.2] - 2026-10-26
+
+> Experimental prerelease: diagnostics fixes have passed offline checks only;
+> on-device permission prompts, concurrent self-test and Bluetooth-drop reporting remain to be verified.
+> 实验性预发布：诊断修复仅完成离线验证，实机权限弹窗、自检与连接并行及蓝牙断开报告仍待确认。
+
+### English
+- Diagnostics: a Bluetooth link drop during Wi-Fi join, or an exception after it, is recorded as `BT_LINK_CLOSED` instead of a user stop; exceptions keep the stage-specific code (`SETUP_FAILED`, `CARWITH_FAILED`, …) instead of `CONNECTION_INCOMPLETE`.
+- Diagnostics: CarWith self-tests use their own timeline (`track=self_test`), so a self-test and a CarPlay attempt no longer cancel each other's records.
+- Diagnostics: showing a permission dialog is no longer recorded as a failed attempt; only a denial is (new code `WIFI_PERMISSION` for Android 13+).
+- Diagnostics: a video stream that ends after frames were sent is recorded as a normal stop, not a failure.
+- Reports: known names are replaced only as whole words, and a `name` label inside an identifier such as `serviceName=` is no longer treated as a name.
+- Diagnostic records are written on a background thread, outside the timeline lock, so video, audio and UI threads no longer wait on disk writes.
+- Validation: 412 JVM tests, 26 Python tests, formatting, Android lint and local APK builds passed. No new vehicle-compatibility claim is made.
+
+### 简体中文
+- 诊断：加入热点期间蓝牙链路断开（或随后发生异常）记为 `BT_LINK_CLOSED`，不再记成用户停止；异常保留阶段错误码（`SETUP_FAILED`、`CARWITH_FAILED` 等），不再统一记为 `CONNECTION_INCOMPLETE`。
+- 诊断：CarWith 自检使用独立时间线（`track=self_test`），自检与 CarPlay 连接不再互相顶掉记录。
+- 诊断：弹出权限对话框不再记为连接失败，只有拒绝授权才记录（Android 13+ 新增错误码 `WIFI_PERMISSION`）。
+- 诊断：已发出视频帧后视频连接结束记为正常结束，不再算作失败。
+- 报告：已知名称只按完整单词替换；`serviceName=` 这类标识符里的 `name` 不再被当作名称。
+- 诊断记录改在后台线程、时间线锁外写盘，视频、音频和界面线程不再等待磁盘写入。
+- 验证：412 项 JVM 测试、26 项 Python 测试、格式、Android lint 和本地 APK 构建通过；不新增实车适配声明。
+
+Full changes / 完整变更: [v0.1.1-test.1...v0.1.1-test.2](https://github.com/wangxso/mcarplay/compare/v0.1.1-test.1...v0.1.1-test.2)
+
 ## [v0.1.1-test.1] - 2026-10-26
 
 > Experimental prerelease: diagnostics changes have passed offline checks only;
