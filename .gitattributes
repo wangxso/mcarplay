@@ -6,6 +6,7 @@
 *.yml text eol=lf
 *.py text eol=lf
 gradlew text eol=lf
+.githooks/* text eol=lf
 gradlew.bat text eol=crlf
 *.jar binary
 *.png binary

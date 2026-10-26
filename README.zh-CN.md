@@ -106,7 +106,8 @@ Debug 包通常无法覆盖更新为正式签名包；未记录发行标签的�
 ```
 
 APK 路径：`app/build/outputs/apk/standard/debug/app-standard-debug.apk`。
-使用 `./gradlew spotlessApply` 格式化 Kotlin 代码。
+使用 `./gradlew spotlessApply` 格式化 Kotlin 代码。执行一次 `git config core.hooksPath .githooks`，
+即可在提交前本地检查。
 `standard` 为常规版本，`remote` 另带开发调试工具。
 
 可选的诊断工具测试：

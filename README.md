@@ -116,7 +116,8 @@ or set `sdk.dir=/path/to/Android/sdk` in an untracked `local.properties` file.
 ```
 
 Output: `app/build/outputs/apk/standard/debug/app-standard-debug.apk`.
-Use `./gradlew spotlessApply` to format Kotlin. `standard` is the normal flavor;
+Use `./gradlew spotlessApply` to format Kotlin. Run `git config core.hooksPath .githooks` once to
+check commits locally. `standard` is the normal flavor;
 `remote` contains additional development tools.
 
 Optional diagnostic-tool tests:

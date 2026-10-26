@@ -189,3 +189,18 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 4. 00:56:24.778 再次出画，至 00:57:31 已收到 1321 帧，界面显示约 20fps。安装后的同一手机进程持续存活，按该进程过滤的 crash buffer 为 0 行，未新增心跳 FATAL。
 
 本轮仅覆盖安装冒烟、接收端丢失清理和重连、应用内手动断开后重连；没有重做音乐听感、导航提示或完整 10 分钟专项，不代表真实车机稳定性验收完成。364 项 JVM 测试、12 项 Python 测试、Spotless、standard debug/release lint 与 standard debug/release、remote debug 构建通过。
+
+## 同局域网连接失败与失效网络绑定（2026-10-26 晚间）
+
+本轮为用户授权的无线 ADB 排查。手机为 `2509FPN0BC / OS4.0.4.0.XPBCNXM / Android 17 (SDK 37)`，CarWith `4.0.20-20260923`、小米 CarLife 已更新到 `8.8.5 (274)`。已安装 mcarplay `standard/release 0.1.1 (1010000)`，APK SHA-256 为 `e456b0f17a653c538abb38bc32ae7d2186b8ba669775be6a0be02932bec0c894`。接收端为 `PA2353 / Android 14 / DiPlay 0.2.21`，使用 `Existing Wi-Fi / Same LAN`；两端实际连接同一路由器。原始双端日志和报告仅保存在本机私有临时目录，不入仓、不上传。
+
+1. 手机历史自检曾收到真实 CarWith 视频，报告中最近两轮为 12 / 98 帧；不能因此推断正式 CarPlay 链路也已经出画。
+2. 23:28:45 手机获得应用专属网络句柄 `111`；23:28:46 TCP 接通，随后 pair-setup、pair-verify、SETUP 和主屏流协商成功，23:28:47 RECORD 成功。接收端声明主屏 `2800×1840@30`。
+3. RECORD 后应用请求 CarWith 公开入口，但本机 `7240` 连续返回 `ECONNREFUSED`，七路连接未建立，源视频和已发送视频均为 0。23:28:53 会话结束。现有证据仅定位到原厂监听未就绪，尚不足以归因于 CarLife 8.8.5 更新、屏幕分辨率或某个原厂权限。
+4. 23:29 起手机反复认定“网络已在位”而跳过入网；实际所有新 TCP 均报 `ENONET`。报告 `network.active=WIFI validated=true`、`network.bound=unknown`，系统网络列表仅有当前 Wi-Fi `112`，原句柄 `111` 已不存在。DiPlay 同期蓝牙鉴权成功、已发送启动请求，但等待首个 TCP 超时。本轮两端退出记录未提供对应崩溃证据。
+5. 源码的 `AtomicReference.compareAndSet(network, null)` 按引用而非网络值匹配，可能漏掉来自另一 `Network` 实例的断开通知；读取当前绑定也从未检查系统是否仍认识该句柄。Android 明确说明绑定网络失效后，新套接字也会继续失败，必须清除绑定：[bindProcessToNetwork](https://developer.android.com/reference/android/net/ConnectivityManager#bindProcessToNetwork(android.net.Network))。
+6. 同局域网捷径通过同步 `getNetworkCapabilities()` 读取 SSID，但该 API 会脱敏位置相关字段。临时授予前台位置权限的对照没有恢复连接；正确方式还需要带 `FLAG_INCLUDE_LOCATION_INFO` 的网络回调。参考 [NetworkCallback](https://developer.android.com/reference/android/net/ConnectivityManager.NetworkCallback#FLAG_INCLUDE_LOCATION_INFO)。对照结束已撤回精确/大致位置权限，并恢复原权限标志。
+
+修复将请求所有权、绑定、失效清理集中到同一同步状态机；按网络值匹配断开事件，拒绝旧请求回调，绑定失败不报成功，系统已失效的网络不再复用。SSID 改由被动回调读取；用户手动连接时可明确确认接收端处于当前同局域网，从而不依赖位置权限核对 SSID，不自动把任意 Wi-Fi 当作目标网络。
+
+新增 6 项网络生命周期回归，覆盖同值不同实例断开、漏通知失效、旧请求污染、绑定失败、其他网络断开及注销后晚回调。全量 455 项 JVM 测试、Spotless、standard debug lint/构建通过。修复版尚未正式签名覆盖安装；CarWith 首帧、接收端显示/音频/触控与重连仍待验证，不将离线通过记作连接恢复或实车验收。

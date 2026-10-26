@@ -76,6 +76,8 @@ A missing END may mean an active session, abrupt termination or truncated record
 No exit records does not prove no previous exit. Do not attribute an old low-memory
 record to a later reset without matching timestamps and receiver-side evidence.
 Local car Wi-Fi without Internet validation is not by itself a connection failure.
+Repeated `ENONET` with an active Wi-Fi and `network.bound=unknown` calls for checking
+an expired process network binding before treating it as an AirPlay pairing defect.
 An uncaught exception is associated with the active attempt at capture time; this
 does not prove that attempt created the failing thread. Inspect the stack and timing.
 

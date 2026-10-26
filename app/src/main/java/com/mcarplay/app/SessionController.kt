@@ -1238,11 +1238,12 @@ object SessionController {
     private fun bindExistingCarWifi(
         connector: WifiCarPlayConnector,
         ssid: String,
+        verifySsid: Boolean = true,
     ): Network? {
         var boundOk = false
         // ssidHint：绑定断开（熄火）时经 onNetworkLost 通知会话层——兜底入网是主路径，
         // 不通知的话英雄卡停在「已连接」、会话拖到心跳超时才死
-        connector.bindCurrentWifi(ssid, expectedSsid = ssid) { boundOk = it }
+        connector.bindCurrentWifi(ssid, expectedSsid = ssid.takeIf { verifySsid }) { boundOk = it }
         val waitUntil = SystemClock.uptimeMillis() + 3_000
         while (!boundOk &&
             connector.currentNetwork == null &&
@@ -1424,6 +1425,35 @@ object SessionController {
 
     /** 手动兜底：密码进剪贴板 + 跳 WLAN 设置，轮询用户是否连上。 */
     private fun manualJoinCarWifi(wifi: Iap2SenderSession.WifiConfiguration) {
+        val connector = wifiConnector
+        if (connector != null && connector.hasExistingWifi() && connector.currentWifiSsid() == null) {
+            val useCurrent =
+                askWifiJoinChoice(
+                    DialogSpec(
+                        title = "使用当前 Wi-Fi？",
+                        message =
+                            "如果手机和接收端都已连接同一路由器（例如 DiPlay 同局域网模式），可以直接使用当前 Wi-Fi。\n\n" +
+                                "请确认两端网络相同；若接收端提供独立热点，请前往 WLAN 设置加入 \"${wifi.ssid}\"。",
+                        positive = "使用当前 Wi-Fi",
+                        negative = "打开 WLAN 设置",
+                    ),
+                )
+            if (connectCancelled || useCurrent == null) return
+            if (useCurrent) {
+                // The user explicitly confirmed Same-LAN; do not require location access to read the SSID.
+                val network =
+                    synchronized(wifiBindLock) {
+                        bindExistingCarWifi(connector, wifi.ssid, verifySsid = false)
+                    }
+                if (network != null) {
+                    boundCarSsid = wifi.ssid
+                    phaseHint = "已绑定当前 Wi-Fi"
+                    ctrlAdvertiser?.ensureForNetwork(wifi.ssid, force = true, network = network)
+                    appendLog("WIFI: 用户确认同一局域网，已绑定当前 Wi-Fi（$network）")
+                    return
+                }
+            }
+        }
         copyHotspotPsk(wifi.passphrase)
         openWlanSettings()
         phaseHint = "请在 WLAN 设置中连接 ${wifi.ssid}…"

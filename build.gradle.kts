@@ -6,7 +6,7 @@ plugins {
 
 // 代码格式化：ktlint（Kotlin 官方代码风格），规则见根目录 .editorconfig
 //  ./gradlew spotlessApply   —— 自动格式化
-//  ./gradlew spotlessCheck   —— 仅校验（pre-commit 钩子提交前自动执行）
+//  ./gradlew spotlessCheck   —— 仅校验（.githooks/pre-commit 提交前自动执行）
 spotless {
     kotlin {
         target("app/src/**/*.kt")
