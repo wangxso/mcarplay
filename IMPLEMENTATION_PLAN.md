@@ -6,6 +6,7 @@
 
 ## 当前基线与结论
 
+- **GitHub 更新（本轮离线验证）：** 首页新增检查更新，支持正式版/预发布筛选、更新说明、可取消的 APK 下载、哈希与包/版本/签名校验，再由用户授权 Android 系统安装器。来源固定为本项目 GitHub Releases；连接和自检期间阻止更新，不自动卸载、清数据或上传日志。标签构建记录精确发行标签；旧包同基础版本无法判断预发布先后时提供发行页入口。手机端权限、覆盖安装及断网回归待完成，机制与验收见 `docs/UPDATES.md`。
 - **连接体验与诊断（本轮仅离线验收）：** 首页新增会话编号、连接阶段、错误码与处置提示，可直接导出脱敏报告；“已连接”需视频发送器实际写出帧，不再只凭发送线程启动。报告包含 APK/签名指纹、组件/权限/网络快照、最近进程关键事件、输入/发送媒体计数、内存采样、堆栈及本应用系统退出记录。提供离线摘要脚本与 GitHub 反馈表。日志有界滚动并保留前一段，不自动上传。用户选择先完成离线验证，设备端真实导出、权限交互和小米连接回归尚待完成。详见 `docs/DIAGNOSTICS.md`。
 - **10 月 26 日退出排查：** 已修复 `CarLifeSession` 心跳睡眠被 `stop()` 中断时未捕获 `InterruptedException` 的问题；新增实际心跳线程停止回归，连续 20 次启停不进入未捕获异常处理器。CarPlay 视频结束时现在同时停止本轮 CarLife 源并释放所有权、停止原生音频桥，旧轮回调不得清理新轮状态。覆盖安装前的小米系统退出记录未显示对应时段的崩溃/ANR；Pad 在 00:24 被系统以 `LOW_MEMORY / single-cleaner` 清理，00:38 为链路重置及 DiPlay 主动拆链记录，不能混为一次 mcarplay 进程崩溃。详情见 `docs/CARWITH-ENTRY-FINDINGS.md`。
 - **修复版设备回归：** 覆盖安装并由用户确认免责声明后，在 DiPlay 上恢复 1920×1140、约 20fps 画面；有意关闭接收端后手机关闭七路通道，观察 10 秒无残留视频帧。重新打开接收端可再出画，手机内手动断开后也可再次连接；同一手机进程保持存活，未新增 FATAL。仅为定向回归，不替代 10 分钟/实车验收。
@@ -215,7 +216,7 @@ python3 -m venv .venv
   :app:lintStandardDebug :app:assembleStandardDebug
 ```
 
-当前基线：399 项 JVM 测试、26 项 Python 测试全部通过；Spotless、standard debug/release lint、standard debug/release 和 remote debug 构建通过。诊断专项覆盖脱敏、会话代际隔离、失败原因保留、媒体计数、历史滚动、导出事务清理，以及实际 TCP/UDP 回环中的观察回调异常隔离。所有 Gradle 检查使用 `--offline`。诊断 APK 为 `dist/mcarplay-debug.apk`，校验值在 `dist/mcarplay-debug.apk.sha256`；本轮未在手机验证该 APK。前轮音乐稳定性观察来自构建 `94ae9756b71327a3cd991c4c9c007c41194a52e0d0acf4c29c8167c11d133dab`，不与本轮离线结果合并计算稳定性。
+当前基线：449 项 JVM 测试（其中 37 项覆盖更新功能）、26 项 Python 测试全部通过；Spotless、standard debug/release lint、standard debug/release 和 remote debug 构建通过。更新专项覆盖标签/频道、可信地址、下载边界、哈希、取消/失败清理，以及包名/版本/签名拒绝；诊断专项覆盖脱敏、会话代际隔离、失败原因保留、媒体计数、历史滚动、导出事务清理，以及实际 TCP/UDP 回环中的观察回调异常隔离。所有 Gradle 检查使用 `--offline`。测试 APK 为 `dist/mcarplay-debug.apk`，校验值在 `dist/mcarplay-debug.apk.sha256`；本轮未在手机验证该 APK。前轮音乐稳定性观察来自构建 `94ae9756b71327a3cd991c4c9c007c41194a52e0d0acf4c29c8167c11d133dab`，不与本轮离线结果合并计算稳定性。
 
 验收证据统一记录：日期、手机型号与系统、CarWith/CarLife 版本、APK 与 H.264 的 SHA-256、完整命令、脱敏时序日志、`ffprobe` 结果和车机型号/固件。认证签名、AES 密钥、配对材料和个人日志不得入仓。
 

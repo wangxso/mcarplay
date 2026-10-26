@@ -1,5 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="update_title">检查更新</string>
+    <string name="update_safety">请停车并断开车机后操作。仅从本仓库 GitHub Releases 下载；安装前检查哈希、包名、版本和签名，仍需系统确认。不会自动卸载或清数据。</string>
+    <string name="update_preview">包含预发布版本（实验功能，可能不稳定）</string>
+    <string name="update_check">检查更新</string>
+    <string name="update_download">下载并校验 APK</string>
+    <string name="update_install">安装更新</string>
+    <string name="update_cancel">取消当前操作</string>
+    <string name="update_releases">打开发行页</string>
+    <string name="update_back">返回连接页面</string>
+    <string name="update_current">当前：%1$s (%2$d)\n发行标签：%3$s\n来源：%4$s</string>
+    <string name="update_unknown_tag">本地构建，未知</string>
+    <string name="update_source_denied">未允许安装来源。已保留下载文件，不会自动卸载或修改应用。</string>
+    <string name="update_source_failed">无法打开安装来源设置，请到系统设置中允许后重试。</string>
+    <string name="update_cancelling">正在取消…网络等待结束后会删除未完成的文件。</string>
+    <string name="update_browser_failed">无法打开浏览器，请手动访问 %1$s</string>
+    <string name="update_connection_active">请先断开 CarPlay 连接并停止 CarWith 自检，再进行更新，避免中断车机使用。</string>
+    <string name="update_checking">正在从 GitHub 检查更新…</string>
+    <string name="update_no_release">本频道暂未找到带 APK 和校验值的可安装版本，可打开发行页查看。</string>
+    <string name="update_new_preview">发现新版本 %1$s（预览版）</string>
+    <string name="update_new_stable">发现新版本 %1$s</string>
+    <string name="update_latest">当前已是此频道最新版本：%1$s</string>
+    <string name="update_older">当前构建版本高于远程版本 %1$s，不会降级。</string>
+    <string name="update_same_base">远程为 %1$s，基础版本相同；本地构建缺少发行标签，无法判断预览序号，请打开发行页手动更新。</string>
+    <string name="update_release_notes">%1$s\n%2$d KB\n\n%3$s</string>
+    <string name="update_no_notes">此版本未提供更新说明</string>
+    <string name="update_debug_warning">\n\n提示：当前为调试包，发行包签名可能不同；签名不符时会拒绝安装。</string>
+    <string name="update_remote_warning">\n\nremote 调试版不能由标准发行 APK 覆盖，请使用对应构建渠道。</string>
+    <string name="update_downloading">正在下载 %1$s…</string>
+    <string name="update_download_progress">正在下载：%1$d / %2$d KB</string>
+    <string name="update_verified">下载完成，SHA-256、包名、版本和签名证书检查通过。点击「安装更新」后仍需系统确认。</string>
+    <string name="update_hash">\n\nAPK SHA-256：%1$s</string>
+    <string name="update_verifying">正在进行安装前校验…</string>
+    <string name="update_installer_opened">已交给系统安装器，请自行确认；取消安装不会清除当前应用数据。</string>
+    <string name="update_installer_failed">无法启动系统安装器，请打开发行页手动下载。</string>
+    <string name="update_busy">上一更新任务尚未结束，请稍后再试。</string>
+    <string name="update_error">%1$s\n错误码：%2$s</string>
+    <string name="update_failed">更新操作失败，请检查网络或剩余空间后重试；也可打开发行页手动下载。</string>
     <string name="diagnostic_empty">遇到连接问题？导出诊断报告反馈，无需电脑或 Shizuku。</string>
     <string name="export_diagnostics">导出脱敏诊断报告</string>
     <!-- 应用名**不含** CarPlay：它既是 Apple 的商标，用「CarPlay」作产品名会构成

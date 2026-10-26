@@ -95,6 +95,11 @@ development builds (`N` is 1–9999). Tag workflows use the base version.
 Do not mix numbered development builds and stable builds of the same base version
 when testing Android upgrade ordering.
 
+Tag builds also record the release tag for the [in-app updater](UPDATES.md).
+Retain `mcarplay-<base>.apk`, `SHA256SUMS.txt` and the same signing key. Forks must
+change `UpdateSource.REPOSITORY` before distributing APKs that check for updates.
+标签构建同时记录应用内更新所需的发行标签；请保持上述资产命名与签名密钥，Fork 发布前修改更新仓库常量。
+
 ## 中文快速操作
 
 1. 执行 `python3 tools/prepare_upload.py`，上传 `dist/github-upload/` **里面的内容**。

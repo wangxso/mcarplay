@@ -773,6 +773,9 @@ class MainActivity : AppCompatActivity() {
     /** onCreate 的 UI 初始化尾部：开关/按钮/折叠卡（会话逻辑不变，仅挂新界面）。 */
     private fun setUpUiControls() {
         val preferences = getSharedPreferences("settings", Context.MODE_PRIVATE)
+        findViewById<View>(R.id.btnCheckUpdates).setOnClickListener {
+            startActivity(Intent(this, com.mcarplay.app.update.UpdateActivity::class.java))
+        }
         // 清理旧版本遗留的模式偏好（模式已固定为「隐形屏」启动器）
         if (preferences.contains("mode")) {
             preferences.edit().remove("mode").apply()

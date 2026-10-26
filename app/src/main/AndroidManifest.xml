@@ -3,6 +3,8 @@
 
     <!-- 无线 CarPlay 全链路：蓝牙 RFCOMM（iAP2 控制通道）+ WiFi（热点加入 / mDNS） -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- User-confirmed system installation of a verified GitHub release; never silent installation. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
@@ -79,6 +81,19 @@
         <activity
             android:name=".PhoneSettingsActivity"
             android:exported="false" />
+        <activity
+            android:name=".update.UpdateActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+        <provider
+            android:name=".update.UpdateFileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_file_paths" />
+        </provider>
         <activity
             android:name=".SettingsContentActivity"
             android:exported="false" />

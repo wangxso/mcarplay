@@ -3,6 +3,30 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.2-test.1] - 2026-10-26
+
+> Experimental prerelease: GitHub updates have passed offline validation;
+> on-device installation, permissions and post-upgrade connection regression remain pending.
+> 实验性预发布：GitHub 更新已通过离线验证；手机端安装、权限和升级后连接回归仍待完成。
+
+### English
+- Add a main-screen GitHub update flow with release notes, stable/preview channels, cancellable APK downloads and explicit Android installer confirmation.
+- Verify download size/SHA-256, package/version, Android requirements and the installed signing certificate; refuse downgrades and standard APK updates for the remote flavor.
+- Record release tags in tagged builds to compare preview iterations; explain when older/local builds lack enough metadata to compare the same base version.
+- Advance the Android base version to `0.1.2` (`versionCode=1020000`) and record `v0.1.2-test.1` in the tagged APK. In-place upgrades require the same signing key.
+- Document update behavior and device acceptance checks. On-device installation and connection regression remain pending.
+- Offline validation: 449 JVM tests (37 update tests), 26 Python tests, formatting, standard debug/release lint and standard debug/release plus remote debug APK builds.
+
+### 简体中文
+- 首页新增 GitHub 更新入口：更新说明、正式/预发布频道、可取消 APK 下载，最后由用户在 Android 系统安装器确认。
+- 检查大小/SHA-256、包名/版本、Android 要求及当前签名证书，阻止降级和 remote 版安装标准发行 APK。
+- 标签构建记录发行标签以比较预发布先后；旧版/本地包缺少同基础版本比较信息时明确说明。
+- Android 基础版本升级为 `0.1.2`（`versionCode=1020000`），标签 APK 记录 `v0.1.2-test.1`。覆盖升级须使用同一签名密钥。
+- 补充更新机制与设备验收文档；手机端安装及连接回归仍待完成。
+- 离线验证：449 项 JVM 测试（其中 37 项更新测试）、26 项 Python 测试、格式、standard debug/release lint、standard debug/release 与 remote debug APK 构建。
+
+Full changes / 完整变更: [v0.1.1-test.2...v0.1.2-test.1](https://github.com/wangxso/mcarplay/compare/v0.1.1-test.2...v0.1.2-test.1)
+
 ## [v0.1.1-test.2] - 2026-10-26
 
 > Experimental prerelease: diagnostics fixes have passed offline checks only;

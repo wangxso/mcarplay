@@ -1440,6 +1440,21 @@
                 </LinearLayout>
             </LinearLayout>
 
+            <TextView
+                android:id="@+id/btnCheckUpdates"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_card"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="56dp"
+                android:paddingHorizontal="18dp"
+                android:text="@string/update_title"
+                android:textColor="@color/m3_primary"
+                android:textSize="14sp" />
+
             <!-- 免责声明（只读重看；首次启动的强制接受是独立弹窗） -->
             <LinearLayout
                 android:id="@+id/btnDisclaimer"

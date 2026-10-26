@@ -68,6 +68,21 @@ root or Shizuku. Optional display/launcher utilities inherited from CarDeck may
 still use [Shizuku](https://shizuku.rikka.app/).
 If pairing stalls after reinstalling, restart the test receiver to clear its previous session.
 
+## Check for updates
+
+Open **检查更新** on the main screen while parked and disconnected. The app checks
+[GitHub Releases](https://github.com/wangxso/mcarplay/releases), shows release notes,
+and lets you download an APK and open the Android installer. **Include previews**
+is enabled by default for this experimental project; disable it for stable releases only.
+Nothing is installed silently.
+
+Downloads are checked against SHA-256, package/version, Android compatibility and
+the installed signing certificate. A debug APK generally cannot receive a release-signed
+update. Older builds without a recorded release tag cannot order previews of the
+same base version; use the release page for those. The `remote` flavor is excluded
+from standard APK updates. Offline checks pass; on-device installation is pending.
+See [update behavior, limitations and acceptance checks](docs/UPDATES.md).
+
 ## Connection troubleshooting
 
 Tap **导出脱敏诊断报告** on the main connection card, review it, then share the file
