@@ -49,6 +49,16 @@ delivered by mcarplay. This documents video output in the shown session only; it
 does not verify audio, touch, a 10-minute run, reconnect behavior or real-vehicle
 compatibility.
 
+### DiPlay photo
+
+![DiPlay on an Android tablet showing the CarWith NetEase Cloud Music screen from mcarplay](docs/screenshots/diplay-carwith-photo.jpg)
+
+Photo from October 27, 2026 (22:08): DiPlay on an Android tablet shows the CarWith
+NetEase Cloud Music screen delivered by mcarplay `v0.1.3-test.2` code, with CarWith
+encoding 1920 x 1080 at 30 fps. Music was paused when the photo was taken; audio
+arrived after playback started. The photo documents picture output in that session
+only; see `docs/CARWITH-ENTRY-FINDINGS.md` for the log details.
+
 ## Known limitations and roadmap
 
 | Area | Known status | Next step | Priority |
