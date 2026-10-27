@@ -15,7 +15,7 @@ plugins {
  * Optional signed build suffix: -Pmcarplay.buildNumber=N.
  * Tagged releases use the base version; update it before publishing a new tag.
  */
-val appVersionName = "0.1.2"
+val appVersionName = "0.1.3"
 val releaseTag =
     providers.gradleProperty("mcarplay.releaseTag").orNull
         ?: if (providers.environmentVariable("GITHUB_REF_TYPE").orNull == "tag") {

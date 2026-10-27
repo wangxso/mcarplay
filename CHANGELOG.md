@@ -3,6 +3,27 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.3-test.1] - 2026-10-27
+
+> Experimental prerelease: receiver policy and Wi-Fi/CarWith fixes passed offline checks; receiver-specific behavior and real-car media stability still need device validation.
+> 实验性预发布：接收端策略及 Wi-Fi/CarWith 修复已通过离线检查；接收端专项行为和真实车机媒体稳定性仍待实机验证。
+
+### English
+- Add one receiver compatibility policy based on Bluetooth identity/firmware/EA, mDNS features/srcvers, AirPlay `/info` capabilities and current-session state. Pairing, Bluetooth handoff, recovery exceptions, audio selection and compatibility memory now follow the same endpoint evidence; unknown receivers remain conservative.
+- Keep active Wi-Fi video sessions alive when a receiver releases Bluetooth after network handoff, and report automatic Bluetooth loss separately from a user disconnect.
+- Stabilize same-LAN Wi-Fi and CarWith setup by refreshing stale network bindings and respecting system network-picker and join lifecycles.
+- Advance the Android base version to `0.1.3` (`versionCode=1030000`); tagged builds identify `v0.1.3-test.1`.
+- Validation: 493 JVM tests, 26 Python tests, `spotlessCheck`, `lintStandardRelease` and `assembleStandardRelease` passed. No new vehicle-compatibility claim is made; receiver behavior and full media regression still need device validation.
+
+### 简体中文
+- 新增统一接收端兼容策略，依据蓝牙身份/固件/EA、mDNS features/srcvers、AirPlay `/info` 能力及本轮会话状态，统一决定配对、蓝牙交接、恢复例外、音频选择和兼容记忆；未知接收端继续采用保守策略。
+- 接收端完成网络交接并释放蓝牙时，保留仍在运行的 Wi-Fi 视频会话；诊断中区分蓝牙自动断开与用户主动断开。
+- 通过刷新过期网络绑定并正确处理系统选网框和入网生命周期，提升同局域网 Wi-Fi 与 CarWith 启动流程的稳定性。
+- Android 基础版本升级为 `0.1.3`（`versionCode=1030000`）；标签构建记录 `v0.1.3-test.1`。
+- 验证：493 项 JVM 测试、26 项 Python 测试、`spotlessCheck`、`lintStandardRelease` 和 `assembleStandardRelease` 均通过。不新增实车兼容声明；接收端行为及完整媒体回归仍待实机验证。
+
+Full changes / 完整变更: [v0.1.2-test.1...v0.1.3-test.1](https://github.com/wangxso/mcarplay/compare/v0.1.2-test.1...v0.1.3-test.1)
+
 ## [v0.1.2-test.1] - 2026-10-26
 
 > Experimental prerelease: GitHub updates have passed offline validation;
