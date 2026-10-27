@@ -5,22 +5,22 @@ Test releases are experimental and do not establish real-vehicle compatibility.
 
 ## [Unreleased]
 
-> Release gate: the next version is published only after a successful device run on WinPlay 1.2.4. Until then, do not tag or publish it.
-> 发布前提：下一版本必须先在 WinPlay 1.2.4 上实机验证成功才可发布；验证通过前不打标签、不发布。
+> Release gate: the next version is published only after a successful device run on WinPlay 1.2.5. Until then, do not tag or publish it.
+> 发布前提：下一版本必须先在 WinPlay 1.2.5 上实机验证成功才可发布；验证通过前不打标签、不发布。
 
 ### English
 - Validation: 543 JVM tests, `spotlessCheck`, `lintStandardDebug`, `assembleStandardDebug`, `lintRemoteDebug` and `assembleRemoteDebug` passed. Short WinPlay and DiPlay runs on 2026-10-27 delivered CarWith picture and sound (`docs/CARWITH-ENTRY-FINDINGS.md`); they do not meet the WinPlay gate. The detection wizard still needs device interaction, full media/input and reconnect validation; the release gate below remains in force.
 - Add **检测当前车机**: collect connection evidence, confirm picture/sound/touch, and atomically save device-specific settings locally. Try one explicit Bluetooth-stage alternative; limit fallback-port and `/info` method probes; reuse confirmed audio preferences only for matching capabilities. Cancellation preserves previous settings, unknown results stay unverified, and no model list or automatic upload is added.
 - Fix no CarWith sound when Bluetooth auto-start races a manual start: the auto-start path no longer turns off sound when native CarWith audio is available. Log the first frame of each CarLife audio kind and count frames the parser drops, so a 0-packet session shows whether CarWith sent anything. The remote flavor logs phone, HyperOS, CarWith and CarLife versions when it connects to the debug server.
 - Add two opt-in compatibility fallbacks in **车机设置 → 显示**, both off by default: retry with an unencrypted session after an ordinary pairing failure, and try the PCM 48 kHz audio baseline when the receiver lists no usable media format.
-- Required WinPlay 1.2.4 validation (default settings, both fallbacks off): connect from the phone; CarWith video, touch and sound reach the receiver; the session survives WinPlay releasing Bluetooth after network handoff for at least 10 minutes; one disconnect and reconnect succeeds; "上车自动连接" stays on. Record phone/HyperOS, CarWith/CarLife versions and the result in `docs/CARWITH-ENTRY-FINDINGS.md`, then cite it in this entry's validation line.
+- Required WinPlay 1.2.5 validation (default settings, both fallbacks off): connect from the phone; CarWith video, touch and sound reach the receiver; the session survives WinPlay releasing Bluetooth after network handoff for at least 10 minutes; one disconnect and reconnect succeeds; "上车自动连接" stays on. Record phone/HyperOS, CarWith/CarLife versions and the result in `docs/CARWITH-ENTRY-FINDINGS.md`, then cite it in this entry's validation line.
 
 ### 简体中文
 - 验证：543 项 JVM 测试、`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug`、`lintRemoteDebug` 和 `assembleRemoteDebug` 均通过。10 月 27 日 WinPlay 与 DiPlay 短时实测均出画面和声音（见 `docs/CARWITH-ENTRY-FINDINGS.md`），未达到 WinPlay 发布门槛。检测向导的实机交互、完整音画触控及重连仍待验证，下述发布门槛继续有效。
 - 新增 **检测当前车机**：收集连接证据，由用户确认画面／声音／触控后，按设备原子保存本地配置。蓝牙阶段可显式对照一次，端口及 `/info` 方法探测有界；音频偏好仅在能力匹配时复用。取消保留旧配置，未知结果保持未验证，无需车型列表，不自动上传。
 - 修复蓝牙自动启动与手动启动相互覆盖导致 CarWith 无声：CarWith 原生音频可用时，自动启动不再关闭声音。CarLife 各音频帧类型首帧入日志，并统计解析器丢弃的帧，0 包会话可据此判断 CarWith 是否发送过数据。remote 版本连上调试服务器时自动记录手机、HyperOS、CarWith 与 CarLife 版本。
 - 在 **车机设置 → 显示** 新增两个兼容兜底开关，均默认关闭：普通配对失败后改用明文会话重试；接收端未声明可用的媒体音频格式时按 PCM 48kHz 基线尝试。
-- WinPlay 1.2.4 必验项（默认设置，两个兜底开关均关闭）：手机发起连接；CarWith 画面、触控和声音到达接收端；WinPlay 网络交接后释放蓝牙，会话仍持续至少 10 分钟；断开后可重新连接一次；「上车自动连接」保持开启。在 `docs/CARWITH-ENTRY-FINDINGS.md` 记录手机/HyperOS、CarWith/CarLife 版本与结果，并在本条目的验证行中引用。
+- WinPlay 1.2.5 必验项（默认设置，两个兜底开关均关闭）：手机发起连接；CarWith 画面、触控和声音到达接收端；WinPlay 网络交接后释放蓝牙，会话仍持续至少 10 分钟；断开后可重新连接一次；「上车自动连接」保持开启。在 `docs/CARWITH-ENTRY-FINDINGS.md` 记录手机/HyperOS、CarWith/CarLife 版本与结果，并在本条目的验证行中引用。
 
 ## [v0.1.3-test.1] - 2026-10-27
 
