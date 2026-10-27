@@ -71,6 +71,12 @@ environment. Then run:
 
 ## Publish a release
 
+Release gate: the version after `v0.1.3-test.1` is published only after a successful
+device run on WinPlay 1.2.4, using the checklist in the `[Unreleased]` entry of
+`CHANGELOG.md`. Do not push its tag before that evidence is recorded in
+`docs/CARWITH-ENTRY-FINDINGS.md`. A tag push publishes immediately and the in-app
+updater offers prereleases by default.
+
 1. Update `appVersionName` in `app/build.gradle.kts` for each new version.
 2. Commit that change, then create and push a matching tag. Use `v0.1.0` for a
    regular release or `v0.1.0-test.1` for a test prerelease. The base version in
@@ -101,6 +107,10 @@ change `UpdateSource.REPOSITORY` before distributing APKs that check for updates
 标签构建同时记录应用内更新所需的发行标签；请保持上述资产命名与签名密钥，Fork 发布前修改更新仓库常量。
 
 ## 中文快速操作
+
+发布前提：`v0.1.3-test.1` 之后的版本必须先按 `CHANGELOG.md` 中 `[Unreleased]` 的清单在
+WinPlay 1.2.4 上实机验证成功，并在 `docs/CARWITH-ENTRY-FINDINGS.md` 记录证据，之后才能推送标签。
+推送标签即自动发布，应用内更新默认包含预发布版本。
 
 1. 执行 `python3 tools/prepare_upload.py`，上传 `dist/github-upload/` **里面的内容**。
    若使用 ZIP，先解压；只上传 ZIP 不会自动构建。不要遗漏隐藏目录 `.github/`。

@@ -3,6 +3,19 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [Unreleased]
+
+> Release gate: the next version is published only after a successful device run on WinPlay 1.2.4. Until then, do not tag or publish it.
+> 发布前提：下一版本必须先在 WinPlay 1.2.4 上实机验证成功才可发布；验证通过前不打标签、不发布。
+
+### English
+- Add two opt-in compatibility fallbacks in **车机设置 → 显示**, both off by default: retry with an unencrypted session after an ordinary pairing failure, and try the PCM 48 kHz audio baseline when the receiver lists no usable media format.
+- Required WinPlay 1.2.4 validation (default settings, both fallbacks off): connect from the phone; CarWith video, touch and sound reach the receiver; the session survives WinPlay releasing Bluetooth after network handoff for at least 10 minutes; one disconnect and reconnect succeeds; "上车自动连接" stays on. Record phone/HyperOS, CarWith/CarLife versions and the result in `docs/CARWITH-ENTRY-FINDINGS.md`, then cite it in this entry's validation line.
+
+### 简体中文
+- 在 **车机设置 → 显示** 新增两个兼容兜底开关，均默认关闭：普通配对失败后改用明文会话重试；接收端未声明可用的媒体音频格式时按 PCM 48kHz 基线尝试。
+- WinPlay 1.2.4 必验项（默认设置，两个兜底开关均关闭）：手机发起连接；CarWith 画面、触控和声音到达接收端；WinPlay 网络交接后释放蓝牙，会话仍持续至少 10 分钟；断开后可重新连接一次；「上车自动连接」保持开启。在 `docs/CARWITH-ENTRY-FINDINGS.md` 记录手机/HyperOS、CarWith/CarLife 版本与结果，并在本条目的验证行中引用。
+
 ## [v0.1.3-test.1] - 2026-10-27
 
 > Experimental prerelease: receiver policy and Wi-Fi/CarWith fixes passed offline checks; receiver-specific behavior and real-car media stability still need device validation.
