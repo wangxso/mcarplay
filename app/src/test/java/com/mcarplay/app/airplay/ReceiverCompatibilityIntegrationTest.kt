@@ -132,6 +132,26 @@ class ReceiverCompatibilityIntegrationTest {
     }
 
     @Test
+    fun audioBaselineSwitchRestoresLegacyFallback() {
+        val client = AirPlayClient(endpoint(), log = {})
+        setInfo(client, emptyList())
+        assertEquals(listOf(AudioCodec.PCM), client.audioCandidates(allowBaseline = true).map { it.codec })
+        assertEquals(48_000, client.audioCandidates(allowBaseline = true).single().sampleRate)
+
+        // 只有非媒体档：开关打开后与旧行为一致，可用该档的 PCM
+        setInfo(client, listOf(format(100, "telephony", 1L shl 15)))
+        assertEquals("telephony", client.audioCandidates(allowBaseline = true).single().audioType)
+
+        // 只有不支持的编码：回退协议基线
+        setInfo(client, listOf(format(100, "media", 1L shl 2)))
+        assertEquals(AudioCodec.PCM, client.audioCandidates(allowBaseline = true).single().codec)
+
+        // 有可用声明时开关不改变选择
+        setInfo(client, listOf(format(102, "media", 1L shl 23)))
+        assertEquals(client.audioCandidates(), client.audioCandidates(allowBaseline = true))
+    }
+
+    @Test
     fun unsupportedAndTelephonyOnlyCapabilitiesNeverBecomeMediaBaseline() {
         val client = AirPlayClient(endpoint(), log = {})
         assertEquals(1, client.audioCandidates().size)

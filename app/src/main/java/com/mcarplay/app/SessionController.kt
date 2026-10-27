@@ -23,6 +23,7 @@ import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
 import com.mcarplay.app.carlife.mapCarLifeTouch
+import com.mcarplay.app.compat.CompatibilityPrefs
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionStage
@@ -1912,7 +1913,7 @@ object SessionController {
                 entry = AudioProfileMemory.Entry()
                 appendLog("AUDIO: 本车机（$identity）有「全部档位拆链」的旧记忆，已自动清除并重试")
             }
-            val candidates = client.audioCandidates(preferCompat = audioPreferCompat)
+            val candidates = client.audioCandidates(preferCompat = audioPreferCompat, allowBaseline = audioBaselineAllowed())
             val ordered = AudioProfileMemory.order(candidates, entry)
             if (ordered.isEmpty()) {
                 appendLog("AUDIO: 没有可用音频档位（候选=${candidates.map { it.label }}）——仅推视频")
@@ -2071,12 +2072,14 @@ object SessionController {
         )
     }
 
+    private fun audioBaselineAllowed(): Boolean = appContext?.let(CompatibilityPrefs::audioBaseline) == true
+
     /** 该车机上「所有可能用到的档位键」——用于判断是否已全部试穿。 */
     private fun audioCandidateKeys(identity: String): Set<String> =
         runCatching {
             val client = currentClient ?: return@runCatching emptySet()
-            val preferred = client.audioCandidates(preferCompat = audioPreferCompat).map { it.key }
-            val alternate = client.audioCandidates(preferCompat = !audioPreferCompat).map { it.key }
+            val preferred = client.audioCandidates(preferCompat = audioPreferCompat, allowBaseline = audioBaselineAllowed()).map { it.key }
+            val alternate = client.audioCandidates(preferCompat = !audioPreferCompat, allowBaseline = audioBaselineAllowed()).map { it.key }
             (preferred + alternate).toSet()
         }.getOrDefault(emptySet())
 
@@ -2699,7 +2702,14 @@ object SessionController {
                             attemptedPairing = client.attemptedPairing,
                             pairingUnsupported = client.pairingUnsupported,
                             policy = client.receiverCompatibility(),
+                            allowPlainAfterFailure = appContext?.let(CompatibilityPrefs::plainFallback) == true,
                         ).usePlainSession
+                    if (plainSession && appContext?.let(CompatibilityPrefs::plainFallback) == true &&
+                        !client.pairingUnsupported &&
+                        client.receiverCompatibility().pairingMode != ReceiverCompatibility.PairingMode.ADVERTISED_PLAIN
+                    ) {
+                        appendLog("COMPAT: 用户开启「配对失败后尝试明文」，本轮按明文会话兜底")
+                    }
                     if (plainSession) {
                         phaseHint = "建立明文会话…"
                         appendLog(
@@ -3280,6 +3290,7 @@ internal fun pairingFallback(
     attemptedPairing: Boolean,
     pairingUnsupported: Boolean,
     policy: ReceiverCompatibility.Policy = ReceiverCompatibility.resolve(ReceiverProfile.Signals()),
+    allowPlainAfterFailure: Boolean = false,
 ): PairingFallback {
     val decision =
         ReceiverCompatibility.pairingFallback(
@@ -3290,6 +3301,7 @@ internal fun pairingFallback(
             pairingForbidden,
             attemptedPairing,
             pairingUnsupported,
+            allowPlainAfterFailure,
         )
     return PairingFallback(decision.useBtRetireHack, decision.usePlainSession)
 }

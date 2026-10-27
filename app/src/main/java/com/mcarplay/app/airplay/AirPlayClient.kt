@@ -1908,9 +1908,14 @@ class AirPlayClient(
      *     部分车机 media 档只声明 44.1k 且其音频通路只吃 48k，只能用兼容档；
      *  4. 延迟取该 (type, audioType) 在 audioLatencies 的 outputLatencyMicros，
      *     取不到用 [AUDIO_LATENCY_FALLBACK_MS]。
-     * 拿不到 /info 时回退协议基线（media + PCM48k + 250ms），与改动前一致。
+     * 拿不到 /info 或未声明 audioFormats 时回退协议基线（media + PCM48k + 250ms）。
+     * 清单为空或没有可用媒体格式时默认只推视频；[allowBaseline]（用户开关「音频格式
+     * 未声明时仍尝试」）打开后恢复旧行为：照常回退基线，PCM 也可用非媒体档。
      */
-    fun audioCandidates(preferCompat: Boolean = false): List<AudioProfile> {
+    fun audioCandidates(
+        preferCompat: Boolean = false,
+        allowBaseline: Boolean = false,
+    ): List<AudioProfile> {
         val baseline =
             listOf(
                 AudioProfile(AUDIO_TYPE_MEDIA, AUDIO_FORMAT_PCM_48K_STEREO, 48_000, AUDIO_LATENCY_FALLBACK_MS),
@@ -1922,8 +1927,18 @@ class AirPlayClient(
                 .orEmpty()
         if (declared.isEmpty()) {
             val explicitlyEmpty = info.containsKey("audioFormats")
-            log(if (explicitlyEmpty) "AIRPLAY: 接收端音频清单为空——仅推视频" else "AIRPLAY: 未声明 audioFormats → 按协议基线尝试")
-            return if (explicitlyEmpty) emptyList() else baseline
+            if (explicitlyEmpty && !allowBaseline) {
+                log("AIRPLAY: 接收端音频清单为空——仅推视频")
+                return emptyList()
+            }
+            log(
+                if (explicitlyEmpty) {
+                    "AIRPLAY: 接收端音频清单为空，用户开启兜底 → 按协议基线尝试"
+                } else {
+                    "AIRPLAY: 未声明 audioFormats → 按协议基线尝试"
+                },
+            )
+            return baseline
         }
 
         // ---- 1) AAC-LC 通路：MainHighAudio(102) 优先，其次 type=100 ----
@@ -1970,7 +1985,7 @@ class AirPlayClient(
                 val type = (channel["audioType"] as? String)?.lowercase()
                 type == AUDIO_TYPE_MEDIA || type == "compatibility" || type == "default"
             }
-        val pool = mediaTypes
+        val pool = if (allowBaseline) mediaTypes.ifEmpty { formats } else mediaTypes
         // 外层按格式（48k → 44.1k），内层按车机声明顺序：同档位时 48k 自然排在前面
         listOf(AUDIO_FORMAT_PCM_48K_STEREO to 48_000, AUDIO_FORMAT_PCM_44K_STEREO to 44_100)
             .forEach { (bit, rate) ->
@@ -1998,10 +2013,10 @@ class AirPlayClient(
                 pcm.sortedBy { priority(it.audioType) }
         if (ordered.isEmpty()) {
             log(
-                "AIRPLAY: 车机未声明可用的 AAC-LC / PCM 立体声格式" +
-                    "（共 ${declared.size} 档）→ 仅推视频，不尝试未声明的格式",
+                "AIRPLAY: 车机未声明可用的 AAC-LC / PCM 立体声格式（共 ${declared.size} 档）→ " +
+                    if (allowBaseline) "用户开启兜底，按协议基线尝试" else "仅推视频，不尝试未声明的格式",
             )
-            return emptyList()
+            return if (allowBaseline) baseline else emptyList()
         }
         log("AIRPLAY: 音频候选（按偏好）=${ordered.map { it.label }}")
         return ordered.distinctBy { it.key }

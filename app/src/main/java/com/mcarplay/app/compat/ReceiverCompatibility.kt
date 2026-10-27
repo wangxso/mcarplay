@@ -101,12 +101,16 @@ object ReceiverCompatibility {
         pairingForbidden: Boolean,
         attemptedPairing: Boolean,
         pairingUnsupported: Boolean,
+        /** 用户开关「配对失败后尝试明文」：恢复旧兜底，403 仍禁止。 */
+        allowPlainAfterFailure: Boolean = false,
     ): PairingFallback {
         if (keysEstablished || pairingForbidden) return PairingFallback(false, false)
         return PairingFallback(
             useBtRetireHack = policy.allowBluetoothRetireRetry && !noPairing && !pairSetupRejected && attemptedPairing,
             // 超时/复位不证明支持明文；只有能力明确声明或端点明确不支持配对才允许降级。
-            usePlainSession = noPairing || pairingUnsupported || policy.pairingMode == PairingMode.ADVERTISED_PLAIN,
+            usePlainSession =
+                noPairing || pairingUnsupported || policy.pairingMode == PairingMode.ADVERTISED_PLAIN ||
+                    (allowPlainAfterFailure && attemptedPairing),
         )
     }
 

@@ -113,6 +113,62 @@ class PairingFallbackTest {
     }
 
     @Test
+    fun `明文兜底开关 - 默认关时普通失败不降级`() {
+        val off =
+            pairingFallback(
+                false,
+                noPairing = false,
+                pairSetupRejected = false,
+                pairingForbidden = false,
+                attemptedPairing = true,
+                pairingUnsupported = false,
+            )
+        assertFalse(off.usePlainSession)
+    }
+
+    @Test
+    fun `明文兜底开关 - 打开后已连上 RTSP 的普通失败降级明文`() {
+        val on =
+            pairingFallback(
+                false,
+                noPairing = false,
+                pairSetupRejected = false,
+                pairingForbidden = false,
+                attemptedPairing = true,
+                pairingUnsupported = false,
+                allowPlainAfterFailure = true,
+            )
+        assertTrue(on.usePlainSession)
+        assertFalse("开关不影响断蓝牙重试", on.useBtRetireHack)
+    }
+
+    @Test
+    fun `明文兜底开关 - 打开后 403 与未连上 RTSP 仍不降级`() {
+        val forbidden =
+            pairingFallback(
+                false,
+                noPairing = false,
+                pairSetupRejected = false,
+                pairingForbidden = true,
+                attemptedPairing = true,
+                pairingUnsupported = false,
+                allowPlainAfterFailure = true,
+            )
+        assertFalse(forbidden.usePlainSession)
+        val unreached =
+            pairingFallback(
+                false,
+                noPairing = false,
+                pairSetupRejected = false,
+                pairingForbidden = false,
+                attemptedPairing = false,
+                pairingUnsupported = false,
+                allowPlainAfterFailure = true,
+            )
+        assertFalse(unreached.usePlainSession)
+    }
+
+    @Test
     fun `重试退避 - 403 长 - 其余短`() {
         assertEquals(5_000L, pairingRetryBackoffMs("RTSP/1.0 403 Forbidden"))
         assertEquals(5_000L, pairingRetryBackoffMs("HTTP/1.1 403"))

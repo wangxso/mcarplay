@@ -95,6 +95,20 @@ processes are included automatically; reopen and export after an unexpected exit
 before reinstalling or clearing app data. No computer or Shizuku is needed, and
 there is no automatic upload. See [diagnostic contents and error codes](docs/DIAGNOSTICS.md).
 
+## Compatibility fallbacks
+
+Two fallbacks from earlier versions are off by default. They have no vehicle evidence;
+turn one on only for the symptom below, then reconnect. Open **车机设置 → 显示** on the
+main screen (the same panel is on the car screen) and find:
+
+| Switch | Symptom it addresses | What it does | Risk |
+| --- | --- | --- | --- |
+| **兼容兜底：配对失败后尝试明文** | Pairing fails every time on an older receiver that you know accepts only unencrypted sessions | After an ordinary pairing failure on a reachable receiver, retries once with an unencrypted (`et=NONE`) session. A 403 reply never falls back. | Uses the receiver's reconnect window; the session may be rejected |
+| **兼容兜底：音频格式未声明时仍尝试** | Video works but the app always streams video only, while the receiver can play sound | When the receiver lists no usable media audio format, still tries PCM 48 kHz (and non-media audio types) | No sound, or the receiver may disconnect shortly after audio starts |
+
+Turn the switch off again if it does not help. When reporting a problem, mention which
+switches were on; the diagnostic log records a `COMPAT:` line or an audio fallback line.
+
 ## Architecture
 
 ```text
