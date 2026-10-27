@@ -20,6 +20,7 @@ import com.mcarplay.app.capture.HiddenDisplaySource
 import com.mcarplay.app.carlife.CarLifeAudioEvent
 import com.mcarplay.app.carlife.CarLifeJoinGate
 import com.mcarplay.app.carlife.CarLifeLauncher
+import com.mcarplay.app.carlife.CarLifeProtocol
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
 import com.mcarplay.app.carlife.mapCarLifeTouch
@@ -627,7 +628,10 @@ object SessionController {
     }
 
     /** 正式会话的 CarLife 源：输出按 [carLifeOutput] 路由，旧轮迟到回调被隔离。 */
-    private fun newFormalCarLifeSession(context: Context): CarLifeSession {
+    private fun newFormalCarLifeSession(
+        context: Context,
+        requestedVideoSize: Pair<Int, Int>? = null,
+    ): CarLifeSession {
         lateinit var session: CarLifeSession
         session =
             CarLifeSession(
@@ -680,6 +684,7 @@ object SessionController {
                     nativeAudioBridge?.submit(channel, event)
                 },
                 log = { line -> appendLog(line) },
+                requestedVideoSize = requestedVideoSize,
             )
         return session
     }
@@ -2818,7 +2823,12 @@ object SessionController {
                                             )
                                         } else if (consumerUsage != null) {
                                             val keyCode = ConsumerKeys.keyCodeFor(consumerUsage)
-                                            if (keyCode != 0) {
+                                            val hardKey = CarLifeProtocol.hardKeyFor(keyCode)
+                                            if (hardKey != null && currentCarLifeSession?.sendHardKey(hardKey) == true) {
+                                                appendLog(
+                                                    "EVENT: 车机媒体键 ${ConsumerKeys.nameOf(consumerUsage)} → CarWith 硬按键 $hardKey",
+                                                )
+                                            } else if (keyCode != 0) {
                                                 dispatchMediaKey(keyCode)
                                                 appendLog(
                                                     "EVENT: 车机媒体键 ${ConsumerKeys.nameOf(consumerUsage)}" +
@@ -3096,7 +3106,12 @@ object SessionController {
                                     val videoH = pendingVideoH
                                     val videoDensity = pendingVideoDensity
                                     val output = CarLifeOutput(diagnosticAttempt, sessionVideoSender)
-                                    val createdCarLife = newFormalCarLifeSession(context)
+                                    // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准
+                                    val createdCarLife =
+                                        newFormalCarLifeSession(
+                                            context,
+                                            CarLifeProtocol.videoRequestFor(setup.displayWidth, setup.displayHeight),
+                                        )
                                     carLife = createdCarLife
                                     val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)
                                     val videoStarted = claimed && videoSender?.start {} == true

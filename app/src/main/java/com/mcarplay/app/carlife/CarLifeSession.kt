@@ -23,6 +23,8 @@ class CarLifeSession(
     private val onEnded: (String) -> Unit,
     private val log: (String) -> Unit,
     private val launchStrategy: CarLifeLaunchStrategy = CarLifeLaunchStrategy.EXPORTED_ENTRY,
+    /** 向 CarWith 请求的编码尺寸；null 时沿用协议默认值。CarWith 可能不采纳。 */
+    private val requestedVideoSize: Pair<Int, Int>? = null,
     private val isAppInForeground: () -> Boolean = CarLifeLauncher::isAppInForeground,
     private val connectorFactory: (String, (Int) -> Socket) -> CarLifeChannelConnector =
         { _, connect ->
@@ -204,7 +206,9 @@ class CarLifeSession(
         if (frame.kind == CarLifeProtocol.MD_PROTOCOL_MATCH && !result.failed) startHeartbeat()
         if (result.encryptionReady) {
             log("CARLIFE: AES 已就绪，请求视频初始化")
-            stateMachine.requestVideoInit().forEach(::sendAction)
+            val (width, height) = requestedVideoSize ?: (CarLifeProtocol.DEFAULT_WIDTH to CarLifeProtocol.DEFAULT_HEIGHT)
+            log("CARLIFE: 请求编码尺寸 ${width}x$height（以 VIDEO_INIT_DONE 返回为准）")
+            stateMachine.requestVideoInit(width, height).forEach(::sendAction)
             startHeartbeat()
         }
         if (frame.kind == CarLifeProtocol.VIDEO_ENCODER_INIT_DONE &&
@@ -402,6 +406,26 @@ class CarLifeSession(
             synchronized(socket) {
                 socket.getOutputStream().apply {
                     write(CarLifeProtocol.encodeCommand(kind, body))
+                    flush()
+                }
+            }
+            true
+        }.getOrElse {
+            connectionClosed(CarLifeChannel.TOUCH)
+            false
+        }
+    }
+
+    /** 车机硬按键 → CarWith（0x68008）；未进入视频阶段或发送失败返回 false。 */
+    fun sendHardKey(keyCode: Int): Boolean {
+        if (stateMachine.state != CarLifeStateMachine.State.VIDEO_RUNNING) return false
+        val socket = connector?.socket(CarLifeChannel.TOUCH) ?: return false
+        return runCatching {
+            val payload = CarLifeProtocol.hardKeyPayload(keyCode)
+            val body = stateMachine.payloadCipher?.encrypt(payload) ?: payload
+            synchronized(socket) {
+                socket.getOutputStream().apply {
+                    write(CarLifeProtocol.encodeCommand(CarLifeProtocol.TOUCH_CAR_HARD_KEY_CODE, body))
                     flush()
                 }
             }

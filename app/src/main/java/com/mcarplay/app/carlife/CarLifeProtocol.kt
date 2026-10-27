@@ -51,6 +51,14 @@ object CarLifeProtocol {
     const val TOUCH_DOWN = 425986
     const val TOUCH_UP = 425987
     const val TOUCH_MOVE = 425988
+
+    /** CarlifeCarHardKeyCode{int32 keycode=1}，与触摸同走 9340 通道。 */
+    const val TOUCH_CAR_HARD_KEY_CODE = 0x68008
+
+    // 百度 CarLife 车机端（MyMediaButtonReceiver）实际发送的值：媒体上一首 → 15、下一首 → 16。
+    // 其他键值各参考资料互相矛盾（旋钮/确认等），未经实机核对前不发送。
+    const val HARD_KEY_SEEK_SUB = 15
+    const val HARD_KEY_SEEK_ADD = 16
     const val VIDEO_FRAME = 0x20001
     const val VIDEO_HEARTBEAT = 0x20002
     const val MEDIA_INIT = 196609
@@ -235,6 +243,33 @@ object CarLifeProtocol {
         height: Int = DEFAULT_HEIGHT,
         fps: Int = DEFAULT_FPS,
     ): ByteArray = pbInt(1, width) + pbInt(2, height) + pbInt(3, fps)
+
+    fun hardKeyPayload(keyCode: Int): ByteArray = pbInt(1, keyCode)
+
+    /** 只映射有证据的媒体键；其余返回 null，由调用方退回 Android 媒体键。 */
+    fun hardKeyFor(androidKeyCode: Int): Int? =
+        when (androidKeyCode) {
+            android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> HARD_KEY_SEEK_ADD
+            android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> HARD_KEY_SEEK_SUB
+            else -> null
+        }
+
+    /**
+     * 请求 CarWith 按接收端屏幕比例编码：长边不超过 [maxLongSide]，宽高取偶数。
+     * CarWith 可能不采纳请求（10-27 请求 1280×720 时实际返回 1920×1140），
+     * 实际尺寸始终以 VIDEO_ENCODER_INIT_DONE 为准。
+     */
+    fun videoRequestFor(
+        displayWidth: Int,
+        displayHeight: Int,
+        maxLongSide: Int = 1920,
+    ): Pair<Int, Int> {
+        if (displayWidth <= 0 || displayHeight <= 0) return DEFAULT_WIDTH to DEFAULT_HEIGHT
+        val scale = minOf(1.0, maxLongSide.toDouble() / maxOf(displayWidth, displayHeight))
+
+        fun even(value: Double) = ((value.toInt() / 2) * 2).coerceAtLeast(2)
+        return even(displayWidth * scale) to even(displayHeight * scale)
+    }
 
     fun touchPayload(
         x: Int,
