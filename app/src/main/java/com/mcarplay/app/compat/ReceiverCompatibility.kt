@@ -56,27 +56,29 @@ object ReceiverCompatibility {
                 generation == ReceiverProfile.LinkGeneration.CLASSIC_MIB3 -> Family.CLASSIC_MIB3
                 else -> Family.GENERIC
             }
-        // WinPlay V1.2.4 的源码与 2026-10-27 开关对照；不推断后续版本的交接时序。
-        val winPlay124 = winPlay && normalize(signals.firmwareVersion) == "1.2.4"
+        // WinPlay 1.2.4 与 1.2.5（13ccb04）的源码和 2026-10-27 实机对照：都按目标蓝牙地址过滤 SETUP、
+        // 网络 iAP 认证后释放蓝牙。只登记核对过的固件号，不推断后续版本的交接时序。
+        val winPlayFirmware = normalize(signals.firmwareVersion)
+        val winPlayHandoff = winPlay && winPlayFirmware in WINPLAY_HANDOFF_FIRMWARE
         // DiPlay v0.2.21 自报 firmware=0.1.0（并非应用版本）。同时核对 EA 与名称，
         // 避免把 CARLINKIT 认证证书或单个显示名当成 DiPlay 软件身份。
         val diPlayWire010 = diPlay && normalize(signals.firmwareVersion) == "0.1.0"
         val rules =
             buildList {
                 add("protocol.${pairing.name.lowercase()}")
-                if (winPlay124) add("winplay.1.2.4.network-handoff")
+                if (winPlayHandoff) add("winplay.$winPlayFirmware.network-handoff")
                 if (diPlayWire010) add("diplay.wire-0.1.0.bt-retire-retry")
                 if (family == Family.CLASSIC_MIB3) add("iap2.classic-mib3")
-                if (winPlay && !winPlay124) add("winplay.unverified-firmware")
+                if (winPlay && !winPlayHandoff) add("winplay.unverified-firmware")
                 if (diPlay && !diPlayWire010) add("diplay.unverified-firmware")
             }
         return Policy(
             family = family,
             pairingMode = pairing,
-            bluetoothRole = if (winPlay124) BluetoothRole.NETWORK_HANDOFF else BluetoothRole.KEEP_DURING_BRINGUP,
+            bluetoothRole = if (winPlayHandoff) BluetoothRole.NETWORK_HANDOFF else BluetoothRole.KEEP_DURING_BRINGUP,
             linkGeneration = generation,
             allowBluetoothRetireRetry = diPlayWire010,
-            requiresRealBluetoothIdentity = winPlay124,
+            requiresRealBluetoothIdentity = winPlayHandoff,
             memoryKey = memoryKey(signals, mediaCapabilities, receiverInstance),
             rules = rules,
         )
@@ -109,7 +111,9 @@ object ReceiverCompatibility {
             useBtRetireHack = policy.allowBluetoothRetireRetry && !noPairing && !pairSetupRejected && attemptedPairing,
             // 超时/复位不证明支持明文；只有能力明确声明或端点明确不支持配对才允许降级。
             usePlainSession =
-                noPairing || pairingUnsupported || policy.pairingMode == PairingMode.ADVERTISED_PLAIN ||
+                noPairing ||
+                    pairingUnsupported ||
+                    policy.pairingMode == PairingMode.ADVERTISED_PLAIN ||
                     (allowPlainAfterFailure && attemptedPairing),
         )
     }
@@ -143,6 +147,9 @@ object ReceiverCompatibility {
         val hash = MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
         return "rx1_" + hash.take(20).joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
+
+    /** WinPlay iAP2 识别消息自报的固件号（`iap.ts` 硬编码）。 */
+    private val WINPLAY_HANDOFF_FIRMWARE = setOf("1.2.4", "1.2.5")
 
     private fun normalize(value: String?): String = value.orEmpty().trim().lowercase(java.util.Locale.ROOT)
 }

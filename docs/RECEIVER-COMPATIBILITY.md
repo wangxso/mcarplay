@@ -26,7 +26,7 @@ flowchart LR
 
 | 接收端信号 | 配对 | 蓝牙生命周期 | 例外与约束 |
 | --- | --- | --- | --- |
-| WinPlay，型号 WinPlay、制造商 Roylyl、EA `io.github.roylyl.winplay`、固件 `1.2.4` | 由 features 决定；SETUP 前检查真实蓝牙身份 | RECORD 和网络 iAP 认证完成后，首帧前也可保留网络会话 | 禁止借用 DiPlay 的断蓝牙重试；占位 deviceID 直接给出明确日志 |
+| WinPlay，型号 WinPlay、制造商 Roylyl、EA `io.github.roylyl.winplay`、固件 `1.2.4` 或 `1.2.5` | 由 features 决定；SETUP 前检查真实蓝牙身份 | RECORD 和网络 iAP 认证完成后，首帧前也可保留网络会话 | 禁止借用 DiPlay 的断蓝牙重试；占位 deviceID 直接给出明确日志 |
 | DiPlay，固定名称、EA `com.shilapi.xcertplay`、自报固件 `0.1.0` | 由 features 与配对应答决定 | bring-up 期间保留蓝牙；视频运行后由网络通道判断会话结束 | 仅该已识别软件画像允许原有断蓝牙恢复；403、未连通 RTSP、已配对成功仍禁止该恢复 |
 | DELPHI/AUDI 且双消息清单稀疏的既有 MIB3 画像 | 由 features 与配对应答决定 | 保留原有链路协商与资源重申；不主动断蓝牙重试 | 链路代际沿用现有证据判据；不能从该画像推断车型已支持 |
 | 明确未声明 HomeKit 配对能力的旧接收端 | `et=NONE` 起步；SETUP 不接受时仍可尝试加密升级 | 不主动执行软件接收端的危险恢复 | 使用原有明文事件与 AES-CTR 屏幕流路径 |
@@ -57,6 +57,7 @@ WinPlay 的“网络交接完成”必须同时满足 RECORD 成功和网络 iAP
 
 ## 例外证据与版本边界
 
+- WinPlay 1.2.5 发布构建（main [`13ccb04`](https://github.com/Roylyl/WinPlay/commit/13ccb0431b61679425767c3974fd92189c510969)）的[身份声明](https://github.com/Roylyl/WinPlay/blob/13ccb0431b61679425767c3974fd92189c510969/src/engine/iap.ts#L53)自报固件 `1.2.5`，[设备过滤](https://github.com/Roylyl/WinPlay/blob/13ccb0431b61679425767c3974fd92189c510969/src/engine/run.ts#L80)、[SETUP 403](https://github.com/Roylyl/WinPlay/blob/13ccb0431b61679425767c3974fd92189c510969/src/engine/protocol/cpStack.ts#L708)与[网络认证后释放蓝牙](https://github.com/Roylyl/WinPlay/blob/13ccb0431b61679425767c3974fd92189c510969/src/engine/run.ts#L99)与 1.2.4 相同；2026-10-27 实机断开、断网、重连对照见 `CARWITH-ENTRY-FINDINGS.md`。注意 `V1.2.5` 标签指向的提交仍自报 `1.2.4`，按该标签构建的版本会命中 1.2.4 规则。
 - WinPlay V1.2.4 的[身份声明](https://github.com/Roylyl/WinPlay/blob/V1.2.4/src/engine/iap.ts#L46-L51)、[设备过滤](https://github.com/Roylyl/WinPlay/blob/V1.2.4/src/engine/run.ts#L64)、[网络认证后释放蓝牙](https://github.com/Roylyl/WinPlay/blob/V1.2.4/src/engine/run.ts#L81-L93)，以及 2026-10-27 用户关闭自动连接后的对照，见 `CARWITH-ENTRY-FINDINGS.md`。
 - DiPlay v0.2.21 的[识别配置](https://github.com/shihabal3amri/DiPlay/blob/v0.2.21/common/src/main/java/com/shilapi/xcertplay/CarPlayHostActivity.kt#L194-L206)自报固件 `0.1.0`，实际型号与制造商可配置。该字段不能代表应用发行版本；规则编号因此使用 wire-0.1.0，不把所有 DiPlay 发布版本标为已验证。
 - MIB3、旧协议、HFT 的现有判据来自仓库协议记录与回放。当前 CarWith 桥接版本的实车覆盖仍须按 `AGENTS.md` 补齐独立设备证据。
