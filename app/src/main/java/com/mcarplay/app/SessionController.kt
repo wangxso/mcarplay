@@ -23,6 +23,7 @@ import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
 import com.mcarplay.app.carlife.mapCarLifeTouch
+import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionStage
 import com.mcarplay.app.diagnostics.DiagnosticCode
@@ -366,7 +367,7 @@ object SessionController {
     @Volatile
     private var activeAudioProfile: AudioProfile? = null
 
-    /** 音频档位记忆的键（车机身份文本，见 [AirPlayClient.receiverIdentity]）。 */
+    /** 音频档位记忆的作用域摘要（见 [AirPlayClient.receiverIdentity]）。 */
     @Volatile
     private var activeAudioReceiverKey: String = ""
 
@@ -447,7 +448,7 @@ object SessionController {
      * 守卫拦截），清除是安全的。
      */
     fun onSenderLinkClosed() {
-        if (videoSender?.isRunning == true) return
+        if (bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) return
         if (sessionStarting.compareAndSet(true, false)) {
             ConnectionDiagnostics.issueCurrent(DiagnosticCode.BT_LINK_CLOSED)
             connectCancelled = true
@@ -464,19 +465,7 @@ object SessionController {
      * 8 秒自杀一次，把车机侧邀请窗口反复清零（真 iPhone 实录要约 21 秒才邀请）。
      */
 
-    /** 本轮蓝牙会话判定的链路代际缓存（0x1D01 画像回调写入；null=未识别）。 */
-    @Volatile
-    private var senderLinkGenerationCache: ReceiverProfile.LinkGeneration? = null
-
     private fun knownCarHotspotSsid(): String? = boundCarSsid ?: lastCarWifiSsid
-
-    /**
-     * 本轮蓝牙会话判定的车机链路代际（0x1D01 画像，CLASSIC_MIB3 / EVENT_LINK）。
-     * 会话对象未建或尚未识别时回退 EVENT_LINK（0.1.13 前兼容行为）——
-     * 错把 MIB3 当 EVENT_LINK 只是协商无应答后静默，反向会挂死车机。
-     */
-    private fun senderLinkGeneration(): ReceiverProfile.LinkGeneration =
-        senderLinkGenerationCache ?: ReceiverProfile.LinkGeneration.EVENT_LINK
 
     /**
      * 最近一次 0x5703 的热点密码（仅内存，不落盘）。
@@ -550,8 +539,7 @@ object SessionController {
                     onLinkClosed = ::onSenderLinkClosed,
                     knownCarSsid = ::knownCarHotspotSsid,
                     onGeneration = { g ->
-                        senderLinkGenerationCache = g
-                        appendLog("IAPLINK: 代际缓存更新 → $g（AirPlay 阶段布防分派用）")
+                        appendLog("IAPLINK: 本条蓝牙会话链路代际 → $g（随端点传递到 AirPlay）")
                     },
                     targetProvider = targetProvider,
                 )
@@ -565,8 +553,7 @@ object SessionController {
                     onLinkClosed = ::onSenderLinkClosed,
                     knownCarSsid = ::knownCarHotspotSsid,
                     onGeneration = { g ->
-                        senderLinkGenerationCache = g
-                        appendLog("IAPLINK: 代际缓存更新 → $g（AirPlay 阶段布防分派用）")
+                        appendLog("IAPLINK: 本条蓝牙会话链路代际 → $g（随端点传递到 AirPlay）")
                     },
                     targetProvider = targetProvider,
                 )
@@ -619,6 +606,13 @@ object SessionController {
         videoSender?.isRunning == true ||
             bluetoothServer?.isRunning == true ||
             bluetoothClient?.isRunning == true
+
+    /** ACL 广播与 RFCOMM 关闭共用策略，避免两条路径对网络交接做出相反判断。 */
+    fun bluetoothDisconnectAction(): ReceiverCompatibility.BluetoothLossAction {
+        val client = currentClient
+        val policy = client?.receiverCompatibility() ?: ReceiverCompatibility.resolve(ReceiverProfile.Signals())
+        return ReceiverCompatibility.bluetoothLossAction(policy, videoSender?.isRunning == true, client?.networkHandoffReady == true)
+    }
 
     private fun stopFormalCarLife() {
         carLifeOutput = null
@@ -749,9 +743,12 @@ object SessionController {
         }
     }
 
-    /** 「断开连接」（可在任意 Activity 实例上调用——操作的是真管线对象）。 */
-    fun disconnect(context: Context) {
-        ConnectionDiagnostics.finishCurrent(DiagnosticCode.USER_STOP, false)
+    /** 结束连接；自动蓝牙断开必须保留实际原因，不能记成用户手动停止。 */
+    fun disconnect(
+        context: Context,
+        reason: DiagnosticCode = DiagnosticCode.USER_STOP,
+    ) {
+        ConnectionDiagnostics.finishCurrent(reason, false)
         val hadProjection = CarPlayService.mediaProjection != null
         pendingEndpointUpdate = null
         retireSession()
@@ -775,15 +772,13 @@ object SessionController {
         // shell 兜底存下的系统网络（connect-network）自动 forget 还原：无互联网热点
         // 被系统当默认网会挤掉移动数据。失败只记日志（用户可到 WLAN 手动删）。
         cleanupShellFallbackNetwork()
-        // 代际缓存随会话清零：读取侧有 `?: EVENT_LINK` 兜底，语义不变；留着的话
-        // 跨车换连（奥迪→本田）存在读到上一辆缓存的理论窗口（2026-10-23 审阅）。
-        senderLinkGenerationCache = null
+        val endAction = if (reason == DiagnosticCode.USER_STOP) "手动断开" else "自动断开（${reason.name}）"
         if (hadProjection) {
             // Android 14+：MediaProjection 与保活服务（mediaProjection FGS 类型）绑定，
             // 停服务会连带失效授权——下次连接需重新点「申请投屏权限」
-            appendLog("已手动断开并停止保活服务（常亮已恢复）；投屏授权已随服务停止失效，下次连接如需声音请重新申请")
+            appendLog("已${endAction}并停止保活服务（常亮已恢复）；投屏授权已随服务停止失效，下次连接如需声音请重新申请")
         } else {
-            appendLog("已手动断开并停止保活服务（常亮已恢复）")
+            appendLog("已${endAction}并停止保活服务（常亮已恢复）")
         }
     }
 
@@ -1900,12 +1895,21 @@ object SessionController {
             val identity = client.receiverIdentity()
             // 音频封装参数已定案（见 AudioTuning），不再提供切换
             val tuning = AudioTuning.RAW_SPF
-            val entry = AudioProfileMemory.load(context.applicationContext, identity)
+            var entry =
+                if (identity.isBlank()) {
+                    AudioProfileMemory.Entry()
+                } else {
+                    AudioProfileMemory.load(
+                        context.applicationContext,
+                        identity,
+                    )
+                }
             if (entry.disabled) {
                 // 以前「全部档位都导致拆链」会自动退成只推视频，并要用户去弹窗里手点
                 // 「清除记忆」。现在音频通路已换成 AAC-LC 且实测能稳定跑满 147s，
                 // 旧结论不再可信：用户既然主动选了「开启声音」，就直接清记忆重试。
-                AudioProfileMemory.clearAll(context.applicationContext)
+                AudioProfileMemory.reset(context.applicationContext, identity)
+                entry = AudioProfileMemory.Entry()
                 appendLog("AUDIO: 本车机（$identity）有「全部档位拆链」的旧记忆，已自动清除并重试")
             }
             val candidates = client.audioCandidates(preferCompat = audioPreferCompat)
@@ -1933,13 +1937,15 @@ object SessionController {
                 }
                 // SETUP 被拒不等于「车机不兼容」：可能只是资源仲裁/网络抖动，
                 // 不能据此把整台车机的音频判死（置 disabled 只认「拆链」证据）。
-                AudioProfileMemory.recordRejected(
-                    context.applicationContext,
-                    identity,
-                    candidate.key,
-                    ordered.map { it.key }.toSet(),
-                    markExhausted = false,
-                )
+                if (identity.isNotBlank()) {
+                    AudioProfileMemory.recordRejected(
+                        context.applicationContext,
+                        identity,
+                        candidate.key,
+                        ordered.map { it.key }.toSet(),
+                        markExhausted = false,
+                    )
+                }
                 appendLog("AUDIO: 档位 ${candidate.label} 协商失败——本会话继续试下一档")
             }
             val profile = chosen
@@ -2369,6 +2375,8 @@ object SessionController {
             deviceIdentifier = late.deviceIdentifier ?: fallback.deviceIdentifier,
             sourceVersion = late.sourceVersion ?: fallback.sourceVersion,
             advertisedFeatures = late.advertisedFeatures ?: fallback.advertisedFeatures,
+            receiverSignals =
+                if (late.receiverSignals == ReceiverProfile.Signals()) fallback.receiverSignals else late.receiverSignals,
         )
 
     /**
@@ -2492,11 +2500,11 @@ object SessionController {
                     null -> "未知（按需配对）"
                 },
         )
-        // 车机画像（信号收口点）：mDNS 侧信号到达——era 判定 + 依据一行可解释
+        // 端点携带本轮蓝牙事实，mDNS 的能力补充到同一份策略，不丢失接收端身份。
         appendLog(
-            ReceiverProfile.describe(
-                ReceiverProfile.classify(
-                    ReceiverProfile.Signals(
+            ReceiverCompatibility.describe(
+                ReceiverCompatibility.resolve(
+                    endpoint.receiverSignals.copy(
                         features = endpoint.advertisedFeatures,
                         srcvers = endpoint.sourceVersion,
                     ),
@@ -2567,7 +2575,7 @@ object SessionController {
                             context = context.applicationContext,
                             // 链路代际：蓝牙侧 0x1D01 画像已判定（CLASSIC_MIB3/EVENT_LINK），
                             // AirPlay 阶段的 MIB3 布防据此分派 marker 策略（2026-10-23 分代重构）
-                            linkGeneration = senderLinkGeneration(),
+                            linkGeneration = ReceiverProfile.linkGenerationOf(effectiveEndpoint.receiverSignals),
                             endpointRefresher = { current -> enrichEndpointFromBrowser(current, source) },
                             retryTick = { attempt ->
                                 // 配对重试期间车机仍可能没探测到 ctrl（Bonjour 漏掉首次公告）：
@@ -2619,13 +2627,15 @@ object SessionController {
                     var client = newClient()
                     currentClient = client
                     drainPendingEndpoint(client)
+                    val compatibility = ReceiverCompatibility.describe(client.receiverCompatibility())
+                    appendLog(compatibility)
+                    ConnectionDiagnostics.timeline.note(diagnosticAttempt, compatibility)
                     // pre-HomeKit 老车机（CarPlay 210.81 时代，奥迪 4xxx 固件）在
                     // `_airplay._tcp` 里**不声明** HK_PAIRING_AND_ENCRYPT：它们只接受
                     // 明文 SETUP（et=NONE）+ AES-CTR 屏幕流，走 pair-setup 必然失败。
                     // catplay 的接收端分类 1 即此形态；旧实现会在这里空转 120s 配对窗口，
                     // 用户看到的就是「连不上」。
-                    val noPairing =
-                        AirPlayFeatures.supportsPairing(client.currentEndpoint.advertisedFeatures) == false
+                    val noPairing = client.receiverCompatibility().pairingMode == ReceiverCompatibility.PairingMode.ADVERTISED_PLAIN
                     var keys: PairVerifyClient.ControlKeys? =
                         if (noPairing) {
                             client.skipPairing("TXT features 未声明 HK_PAIRING_AND_ENCRYPT")
@@ -2649,6 +2659,7 @@ object SessionController {
                             pairingForbidden = client.pairingForbidden,
                             attemptedPairing = client.attemptedPairing,
                             pairingUnsupported = client.pairingUnsupported,
+                            policy = client.receiverCompatibility(),
                         )
                     if (fallbackAfterFirstRound.useBtRetireHack) {
                         // 第二阶段（仅测试台 DiPlay）：复现「BT 控制已结束」状态再试一次。
@@ -2675,12 +2686,9 @@ object SessionController {
                     }
                     // keys == null 时仍有合法路径：**catplay 的 et=NONE 明文会话**。
                     //  - 接收端明确不支持配对（pre-HomeKit / TXT 无 HK_PAIRING_AND_ENCRYPT）；
-                    //  - 配对彻底失败但 RTSP 确实连上过（有些车只认明文会话，
-                    //    pair-setup/pair-verify 全拒——catplay 正是「先试明文、失败才配对」，
-                    //    我们反过来：优先配对（保住 DiPlay/已知车机），失败后降级明文兜底）。
-                    //  - **403 证据（pairingForbidden）除外**（真机抓包 2026-10-21 定谳，决策
-                    //    见 pairingFallback）：车机在等自身就绪、~20s 后重邀即成——明文必被
-                    //    拒且消耗重邀窗口，不降级。
+                    //  - 配对端点明确返回不支持。超时、连接复位或普通失败不构成明文依据。
+                    //  - 403（pairingForbidden）禁止降级：既可能是车机尚未就绪，
+                    //    也可能是软件接收端拒绝设备身份，不能从状态码推断明文能力。
                     // hack 段可能已重跑拿到 keys：决策以重跑后的状态为准。
                     val plainSession =
                         pairingFallback(
@@ -2690,6 +2698,7 @@ object SessionController {
                             pairingForbidden = client.pairingForbidden,
                             attemptedPairing = client.attemptedPairing,
                             pairingUnsupported = client.pairingUnsupported,
+                            policy = client.receiverCompatibility(),
                         ).usePlainSession
                     if (plainSession) {
                         phaseHint = "建立明文会话…"
@@ -3255,16 +3264,13 @@ object SessionController {
 internal data class PairingFallback(
     /** 「断 BT 复现控制结束再试」二段 hack（仅测试台 DiPlay 形态）。 */
     val useBtRetireHack: Boolean,
-    /** et=NONE 明文会话降级（pre-HomeKit 老车机 / 配对全拒但 RTSP 连上过的兜底）。 */
+    /** et=NONE 明文会话降级，只接受能力声明或明确不支持配对的证据。 */
     val usePlainSession: Boolean,
 )
 
 /**
- * 决策依据（2026-10-21 真机 sysdiagnose，docs/PROTOCOL-NOTES.md §13a）：
- * 任意阶段 403 = 「iAP2 信任已建立的车机在等自身就绪」——首连被拒是车机固有状态，
- * 它 18~20s 后自动重邀、第二次即成。此状态下断 BT（整栈重建 30~40s，恰好错过重邀
- * 窗口）与明文降级（必被拒且空耗重邀窗口）都是反向操作，两条兜底一律禁用；
- * 配对循环以 5s 退避在窗口内原地重试（见 pairingRetryBackoffMs）。
+ * 403 不代表支持明文或应该断蓝牙：原厂接收端可能尚未就绪，软件接收端也可能拒绝
+ * 不匹配的设备身份。能力声明、接收端例外及失败事实由统一兼容策略共同决策。
  */
 internal fun pairingFallback(
     keysEstablished: Boolean,
@@ -3273,9 +3279,17 @@ internal fun pairingFallback(
     pairingForbidden: Boolean,
     attemptedPairing: Boolean,
     pairingUnsupported: Boolean,
+    policy: ReceiverCompatibility.Policy = ReceiverCompatibility.resolve(ReceiverProfile.Signals()),
 ): PairingFallback {
-    if (keysEstablished) return PairingFallback(useBtRetireHack = false, usePlainSession = false)
-    val useBtRetireHack = !noPairing && !pairSetupRejected && !pairingForbidden && attemptedPairing
-    val usePlainSession = !pairingForbidden && (pairingUnsupported || attemptedPairing)
-    return PairingFallback(useBtRetireHack = useBtRetireHack, usePlainSession = usePlainSession)
+    val decision =
+        ReceiverCompatibility.pairingFallback(
+            policy,
+            keysEstablished,
+            noPairing,
+            pairSetupRejected,
+            pairingForbidden,
+            attemptedPairing,
+            pairingUnsupported,
+        )
+    return PairingFallback(decision.useBtRetireHack, decision.usePlainSession)
 }

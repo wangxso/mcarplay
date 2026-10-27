@@ -77,6 +77,14 @@ A missing END may mean an active session, abrupt termination or truncated record
 No exit records does not prove no previous exit. Do not attribute an old low-memory
 record to a later reset without matching timestamps and receiver-side evidence.
 Local car Wi-Fi without Internet validation is not by itself a connection failure.
+Bluetooth may close normally after the network iAP session takes over (WinPlay
+1.2.4 does this). An ACL disconnect must not stop a running Wi-Fi video sender.
+The auto-stop path before video starts records `BT_LINK_CLOSED`; an explicit user
+stop records `USER_STOP`. Automatic teardown must not be labelled a manual stop.
+`COMPAT:` entries show the selected receiver family, pairing and Bluetooth policy,
+and fixed rule IDs. They contain no additional raw device identifiers. See
+[receiver compatibility](RECEIVER-COMPATIBILITY.md) for matching conditions and
+version boundaries; a matched policy does not establish device support.
 Repeated `ENONET` with an active Wi-Fi and `network.bound=unknown` calls for checking
 an expired process network binding before treating it as an AirPlay pairing defect.
 An uncaught exception is associated with the active attempt at capture time; this

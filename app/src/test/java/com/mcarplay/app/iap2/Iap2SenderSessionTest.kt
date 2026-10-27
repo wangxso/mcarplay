@@ -43,6 +43,9 @@ class Iap2SenderSessionTest {
         assertEquals("mock-device-id", endpoint.deviceIdentifier)
         assertNotNull(endpoint.publicKey)
         assertEquals(listOf("192.168.49.1", "fd00::1"), endpoint.ipAddresses)
+        assertEquals("MockCarPlay", endpoint.receiverSignals.name)
+        assertEquals("MU-1", endpoint.receiverSignals.model)
+        assertEquals("test-1.0", endpoint.receiverSignals.firmwareVersion)
 
         phoneChannel.close()
         accessoryChannel.close()
@@ -94,6 +97,7 @@ class Iap2SenderSessionTest {
         assertEquals(49152, late.airPlayPort)
         assertEquals(listOf("192.168.49.1", "fd00::1"), late.ipAddresses)
         assertEquals("mock-device-id", late.deviceIdentifier)
+        assertEquals(phaseOne.receiverSignals, late.receiverSignals)
 
         phoneChannel.close()
         accessoryChannel.close()
@@ -381,6 +385,7 @@ class Iap2SenderSessionTest {
                 Iap2Csm.string(0, identityName()),
                 Iap2Csm.string(1, "MU-1"),
                 Iap2Csm.string(2, "Mock Manufacturer"),
+                Iap2Csm.string(4, "test-1.0"),
                 *declarationParams(),
             )
             expect(Iap2MessageIds.IDENTIFICATION_ACCEPTED)

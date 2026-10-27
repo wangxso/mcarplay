@@ -1,6 +1,8 @@
 package com.mcarplay.app
 
 import com.mcarplay.app.airplay.pairingRetryBackoffMs
+import com.mcarplay.app.compat.ReceiverCompatibility
+import com.mcarplay.app.iap2.ReceiverProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -67,9 +69,17 @@ class PairingFallbackTest {
                 pairingForbidden = false,
                 attemptedPairing = true,
                 pairingUnsupported = false,
+                policy =
+                    ReceiverCompatibility.resolve(
+                        ReceiverProfile.Signals(
+                            name = "DiPlay",
+                            firmwareVersion = "0.1.0",
+                            externalAccessoryProtocols = setOf("com.shilapi.xcertplay"),
+                        ),
+                    ),
             )
         assertTrue(f.useBtRetireHack)
-        assertTrue(f.usePlainSession)
+        assertFalse("断蓝牙重试与明文降级是两项独立决策", f.usePlainSession)
     }
 
     @Test

@@ -63,9 +63,13 @@ with the phone, CarWith version, receiver and vehicle.
 5. For bench testing, use a second Android device running [DiPlay](https://github.com/shihabal3amri/DiPlay).
    Disconnect other CarLife receivers before starting the native session.
 
-The core CarWith path uses ordinary application intents and local sockets without
-root or Shizuku. Optional display/launcher utilities inherited from CarDeck may
-still use [Shizuku](https://shizuku.rikka.app/).
+CarWith's native video, audio and touch use ordinary application intents and local
+sockets without root or Shizuku. Some receivers, including WinPlay 1.2.4, also check
+the phone's real Bluetooth identity; on ROMs that restrict access, this step needs
+[Shizuku](https://shizuku.rikka.app/). Optional display/launcher utilities may also use it.
+Receiver capabilities, Bluetooth handoff, pairing fallback and audio memory follow
+the [receiver compatibility design](docs/RECEIVER-COMPATIBILITY.md). Its policy matrix
+describes implementation and evidence boundaries, not a device support list.
 If pairing stalls after reinstalling, restart the test receiver to clear its previous session.
 
 ## Check for updates
@@ -199,7 +203,7 @@ Thanks also to the libraries and tools used by this repository:
 | [Bouncy Castle](https://github.com/bcgit/bc-java) | Pairing and transport cryptography | Bouncy Castle license |
 | [JmDNS](https://github.com/jmdns/jmdns) | DNS-SD discovery | Apache-2.0 |
 | [SLF4J](https://www.slf4j.org/) | Logging API and no-op backend | MIT |
-| [Shizuku API](https://github.com/RikkaApps/Shizuku-API) | Optional shell utilities | MIT |
+| [Shizuku API](https://github.com/RikkaApps/Shizuku-API) | Shell utilities and Bluetooth identity where required | MIT |
 | [JUnit 4](https://github.com/junit-team/junit4) | JVM tests | EPL-1.0 |
 | [JSON-java](https://github.com/stleary/JSON-java) | JSON for local tests | Public domain |
 | [cryptography](https://github.com/pyca/cryptography) | Python diagnostics | Apache-2.0 OR BSD-3-Clause |

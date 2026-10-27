@@ -76,6 +76,8 @@ class Iap2SenderSession(
          * 强制配对（现代）。2026-10-19 奥迪 4xxx（4851）连不上与这条分类直接相关。
          */
         val advertisedFeatures: Long? = null,
+        /** 本条蓝牙会话的身份与消息能力快照；mDNS 补全端点时必须保留。 */
+        val receiverSignals: ReceiverProfile.Signals = ReceiverProfile.Signals(),
     )
 
     private val parser = Iap2Csm.Parser()
@@ -121,6 +123,8 @@ class Iap2SenderSession(
 
     /** 识别帧是否真的带了接收清单（空清单与「未提供」必须区分）。 */
     private var receiveListDeclared = false
+
+    private var receiverSignals = ReceiverProfile.Signals()
 
     /**
      * 车机画像的 WiFi 代际判定（[ReceiverProfile.classify] 的输出，0x1D01 到达时算一次）。
@@ -213,6 +217,7 @@ class Iap2SenderSession(
         // EA 协议解析（启动时机见下方 MFi 完成后——2026-10-11 DiPlay 实测：
         // 认证前发 0xEA00 会让测试台状态机停摆，不再回 0xAA01；奥迪对此不敏感）
         val eaProtocols = parseEaProtocols(identification)
+        receiverSignals = receiverSignals.copy(externalAccessoryProtocols = eaProtocols.map { it.second }.toSet())
 
         // ---- MFi（跳过校验：0xAA05 自报成功）----
         val identityText = identityText(identification)
@@ -488,7 +493,7 @@ class Iap2SenderSession(
                     securityType = endpoint.securityType,
                 )
         }
-        return endpoint
+        return endpoint.copy(receiverSignals = receiverSignals)
     }
 
     /**
@@ -952,6 +957,7 @@ class Iap2SenderSession(
             publicKey = params[4]?.value?.asStringOrEmpty(),
             sourceVersion = params[5]?.value?.asStringOrEmpty(),
             ipAddresses = addresses,
+            receiverSignals = receiverSignals,
         )
     }
 
@@ -1017,6 +1023,15 @@ class Iap2SenderSession(
         // 参 7（它可接收）直接告诉我们它是否认可 0x4300 —— 真车排查的关键证据。
         val sends = params[6]?.value?.asU16List()
         val receives = params[7]?.value?.asU16List()
+        receiverSignals =
+            ReceiverProfile.Signals(
+                name = name,
+                model = model,
+                manufacturer = manufacturer,
+                firmwareVersion = params[4]?.value?.asStringOrEmpty(),
+                sendIds = sends?.toSet(),
+                receiveIds = receives?.toSet(),
+            )
         if (sends != null) {
             // 后续可选消息（0x6800/0x4301）按此清单判断是否会来，避免固定窗口空等
             accessorySendIds = sends.toSet()

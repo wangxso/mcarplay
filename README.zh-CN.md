@@ -59,8 +59,11 @@ CarWith `4.0.20-20260923`，小米 CarLife `8.8.4`。
 5. 桌面测试可用另一台 Android 设备运行 [DiPlay](https://github.com/shihabal3amri/DiPlay)。
    启动本机 CarWith 会话前，先断开其他 CarLife 接收端。
 
-CarWith 主链路使用普通应用 Intent 和本机套接字，无需 root 或 Shizuku。
-上游保留的可选显示、启动器辅助功能可能仍使用 [Shizuku](https://shizuku.rikka.app/)。
+CarWith 原生画面、音频和触控使用普通应用 Intent 和本机套接字，无需 root 或 Shizuku。
+WinPlay 1.2.4 等接收端还会校验手机的真实蓝牙身份；ROM 限制读取时，这一步需要
+[Shizuku](https://shizuku.rikka.app/)。可选显示、启动器辅助功能也可能使用它。
+接收端能力、蓝牙交接、配对降级和音频记忆遵循[接收端兼容设计](docs/RECEIVER-COMPATIBILITY.md)。
+其中的策略矩阵描述实现与证据边界，不是设备支持清单。
 覆盖安装后若配对停住，可重启测试接收端清理旧会话，再重新连接。
 
 ## 检查更新
@@ -187,7 +190,7 @@ mcarplay 基于 shaonialife 及贡献者的
 | [Bouncy Castle](https://github.com/bcgit/bc-java) | 配对和传输密码学 | Bouncy Castle license |
 | [JmDNS](https://github.com/jmdns/jmdns) | DNS-SD 服务发现 | Apache-2.0 |
 | [SLF4J](https://www.slf4j.org/) | 日志 API 和空实现 | MIT |
-| [Shizuku API](https://github.com/RikkaApps/Shizuku-API) | 可选 shell 辅助功能 | MIT |
+| [Shizuku API](https://github.com/RikkaApps/Shizuku-API) | 按需读取蓝牙身份及 shell 辅助功能 | MIT |
 | [JUnit 4](https://github.com/junit-team/junit4) | JVM 测试 | EPL-1.0 |
 | [JSON-java](https://github.com/stleary/JSON-java) | 本地测试 JSON 实现 | 公有领域 |
 | [cryptography](https://github.com/pyca/cryptography) | Python 诊断工具 | Apache-2.0 OR BSD-3-Clause |
