@@ -21,11 +21,12 @@ interface is CarWith, rather than the iOS CarPlay application interface.
 
 ## Status
 
-Experimental, with a working Xiaomi-to-DiPlay test setup as of October 26, 2026.
+Experimental, with a working Xiaomi-to-DiPlay test setup as of October 27, 2026.
 
 | Capability | Validation |
 | --- | --- |
 | Native video | 1280 x 720, approximately 20 fps on DiPlay |
+| WinPlay 1.2.4 video | A bench screenshot shows CarWith video on WinPlay; this does not establish full receiver compatibility |
 | Receiver touch | Page changes verified on the test receiver |
 | Native music | 44.1 kHz PCM converted to 48 kHz AAC-LC; audible playback confirmed |
 | Combined playback | Approximately 6 minutes 36 seconds without audio drops, underruns or write errors |
@@ -39,6 +40,15 @@ The minimum SDK is Android 12 / API 31; this does not establish compatibility
 with every Android 12+ device. Upstream CarDeck vehicle results are not mcarplay
 vehicle compatibility claims.
 
+### WinPlay 1.2.4 video-output snapshot
+
+![WinPlay 1.2.4 displaying CarWith video from mcarplay](docs/screenshots/winplay-1.2.4-video-output.png)
+
+Bench screenshot from October 27, 2026: WinPlay 1.2.4 displays a CarWith screen
+delivered by mcarplay. This documents video output in the shown session only; it
+does not verify audio, touch, a 10-minute run, reconnect behavior or real-vehicle
+compatibility.
+
 ## Known limitations and roadmap
 
 | Area | Known status | Next step | Priority |
@@ -46,7 +56,7 @@ vehicle compatibility claims.
 | Real vehicle testing | The current validation uses a DiPlay bench receiver; mcarplay has not been validated with a car's head unit. | Test pairing, touch controls, audio, ignition cycles and reconnect behavior with real vehicles and record the vehicle/receiver combinations. | High |
 | Phone brands and system versions | Verified on one Xiaomi 17 Pro Max configuration. The bridge depends on CarWith and Xiaomi CarLife components, so other Android brands are unverified and may not expose compatible services. | Build a phone/OS/CarWith compatibility matrix; explore other brands where a compatible CarWith service is available. | High |
 | Session stability | Combined video and music were verified for about 6 minutes 36 seconds; longer sessions and interruptions are not covered. | Test longer runs, incoming navigation prompts, pause/resume, disconnects and recovery after reconnect. | High |
-| Receiver compatibility | The documented bench result is for one PA2353 tablet running DiPlay. | Try additional wireless CarPlay receivers and document pairing, video, audio and touch results. | Medium |
+| Receiver compatibility | DiPlay has bench evidence for video, audio and touch; the WinPlay 1.2.4 screenshot documents video output only. | Verify WinPlay touch, sound, 10-minute post-handoff stability and reconnect behavior, then test additional receivers. | High |
 
 These are planned validation steps, not compatibility guarantees. Results may vary
 with the phone, CarWith version, receiver and vehicle.
