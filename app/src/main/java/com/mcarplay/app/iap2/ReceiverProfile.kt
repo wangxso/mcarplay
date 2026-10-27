@@ -69,6 +69,10 @@ object ReceiverProfile {
         val sendIds: Set<Int>? = null,
         /** 0x1D01 参数 7：车机声明「可接收」的消息号清单；null = 未提供。 */
         val receiveIds: Set<Int>? = null,
+        /** 0x1D01 参数 4；应用发行版本与协议自报固件版本可能不同。 */
+        val firmwareVersion: String? = null,
+        /** 0x1D01 的 EA 协议标识；用于确认软件接收端，不能只匹配蓝牙显示名。 */
+        val externalAccessoryProtocols: Set<String> = emptySet(),
     )
 
     data class Profile(

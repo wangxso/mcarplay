@@ -6,6 +6,11 @@ import com.mcarplay.app.audio.AudioCodec
 import com.mcarplay.app.audio.AudioProfile
 import com.mcarplay.app.audio.AudioSender
 import com.mcarplay.app.audio.AudioTuning
+import com.mcarplay.app.compat.InfoRequest
+import com.mcarplay.app.compat.ReceiverCapabilities
+import com.mcarplay.app.compat.ReceiverCompatibility
+import com.mcarplay.app.compat.ReceiverDetectionRuntime
+import com.mcarplay.app.compat.ReceiverProbePlan
 import com.mcarplay.app.iap2.Iap2Csm
 import com.mcarplay.app.iap2.Iap2MessageIds
 import com.mcarplay.app.iap2.Iap2SenderSession
@@ -57,7 +62,23 @@ class AirPlayClient(
      * （catplay 每 1s force_announce）。
      */
     private val retryTick: ((attempt: Int) -> Unit)? = null,
+    initialInfoRequest: InfoRequest = InfoRequest.GET_EMPTY_PLIST,
+    private val detecting: Boolean = false,
 ) {
+    var negotiatedInfoRequest: InfoRequest = initialInfoRequest
+        private set
+
+    val capabilityDigest: String?
+        get() =
+            ReceiverCapabilities.digest(
+                endpoint.receiverSignals.copy(
+                    features = endpoint.advertisedFeatures ?: endpoint.receiverSignals.features,
+                    srcvers = endpoint.sourceVersion ?: endpoint.receiverSignals.srcvers,
+                ),
+                negotiatedInfo,
+                endpoint.publicKey ?: endpoint.deviceIdentifier,
+            )
+
     /**
      * 当前使用的接收端端点。0x4301 晚到 / mDNS 后上线时由主控热更新；
      * 配对循环每轮重试都重新读取，改动在下一轮即生效。
@@ -71,6 +92,7 @@ class AirPlayClient(
 
     private var socket: Socket? = null
     private var cSeq = 0
+    private val attemptedFallbackPorts = HashSet<String>()
 
     /**
      * 最近一次成功连上接收端时使用的地址（字符串形式，IPv6 链路本地地址带 `%<iface>`）。
@@ -193,6 +215,42 @@ class AirPlayClient(
     /** 当前端点（主控合并晚到端点时用作兜底，避免 0x4301 不带 IP 时把可用地址抹掉）。 */
     val currentEndpoint: Iap2SenderSession.CarPlayEndpoint get() = endpoint
 
+    @Volatile
+    private var recordAccepted = false
+
+    @Volatile
+    private var networkIapAuthenticated = false
+
+    private var connectionEpoch = 0L
+
+    /** RECORD 和网络 iAP 认证均完成，软件接收端才可在首帧前释放蓝牙。 */
+    val networkHandoffReady: Boolean get() = recordAccepted && networkIapAuthenticated
+
+    fun receiverCompatibility(): ReceiverCompatibility.Policy {
+        val current = endpoint
+        val info = negotiatedInfo
+        val signals = current.receiverSignals
+        val facts =
+            signals.copy(
+                model = signals.model ?: info?.get("model") as? String,
+                manufacturer = signals.manufacturer ?: info?.get("manufacturer") as? String,
+                firmwareVersion = signals.firmwareVersion ?: info?.get("firmwareRevision") as? String,
+                features =
+                    current.advertisedFeatures ?: signals.features ?: (info?.get("features") as? Number)?.toLong()
+                        ?: com.mcarplay.app.net.AirPlayFeatures
+                            .parse(info?.get("features") as? String),
+                srcvers = current.sourceVersion ?: signals.srcvers ?: info?.get("sourceVersion") as? String,
+            )
+        val formats =
+            (info?.get("audioFormats") as? List<*>)
+                .orEmpty()
+                .mapNotNull { it as? Map<*, *> }
+                .map { "${it["type"]}|${it["audioType"]}|${it["audioOutputFormats"]}" }
+                .sorted()
+                .joinToString(";")
+        return ReceiverCompatibility.resolve(facts, formats, current.publicKey ?: current.deviceIdentifier)
+    }
+
     /**
      * 热更新接收端端点（0x4301 晚到 / 配对期间 mDNS 新结果）。
      * 地址或端口变化时关闭当前 TCP，让配对循环下一轮按新地址重连。
@@ -204,13 +262,26 @@ class AirPlayClient(
         reason: String,
     ): Boolean {
         val old = endpoint
+        val next =
+            newEndpoint.copy(
+                observation = newEndpoint.observation ?: old.observation,
+                advertisedFeatures = newEndpoint.advertisedFeatures ?: old.advertisedFeatures,
+                sourceVersion = newEndpoint.sourceVersion ?: old.sourceVersion,
+                receiverSignals =
+                    if (newEndpoint.receiverSignals == ReceiverProfile.Signals()) old.receiverSignals else newEndpoint.receiverSignals,
+            )
         val unchanged =
-            old.ipAddresses == newEndpoint.ipAddresses &&
-                old.airPlayPort == newEndpoint.airPlayPort &&
-                old.publicKey == newEndpoint.publicKey &&
-                old.deviceIdentifier == newEndpoint.deviceIdentifier
-        if (unchanged) return false
-        endpoint = newEndpoint
+            old.ipAddresses == next.ipAddresses &&
+                old.airPlayPort == next.airPlayPort &&
+                old.publicKey == next.publicKey &&
+                old.deviceIdentifier == next.deviceIdentifier
+        if (old == next) return false
+        endpoint = next
+        capabilityDigest?.let { ReceiverDetectionRuntime.capabilities(next.observation, it, negotiatedInfoRequest) }
+        if (unchanged) {
+            log(ReceiverCompatibility.describe(receiverCompatibility()))
+            return true
+        }
         endpointGeneration++
         log(
             "AIRPLAY: 端点更新（$reason）" +
@@ -457,6 +528,14 @@ class AirPlayClient(
     private fun isSessionAlive(): Boolean = socket?.isClosed == false
 
     fun close() {
+        synchronized(this) {
+            connectionEpoch++
+            iapLink = null
+            recordAccepted = false
+            networkIapAuthenticated = false
+            mib3ControlSessionDone = false
+            mib3LinkArmed = false
+        }
         runCatching { socket?.close() }
         socket = null
         activeHost = null
@@ -472,7 +551,6 @@ class AirPlayClient(
         failAllPending("控制通道关闭")
         runCatching { iapTunnel?.socket?.close() }
         iapTunnel = null
-        iapLink = null
         // 注意：controlIapTx 不在这里 shutdown——close() 会被同实例的重试路径
         // （retryWithPairing 等）复用，杀掉执行器会废掉重连后的 MIB3 出站；
         // 守护线程常驻的代价可忽略（每客户端实例一根）
@@ -651,12 +729,18 @@ class AirPlayClient(
      * 清单对照 catplay（真车验证的发送端，含 viewAreas/uiContext 等视频必需项）。
      */
     fun runSetup(): SetupInfo? {
+        val deviceId = setupDeviceId()
+        val policy = receiverCompatibility()
+        log(ReceiverCompatibility.describe(policy))
+        if (policy.requiresRealBluetoothIdentity && deviceId == DeviceIdentity.PLACEHOLDER_MAC) {
+            log("AIRPLAY: 当前接收端要求真实蓝牙身份；请启动并授权 Shizuku 后重连（未发送占位 deviceID）")
+            return null
+        }
         // 计时端口：catplay 真车实现始终绑定真实 UDP timing server 通告给车机
         // （媒体时钟同步源）；timingPort=0 曾是我们的屏幕流 400 头号嫌疑。
         if (!timingServer.start()) {
             log("AIRPLAY: 计时服务未启动（继续，但媒体时钟无法同步）")
         }
-        val deviceId = setupDeviceId()
         val body = buildSessionSetupBody(deviceId, timingServer.port, encrypted = cipher != null)
         log(
             "AIRPLAY: 初始 SETUP body=${body.size}B timingPort=${timingServer.port} " +
@@ -711,6 +795,7 @@ class AirPlayClient(
         // `hidDevices uuids=[]` / `displayUuid=null` 两个结果，看不到原因。
         var infoRoot: Map<*, *>? = null
         val infoMap = loadInfoWithDiagnostics()
+        log(ReceiverCompatibility.describe(receiverCompatibility()))
         infoRoot = infoMap
         val display = (infoMap?.get("displays") as? List<*>)?.firstOrNull() as? Map<*, *>
         if (display == null) {
@@ -821,13 +906,20 @@ class AirPlayClient(
      * 会话内被拒时再补一次**独立短连接**探测：接收端的 AirPlay 服务通常允许未绑定
      * 会话的 `/info`（能力查询），而活跃会话内的 `/info` 反而常被按 455/403 拒掉。
      */
-    private fun loadInfoWithDiagnostics(): Map<*, *>? {
+    internal fun loadInfoWithDiagnostics(): Map<*, *>? {
         var statusLine = "未请求"
         var body = ByteArray(0)
         try {
             val first = requestInfo()
             statusLine = first.first
             body = first.second
+            // 已缓存的方法只是候选；换固件后可回到 GET。检测只对明确不支持方法的响应试 POST。
+            ReceiverProbePlan.alternativeInfo(negotiatedInfoRequest, statusLine, detecting)?.let { alternativeRequest ->
+                negotiatedInfoRequest = alternativeRequest
+                val alternative = requestInfo(5_000)
+                statusLine = alternative.first
+                body = alternative.second
+            }
             if (!statusLine.contains("200") || body.isEmpty()) {
                 log("AIRPLAY: /info 首次 [$statusLine] body=${body.size}B → 800ms 后重试一次")
                 Thread.sleep(800)
@@ -843,7 +935,7 @@ class AirPlayClient(
             log("AIRPLAY: /info 请求异常 - ${error.javaClass.simpleName}: ${error.message}")
         }
         parseInfoBody(statusLine, body)?.let { return it }
-        scheduleSideProbe()
+        if (!detecting) scheduleSideProbe()
         return null
     }
 
@@ -902,6 +994,7 @@ class AirPlayClient(
         if (info == null) return null
         logInfoSummary(info)
         negotiatedInfo = info
+        capabilityDigest?.let { ReceiverDetectionRuntime.capabilities(endpoint.observation, it, negotiatedInfoRequest) }
         return info
     }
 
@@ -1326,34 +1419,47 @@ class AirPlayClient(
     var onTunnelControlSessionComplete: (() -> Unit)? = null
 
     /** MIB3 虚拟链路是否已布防（armMib3 成功）——拆链归因用：布防了但控制会话没完成就被拆 = 链路看门狗，与音频档位无关。 */
+    @Volatile
     var mib3LinkArmed: Boolean = false
         private set
 
     /** MIB3 控制会话是否完成过（auth+burst 已发）。 */
+    @Volatile
     var mib3ControlSessionDone: Boolean = false
         private set
 
     /** 虚拟链路唯一实例（出站路由/三形态语义见 [VirtualIap2Link]）。 */
-    private fun obtainIapLink(): VirtualIap2Link =
-        iapLink ?: synchronized(this) {
-            iapLink
-                ?: VirtualIap2Link(
-                    log = { line -> log(line) },
-                    sendEventIap = ::sendIap,
-                    sendControlIap = ::postControlIap,
-                    tunnelWriter = { iapTunnel },
-                    alive = { socket?.isClosed == false },
-                ).also {
-                    it.onMediaKey = { keyCode -> onMediaKey?.invoke(keyCode) }
-                    it.onNavKey = { keyCode -> onNavKey?.invoke(keyCode) }
-                    it.onControlSessionComplete = {
-                        mib3ControlSessionDone = true
-                        onTunnelControlSessionComplete?.invoke()
+    private fun obtainIapLink(): VirtualIap2Link {
+        val link =
+            iapLink ?: synchronized(this) {
+                iapLink
+                    ?: VirtualIap2Link(
+                        log = { line -> log(line) },
+                        sendEventIap = ::sendIap,
+                        sendControlIap = ::postControlIap,
+                        tunnelWriter = { iapTunnel },
+                        alive = { socket?.isClosed == false },
+                    ).also { created ->
+                        created.onMediaKey = { keyCode -> onMediaKey?.invoke(keyCode) }
+                        created.onNavKey = { keyCode -> onNavKey?.invoke(keyCode) }
+                        created.onAuthenticationComplete = {
+                            synchronized(this) {
+                                if (iapLink === created) networkIapAuthenticated = true
+                            }
+                        }
+                        created.onControlSessionComplete = {
+                            val current =
+                                synchronized(this) {
+                                    (iapLink === created).also { if (it) mib3ControlSessionDone = true }
+                                }
+                            if (current) onTunnelControlSessionComplete?.invoke()
+                        }
+                        iapLink = created
                     }
-                    it.begin()
-                    iapLink = it
-                }
-        }
+            }
+        link.begin()
+        return link
+    }
 
     /** 车机 iAPSendMessage 字节入口（SessionController 事件命令处理器调用）。 */
     fun onIapEventBytes(data: ByteArray) {
@@ -1833,9 +1939,14 @@ class AirPlayClient(
      *     部分车机 media 档只声明 44.1k 且其音频通路只吃 48k，只能用兼容档；
      *  4. 延迟取该 (type, audioType) 在 audioLatencies 的 outputLatencyMicros，
      *     取不到用 [AUDIO_LATENCY_FALLBACK_MS]。
-     * 拿不到 /info 时回退协议基线（media + PCM48k + 250ms），与改动前一致。
+     * 拿不到 /info 或未声明 audioFormats 时回退协议基线（media + PCM48k + 250ms）。
+     * 清单为空或没有可用媒体格式时默认只推视频；[allowBaseline]（用户开关「音频格式
+     * 未声明时仍尝试」）打开后恢复旧行为：照常回退基线，PCM 也可用非媒体档。
      */
-    fun audioCandidates(preferCompat: Boolean = false): List<AudioProfile> {
+    fun audioCandidates(
+        preferCompat: Boolean = false,
+        allowBaseline: Boolean = false,
+    ): List<AudioProfile> {
         val baseline =
             listOf(
                 AudioProfile(AUDIO_TYPE_MEDIA, AUDIO_FORMAT_PCM_48K_STEREO, 48_000, AUDIO_LATENCY_FALLBACK_MS),
@@ -1846,7 +1957,18 @@ class AirPlayClient(
                 ?.mapNotNull { it as? Map<*, *> }
                 .orEmpty()
         if (declared.isEmpty()) {
-            log("AIRPLAY: 车机 /info 未声明 audioFormats → 按协议基线尝试")
+            val explicitlyEmpty = info.containsKey("audioFormats")
+            if (explicitlyEmpty && !allowBaseline) {
+                log("AIRPLAY: 接收端音频清单为空——仅推视频")
+                return emptyList()
+            }
+            log(
+                if (explicitlyEmpty) {
+                    "AIRPLAY: 接收端音频清单为空，用户开启兜底 → 按协议基线尝试"
+                } else {
+                    "AIRPLAY: 未声明 audioFormats → 按协议基线尝试"
+                },
+            )
             return baseline
         }
 
@@ -1894,7 +2016,7 @@ class AirPlayClient(
                 val type = (channel["audioType"] as? String)?.lowercase()
                 type == AUDIO_TYPE_MEDIA || type == "compatibility" || type == "default"
             }
-        val pool = mediaTypes.ifEmpty { formats }
+        val pool = if (allowBaseline) mediaTypes.ifEmpty { formats } else mediaTypes
         // 外层按格式（48k → 44.1k），内层按车机声明顺序：同档位时 48k 自然排在前面
         listOf(AUDIO_FORMAT_PCM_48K_STEREO to 48_000, AUDIO_FORMAT_PCM_44K_STEREO to 44_100)
             .forEach { (bit, rate) ->
@@ -1922,10 +2044,10 @@ class AirPlayClient(
                 pcm.sortedBy { priority(it.audioType) }
         if (ordered.isEmpty()) {
             log(
-                "AIRPLAY: 车机未声明可用的 AAC-LC / PCM 立体声格式" +
-                    "（共 ${declared.size} 档）→ 仍按基线尝试",
+                "AIRPLAY: 车机未声明可用的 AAC-LC / PCM 立体声格式（共 ${declared.size} 档）→ " +
+                    if (allowBaseline) "用户开启兜底，按协议基线尝试" else "仅推视频，不尝试未声明的格式",
             )
-            return baseline
+            return if (allowBaseline) baseline else emptyList()
         }
         log("AIRPLAY: 音频候选（按偏好）=${ordered.map { it.label }}")
         return ordered.distinctBy { it.key }
@@ -1953,15 +2075,9 @@ class AirPlayClient(
     }
 
     /**
-     * 车机身份文本（音频档位记忆的键来源）：只用 /info 里稳定的 model + manufacturer，
-     * 蓝牙名/固件串会随重连变化，不能进键。
+     * 按型号、制造商、固件、AirPlay 栈和音频能力隔离记忆；未知身份不持久化。
      */
-    fun receiverIdentity(): String {
-        val info = negotiatedInfo ?: return "unknown"
-        val manufacturer = (info["manufacturer"] as? String).orEmpty().trim()
-        val model = (info["model"] as? String).orEmpty().trim()
-        return "$manufacturer $model".trim().ifBlank { "unknown" }
-    }
+    fun receiverIdentity(): String = receiverCompatibility().memoryKey.orEmpty()
 
     /**
      * SETUP #2：协商主屏视频流（type 110）。streamConnectionID 由客户端指定，
@@ -2066,6 +2182,7 @@ class AirPlayClient(
     /** RECORD：激活会话（接收端 onSessionActive）。路径用相对 `/`（catplay record() 同款）。 */
     fun record(): Boolean =
         try {
+            val epoch = synchronized(this) { connectionEpoch }
             val (statusLine, _) =
                 request(
                     "RECORD",
@@ -2074,6 +2191,9 @@ class AirPlayClient(
                     contentType = "application/x-apple-binary-plist",
                 )
             val ok = statusLine.contains("200")
+            synchronized(this) {
+                if (ok && connectionEpoch == epoch) recordAccepted = true
+            }
             log(if (ok) "AIRPLAY: ✓ RECORD 完成——会话已激活" else "AIRPLAY: RECORD 应答 [$statusLine]")
             ok
         } catch (error: IOException) {
@@ -2273,7 +2393,7 @@ class AirPlayClient(
      */
     private fun requestInfo(timeoutMillis: Int = 10_000): Pair<String, ByteArray> =
         request(
-            "GET",
+            if (negotiatedInfoRequest == InfoRequest.GET_EMPTY_PLIST) "GET" else "POST",
             "/info",
             BinaryPlist.encode(linkedMapOf<String, Any?>()),
             timeoutMillis,
@@ -2306,27 +2426,28 @@ class AirPlayClient(
                     failures += "$host（解析失败：${error.message}）"
                     continue
                 }
-            try {
+            for (port in ReceiverProbePlan.ports(target.airPlayPort, target.portIsFallback, detecting)) {
+                if (cancelled) return false
+                if (port != target.airPlayPort && !attemptedFallbackPorts.add("$host:$port")) continue
                 val newSocket = Socket()
-                newSocket.connect(InetSocketAddress(address, target.airPlayPort), timeoutMillis)
-                if (generation != endpointGeneration) {
-                    // 连接途中端点已更新：丢弃这条旧连接，下一轮按新地址重连
+                try {
+                    newSocket.connect(InetSocketAddress(address, port), timeoutMillis)
+                    if (cancelled || generation != endpointGeneration) {
+                        newSocket.close()
+                        return false
+                    }
+                    newSocket.soTimeout = 0
+                    TcpLiveness.configure(newSocket, "控制通道", log)
+                    socket = newSocket
+                    activeAddress = address
+                    activeHost = addressLiteral(address)
+                    if (port != target.airPlayPort) endpoint = endpoint.copy(airPlayPort = port)
+                    log("AIRPLAY: TCP 已连通 $activeHost:$port（本机 ${newSocket.localAddress.hostAddress}）")
+                    return true
+                } catch (error: IOException) {
                     runCatching { newSocket.close() }
-                    return false
+                    failures += "$host:$port（${error.message}）"
                 }
-                // 读由独立读线程负责（阻塞等数据），请求超时由待响应表的 poll 控制；
-                // 这里若留 soTimeout，读线程会周期性收到 SocketTimeoutException 而退出
-                newSocket.soTimeout = 0
-                // 对端健康检查：内核默认 keepalive 要等 2 小时才开始探测，而车机熄火/
-                // 走出热点时链路常不发 RST，读线程会一直挂着（画面冻结、看门狗不触发）。
-                TcpLiveness.configure(newSocket, "控制通道", log)
-                socket = newSocket
-                activeAddress = address
-                activeHost = addressLiteral(address)
-                log("AIRPLAY: TCP 已连通 $activeHost:${target.airPlayPort}（本机 ${newSocket.localAddress.hostAddress}）")
-                return true
-            } catch (error: IOException) {
-                failures += "$host（${error.message}）"
             }
         }
         log(

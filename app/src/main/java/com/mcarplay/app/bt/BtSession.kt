@@ -1,6 +1,8 @@
 package com.mcarplay.app.bt
 
 import android.content.Context
+import com.mcarplay.app.compat.ReceiverDetectionRuntime
+import com.mcarplay.app.compat.ReceiverObservation
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.transport.Iap2LinkChannel
@@ -23,6 +25,8 @@ internal fun Iap2LinkChannel.runSenderSession(
     knownCarSsid: () -> String? = { null },
     /** 0x1D01 画像判定的链路代际（CLASSIC_MIB3/EVENT_LINK），Phase 1 完成后回调。 */
     onGeneration: (ReceiverProfile.LinkGeneration) -> Unit = {},
+    peerAddress: String? = null,
+    observation: ReceiverObservation? = ReceiverDetectionRuntime.observation(peerAddress),
 ) {
     val session =
         Iap2SenderSession(
@@ -30,20 +34,25 @@ internal fun Iap2LinkChannel.runSenderSession(
             { line -> log(line) },
             resolveBluetoothMac(context, log),
             DeviceIdentity.deviceName(context),
-            onWifiCredentials,
-            onEndpointUpdate,
+            { wifi -> if (ReceiverDetectionRuntime.isCurrent(observation)) onWifiCredentials(wifi) },
+            { update ->
+                if (ReceiverDetectionRuntime.isCurrent(observation)) onEndpointUpdate(update.copy(observation = observation))
+            },
             knownCarSsid,
             // MFi 挑战长度按车机身份持久化（省掉 20B 静默 6 秒的试探）
             context.applicationContext,
+            receiverBinding = observation?.binding,
+            rememberMfi = !ReceiverDetectionRuntime.collecting(observation),
         )
     val endpoint = session.run(timeoutMillis)
     onGeneration(session.linkGeneration)
-    onEndpoint(endpoint)
+    if (!ReceiverDetectionRuntime.isCurrent(observation)) return
+    onEndpoint(endpoint.copy(observation = observation))
     // Phase 2 过渡：保持控制通道存活记录配件消息；AirPlay 配对由 onEndpoint 回调发起
     session.pumpIncomingForever()
     // 链路断开（保活泵退出）：通知主控释放「会话处理中」——否则车机拆链后重连带来的
     // 新端点会被僵尸轮次堵门（2026-10-22 奥迪 3315 真机定谳，见 SessionController.onSenderLinkClosed）
-    onLinkClosed()
+    if (ReceiverDetectionRuntime.isCurrent(observation)) onLinkClosed()
 }
 
 /**

@@ -148,6 +148,7 @@ class VirtualIap2Link(
     private var mfiWindowMillis = 0L
     private var mfiChallengeSentAtMs = 0L
     private var mfiFinished = false
+    private var authenticationNotified = false
 
     init {
         engine.onEaData = { bytes -> handleEaData(bytes) }
@@ -236,6 +237,9 @@ class VirtualIap2Link(
      * AADisplay 注释原话），必须等 burst 完成。
      */
     var onControlSessionComplete: (() -> Unit)? = null
+
+    /** 网络 iAP 已收到本轮挑战应答并发送 AA05；不包含 MIB3 专属的资源突发。 */
+    var onAuthenticationComplete: (() -> Unit)? = null
 
     /**
      * 开一轮控制通道协商：marker + 本表同步包（会话 10/11/12），刷新引擎重发节拍。
@@ -608,6 +612,7 @@ class VirtualIap2Link(
             }
 
             ids.MFI_RESPONSE -> {
+                val challenged = mib3AuthStage == 3
                 if (mib3) {
                     mfiIdentity?.let { MfiLengthMemory.recordSuccess(mfiContext, it, mfiCurrentLength) }
                     log("IAPLINK: 隧道 rx=0xaa03 签名 ${frame.body.size}B（${mfiCurrentLength}B 挑战成功，已记忆）")
@@ -615,6 +620,10 @@ class VirtualIap2Link(
                     mfiFinished = true
                 }
                 sendCsmLocked(ids.MFI_AUTHENTICATION_SUCCEEDED)
+                if (challenged && !authenticationNotified) {
+                    authenticationNotified = true
+                    onAuthenticationComplete?.invoke()
+                }
                 if (mib3) {
                     mib3AuthStage = 4
                     sendMib3BurstLocked()

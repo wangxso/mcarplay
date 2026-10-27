@@ -67,8 +67,11 @@ CarWith `4.0.20-20260923`，小米 CarLife `8.8.4`。
 5. 桌面测试可用另一台 Android 设备运行 [DiPlay](https://github.com/shihabal3amri/DiPlay)。
    启动本机 CarWith 会话前，先断开其他 CarLife 接收端。
 
-CarWith 主链路使用普通应用 Intent 和本机套接字，无需 root 或 Shizuku。
-上游保留的可选显示、启动器辅助功能可能仍使用 [Shizuku](https://shizuku.rikka.app/)。
+CarWith 原生画面、音频和触控使用普通应用 Intent 和本机套接字，无需 root 或 Shizuku。
+WinPlay 1.2.4 等接收端还会校验手机的真实蓝牙身份；ROM 限制读取时，这一步需要
+[Shizuku](https://shizuku.rikka.app/)。可选显示、启动器辅助功能也可能使用它。
+接收端能力、蓝牙交接、配对降级和音频记忆遵循[接收端兼容设计](docs/RECEIVER-COMPATIBILITY.md)。
+其中的策略矩阵描述实现与证据边界，不是设备支持清单。
 覆盖安装后若配对停住，可重启测试接收端清理旧会话，再重新连接。
 
 ## 检查更新
@@ -88,6 +91,26 @@ Debug 包通常无法覆盖更新为正式签名包；未记录发行标签的�
 点击首页 **导出脱敏诊断报告**，检查后分享文件，同时提供复现步骤、故障时间、接收端型号/固件和屏幕提示。
 意外退出后请重新打开并立即导出，不要先重装或清除数据。报告自动包含最近进程关键记录，
 无需电脑或 Shizuku，不会自动上传。详见 [诊断内容、错误码与排查方式](docs/DIAGNOSTICS.md)。
+
+## 检测并记住当前车机
+
+在 **选择设备** 中选定已配对目标，再打开 **检测当前车机 → 开始检测（含声音）**。
+向导复用正常连接流程，展示源端、发送端和输入证据，由你确认实际画面、声音与触控后保存到本机。
+可选的蓝牙阶段对照只运行一次，会暂时断开目标的 HFP/A2DP 通话／音乐连接。取消或失败保留旧配置，未知结果保持未验证。
+保存后按设备复用，并检查环境与能力变化，无需车型列表，不自动上传。
+坐标校准与配置导入属于后续扩展，详见 [实现范围与限制](docs/RECEIVER-AUTODETECT.md)。
+
+## 兼容兜底开关
+
+旧版本的两条兜底默认关闭。它们没有实车证据，只在遇到下表中的现象时打开，然后重新连接。
+在首页点 **车机设置 → 显示**（车机屏上的设置面板相同），找到：
+
+| 开关 | 适用现象 | 作用 | 风险 |
+| --- | --- | --- | --- |
+| **兼容兜底：配对失败后尝试明文** | 老接收端每次都配对失败，且确认它只接受不加密的会话 | 已连上接收端但配对普通失败时，再试一次不加密的明文会话（`et=NONE`）；接收端返回 403 时始终不降级 | 占用接收端的重连窗口，会话仍可能被拒 |
+| **兼容兜底：音频格式未声明时仍尝试** | 画面正常但总是只推视频，而车机其实能出声 | 接收端没有声明可用的媒体音频格式时，仍按 PCM 48kHz 尝试（也会使用非媒体音频档） | 无声，或开声音后不久接收端断开 |
+
+没有效果请关掉。反馈问题时请说明开了哪些开关；诊断日志里会有 `COMPAT:` 行或音频兜底行。
 
 ## 工作原理
 
@@ -195,7 +218,7 @@ mcarplay 基于 shaonialife 及贡献者的
 | [Bouncy Castle](https://github.com/bcgit/bc-java) | 配对和传输密码学 | Bouncy Castle license |
 | [JmDNS](https://github.com/jmdns/jmdns) | DNS-SD 服务发现 | Apache-2.0 |
 | [SLF4J](https://www.slf4j.org/) | 日志 API 和空实现 | MIT |
-| [Shizuku API](https://github.com/RikkaApps/Shizuku-API) | 可选 shell 辅助功能 | MIT |
+| [Shizuku API](https://github.com/RikkaApps/Shizuku-API) | 按需读取蓝牙身份及 shell 辅助功能 | MIT |
 | [JUnit 4](https://github.com/junit-team/junit4) | JVM 测试 | EPL-1.0 |
 | [JSON-java](https://github.com/stleary/JSON-java) | 本地测试 JSON 实现 | 公有领域 |
 | [cryptography](https://github.com/pyca/cryptography) | Python 诊断工具 | Apache-2.0 OR BSD-3-Clause |

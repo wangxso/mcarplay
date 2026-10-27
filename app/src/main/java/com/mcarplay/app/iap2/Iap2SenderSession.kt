@@ -1,5 +1,7 @@
 package com.mcarplay.app.iap2
 
+import com.mcarplay.app.compat.ReceiverFingerprint
+import com.mcarplay.app.compat.ReceiverObservation
 import com.mcarplay.app.transport.Iap2LinkChannel
 import java.io.IOException
 import java.security.SecureRandom
@@ -54,6 +56,10 @@ class Iap2SenderSession(
      * 内存表（单测/纯 JVM），不影响协议流程。
      */
     private val context: android.content.Context? = null,
+    /** 本机私有的接收端实例绑定；未知实例不共用持久化握手记忆。 */
+    private val receiverBinding: String? = null,
+    /** 检测草稿不修改自动兼容记忆。 */
+    private val rememberMfi: Boolean = true,
 ) {
     /** 从 0x5703 + 0x4301 解析出的接收端信息。 */
     data class CarPlayEndpoint(
@@ -76,6 +82,11 @@ class Iap2SenderSession(
          * 强制配对（现代）。2026-10-19 奥迪 4xxx（4851）连不上与这条分类直接相关。
          */
         val advertisedFeatures: Long? = null,
+        /** 本条蓝牙会话的身份与消息能力快照；mDNS 补全端点时必须保留。 */
+        val receiverSignals: ReceiverProfile.Signals = ReceiverProfile.Signals(),
+        val observation: ReceiverObservation? = null,
+        /** 端口仅为网关兜底；现场声明或 mDNS 解析出的端口永不据此轮询。 */
+        val portIsFallback: Boolean = false,
     )
 
     private val parser = Iap2Csm.Parser()
@@ -121,6 +132,8 @@ class Iap2SenderSession(
 
     /** 识别帧是否真的带了接收清单（空清单与「未提供」必须区分）。 */
     private var receiveListDeclared = false
+
+    private var receiverSignals = ReceiverProfile.Signals()
 
     /**
      * 车机画像的 WiFi 代际判定（[ReceiverProfile.classify] 的输出，0x1D01 到达时算一次）。
@@ -213,6 +226,7 @@ class Iap2SenderSession(
         // EA 协议解析（启动时机见下方 MFi 完成后——2026-10-11 DiPlay 实测：
         // 认证前发 0xEA00 会让测试台状态机停摆，不再回 0xAA01；奥迪对此不敏感）
         val eaProtocols = parseEaProtocols(identification)
+        receiverSignals = receiverSignals.copy(externalAccessoryProtocols = eaProtocols.map { it.second }.toSet())
 
         // ---- MFi（跳过校验：0xAA05 自报成功）----
         val identityText = identityText(identification)
@@ -230,7 +244,11 @@ class Iap2SenderSession(
         //    32B→20B 的会话全部卡死，20B→（记忆命中）的会话全部秒通。
         //  - 测试台 DiPlay（Carlinkit AuthV3 EC 身份）：**只接受精确 32B**，长度不符直接断链。
         // 全部无应答也不中止——我们不校验签名（0xAA05 自报），由 0x5702 是否应答判定放行。
-        runMfiChallenge(deadline, prefer20First = legacyCar, receiverKey = identityText)
+        runMfiChallenge(
+            deadline,
+            prefer20First = legacyCar,
+            receiverKey = if (rememberMfi) ReceiverFingerprint.handshake(receiverBinding, receiverSignals) else null,
+        )
         send(Iap2MessageIds.MFI_AUTHENTICATION_SUCCEEDED)
         log("iap2 tx=0xaa05 authentication-succeeded（自报）")
 
@@ -488,7 +506,7 @@ class Iap2SenderSession(
                     securityType = endpoint.securityType,
                 )
         }
-        return endpoint
+        return endpoint.copy(receiverSignals = receiverSignals)
     }
 
     /**
@@ -598,7 +616,7 @@ class Iap2SenderSession(
     private fun runMfiChallenge(
         deadline: Long,
         prefer20First: Boolean = false,
-        receiverKey: String,
+        receiverKey: String?,
     ) {
         val baselineLengths =
             if (prefer20First) {
@@ -607,7 +625,7 @@ class Iap2SenderSession(
                 MFI_ATTEMPTS.map { it.first }
             }
         val windowOf = MFI_ATTEMPTS.associate { it.first to it.second }
-        val memory = MfiLengthMemory.load(context, receiverKey)
+        val memory = receiverKey?.let { MfiLengthMemory.load(context, it) } ?: MfiLengthMemory.Entry()
         val order = MfiLengthMemory.orderAttempts(baselineLengths, memory)
         if (!memory.isEmpty) {
             log(
@@ -638,7 +656,7 @@ class Iap2SenderSession(
                     if (!channel.isAlive) {
                         log("iap2 MFi 挑战期间链路断开（${size}B，对端不接受该长度）——记入该车机被拒档位")
                         // 硬拒绝：链路级证据，推翻「该长度=上次成功」的记忆（防误记锁死）
-                        MfiLengthMemory.recordHardRejected(context, receiverKey, size)
+                        receiverKey?.let { MfiLengthMemory.recordHardRejected(context, it, size) }
                         return
                     }
                     continue
@@ -663,13 +681,14 @@ class Iap2SenderSession(
                 if (gotResponse || gotFailure) break
             }
             if (gotResponse) {
-                MfiLengthMemory.recordSuccess(context, receiverKey, size)
+                // 多档共用连接时，迟到应答可能属于上一档；无可靠归属就不训练成功参数。
+                if (position == 0) receiverKey?.let { MfiLengthMemory.recordSuccess(context, it, size) }
                 return
             }
             if (gotFailure) {
-                MfiLengthMemory.recordRejected(context, receiverKey, size)
+                receiverKey?.let { MfiLengthMemory.recordRejected(context, it, size) }
             } else {
-                MfiLengthMemory.recordSilent(context, receiverKey, size)
+                receiverKey?.let { MfiLengthMemory.recordSilent(context, it, size) }
             }
             if (position < order.size - 1) {
                 log("iap2 MFi ${size}B 无应答，改用 ${order[position + 1]}B 重试")
@@ -952,6 +971,7 @@ class Iap2SenderSession(
             publicKey = params[4]?.value?.asStringOrEmpty(),
             sourceVersion = params[5]?.value?.asStringOrEmpty(),
             ipAddresses = addresses,
+            receiverSignals = receiverSignals,
         )
     }
 
@@ -1017,6 +1037,15 @@ class Iap2SenderSession(
         // 参 7（它可接收）直接告诉我们它是否认可 0x4300 —— 真车排查的关键证据。
         val sends = params[6]?.value?.asU16List()
         val receives = params[7]?.value?.asU16List()
+        receiverSignals =
+            ReceiverProfile.Signals(
+                name = name,
+                model = model,
+                manufacturer = manufacturer,
+                firmwareVersion = params[4]?.value?.asStringOrEmpty(),
+                sendIds = sends?.toSet(),
+                receiveIds = receives?.toSet(),
+            )
         if (sends != null) {
             // 后续可选消息（0x6800/0x4301）按此清单判断是否会来，避免固定窗口空等
             accessorySendIds = sends.toSet()

@@ -36,6 +36,7 @@ enum class DiagnosticCode(
     VIDEO_CLOSED("视频连接已结束；仅凭此不能确认接收端崩溃，请检查网络和接收端"),
     AUDIO_UNAVAILABLE("音频未能启用，画面可以继续；请提供报告核对音频协商"),
     CONNECTION_INCOMPLETE("连接尚未完成，请结合最后阶段和接收端提示排查"),
+    DETECTION_TIMEOUT("适配检测等待达到上限；未确定的项目仍为未验证，可检查车机后重新检测"),
     UNCAUGHT_EXCEPTION("应用线程发生异常，请分享诊断报告，不要只提供界面截图"),
     USER_STOP("用户主动停止，非连接故障"),
     SUPERSEDED("新的连接尝试替代了上一轮"),

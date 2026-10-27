@@ -510,6 +510,70 @@
                     android:layout_marginStart="54dp"
                     android:background="#5A394444" />
 
+                <!-- 检测当前车机：与其它设置行同款（图标块 + 标题/说明 + 右箭头） -->
+                <LinearLayout
+                    android:id="@+id/rowReceiverDetection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="60dp"
+                    android:orientation="horizontal"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp">
+
+                    <FrameLayout
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:background="@drawable/bg_icon_tile">
+
+                        <ImageView
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:layout_gravity="center"
+                            android:contentDescription="检测当前车机"
+                            android:src="@drawable/ic_scan" />
+                    </FrameLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="14dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="检测当前车机"
+                            android:textColor="@color/m3_on_surface"
+                            android:textSize="14.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/receiverDetectionDesc"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="检测连接参数，确认效果后保存到本机"
+                            android:textColor="@color/m3_on_var"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:contentDescription="进入"
+                        android:src="@drawable/ic_chev_right" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginStart="54dp"
+                    android:background="#5A394444" />
+
                 <!-- CarWith 自检附着原厂已启动的会话，独立于 CarPlay 链路。 -->
                 <LinearLayout
                     android:id="@+id/rowCarLifeSelfTest"
@@ -1440,7 +1504,8 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <TextView
+            <!-- 检查更新：与免责声明同款入口卡片 -->
+            <LinearLayout
                 android:id="@+id/btnCheckUpdates"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -1449,11 +1514,56 @@
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center_vertical"
-                android:minHeight="56dp"
-                android:paddingHorizontal="18dp"
-                android:text="@string/update_title"
-                android:textColor="@color/m3_primary"
-                android:textSize="14sp" />
+                android:minHeight="60dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="6dp">
+
+                <FrameLayout
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_icon_tile">
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@string/update_title"
+                        android:src="@drawable/ic_refresh" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="14dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/update_title"
+                        android:textColor="@color/m3_on_surface"
+                        android:textSize="14.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="从 GitHub 发布页检查新版本"
+                        android:textColor="@color/m3_on_var"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:contentDescription="进入"
+                    android:src="@drawable/ic_chev_right" />
+            </LinearLayout>
 
             <!-- 免责声明（只读重看；首次启动的强制接受是独立弹窗） -->
             <LinearLayout

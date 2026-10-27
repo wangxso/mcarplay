@@ -1,6 +1,8 @@
 package com.mcarplay.app
 
 import com.mcarplay.app.airplay.pairingRetryBackoffMs
+import com.mcarplay.app.compat.ReceiverCompatibility
+import com.mcarplay.app.iap2.ReceiverProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -67,9 +69,17 @@ class PairingFallbackTest {
                 pairingForbidden = false,
                 attemptedPairing = true,
                 pairingUnsupported = false,
+                policy =
+                    ReceiverCompatibility.resolve(
+                        ReceiverProfile.Signals(
+                            name = "DiPlay",
+                            firmwareVersion = "0.1.0",
+                            externalAccessoryProtocols = setOf("com.shilapi.xcertplay"),
+                        ),
+                    ),
             )
         assertTrue(f.useBtRetireHack)
-        assertTrue(f.usePlainSession)
+        assertFalse("断蓝牙重试与明文降级是两项独立决策", f.usePlainSession)
     }
 
     @Test
@@ -100,6 +110,62 @@ class PairingFallbackTest {
             )
         assertFalse(f.useBtRetireHack)
         assertFalse(f.usePlainSession)
+    }
+
+    @Test
+    fun `明文兜底开关 - 默认关时普通失败不降级`() {
+        val off =
+            pairingFallback(
+                false,
+                noPairing = false,
+                pairSetupRejected = false,
+                pairingForbidden = false,
+                attemptedPairing = true,
+                pairingUnsupported = false,
+            )
+        assertFalse(off.usePlainSession)
+    }
+
+    @Test
+    fun `明文兜底开关 - 打开后已连上 RTSP 的普通失败降级明文`() {
+        val on =
+            pairingFallback(
+                false,
+                noPairing = false,
+                pairSetupRejected = false,
+                pairingForbidden = false,
+                attemptedPairing = true,
+                pairingUnsupported = false,
+                allowPlainAfterFailure = true,
+            )
+        assertTrue(on.usePlainSession)
+        assertFalse("开关不影响断蓝牙重试", on.useBtRetireHack)
+    }
+
+    @Test
+    fun `明文兜底开关 - 打开后 403 与未连上 RTSP 仍不降级`() {
+        val forbidden =
+            pairingFallback(
+                false,
+                noPairing = false,
+                pairSetupRejected = false,
+                pairingForbidden = true,
+                attemptedPairing = true,
+                pairingUnsupported = false,
+                allowPlainAfterFailure = true,
+            )
+        assertFalse(forbidden.usePlainSession)
+        val unreached =
+            pairingFallback(
+                false,
+                noPairing = false,
+                pairSetupRejected = false,
+                pairingForbidden = false,
+                attemptedPairing = false,
+                pairingUnsupported = false,
+                allowPlainAfterFailure = true,
+            )
+        assertFalse(unreached.usePlainSession)
     }
 
     @Test

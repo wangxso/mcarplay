@@ -227,6 +227,8 @@ class VirtualIap2LinkTest {
     @Test
     fun fullMib3HandshakeWithBurstAndSubscriptions() {
         val h = Harness()
+        var authenticated = 0
+        h.link.onAuthenticationComplete = { authenticated++ }
         h.link.setGeneration(ReceiverProfile.LinkGeneration.CLASSIC_MIB3)
         h.link.armMib3()
         h.car.start(0)
@@ -253,12 +255,14 @@ class VirtualIap2LinkTest {
                 .copyOfRange(6, h.lastRawFrameOf(0xAA02)!!.size)
                 .let { Iap2Csm.parseParams(it).first() }
         assertEquals(20, challengeBody.value.size)
+        assertEquals(0, authenticated)
 
         // 0xAA03（签名应答）→ 0xAA05 + 突发（0x4E0C/0xA100/0x4E0A/0x4E0B/0x4E09/0xFFFA/0xFFF0）
         assertEquals(
             listOf(0xAA05, 0x4E0C, 0xA100, 0x4E0A, 0x4E0B, 0x4E09, 0xFFFA, 0xFFF0),
             h.carSends(0xAA03, Iap2Csm.param(0, ByteArray(96))),
         )
+        assertEquals(1, authenticated)
 
         // 订阅应答：0x5000 → 0x5001 空态；0x4157 → 0x4158；0x4154 → 0x4155；0x4170 → 0x4171
         assertEquals(listOf(0x5001), h.carSends(0x5000))

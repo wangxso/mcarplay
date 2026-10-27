@@ -23,6 +23,8 @@ class CarLifeSession(
     private val onEnded: (String) -> Unit,
     private val log: (String) -> Unit,
     private val launchStrategy: CarLifeLaunchStrategy = CarLifeLaunchStrategy.EXPORTED_ENTRY,
+    /** 向 CarWith 请求的编码尺寸；null 时沿用协议默认值。CarWith 可能不采纳。 */
+    private val requestedVideoSize: Pair<Int, Int>? = null,
     private val isAppInForeground: () -> Boolean = CarLifeLauncher::isAppInForeground,
     private val connectorFactory: (String, (Int) -> Socket) -> CarLifeChannelConnector =
         { _, connect ->
@@ -42,6 +44,10 @@ class CarLifeSession(
     private val audioParsers =
         listOf(CarLifeChannel.MEDIA, CarLifeChannel.TTS, CarLifeChannel.VOICE)
             .associateWith { CarLifeAudioParser() }
+
+    /** 每个通道已见过的帧类型：首帧各记一行，区分「CarWith 没发」与「发了被丢」。 */
+    private val seenAudioKinds = java.util.Collections.synchronizedSet(mutableSetOf<Pair<CarLifeChannel, Int>>())
+    private val unparsedAudio = java.util.concurrent.ConcurrentHashMap<CarLifeChannel, Long>()
     private val touchState = CarLifeTouchState()
     private var endReported = false
     private var sourceThread: Thread? = null
@@ -204,7 +210,9 @@ class CarLifeSession(
         if (frame.kind == CarLifeProtocol.MD_PROTOCOL_MATCH && !result.failed) startHeartbeat()
         if (result.encryptionReady) {
             log("CARLIFE: AES 已就绪，请求视频初始化")
-            stateMachine.requestVideoInit().forEach(::sendAction)
+            val (width, height) = requestedVideoSize ?: (CarLifeProtocol.DEFAULT_WIDTH to CarLifeProtocol.DEFAULT_HEIGHT)
+            log("CARLIFE: 请求编码尺寸 ${width}x$height（以 VIDEO_INIT_DONE 返回为准）")
+            stateMachine.requestVideoInit(width, height).forEach(::sendAction)
             startHeartbeat()
         }
         if (frame.kind == CarLifeProtocol.VIDEO_ENCODER_INIT_DONE &&
@@ -275,6 +283,9 @@ class CarLifeSession(
     internal fun handleAudio(frame: CarLifeFrame) {
         val channel = CarLifeChannel.fromPort(frame.channel) ?: return
         val parser = audioParsers[channel] ?: return
+        if (seenAudioKinds.add(channel to frame.kind)) {
+            log("CARLIFE: ${channel.name} 首次收到 kind=0x${frame.kind.toString(16)} ${frame.payload.size}B")
+        }
         val payload =
             runCatching {
                 // This session connects specifically to com.baidu.carlife.xiaomi.
@@ -284,7 +295,18 @@ class CarLifeSession(
                 log("CARLIFE: ${channel.name} 音频解密失败")
                 return
             }
-        val event = parser.parse(channel, frame.copy(payload = payload)) ?: return
+        val event = parser.parse(channel, frame.copy(payload = payload))
+        if (event == null) {
+            // PCM 在没有有效 INIT 时、INIT 字段不合法时、未知 kind 时都会被静默丢弃。
+            val count = unparsedAudio.merge(channel, 1L, Long::plus) ?: 1L
+            if (count == 1L || count % UNPARSED_AUDIO_LOG_EVERY == 0L) {
+                log(
+                    "CARLIFE: ${channel.name} 音频帧未解析 kind=0x${frame.kind.toString(16)} ${payload.size}B" +
+                        "（累计 $count；PCM 须先有有效 INIT）${initFieldsSummary(frame.kind, payload)}",
+                )
+            }
+            return
+        }
         when (event) {
             is CarLifeAudioEvent.Init ->
                 log(
@@ -412,9 +434,39 @@ class CarLifeSession(
         }
     }
 
+    /** 车机硬按键 → CarWith（0x68008）；未进入视频阶段或发送失败返回 false。 */
+    fun sendHardKey(keyCode: Int): Boolean {
+        if (stateMachine.state != CarLifeStateMachine.State.VIDEO_RUNNING) return false
+        val socket = connector?.socket(CarLifeChannel.TOUCH) ?: return false
+        return runCatching {
+            val payload = CarLifeProtocol.hardKeyPayload(keyCode)
+            val body = stateMachine.payloadCipher?.encrypt(payload) ?: payload
+            synchronized(socket) {
+                socket.getOutputStream().apply {
+                    write(CarLifeProtocol.encodeCommand(CarLifeProtocol.TOUCH_CAR_HARD_KEY_CODE, body))
+                    flush()
+                }
+            }
+            true
+        }.getOrElse {
+            connectionClosed(CarLifeChannel.TOUCH)
+            false
+        }
+    }
+
     private fun releaseActiveTouch() {
         val (x, y) = touchState.releasePoint() ?: return
         sendTouchAction(CarLifeTouchAction.UP, x, y)
+    }
+
+    /** INIT 解析失败时附上三个 protobuf 字段，便于判断是格式不合法还是解密不对。 */
+    private fun initFieldsSummary(
+        kind: Int,
+        payload: ByteArray,
+    ): String {
+        if (kind != CarLifeProtocol.MEDIA_INIT && kind != CarLifeProtocol.NAVI_TTS_INIT && kind != CarLifeProtocol.VR_AUDIO_INIT) return ""
+        val fields = (1..3).map { field -> runCatching { CarLifeAudioParser.firstIntField(payload, field) }.getOrNull() }
+        return " INIT 字段 rate=${fields[0]} channels=${fields[1]} format=${fields[2]}"
     }
 
     private fun connectionClosed(channel: CarLifeChannel) {
@@ -437,6 +489,7 @@ class CarLifeSession(
 
     internal companion object {
         const val ENTRY_BLOCKED_HINT = "CarWith 入口在后台发起，可能被系统拦截"
+        const val UNPARSED_AUDIO_LOG_EVERY = 2_000L
 
         fun isEntryBlockedSuspected(
             error: Exception,

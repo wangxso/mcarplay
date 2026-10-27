@@ -203,13 +203,16 @@ class CarLifeStateMachine(
         return emptyList()
     }
 
-    fun requestVideoInit(): List<Action> {
+    fun requestVideoInit(
+        width: Int = CarLifeProtocol.DEFAULT_WIDTH,
+        height: Int = CarLifeProtocol.DEFAULT_HEIGHT,
+    ): List<Action> {
         if (state != State.ENCRYPTED || videoInitSent) return fail()
         if (!peerAuthAccepted) return emptyList()
         videoInitSent = true
         state = State.VIDEO_REQUESTED
         return listOf(
-            Action(CarLifeProtocol.VIDEO_ENCODER_INIT, CarLifeProtocol.videoInitPayload()),
+            Action(CarLifeProtocol.VIDEO_ENCODER_INIT, CarLifeProtocol.videoInitPayload(width, height)),
         )
     }
 

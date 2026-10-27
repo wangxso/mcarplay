@@ -14,6 +14,8 @@ import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.SilentProjectionActivity
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
+import com.mcarplay.app.compat.ReceiverCompatibility
+import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 
@@ -52,12 +54,19 @@ class CarPlayService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
-        // 下车：车机蓝牙 ACL 断开（由 startService 投递——服务在跑时进程已是前台服务态，
-        // 不受后台启动限制）。disconnect 内部会 stopService → onDestroy。
+        // ACL 断开不一定是下车：WinPlay 在网络 iAP 接入后会释放蓝牙。
+        // 已启动的 Wi-Fi 视频由媒体通道结束/网络失效负责收尾，不能被蓝牙交接误停。
         if (intent?.action == ACTION_AUTO_STOP_SESSION) {
+            if (SessionController.bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) {
+                val frames = SessionController.videoSender?.framesSentTotal ?: 0
+                Bg.run("bt-handoff-log") {
+                    SessionController.appendLog("AUTO: 蓝牙已断开，兼容策略保留已接入的网络会话（已发送 $frames 帧）")
+                }
+                return START_STICKY
+            }
             fileLog("SVC: 收到「下车自动结束」——收起会话")
             if (SessionController.isSessionRunning()) {
-                SessionController.disconnect(applicationContext)
+                SessionController.disconnect(applicationContext, DiagnosticCode.BT_LINK_CLOSED)
             } else {
                 CarLifeDiagnostics.stop()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -109,9 +118,11 @@ class CarPlayService : Service() {
             val app = applicationContext
             Bg.run("auto-session-start") {
                 SessionController.ensure(app)
-                // 自动连接默认带声音：先静默领取投屏令牌；失败退回只推视频
+                // 自动连接默认带声音：CarWith 原生音频无需投屏授权；否则先静默领取投屏令牌，
+                // 失败退回只推视频。（旧写法 `!isAvailable && …` 在 CarWith 可用时恒为 false，
+                // 会覆盖用户刚选的「开启声音」——2026-10-27 WinPlay 实测第二次会话无声。）
                 SessionController.audioEnabledForSession =
-                    !CarLifeLauncher.isAvailable(app) &&
+                    CarLifeLauncher.isAvailable(app) ||
                     acquireProjectionSilently()
                 SessionController.startConnection(app)
             }
@@ -228,7 +239,7 @@ class CarPlayService : Service() {
         /** 上车自动连接：车机蓝牙 ACL 连上时由 CarBluetoothReceiver 投递。 */
         const val ACTION_AUTO_START_SESSION = "com.mcarplay.app.action.AUTO_START"
 
-        /** 下车自动收摊：ACL 断开时投递（只有服务在跑才发，见 CarBluetoothReceiver）。 */
+        /** 目标蓝牙 ACL 断开时检查是否自动收摊；Wi-Fi 视频已启动时保留会话。 */
         const val ACTION_AUTO_STOP_SESSION = "com.mcarplay.app.action.AUTO_STOP"
 
         /** CarWith-only connectivity self-test; keeps the process alive without CarPlay. */

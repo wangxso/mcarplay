@@ -69,7 +69,7 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                 )
             }
         } else {
-            DebugFileLog.append(app, "AUTO: 车机蓝牙已断开 ${name ?: "?"}（$address）——结束会话")
+            DebugFileLog.append(app, "AUTO: 车机蓝牙已断开 ${name ?: "?"}（$address）——检查是否需要结束会话")
             // 会话在跑时服务就是前台进程，startService 允许；不在跑说明本来就没有会话
             runCatching {
                 context.startService(

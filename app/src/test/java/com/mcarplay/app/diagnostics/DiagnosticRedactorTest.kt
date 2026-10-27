@@ -7,6 +7,19 @@ import org.junit.Test
 
 class DiagnosticRedactorTest {
     @Test
+    fun detectionPrivateIndexesAreOmittedWhileProgressCountersRemainUseful() {
+        val safe =
+            DiagnosticRedactor().redact(
+                "binding=private-index capabilityDigest=private-capabilities environmentDigest=private-environment " +
+                    "DETECT state=COLLECTING videoFrames=42 audioPackets=21 touches=5",
+            )
+        assertFalse(safe.contains("private-index"))
+        assertFalse(safe.contains("private-capabilities"))
+        assertFalse(safe.contains("private-environment"))
+        assertTrue(safe.contains("state=COLLECTING videoFrames=42 audioPackets=21 touches=5"))
+    }
+
+    @Test
     fun hidesCredentialsAndShortSessionKeys() {
         val safe =
             DiagnosticRedactor().redact(

@@ -51,6 +51,59 @@ object BtProfiles {
     /** profile id → 已获取的代理（进程内复用；代理本身无会话状态）。 */
     private val proxies = HashMap<Int, BluetoothProfile>()
 
+    data class DisconnectResult(
+        val known: Boolean,
+        val before: List<String>,
+        val remaining: List<String>,
+    ) {
+        val disconnected: Boolean get() = known && remaining.isEmpty()
+    }
+
+    /** 检测路径不使用设备级 disconnect 兜底；查询失败不能当作「原本未连接」。 */
+    fun disconnectChecked(
+        context: Context,
+        device: BluetoothDevice,
+    ): DisconnectResult {
+        val address = runCatching { device.address }.getOrNull() ?: return DisconnectResult(false, emptyList(), emptyList())
+        val before = checkedState(context, address)
+        for (id in profiles.filter { it != BluetoothProfile.LE_AUDIO }) {
+            if (profileName(id) in before.second) proxy(context, id)?.let { disconnectProfile(it, device) }
+        }
+        val deadline = SystemClock.uptimeMillis() + 1_500L
+        var after = checkedState(context, address)
+        while (after.second.isNotEmpty() && SystemClock.uptimeMillis() < deadline) {
+            try {
+                Thread.sleep(120)
+            } catch (_: InterruptedException) {
+                return DisconnectResult(false, before.second, after.second)
+            }
+            after = checkedState(context, address)
+        }
+        return DisconnectResult(before.first && after.first, before.second, after.second)
+    }
+
+    private fun checkedState(
+        context: Context,
+        address: String,
+    ): Pair<Boolean, List<String>> {
+        var known = true
+        val connected =
+            profiles.filter { it != BluetoothProfile.LE_AUDIO }.mapNotNull { id ->
+                val service = proxy(context, id)
+                if (service == null) {
+                    known = false
+                    return@mapNotNull null
+                }
+                try {
+                    if (service.connectedDevices.any { it.address.equals(address, ignoreCase = true) }) profileName(id) else null
+                } catch (_: Exception) {
+                    known = false
+                    null
+                }
+            }
+        return known to connected
+    }
+
     /** 该地址当前在线（已连接）的配置文件名称。 */
     fun connectedNames(
         context: Context,

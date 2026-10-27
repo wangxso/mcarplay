@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.SystemClock
 import com.mcarplay.app.BuildConfig
 import com.mcarplay.app.carlife.CarLifeLauncher
+import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.util.DebugFileLog
 import org.json.JSONObject
 import java.io.File
@@ -36,6 +37,7 @@ object SupportReport {
             listOfNotNull(
                 ConnectionDiagnostics.timeline.snapshot()?.let { "CarPlay 连接：" + exportSummary(it) },
                 ConnectionDiagnostics.selfTest.snapshot()?.let { "CarWith 自检：" + exportSummary(it) },
+                "RECEIVER_DETECTION " + ReceiverDetectionRuntime.reportSummary(),
             ).joinToString("\n\n").ifEmpty { "本进程尚无连接尝试；请复现问题后再导出" }
         return render(
             reportId = reportId,

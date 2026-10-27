@@ -73,9 +73,13 @@ with the phone, CarWith version, receiver and vehicle.
 5. For bench testing, use a second Android device running [DiPlay](https://github.com/shihabal3amri/DiPlay).
    Disconnect other CarLife receivers before starting the native session.
 
-The core CarWith path uses ordinary application intents and local sockets without
-root or Shizuku. Optional display/launcher utilities inherited from CarDeck may
-still use [Shizuku](https://shizuku.rikka.app/).
+CarWith's native video, audio and touch use ordinary application intents and local
+sockets without root or Shizuku. Some receivers, including WinPlay 1.2.4, also check
+the phone's real Bluetooth identity; on ROMs that restrict access, this step needs
+[Shizuku](https://shizuku.rikka.app/). Optional display/launcher utilities may also use it.
+Receiver capabilities, Bluetooth handoff, pairing fallback and audio memory follow
+the [receiver compatibility design](docs/RECEIVER-COMPATIBILITY.md). Its policy matrix
+describes implementation and evidence boundaries, not a device support list.
 If pairing stalls after reinstalling, restart the test receiver to clear its previous session.
 
 ## Check for updates
@@ -100,6 +104,29 @@ with reproduction steps, failure time and receiver model/firmware. Recent previo
 processes are included automatically; reopen and export after an unexpected exit,
 before reinstalling or clearing app data. No computer or Shizuku is needed, and
 there is no automatic upload. See [diagnostic contents and error codes](docs/DIAGNOSTICS.md).
+
+## Detect and remember a receiver
+
+Select a paired target in **选择设备**, then open **检测当前车机 → 开始检测（含声音）**.
+The wizard uses the normal connection pipeline, shows source/sender/input evidence, and asks you to confirm the actual picture,
+sound and touch before saving local settings. A single optional Bluetooth-stage trial temporarily disconnects that target's
+HFP/A2DP profiles. Cancelled or unsuccessful trials keep the previous configuration; unknown results stay unverified.
+Saved settings are reused for that device, with environment and capability checks. No model list or automatic upload is used.
+Coordinate calibration and configuration import are future work. See [implementation and limits](docs/RECEIVER-AUTODETECT.md).
+
+## Compatibility fallbacks
+
+Two fallbacks from earlier versions are off by default. They have no vehicle evidence;
+turn one on only for the symptom below, then reconnect. Open **车机设置 → 显示** on the
+main screen (the same panel is on the car screen) and find:
+
+| Switch | Symptom it addresses | What it does | Risk |
+| --- | --- | --- | --- |
+| **兼容兜底：配对失败后尝试明文** | Pairing fails every time on an older receiver that you know accepts only unencrypted sessions | After an ordinary pairing failure on a reachable receiver, retries once with an unencrypted (`et=NONE`) session. A 403 reply never falls back. | Uses the receiver's reconnect window; the session may be rejected |
+| **兼容兜底：音频格式未声明时仍尝试** | Video works but the app always streams video only, while the receiver can play sound | When the receiver lists no usable media audio format, still tries PCM 48 kHz (and non-media audio types) | No sound, or the receiver may disconnect shortly after audio starts |
+
+Turn the switch off again if it does not help. When reporting a problem, mention which
+switches were on; the diagnostic log records a `COMPAT:` line or an audio fallback line.
 
 ## Architecture
 
@@ -209,7 +236,7 @@ Thanks also to the libraries and tools used by this repository:
 | [Bouncy Castle](https://github.com/bcgit/bc-java) | Pairing and transport cryptography | Bouncy Castle license |
 | [JmDNS](https://github.com/jmdns/jmdns) | DNS-SD discovery | Apache-2.0 |
 | [SLF4J](https://www.slf4j.org/) | Logging API and no-op backend | MIT |
-| [Shizuku API](https://github.com/RikkaApps/Shizuku-API) | Optional shell utilities | MIT |
+| [Shizuku API](https://github.com/RikkaApps/Shizuku-API) | Shell utilities and Bluetooth identity where required | MIT |
 | [JUnit 4](https://github.com/junit-team/junit4) | JVM tests | EPL-1.0 |
 | [JSON-java](https://github.com/stleary/JSON-java) | JSON for local tests | Public domain |
 | [cryptography](https://github.com/pyca/cryptography) | Python diagnostics | Apache-2.0 OR BSD-3-Clause |

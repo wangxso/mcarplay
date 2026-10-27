@@ -30,6 +30,11 @@ still-redacted recent runtime history.
   events use JSONL schema 1, independently of verbose protocol logs.
 - Source H.264 frames, video transport writes, native PCM chunks and sent audio
   packets are separate evidence. Writes do not prove receiver display or sound.
+- `RECEIVER_DETECTION` and `DETECT` notes contain the local wizard's fixed state,
+  trial/stage, storage status and media/input counters. Private receiver bindings,
+  installation secrets and environment/capability digests are excluded. Counts do
+  not replace the user's picture, sound or input confirmation. See
+  [receiver detection](RECEIVER-AUTODETECT.md).
 - Uncaught stacks and up to five exit records from this app only; an available
   recent crash/ANR trace is capped at 64KB. Other apps' logcat is not read.
 - Default runtime tail: 512KB; journal: two 128KB segments; runtime storage: two
@@ -72,11 +77,20 @@ only a denial is.
 | `UNCAUGHT_EXCEPTION` | Captured stack; worker exception does not necessarily mean process death. |
 | `USER_STOP`, `SUPERSEDED` | Expected user stop or replacement, not a connection defect. |
 | `CONNECTION_INCOMPLETE` | Ended before pairing with no more specific cause; an `EXCEPTION` note carries any stack. |
+| `DETECTION_TIMEOUT` | Explicit receiver detection reached its eight-minute pre-video budget; unobserved capabilities remain unverified. |
 
 A missing END may mean an active session, abrupt termination or truncated records.
 No exit records does not prove no previous exit. Do not attribute an old low-memory
 record to a later reset without matching timestamps and receiver-side evidence.
 Local car Wi-Fi without Internet validation is not by itself a connection failure.
+Bluetooth may close normally after the network iAP session takes over (WinPlay
+1.2.4 does this). An ACL disconnect must not stop a running Wi-Fi video sender.
+The auto-stop path before video starts records `BT_LINK_CLOSED`; an explicit user
+stop records `USER_STOP`. Automatic teardown must not be labelled a manual stop.
+`COMPAT:` entries show the selected receiver family, pairing and Bluetooth policy,
+and fixed rule IDs. They contain no additional raw device identifiers. See
+[receiver compatibility](RECEIVER-COMPATIBILITY.md) for matching conditions and
+version boundaries; a matched policy does not establish device support.
 Repeated `ENONET` with an active Wi-Fi and `network.bound=unknown` calls for checking
 an expired process network binding before treating it as an AirPlay pairing defect.
 An uncaught exception is associated with the active attempt at capture time; this

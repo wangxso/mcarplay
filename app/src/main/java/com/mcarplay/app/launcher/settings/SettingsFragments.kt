@@ -11,6 +11,7 @@ import android.widget.TextView
 import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.bt.AutoConnectPrefs
+import com.mcarplay.app.compat.CompatibilityPrefs
 import com.mcarplay.app.input.TouchRouter
 import com.mcarplay.app.launcher.AppIcons
 import com.mcarplay.app.launcher.DefaultMapPrefs
@@ -693,6 +694,24 @@ class DisplayPanelFragment : SettingsPanelFragment() {
         hidRawOn.setOnClickListener { applyHidRaw(true) }
         hidRawOff.setOnClickListener { applyHidRaw(false) }
 
+        // 兼容兜底开关（默认关）：恢复统一兼容策略之前的宽松行为，下次连接起效
+        bindToggle(
+            view.findViewById(R.id.btnPlainFallbackOn),
+            view.findViewById(R.id.btnPlainFallbackOff),
+            CompatibilityPrefs.plainFallback(ctx),
+        ) { enabled ->
+            CompatibilityPrefs.setPlainFallback(ctx, enabled)
+            hostToast(if (enabled) "已开启：配对失败后尝试明文（下次连接起效）" else "已关闭：配对失败不再尝试明文")
+        }
+        bindToggle(
+            view.findViewById(R.id.btnAudioBaselineOn),
+            view.findViewById(R.id.btnAudioBaselineOff),
+            CompatibilityPrefs.audioBaseline(ctx),
+        ) { enabled ->
+            CompatibilityPrefs.setAudioBaseline(ctx, enabled)
+            hostToast(if (enabled) "已开启：音频格式未声明时仍尝试（下次连接起效）" else "已关闭：未声明音频格式时只推视频")
+        }
+
         // 滑条 progress（0..26）→ 百分比（30..160，步进 5）
         fun progressOf(percent: Int) = (percent - DisplayPrefs.SCALE_MIN) / DisplayPrefs.SCALE_STEP
 
@@ -805,5 +824,32 @@ class DisplayPanelFragment : SettingsPanelFragment() {
                 }
             },
         )
+    }
+
+    /** 「开/关」分段开关：与上方几组相同的样式与去重逻辑。 */
+    private fun bindToggle(
+        on: TextView,
+        off: TextView,
+        initial: Boolean,
+        onChange: (Boolean) -> Unit,
+    ) {
+        var current = initial
+
+        fun refresh(enabled: Boolean) {
+            on.setBackgroundResource(if (enabled) R.drawable.bg_segment_sel else R.drawable.bg_segment)
+            on.setTextColor(if (enabled) 0xFFFFFFFF.toInt() else 0xFF8E8E93.toInt())
+            off.setBackgroundResource(if (enabled) R.drawable.bg_segment else R.drawable.bg_segment_sel)
+            off.setTextColor(if (enabled) 0xFF8E8E93.toInt() else 0xFFFFFFFF.toInt())
+        }
+        refresh(current)
+
+        fun apply(enabled: Boolean) {
+            if (enabled == current) return
+            current = enabled
+            refresh(enabled)
+            onChange(enabled)
+        }
+        on.setOnClickListener { apply(true) }
+        off.setOnClickListener { apply(false) }
     }
 }
