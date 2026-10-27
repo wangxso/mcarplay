@@ -399,8 +399,17 @@ object SessionController {
     @Volatile
     private var uiPausedAtMs: Long? = null
 
+    /** 主界面已不可见（onStop）：被浮窗盖住时不会走到这里。 */
+    @Volatile
+    private var uiStopped: Boolean = false
+
     fun onMainUiVisibilityChanged(resumed: Boolean) {
         uiPausedAtMs = if (resumed) null else android.os.SystemClock.uptimeMillis()
+        if (resumed) uiStopped = false
+    }
+
+    fun onMainUiStopped() {
+        uiStopped = true
     }
 
     /** 用户取消连接：配对线程在关键检查点看到后中止（mDNS/配对等待无法中途打断，粒度秒级）。 */
@@ -1206,7 +1215,7 @@ object SessionController {
                         quickFallback = { specifierQuickFallback(wifi) },
                         deepFallback = { specifierDeepFallback(wifi) },
                         userChoicePending = { requestedAt ->
-                            WifiCarPlayConnector.isUserChoicePending(uiPausedAtMs, requestedAt)
+                            WifiCarPlayConnector.isUserChoicePending(uiPausedAtMs, uiStopped, requestedAt)
                         },
                     )
                 }

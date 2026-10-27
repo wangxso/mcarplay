@@ -10,6 +10,7 @@ class CarLifeJoinGateTest {
     private val pps = byteArrayOf(0x68, 0xCE.toByte(), 0x3C, 0x80.toByte())
     private val idr = byteArrayOf(0x65, 0x88.toByte(), 0x84.toByte())
     private val slice = byteArrayOf(0x41, 0x9A.toByte())
+    private val aud = byteArrayOf(0x09, 0xF0.toByte())
 
     @Test
     fun dropsFramesUntilFirstIdr() {
@@ -26,6 +27,30 @@ class CarLifeJoinGateTest {
         val gate = CarLifeJoinGate()
         val admitted = gate.admit(unit(annexB(idr), keyFrame = true))
         assertArrayEquals(annexB(sps, pps, idr), admitted!!.data)
+    }
+
+    @Test
+    fun idrWithInlineSpsOnlyGetsCachedPps() {
+        // 审查复现顺序：配置 AU [7,8]（非关键帧被丢弃）→ IDR [9,7,5] → P 帧 [1]
+        val gate = CarLifeJoinGate()
+        assertNull(gate.admit(unit(annexB(sps, pps), keyFrame = false)))
+        val admitted = gate.admit(unit(annexB(aud, sps, idr), keyFrame = true))
+        assertArrayEquals(annexB(pps, aud, sps, idr), admitted!!.data)
+        val next = unit(annexB(slice), keyFrame = false)
+        assertSame(next, gate.admit(next))
+    }
+
+    @Test
+    fun idrWithInlinePpsOnlyGetsCachedSps() {
+        val gate = CarLifeJoinGate()
+        val admitted = gate.admit(unit(annexB(pps, idr), keyFrame = true))
+        assertArrayEquals(annexB(sps, pps, idr), admitted!!.data)
+    }
+
+    @Test
+    fun idrMissingPpsWithoutCacheKeepsWaiting() {
+        val gate = CarLifeJoinGate()
+        assertNull(gate.admit(CarLifeVideoAccessUnit(1, annexB(sps, idr), keyFrame = true, sps = sps, pps = null)))
     }
 
     @Test

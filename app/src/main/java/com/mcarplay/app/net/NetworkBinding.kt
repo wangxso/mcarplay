@@ -8,11 +8,15 @@ internal class NetworkBinding<N : Any, R : Any>(
     private var request: R? = null
     private var network: N? = null
 
+    /** current() 主动清掉、但同一请求的 onLost 尚未到达的网络；onLost 到达时仍需通知一次。 */
+    private var invalidated: N? = null
+
     @Synchronized
     fun replaceRequest(next: R?): R? {
         val previous = request
         request = next
         clearNetwork()
+        invalidated = null
         return previous
     }
 
@@ -26,6 +30,7 @@ internal class NetworkBinding<N : Any, R : Any>(
     ): Boolean {
         if (request !== owner || !bindProcess(candidate)) return false
         network = candidate
+        invalidated = null
         return true
     }
 
@@ -34,9 +39,16 @@ internal class NetworkBinding<N : Any, R : Any>(
         owner: R,
         lost: N,
     ): Boolean {
-        if (request !== owner || network != lost) return false
-        clearNetwork()
-        return true
+        if (request !== owner) return false
+        if (network == lost) {
+            clearNetwork()
+            return true
+        }
+        if (invalidated == lost) {
+            invalidated = null
+            return true
+        }
+        return false
     }
 
     @Synchronized
@@ -44,6 +56,7 @@ internal class NetworkBinding<N : Any, R : Any>(
         val current = network ?: return null
         if (!isUsable(current)) {
             clearNetwork()
+            invalidated = current
             return null
         }
         return current

@@ -511,11 +511,16 @@ class WifiCarPlayConnector(
             userChoicePending: Boolean,
         ): Boolean = now < deadline || (userChoicePending && now < holdDeadline)
 
-        /** 本应用界面在请求发出后才被盖住，才视为系统选择框在等用户（之前已离开则无法区分）。 */
+        /**
+         * 系统选择框是浮窗：它只让本应用 onPause、界面仍可见（不 onStop）。按 Home、切换应用、
+         * 锁屏都会 onStop，此时不能延长首窗，否则挂起无框时的快速兜底被推迟到总超时。
+         * 请求发出前已离开本应用同样无法区分，按原 5 秒首窗处理。
+         */
         internal fun isUserChoicePending(
             uiPausedAtMs: Long?,
+            uiStopped: Boolean,
             requestedAtMs: Long,
-        ): Boolean = uiPausedAtMs != null && uiPausedAtMs >= requestedAtMs
+        ): Boolean = !uiStopped && uiPausedAtMs != null && uiPausedAtMs >= requestedAtMs
     }
 }
 

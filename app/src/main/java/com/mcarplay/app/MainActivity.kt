@@ -2631,6 +2631,11 @@ class MainActivity : AppCompatActivity() {
         mainHandler.removeCallbacks(heroTick)
     }
 
+    override fun onStop() {
+        super.onStop()
+        SessionController.onMainUiStopped()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         // 强制声明不得随 Activity 销毁残留窗口（旋转时 Activity 重建，onResume 会续弹）

@@ -96,6 +96,37 @@ class NetworkBindingTest {
         assertEquals(listOf(network, null), environment.bindings)
     }
 
+    @Test
+    fun lossAfterProactiveInvalidationIsStillReportedOnce() {
+        val environment = Environment()
+        val owner = Any()
+        val network = environment.liveNetwork(111)
+        environment.binding.replaceRequest(owner)
+        assertTrue(environment.binding.bind(owner, network))
+        environment.liveIds.clear()
+        assertNull(environment.binding.current())
+
+        assertTrue("Async onLost after current() must still notify", environment.binding.lost(owner, TestNetwork(111)))
+        assertFalse("Notification is one-shot", environment.binding.lost(owner, TestNetwork(111)))
+        assertEquals(listOf(network, null), environment.bindings)
+    }
+
+    @Test
+    fun invalidatedNetworkOfRetiredRequestIsNotReported() {
+        val environment = Environment()
+        val owner = Any()
+        val network = environment.liveNetwork(111)
+        environment.binding.replaceRequest(owner)
+        assertTrue(environment.binding.bind(owner, network))
+        environment.liveIds.clear()
+        assertNull(environment.binding.current())
+        val next = Any()
+        environment.binding.replaceRequest(next)
+
+        assertFalse(environment.binding.lost(owner, network))
+        assertFalse(environment.binding.lost(next, network))
+    }
+
     private data class TestNetwork(
         val id: Int,
     )
