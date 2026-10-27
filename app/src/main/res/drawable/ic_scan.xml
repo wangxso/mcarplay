@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 检测当前车机入口图标：取景框 + 中心点，与 ic_info_circle / ic_refresh 同款 24dp 线性风格（1.8 描边） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M4,8.5 V6 a2,2 0 0 1 2,-2 h2.5 M15.5,4 H18 a2,2 0 0 1 2,2 v2.5 M20,15.5 V18 a2,2 0 0 1 -2,2 h-2.5 M8.5,20 H6 a2,2 0 0 1 -2,-2 v-2.5"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.8" />
+    <path
+        android:pathData="M12,8.6 a3.4,3.4 0 1 0 0,6.8 a3.4,3.4 0 1 0 0,-6.8 z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.8" />
+</vector>

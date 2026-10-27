@@ -86,7 +86,7 @@ class UpdateActivity : AppCompatActivity() {
             runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(candidate?.pageUrl ?: UpdateSource.RELEASES_URL))) }
                 .onFailure { status.text = getString(R.string.update_browser_failed, UpdateSource.RELEASES_URL) }
         }
-        findViewById<Button>(R.id.updateBack).setOnClickListener { finish() }
+        findViewById<View>(R.id.updateBack).setOnClickListener { finish() }
         refresh()
         requestCheck()
     }

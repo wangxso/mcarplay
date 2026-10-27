@@ -1,13 +1,13 @@
 package com.mcarplay.app.ui
 
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.view.View
-import android.widget.ArrayAdapter
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -31,63 +31,100 @@ object ReceiverDetectionDialog {
         val density = activity.resources.displayMetrics.density
 
         fun dp(value: Int): Int = (value * density).toInt()
+        // 与 DarkMessageDialog 同一套视觉：标题和操作都画在 bg_dialog_panel 里，
+        // 不用系统 AlertDialog 的标题/按钮（浅色主题下与深色 UI 割裂）。
         val body =
             LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
-                setBackgroundResource(R.drawable.bg_dialog_panel)
-                setPadding(dp(20), dp(8), dp(20), dp(12))
+                setPadding(dp(18), dp(18), dp(18), dp(14))
             }
 
-        fun label(text: String): TextView =
+        fun text(
+            value: String,
+            size: Float = 12.5f,
+            color: Int = R.color.m3_on_var,
+            bold: Boolean = false,
+            top: Int = 6,
+        ): TextView =
             TextView(activity).apply {
-                this.text = text
-                textSize = 14f
-                setTextColor(activity.getColor(R.color.m3_on_surface))
-                setPadding(0, dp(6), 0, dp(6))
-                body.addView(this)
+                text = value
+                textSize = size
+                setTextColor(activity.getColor(color))
+                if (bold) setTypeface(typeface, Typeface.BOLD)
+                setLineSpacing(dp(3).toFloat(), 1f)
+                body.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) })
             }
+        text("检测当前车机", size = 17f, color = R.color.m3_on_surface, bold = true, top = 0)
         val target = TargetDevicePrefs.get(activity)
-        label(target?.let { "当前设备：${it.name}" } ?: "请先选择已配对的车机")
-        label("检测会尝试当前设备的连接参数。画面、声音和触控需实际确认，保存后下次自动复用。")
-        val status = label("")
-        val counters = label("")
+        text(target?.let { "当前设备：${it.name}" } ?: "请先选择已配对的车机", size = 14f, color = R.color.m3_on_surface, top = 10)
+        text("检测会尝试当前设备的连接参数。画面、声音和触控需实际确认，保存后下次自动复用。")
+        val status = text("", size = 13f, color = R.color.m3_primary, top = 10)
+        val counters = text("", size = 12f)
 
-        fun check(title: String): Spinner {
-            label(title)
-            return Spinner(activity).apply {
-                adapter =
-                    ArrayAdapter(
-                        activity,
-                        android.R.layout.simple_spinner_dropdown_item,
-                        listOf("未验证／跳过", "确认正常", "有问题"),
-                    )
-                body.addView(this, LinearLayout.LayoutParams(-1, dp(48)))
-            }
-        }
-        val video = check("车机画面")
-        val audio = check("车机扬声器声音（含速度与音调）")
-        val touch = check("点击与滑动位置")
+        val video = Choice(activity, body, "车机画面", ::dp)
+        val audio = Choice(activity, body, "车机扬声器声音（含速度与音调）", ::dp)
+        val touch = Choice(activity, body, "点击与滑动位置", ::dp)
 
-        fun button(text: String): Button =
-            Button(activity).apply {
-                this.text = text
-                isAllCaps = false
-                body.addView(this, LinearLayout.LayoutParams(-1, -2))
+        fun button(
+            label: String,
+            primary: Boolean = false,
+            danger: Boolean = false,
+        ): TextView =
+            TextView(activity).apply {
+                text = label
+                textSize = 13f
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setPadding(dp(16), dp(11), dp(16), dp(11))
+                when {
+                    primary -> {
+                        setBackgroundResource(R.drawable.bg_cta_fill)
+                        setTextColor(activity.getColor(R.color.m3_on_primary))
+                    }
+
+                    danger -> {
+                        background =
+                            GradientDrawable().apply {
+                                cornerRadius = 999f * density
+                                setColor(activity.getColor(R.color.m3_err_container))
+                            }
+                        setTextColor(activity.getColor(R.color.m3_on_err_container))
+                    }
+
+                    else -> {
+                        setBackgroundResource(R.drawable.bg_btn_tonal)
+                        setTextColor(activity.getColor(R.color.m3_on_sec_container))
+                    }
+                }
+                body.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             }
-        val save = button("保存已确认的适配结果")
-        val start = button(if (target == null) "选择设备" else "开始检测（含声音）")
+        val save = button("保存已确认的适配结果", primary = true).apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(16) }
+        val start = button(if (target == null) "选择设备" else "开始检测（含声音）", primary = true)
         val retry = button("蓝牙阶段重试")
         val cancel = button("取消检测并断开")
-        val delete = button("删除这台设备的适配记录")
-        val message = label("")
-        val scroll = ScrollView(activity).apply { addView(body) }
+        val delete = button("删除这台设备的适配记录", danger = true)
+        val message = text("", size = 12.5f, color = R.color.m3_primary)
+        val close =
+            TextView(activity).apply {
+                text = "收起"
+                textSize = 13f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(activity.getColor(R.color.m3_primary))
+                setBackgroundResource(R.drawable.bg_tbtn)
+                setPadding(dp(16), dp(10), dp(16), dp(10))
+                body.addView(this, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.END })
+            }
+        val scroll =
+            ScrollView(activity).apply {
+                setBackgroundResource(R.drawable.bg_dialog_panel)
+                addView(body)
+            }
         val dialog =
             AlertDialog
                 .Builder(activity)
-                .setTitle("检测当前车机")
                 .setView(scroll)
-                .setNegativeButton("收起") { _, _ -> }
                 .create()
+        close.setOnClickListener { dialog.dismiss() }
         val handler = Handler(Looper.getMainLooper())
         var revision = ""
         val tick =
@@ -156,6 +193,7 @@ object ReceiverDetectionDialog {
                         !connecting() &&
                         !ReceiverDetectionRuntime.saving &&
                         draft?.state != ReceiverDetection.State.COLLECTING
+                    listOf(save, start, retry, cancel, delete).forEach { it.alpha = if (it.isEnabled) 1f else 0.45f }
                     handler.postDelayed(this, 500)
                 }
             }
@@ -210,6 +248,67 @@ object ReceiverDetectionDialog {
         dialog.show()
         PanelWindow.apply(dialog, activity, heightFraction = 0.9f)
         return dialog
+    }
+
+    /** 三段式确认（未验证 / 正常 / 有问题），沿用设置面板的 bg_segment 分段控件代替系统 Spinner。 */
+    private class Choice(
+        activity: AppCompatActivity,
+        parent: LinearLayout,
+        title: String,
+        dp: (Int) -> Int,
+    ) {
+        private val options = listOf("未验证", "确认正常", "有问题")
+        private val selectedColor = 0xFFFFFFFF.toInt()
+        private val idleColor = 0xFF8E8E93.toInt()
+        private val row =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setBackgroundResource(R.drawable.bg_segment)
+                setPadding(dp(3), dp(3), dp(3), dp(3))
+            }
+        private val cells: List<TextView>
+        var selectedItemPosition = 0
+            private set
+        var isEnabled = true
+            set(value) {
+                field = value
+                row.alpha = if (value) 1f else 0.45f
+                cells.forEach { it.isEnabled = value }
+            }
+
+        init {
+            parent.addView(
+                TextView(activity).apply {
+                    text = title
+                    textSize = 14f
+                    setTextColor(activity.getColor(R.color.m3_on_surface))
+                },
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) },
+            )
+            cells =
+                options.mapIndexed { index, option ->
+                    TextView(activity).apply {
+                        text = option
+                        textSize = 13f
+                        setTypeface(typeface, Typeface.BOLD)
+                        gravity = Gravity.CENTER
+                        setPadding(dp(8), dp(7), dp(8), dp(7))
+                        setOnClickListener { setSelection(index) }
+                        row.addView(this, LinearLayout.LayoutParams(0, -2, 1f))
+                    }
+                }
+            parent.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            setSelection(0)
+        }
+
+        fun setSelection(position: Int) {
+            selectedItemPosition = position
+            cells.forEachIndexed { index, cell ->
+                val selected = index == position
+                if (selected) cell.setBackgroundResource(R.drawable.bg_segment_sel) else cell.background = null
+                cell.setTextColor(if (selected) selectedColor else idleColor)
+            }
+        }
     }
 
     private fun stateText(draft: ReceiverDetection.Draft): String =

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CheckBox 按钮图：复用设置面板的勾选框（bg_checkbox_on / off），替代系统默认样式。
+     两者是无固有尺寸的 shape，这里用 layer-list 固定 20dp。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true">
+        <layer-list>
+            <item android:width="20dp" android:height="20dp" android:drawable="@drawable/bg_checkbox_on" />
+        </layer-list>
+    </item>
+    <item>
+        <layer-list>
+            <item android:width="20dp" android:height="20dp" android:drawable="@drawable/bg_checkbox_off" />
+        </layer-list>
+    </item>
+</selector>
