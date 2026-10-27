@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import com.mcarplay.app.BuildConfig
+import com.mcarplay.app.diagnostics.DeviceEnvironment
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 import org.json.JSONArray
@@ -233,6 +234,8 @@ object BridgeClient {
                     setState("已连接（${msg.optLong("pairedAt")}）")
                     nextRetryAtElapsed = 0
                     debugLog("已连上调试服务器（配对通过），日志流恢复")
+                    // 实机记录必需的版本号自动上报，复测时无需人工查询
+                    appContext?.let { DebugFileLog.append(it, DeviceEnvironment.summary(it)) }
                     // 本轮连接走默认网络且真通了：清除「假 VALIDATED」失败判定
                     route?.noteSuccess(connUsedDefaultNetwork)
                     if (!wasConnected) {

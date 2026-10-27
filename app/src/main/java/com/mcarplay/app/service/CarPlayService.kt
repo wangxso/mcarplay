@@ -118,9 +118,11 @@ class CarPlayService : Service() {
             val app = applicationContext
             Bg.run("auto-session-start") {
                 SessionController.ensure(app)
-                // 自动连接默认带声音：先静默领取投屏令牌；失败退回只推视频
+                // 自动连接默认带声音：CarWith 原生音频无需投屏授权；否则先静默领取投屏令牌，
+                // 失败退回只推视频。（旧写法 `!isAvailable && …` 在 CarWith 可用时恒为 false，
+                // 会覆盖用户刚选的「开启声音」——2026-10-27 WinPlay 实测第二次会话无声。）
                 SessionController.audioEnabledForSession =
-                    !CarLifeLauncher.isAvailable(app) &&
+                    CarLifeLauncher.isAvailable(app) ||
                     acquireProjectionSilently()
                 SessionController.startConnection(app)
             }

@@ -250,3 +250,16 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 修复：自动收尾命令执行时，若当前 Wi-Fi 视频发送端已启动则保留会话，首帧尚未到达也同样保护；媒体通道继续按既有结束流程清理。视频未启动时仍自动收尾，诊断使用 `BT_LINK_CLOSED`，最终提示区分自动与手动。新增实际 TCP 回环回归，模拟首帧前和首帧后的蓝牙释放，验证后续帧仍能传输；同时覆盖重复 ACL 命令、发送端停止后和没有发送端时的自动结束分支。修复包尚未在用户设备复测，音频、触控及长时稳定性未由本轮日志确认；临时规避为关闭「上车自动连接」后手动启动。
 
 离线验证：新增 2 项服务生命周期回归，全量 475 项 JVM 测试、Spotless、standard debug lint 与 standard debug 构建通过（`--offline`）。本轮没有修改 Python 工具，未重复运行其测试。
+
+## WinPlay 无声的两处原因与 WinPlay / DiPlay 出声复测（2026-10-27 18:26–19:24）
+
+本轮日志来自 remote 调试桥（NAS 上的 `cardeck-bridge`，设备日志 `3c88630b.jsonl`），只在本机临时目录阅读，未纳入仓库。手机环境由新增的 `ENV:` 行自动上报（19:22:41，remote 包 SHA-256 `c6f099b01cdd84eefe2cec591a0f6a808edcdd014498fbd46648fe03746f8006`）：Xiaomi `2509FPN0BC`，Android 17（SDK 37），HyperOS `OS4.0`（ROM `OS4.0.4.0.XPBCNXM`），CarWith `4.0.20-20260923`（104000020），小米 CarLife `8.8.5`（274）。WinPlay 复测早于这一行约 27 分钟、使用上一版 remote 包（`daf5a9428ed20b968d794cce880987754a397d220ba7e563245514aeeeb42ec2`），同一台手机；期间未观察到 CarWith/CarLife 升级，但该时刻的版本并非由日志直接记录。WinPlay 由兼容规则识别为 `winplay.1.2.4`，Windows 版本未记录；DiPlay 运行在 macOS 主机上，其版本号未在日志中记录。
+
+1. **第二次会话（18:36）被自动启动覆盖为「仅推视频」。** 18:36:01.909 用户选择开启声音；18:36:02.047 蓝牙 ACL 触发 `ACTION_AUTO_START_SESSION`，`CarPlayService` 以 `!CarLifeLauncher.isAvailable(app) && acquireProjectionSilently()` 重写 `audioEnabledForSession`，CarWith 可用时恒为 false，18:36:03.298 记录「本次连接未开启车机侧声音」。原生音频不需要投屏授权，已改为 `isAvailable || acquireProjectionSilently()`。
+2. **第一次会话（18:26–18:35）协商成功但 0 包。** t102/media/48kHz AAC-LC SETUP 与补发 RECORD 成功，WinPlay 持续回报 `type=102 sampleRate=48000`，约 9 分钟内没有 `MEDIA 音频初始化`/`原生 PCM 接入`，结束时 `共发 0 包`。用户确认期间在播放。旧 `CarLifeAudioParser` 对无有效 INIT 的 PCM、非法 INIT 字段和未知 kind 一律静默返回，日志无法区分「CarWith 未发送」与「发送后被丢弃」，**该次根因未确定**。已在 `CarLifeSession.handleAudio()` 增加每通道每种 kind 的首帧记录、未解析帧计数（首次与每 2000 次）及 INIT 字段摘要。
+3. **WinPlay 复测（18:55，修复包）：** 18:55:32.034 协商 t102/media/48kHz AAC-LC；18:55:40.097 首次收到 MEDIA `kind=0x30001`（16B），随即 `MEDIA 音频初始化 44100Hz 2ch 16bit`，40.106 首次收到 `kind=0x30006`（7056B），40.114 `原生 PCM 接入 #1 nonzero=true dropped=0`；18:56:02 累计 1032 包、552KB，无「未解析」行。用户确认画面与声音正常。
+4. **DiPlay 复测（19:23，ENV 包）：** 19:23:13.688 协商同一档位；CarWith 返回 `VIDEO_INIT_DONE 1920x1080@30`（请求 1920×1260）；19:23:18.638 收到 MEDIA INIT 44.1kHz/2ch/16bit 与首个 DATA，19:23:43 累计 1180 包、631KB。用户确认画面与声音正常。
+
+两次复测 INIT 均在七路握手后数秒内到达并先于 DATA，未出现静默丢帧。观察窗口均不足 1 分钟（以日志统计行计），没有覆盖暂停/恢复、导航提示、触控和重连；**不满足 `CHANGELOG.md` 中 WinPlay 1.2.4 发布门槛（10 分钟、触控、断开重连），门槛继续有效。**
+
+离线验证：新增 3 项 JVM 测试，全量 543 项、Spotless、standard debug lint、remote debug lint 与构建通过。

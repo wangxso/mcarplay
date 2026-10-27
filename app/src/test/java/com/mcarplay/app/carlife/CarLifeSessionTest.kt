@@ -106,5 +106,52 @@ class CarLifeSessionTest {
         assertNull(CarLifeLauncher.isBackgroundStartModeAllowed(android.app.AppOpsManager.MODE_DEFAULT))
     }
 
+    @Test
+    fun audioFramesDroppedBeforeInitAreLoggedInsteadOfSilentlyIgnored() {
+        val lines = mutableListOf<String>()
+        val events = mutableListOf<CarLifeAudioEvent>()
+        val session =
+            CarLifeSession(
+                Application(),
+                onAccessUnit = {},
+                onEnded = {},
+                onAudioEvent = { _, event -> events += event },
+                log = { lines += it },
+            )
+        val pcm = ByteArray(8) { 1 }
+        session.handleAudio(mediaFrame(CarLifeProtocol.MEDIA_DATA, pcm))
+        session.handleAudio(mediaFrame(CarLifeProtocol.MEDIA_DATA, pcm))
+        assertTrue(events.isEmpty())
+        assertEquals(1, lines.count { "MEDIA 首次收到 kind=0x30006" in it })
+        assertEquals(1, lines.count { "MEDIA 音频帧未解析 kind=0x30006" in it && "累计 1" in it })
+
+        // rate=44100, channels=2, format=16（未握手时无 AES，按明文解析）
+        val init = byteArrayOf(0x08, 0xC4.toByte(), 0xD8.toByte(), 0x02, 0x10, 0x02, 0x18, 0x10)
+        session.handleAudio(mediaFrame(CarLifeProtocol.MEDIA_INIT, init))
+        session.handleAudio(mediaFrame(CarLifeProtocol.MEDIA_DATA, pcm))
+        assertEquals(CarLifeAudioEvent.Init(44100, 2, 16), events.first())
+        assertTrue(events.last() is CarLifeAudioEvent.Pcm)
+    }
+
+    @Test
+    fun malformedAudioInitLogsDecodedFields() {
+        val lines = mutableListOf<String>()
+        val session = CarLifeSession(Application(), onAccessUnit = {}, onEnded = {}, log = { lines += it })
+        session.handleAudio(mediaFrame(CarLifeProtocol.MEDIA_INIT, byteArrayOf(0x08, 0x05)))
+        assertTrue(lines.any { "INIT 字段 rate=5 channels=null format=null" in it })
+    }
+
+    private fun mediaFrame(
+        kind: Int,
+        payload: ByteArray,
+    ): CarLifeFrame =
+        CarLifeFrame(
+            channel = CarLifeProtocol.PORT_MEDIA,
+            kind = kind,
+            timestamp = 1,
+            reserved = 0,
+            payload = payload,
+        )
+
     private fun field(name: String) = CarLifeSession::class.java.getDeclaredField(name).apply { isAccessible = true }
 }
