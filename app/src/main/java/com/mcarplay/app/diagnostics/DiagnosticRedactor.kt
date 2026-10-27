@@ -81,7 +81,7 @@ class DiagnosticRedactor(
             Regex(
                 "(?i)(pass(?:word|phrase)?|psk|secret|token|authorization|privateKey|publicKey|aesKey|sessionKey|writeKey|readKey|seed|" +
                     "deviceI[Dd]|androidI[Dd]|serial(?:Number)?|pairingId|pairingIdentifier|identifier|authKey|userId|imei|imsi|" +
-                    "cuid|nonce|signature|密码|密钥|配对码)" +
+                    "cuid|nonce|signature|binding|receiverBinding|bindingId|capabilityDigest|environmentDigest|密码|密钥|配对码)" +
                     "[\\\"']?\\s*[:=：]\\s*(?:\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;；）}]+)",
             )
         private val quotedNetwork = Regex("(?i)(?<![A-Za-z0-9_])(ssid|热点|Wi-?Fi|name)[\\s:=：]*[\\\"“]([^\\\"”]+)[\\\"”]")

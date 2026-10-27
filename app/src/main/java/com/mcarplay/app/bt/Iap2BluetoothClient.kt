@@ -8,6 +8,8 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import com.mcarplay.app.compat.BluetoothBringup
+import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.transport.Iap2LinkChannel
@@ -75,8 +77,7 @@ class Iap2BluetoothClient(
         java.util.concurrent.atomic
             .AtomicLong(0)
 
-    @Volatile
-    private var activeChannel: Iap2LinkChannel? = null
+    private val activeChannel = AtomicReference<Iap2LinkChannel?>(null)
 
     @Volatile
     private var running = false
@@ -201,6 +202,7 @@ class Iap2BluetoothClient(
                 null
             } ?: return
         var lastFailureLogAt = 0L
+        val profileTrials = HashSet<String>()
         while (running && generation.get() == myGeneration) {
             // 静默降噪（2026-10-10 用户实测后启用）——会话期间完全静默，不产生任何连接尝试/日志：
             //  - inboundActive：接收端正在连我们（两条 RFCOMM 会互相踩；Audi 实测双会话混乱）
@@ -237,22 +239,27 @@ class Iap2BluetoothClient(
                     }
                     continue
                 }
-                // 「只配对、不连接」：奥迪 MIB3 实测手机与车机处于蓝牙已连接状态
-                // （HFP/A2DP 在线）时，车机不开放无线 CarPlay 的 iAP2 服务窗口——
-                // 表现为每 3s 连接失败。iAP2 是独立的 SDP 直连服务，与这些配置文件
-                // 无关，断开后不影响 CarPlay 本身（声音走 WiFi 的 AirPlay）。
-                run {
-                    val dropped = BtProfiles.disconnect(context, device)
-                    if (dropped.isNotEmpty()) {
+                // 未知设备先保留 HFP/A2DP；只有已保存的本地策略或用户发起的一次对照才断开。
+                // 每次 start 对同一目标最多执行一次，失败后恢复保留连接的基线，避免 ACL 反复震荡。
+                if (ReceiverDetectionRuntime.bluetooth(device.address) == BluetoothBringup.DISCONNECT_PROFILES &&
+                    profileTrials.add(device.address)
+                ) {
+                    val trialEpoch = ReceiverDetectionRuntime.profileTrialStarting(device.address)
+                    val result = BtProfiles.disconnectChecked(context, device)
+                    ReceiverDetectionRuntime.profileTrialCompleted(
+                        trialEpoch,
+                        result.known,
+                        result.disconnected,
+                        result.before.isNotEmpty(),
+                    )
+                    if (result.before.isNotEmpty() || !result.known) {
                         val now = android.os.SystemClock.uptimeMillis()
                         if (now - lastProfileLogAt > PROFILE_LOG_THROTTLE_MILLIS) {
                             lastProfileLogAt = now
-                            val left = BtProfiles.stillConnected(context, device.address)
                             log(
-                                "BT-C: $name 处于蓝牙已连接状态（${dropped.joinToString("/")}）——已断开" +
-                                    if (left.isEmpty()) "" else "（仍有 ${left.joinToString("/")} 在线）",
+                                "BT-C: 本地适配蓝牙对照：known=${result.known} disconnected=${result.disconnected}" +
+                                    " before=${result.before.joinToString("/")} remaining=${result.remaining.joinToString("/")}",
                             )
-                            log("BT-C: 车机在「蓝牙已连接」状态下不接受 CarPlay——保持仅配对")
                         }
                     }
                 }
@@ -275,7 +282,8 @@ class Iap2BluetoothClient(
             }
             if (generation.get() != myGeneration) {
                 // stop() 与 connect() 成功竞争：本线程已过期，不建会话
-                currentSocket.getAndSet(null)?.let { runCatching { it.close() } }
+                currentSocket.compareAndSet(connected, null)
+                runCatching { connected.close() }
                 return
             }
             runSession(connected)
@@ -348,7 +356,7 @@ class Iap2BluetoothClient(
                 runCatching { socket.close() }
             }
         val channel = Iap2LinkChannel(stream, name = "iap2-bt-car") { line -> log(line) }
-        activeChannel = channel
+        activeChannel.set(channel)
         try {
             channel.runSenderSession(
                 context,
@@ -360,12 +368,13 @@ class Iap2BluetoothClient(
                 onLinkClosed,
                 knownCarSsid,
                 onGeneration,
+                peerAddress = socket.remoteDevice?.address,
             )
         } catch (error: IOException) {
             log("BT-C: SESSION 失败 - ${error.message}")
         } finally {
-            activeChannel = null
-            currentSocket.getAndSet(null)?.let { runCatching { it.close() } }
+            activeChannel.compareAndSet(channel, null)
+            currentSocket.compareAndSet(socket, null)
             runCatching { socket.close() }
             channel.close()
             log("BT-C: 本轮会话结束（客户端仍在运行，将自动重连）")
@@ -374,8 +383,7 @@ class Iap2BluetoothClient(
 
     /** 主动结束当前 BT 控制会话（不影响重连循环）。供 AirPlay 配对前复现控制通道退役状态。 */
     fun detachCurrentSession() {
-        activeChannel?.let { channel ->
-            activeChannel = null
+        activeChannel.getAndSet(null)?.let { channel ->
             channel.close()
             log("BT-C: 已主动断开当前控制会话")
         }
@@ -387,7 +395,7 @@ class Iap2BluetoothClient(
         // 递增世代：即便有线程卡在 connect()，事后也会因世代不符自杀，不会在下次启动时复活
         generation.incrementAndGet()
         currentSocket.getAndSet(null)?.let { runCatching { it.close() } }
-        activeChannel?.let { runCatching { it.close() } }
+        activeChannel.getAndSet(null)?.let { runCatching { it.close() } }
         thread?.interrupt()
         thread = null
         log("BT-C: 已停止")

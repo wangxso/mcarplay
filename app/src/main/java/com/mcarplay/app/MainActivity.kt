@@ -27,11 +27,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
-import com.mcarplay.app.bt.BtProfiles
 import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.ExternalHuController
+import com.mcarplay.app.compat.ReceiverDetection
+import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.diagnostics.DiagnosticRedactor
@@ -49,6 +50,7 @@ import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.ui.DarkMessageDialog
 import com.mcarplay.app.ui.PanelWindow
+import com.mcarplay.app.ui.ReceiverDetectionDialog
 import com.mcarplay.app.ui.ScreenDimmer
 import com.mcarplay.app.ui.SignalWavesView
 import com.mcarplay.app.ui.WallpaperStore
@@ -151,6 +153,8 @@ class MainActivity : AppCompatActivity() {
 
     /** 当前打开的「加入热点」确认弹窗：取消连接时联动关闭（触发流程中止）。 */
     private var wifiJoinDialog: androidx.appcompat.app.AlertDialog? = null
+    private var receiverDetectionDialog: androidx.appcompat.app.AlertDialog? = null
+    private var pendingDetectionTarget: TargetDevicePrefs.Target? = null
 
     private val logListener: (String) -> Unit = { line ->
         runOnUiThread {
@@ -167,7 +171,7 @@ class MainActivity : AppCompatActivity() {
             log("BLUETOOTH_CONNECT 授权: $granted")
             if (pendingStartAfterBtPermission.compareAndSet(true, false)) {
                 ConnectionDiagnostics.permissionResult(granted, DiagnosticCode.BT_PERMISSION)
-                if (granted) ensureBluetoothReady { showAudioChoiceDialog() }
+                if (granted) resumeConnectionChecks() else pendingDetectionTarget = null
             }
         }
 
@@ -431,7 +435,7 @@ class MainActivity : AppCompatActivity() {
                         DiagnosticCode.LOCATION_REQUIRED
                     },
                 )
-                if (granted) ensureBluetoothReady { showAudioChoiceDialog() }
+                if (granted) resumeConnectionChecks() else pendingDetectionTarget = null
             }
         }
 
@@ -593,6 +597,7 @@ class MainActivity : AppCompatActivity() {
                 PackageManager.PERMISSION_GRANTED
             ) {
                 permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                return@runOnUiThread
             }
             // 通知权限（API 33+）：前台服务通知可见；拒绝也不影响保活
             if (Build.VERSION.SDK_INT >= 33 &&
@@ -601,8 +606,59 @@ class MainActivity : AppCompatActivity() {
             ) {
                 permissionLauncher.launch("android.permission.POST_NOTIFICATIONS")
             }
+            val detectionTarget = pendingDetectionTarget
+            pendingDetectionTarget = null
+            if (detectionTarget != null &&
+                (
+                    SessionController.isSessionRunning() ||
+                        SessionController.sessionStarting.get() ||
+                        TargetDevicePrefs.get(this)?.address != detectionTarget.address ||
+                        !ReceiverDetectionRuntime.begin(detectionTarget.address)
+                )
+            ) {
+                snack("未开始检测：请确认目标设备与连接状态后重试")
+                return@runOnUiThread
+            }
             SessionController.startConnection(this)
+            if (detectionTarget != null) showReceiverDetection()
         }
+    }
+
+    private fun resumeConnectionChecks() {
+        ensureBluetoothReady {
+            if (pendingDetectionTarget != null) beginWithAudio(enabled = true) else showAudioChoiceDialog()
+        }
+    }
+
+    private fun showReceiverDetection() {
+        receiverDetectionDialog?.dismiss()
+        receiverDetectionDialog =
+            ReceiverDetectionDialog.show(
+                this,
+                connecting = { SessionController.isSessionRunning() || SessionController.sessionStarting.get() },
+                onStart = {
+                    val target = TargetDevicePrefs.get(this)
+                    if (target == null) {
+                        showTargetPicker()
+                    } else if (SessionController.isSessionRunning() ||
+                        SessionController.sessionStarting.get() ||
+                        SessionController.runningDiagnosticCarLifeSession != null
+                    ) {
+                        snack("请先停止当前连接或 CarWith 自检")
+                    } else {
+                        pendingDetectionTarget = target
+                        resumeConnectionChecks()
+                    }
+                },
+                onRetry = {
+                    if (!SessionController.retryReceiverDetection(this)) snack("当前阶段不能重试蓝牙，请继续等待或重新检测")
+                },
+                onCancel = {
+                    wifiJoinDialog?.cancel()
+                    SessionController.cancelConnecting(this)
+                },
+                onPickTarget = ::showTargetPicker,
+            )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -874,7 +930,10 @@ class MainActivity : AppCompatActivity() {
             when (heroState) {
                 HeroState.CONNECTED -> promptDisconnect()
                 // CarWith 路径不依赖 Shizuku；蓝牙/热点仍是车机 CarPlay 链路的前置
-                HeroState.IDLE -> ensureBluetoothReady { showAudioChoiceDialog() }
+                HeroState.IDLE -> {
+                    pendingDetectionTarget = null
+                    ensureBluetoothReady { showAudioChoiceDialog() }
+                }
                 // 连接中可取消：卡在错误网络/等待回连时用户主动脱身（弹窗防误触）
                 HeroState.CONNECTING -> promptCancelConnecting()
                 null -> {}
@@ -882,6 +941,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // ---- 连接准备 ----
+        findViewById<View>(R.id.rowReceiverDetection).setOnClickListener { showReceiverDetection() }
         findViewById<LinearLayout>(R.id.rowCarLifeSelfTest).setOnClickListener {
             toggleCarLifeSelfTest()
         }
@@ -1098,6 +1158,25 @@ class MainActivity : AppCompatActivity() {
         updateShizukuChip()
         updateCarLifeSelfTestRow()
         updateExternalHuRow()
+        val selected = TargetDevicePrefs.get(this)
+        val binding = ReceiverDetectionRuntime.binding(selected?.address)
+        val detectionState =
+            ReceiverDetectionRuntime.detection
+                .snapshot()
+                ?.takeIf { it.binding == binding }
+                ?.state
+        findViewById<TextView>(R.id.receiverDetectionDesc).text =
+            when (detectionState) {
+                ReceiverDetection.State.COLLECTING -> "检测中 · 点此查看进度并确认效果"
+                ReceiverDetection.State.SAVING -> "正在保存适配结果…"
+                ReceiverDetection.State.SAVED -> "已保存本地适配结果 · 点此查看或重新检测"
+                else ->
+                    if (ReceiverDetectionRuntime.saved(selected?.address) != null) {
+                        "已有本地适配记录 · 点此查看或重新检测"
+                    } else {
+                        "检测连接参数，确认效果后保存到本机"
+                    }
+            }
     }
 
     private fun toggleCarLifeSelfTest() {
@@ -1478,6 +1557,10 @@ class MainActivity : AppCompatActivity() {
      * 选择立即生效（链路动态读取目标，无需重连）。
      */
     private fun showTargetPicker() {
+        if (ReceiverDetectionRuntime.detection.snapshot()?.state == ReceiverDetection.State.COLLECTING) {
+            snack("请先取消当前检测，再切换设备")
+            return
+        }
         val adapter =
             try {
                 (getSystemService(Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager)
@@ -1827,28 +1910,7 @@ class MainActivity : AppCompatActivity() {
                 // 先关弹窗再提示：snackbar 在 Activity 窗口内，弹窗未关时会被盖住
                 dialog.dismiss()
                 setTarget(device, name)
-                // 「只配对、不连接」：系统/车机在配对完成后常会自动建立 HFP/A2DP
-                // 连接，而奥迪实测这种「已连接」状态会让车机拒绝 CarPlay。立即与
-                // 1.5s 后各断一次（车机侧重连通常在这两个时间点之间发生）。
-                val app = applicationContext
-                Bg.run("bt-pair-only") {
-                    repeat(2) { attempt ->
-                        val dropped = BtProfiles.disconnect(app, device)
-                        if (dropped.isNotEmpty()) {
-                            log(
-                                "BT-PAIR: 已断开配对后自动建立的 ${dropped.joinToString("/")} 连接" +
-                                    "（保持仅配对，避免车机拒绝 CarPlay）",
-                            )
-                        }
-                        if (attempt == 0) {
-                            try {
-                                Thread.sleep(1_500)
-                            } catch (_: InterruptedException) {
-                                return@run
-                            }
-                        }
-                    }
-                }
+                // 保留系统配对后的连接；是否断开由本地适配策略或用户发起的检测决定。
             }
 
             BluetoothDevice.BOND_NONE -> {
@@ -2638,6 +2700,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        receiverDetectionDialog?.dismiss()
         // 强制声明不得随 Activity 销毁残留窗口（旋转时 Activity 重建，onResume 会续弹）
         runCatching { activeDisclaimer?.dismiss() }
         activeDisclaimer = null

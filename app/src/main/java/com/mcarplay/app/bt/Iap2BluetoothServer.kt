@@ -7,6 +7,8 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import com.mcarplay.app.compat.ReceiverDetectionRuntime
+import com.mcarplay.app.compat.ReceiverObservation
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.transport.Iap2LinkChannel
@@ -55,6 +57,7 @@ class Iap2BluetoothServer(
 
     @Volatile
     private var activeChannel: Iap2LinkChannel? = null
+    private val channelLock = Any()
 
     @Volatile
     private var running = false
@@ -132,21 +135,27 @@ class Iap2BluetoothServer(
                 continue
             }
             log("BT: 接收端已连入 name=$peerName，开始 iAP2 发送端会话")
-            Thread({ runSession(socket) }, "iap2-bt-session").apply {
+            val observation = ReceiverDetectionRuntime.observation(peerAddress)
+            Thread({ runSession(socket, observation) }, "iap2-bt-session").apply {
                 isDaemon = true
                 start()
             }
         }
     }
 
-    private fun runSession(socket: BluetoothSocket) {
+    private fun runSession(
+        socket: BluetoothSocket,
+        observation: ReceiverObservation?,
+    ) {
         val stream =
             StreamDuplexStream(socket.inputStream, socket.outputStream) {
                 runCatching { socket.close() }
             }
         val channel = Iap2LinkChannel(stream, name = "iap2-bt") { line -> log(line) }
-        activeChannel = channel
-        BtSessionGate.inboundActive = true
+        synchronized(channelLock) {
+            activeChannel = channel
+            BtSessionGate.inboundActive = true
+        }
         try {
             channel.runSenderSession(
                 context,
@@ -158,12 +167,18 @@ class Iap2BluetoothServer(
                 onLinkClosed,
                 knownCarSsid,
                 onGeneration,
+                peerAddress = socket.remoteDevice?.address,
+                observation = observation,
             )
         } catch (error: IOException) {
             log("SESSION 失败: ${error.message}")
         } finally {
-            activeChannel = null
-            BtSessionGate.inboundActive = false
+            synchronized(channelLock) {
+                if (activeChannel === channel) {
+                    activeChannel = null
+                    BtSessionGate.inboundActive = false
+                }
+            }
             channel.close()
             log("SESSION 结束，等待接收端重连（BT 监听仍在运行）")
         }
@@ -171,8 +186,14 @@ class Iap2BluetoothServer(
 
     /** 主动结束当前 BT 控制会话（不影响监听）。用于 AirPlay 配对前复现控制通道退役状态。 */
     fun detachCurrentSession() {
-        activeChannel?.let { channel ->
-            activeChannel = null
+        val current =
+            synchronized(channelLock) {
+                activeChannel.also {
+                    activeChannel = null
+                    BtSessionGate.inboundActive = false
+                }
+            }
+        current?.let { channel ->
             channel.close()
             log("BT: 已主动断开当前控制会话（模拟 tunnel handoff 后的退役）")
         }

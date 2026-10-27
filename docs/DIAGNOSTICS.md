@@ -30,6 +30,11 @@ still-redacted recent runtime history.
   events use JSONL schema 1, independently of verbose protocol logs.
 - Source H.264 frames, video transport writes, native PCM chunks and sent audio
   packets are separate evidence. Writes do not prove receiver display or sound.
+- `RECEIVER_DETECTION` and `DETECT` notes contain the local wizard's fixed state,
+  trial/stage, storage status and media/input counters. Private receiver bindings,
+  installation secrets and environment/capability digests are excluded. Counts do
+  not replace the user's picture, sound or input confirmation. See
+  [receiver detection](RECEIVER-AUTODETECT.md).
 - Uncaught stacks and up to five exit records from this app only; an available
   recent crash/ANR trace is capped at 64KB. Other apps' logcat is not read.
 - Default runtime tail: 512KB; journal: two 128KB segments; runtime storage: two
@@ -72,6 +77,7 @@ only a denial is.
 | `UNCAUGHT_EXCEPTION` | Captured stack; worker exception does not necessarily mean process death. |
 | `USER_STOP`, `SUPERSEDED` | Expected user stop or replacement, not a connection defect. |
 | `CONNECTION_INCOMPLETE` | Ended before pairing with no more specific cause; an `EXCEPTION` note carries any stack. |
+| `DETECTION_TIMEOUT` | Explicit receiver detection reached its eight-minute pre-video budget; unobserved capabilities remain unverified. |
 
 A missing END may mean an active session, abrupt termination or truncated records.
 No exit records does not prove no previous exit. Do not attribute an old low-memory

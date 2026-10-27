@@ -95,6 +95,15 @@ processes are included automatically; reopen and export after an unexpected exit
 before reinstalling or clearing app data. No computer or Shizuku is needed, and
 there is no automatic upload. See [diagnostic contents and error codes](docs/DIAGNOSTICS.md).
 
+## Detect and remember a receiver
+
+Select a paired target in **选择设备**, then open **检测当前车机 → 开始检测（含声音）**.
+The wizard uses the normal connection pipeline, shows source/sender/input evidence, and asks you to confirm the actual picture,
+sound and touch before saving local settings. A single optional Bluetooth-stage trial temporarily disconnects that target's
+HFP/A2DP profiles. Cancelled or unsuccessful trials keep the previous configuration; unknown results stay unverified.
+Saved settings are reused for that device, with environment and capability checks. No model list or automatic upload is used.
+Coordinate calibration and configuration import are future work. See [implementation and limits](docs/RECEIVER-AUTODETECT.md).
+
 ## Compatibility fallbacks
 
 Two fallbacks from earlier versions are off by default. They have no vehicle evidence;

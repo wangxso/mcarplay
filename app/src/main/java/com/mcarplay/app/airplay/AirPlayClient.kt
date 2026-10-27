@@ -6,7 +6,11 @@ import com.mcarplay.app.audio.AudioCodec
 import com.mcarplay.app.audio.AudioProfile
 import com.mcarplay.app.audio.AudioSender
 import com.mcarplay.app.audio.AudioTuning
+import com.mcarplay.app.compat.InfoRequest
+import com.mcarplay.app.compat.ReceiverCapabilities
 import com.mcarplay.app.compat.ReceiverCompatibility
+import com.mcarplay.app.compat.ReceiverDetectionRuntime
+import com.mcarplay.app.compat.ReceiverProbePlan
 import com.mcarplay.app.iap2.Iap2Csm
 import com.mcarplay.app.iap2.Iap2MessageIds
 import com.mcarplay.app.iap2.Iap2SenderSession
@@ -58,7 +62,23 @@ class AirPlayClient(
      * （catplay 每 1s force_announce）。
      */
     private val retryTick: ((attempt: Int) -> Unit)? = null,
+    initialInfoRequest: InfoRequest = InfoRequest.GET_EMPTY_PLIST,
+    private val detecting: Boolean = false,
 ) {
+    var negotiatedInfoRequest: InfoRequest = initialInfoRequest
+        private set
+
+    val capabilityDigest: String?
+        get() =
+            ReceiverCapabilities.digest(
+                endpoint.receiverSignals.copy(
+                    features = endpoint.advertisedFeatures ?: endpoint.receiverSignals.features,
+                    srcvers = endpoint.sourceVersion ?: endpoint.receiverSignals.srcvers,
+                ),
+                negotiatedInfo,
+                endpoint.publicKey ?: endpoint.deviceIdentifier,
+            )
+
     /**
      * 当前使用的接收端端点。0x4301 晚到 / mDNS 后上线时由主控热更新；
      * 配对循环每轮重试都重新读取，改动在下一轮即生效。
@@ -72,6 +92,7 @@ class AirPlayClient(
 
     private var socket: Socket? = null
     private var cSeq = 0
+    private val attemptedFallbackPorts = HashSet<String>()
 
     /**
      * 最近一次成功连上接收端时使用的地址（字符串形式，IPv6 链路本地地址带 `%<iface>`）。
@@ -243,6 +264,7 @@ class AirPlayClient(
         val old = endpoint
         val next =
             newEndpoint.copy(
+                observation = newEndpoint.observation ?: old.observation,
                 advertisedFeatures = newEndpoint.advertisedFeatures ?: old.advertisedFeatures,
                 sourceVersion = newEndpoint.sourceVersion ?: old.sourceVersion,
                 receiverSignals =
@@ -255,6 +277,7 @@ class AirPlayClient(
                 old.deviceIdentifier == next.deviceIdentifier
         if (old == next) return false
         endpoint = next
+        capabilityDigest?.let { ReceiverDetectionRuntime.capabilities(next.observation, it, negotiatedInfoRequest) }
         if (unchanged) {
             log(ReceiverCompatibility.describe(receiverCompatibility()))
             return true
@@ -883,13 +906,20 @@ class AirPlayClient(
      * 会话内被拒时再补一次**独立短连接**探测：接收端的 AirPlay 服务通常允许未绑定
      * 会话的 `/info`（能力查询），而活跃会话内的 `/info` 反而常被按 455/403 拒掉。
      */
-    private fun loadInfoWithDiagnostics(): Map<*, *>? {
+    internal fun loadInfoWithDiagnostics(): Map<*, *>? {
         var statusLine = "未请求"
         var body = ByteArray(0)
         try {
             val first = requestInfo()
             statusLine = first.first
             body = first.second
+            // 已缓存的方法只是候选；换固件后可回到 GET。检测只对明确不支持方法的响应试 POST。
+            ReceiverProbePlan.alternativeInfo(negotiatedInfoRequest, statusLine, detecting)?.let { alternativeRequest ->
+                negotiatedInfoRequest = alternativeRequest
+                val alternative = requestInfo(5_000)
+                statusLine = alternative.first
+                body = alternative.second
+            }
             if (!statusLine.contains("200") || body.isEmpty()) {
                 log("AIRPLAY: /info 首次 [$statusLine] body=${body.size}B → 800ms 后重试一次")
                 Thread.sleep(800)
@@ -905,7 +935,7 @@ class AirPlayClient(
             log("AIRPLAY: /info 请求异常 - ${error.javaClass.simpleName}: ${error.message}")
         }
         parseInfoBody(statusLine, body)?.let { return it }
-        scheduleSideProbe()
+        if (!detecting) scheduleSideProbe()
         return null
     }
 
@@ -964,6 +994,7 @@ class AirPlayClient(
         if (info == null) return null
         logInfoSummary(info)
         negotiatedInfo = info
+        capabilityDigest?.let { ReceiverDetectionRuntime.capabilities(endpoint.observation, it, negotiatedInfoRequest) }
         return info
     }
 
@@ -2362,7 +2393,7 @@ class AirPlayClient(
      */
     private fun requestInfo(timeoutMillis: Int = 10_000): Pair<String, ByteArray> =
         request(
-            "GET",
+            if (negotiatedInfoRequest == InfoRequest.GET_EMPTY_PLIST) "GET" else "POST",
             "/info",
             BinaryPlist.encode(linkedMapOf<String, Any?>()),
             timeoutMillis,
@@ -2395,27 +2426,28 @@ class AirPlayClient(
                     failures += "$host（解析失败：${error.message}）"
                     continue
                 }
-            try {
+            for (port in ReceiverProbePlan.ports(target.airPlayPort, target.portIsFallback, detecting)) {
+                if (cancelled) return false
+                if (port != target.airPlayPort && !attemptedFallbackPorts.add("$host:$port")) continue
                 val newSocket = Socket()
-                newSocket.connect(InetSocketAddress(address, target.airPlayPort), timeoutMillis)
-                if (generation != endpointGeneration) {
-                    // 连接途中端点已更新：丢弃这条旧连接，下一轮按新地址重连
+                try {
+                    newSocket.connect(InetSocketAddress(address, port), timeoutMillis)
+                    if (cancelled || generation != endpointGeneration) {
+                        newSocket.close()
+                        return false
+                    }
+                    newSocket.soTimeout = 0
+                    TcpLiveness.configure(newSocket, "控制通道", log)
+                    socket = newSocket
+                    activeAddress = address
+                    activeHost = addressLiteral(address)
+                    if (port != target.airPlayPort) endpoint = endpoint.copy(airPlayPort = port)
+                    log("AIRPLAY: TCP 已连通 $activeHost:$port（本机 ${newSocket.localAddress.hostAddress}）")
+                    return true
+                } catch (error: IOException) {
                     runCatching { newSocket.close() }
-                    return false
+                    failures += "$host:$port（${error.message}）"
                 }
-                // 读由独立读线程负责（阻塞等数据），请求超时由待响应表的 poll 控制；
-                // 这里若留 soTimeout，读线程会周期性收到 SocketTimeoutException 而退出
-                newSocket.soTimeout = 0
-                // 对端健康检查：内核默认 keepalive 要等 2 小时才开始探测，而车机熄火/
-                // 走出热点时链路常不发 RST，读线程会一直挂着（画面冻结、看门狗不触发）。
-                TcpLiveness.configure(newSocket, "控制通道", log)
-                socket = newSocket
-                activeAddress = address
-                activeHost = addressLiteral(address)
-                log("AIRPLAY: TCP 已连通 $activeHost:${target.airPlayPort}（本机 ${newSocket.localAddress.hostAddress}）")
-                return true
-            } catch (error: IOException) {
-                failures += "$host（${error.message}）"
             }
         }
         log(

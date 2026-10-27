@@ -5,6 +5,7 @@ import android.content.Intent
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.AudioCodec
 import com.mcarplay.app.compat.ReceiverCompatibility
+import com.mcarplay.app.compat.ReceiverObservation
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.net.AirPlayFeatures
@@ -20,6 +21,19 @@ import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ReceiverCompatibilityIntegrationTest {
+    @Test
+    fun mdnsRefreshRetainsPrivateBindingAndUpdatesCapabilityFingerprint() {
+        val observation = ReceiverObservation("local-private-binding", 1, 1)
+        val endpoint = endpoint().copy(observation = observation)
+        val client = AirPlayClient(endpoint, log = {})
+        setInfo(client, listOf(format(102, "media", 1L shl 23)))
+        val digest = client.capabilityDigest
+        assertTrue(client.updateEndpoint(endpoint.copy(observation = null, advertisedFeatures = 0), "mDNS refresh"))
+        assertEquals(observation, client.currentEndpoint.observation)
+        assertNotEquals(digest, client.capabilityDigest)
+        client.close()
+    }
+
     private val signals =
         ReceiverProfile.Signals(
             model = "WinPlay",
