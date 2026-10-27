@@ -45,6 +45,14 @@ CarWith `4.0.20-20260923`，小米 CarLife `8.8.4`。
 实测截图（2026 年 10 月 27 日）：WinPlay 1.2.4 显示了 mcarplay 传来的 CarWith 画面。
 这张图只记录截图所示会话的视频输出，不证明音频、触控、连续运行 10 分钟、断线重连或实车兼容性。
 
+### DiPlay 实拍
+
+![Android 平板上的 DiPlay 显示 mcarplay 发送的 CarWith 网易云音乐界面](docs/screenshots/diplay-carwith-photo.jpg)
+
+实拍照片（2026 年 10 月 27 日 22:08）：Android 平板上的 DiPlay 显示了 mcarplay `v0.1.3-test.2`
+代码传来的 CarWith 网易云音乐界面，CarWith 编码为 1920 × 1080、30fps。拍照时音乐处于暂停，
+开始播放后音频正常到达。照片只记录该会话的画面输出，日志细节见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
 ## 已知限制与后续计划
 
 | 项目 | 已知情况 | 后续计划 | 优先级 |
