@@ -212,7 +212,7 @@ internal fun splitAnnexB(data: ByteArray): List<ByteArray> {
     }
 }
 
-private fun annexBStartCodes(data: ByteArray): List<Pair<Int, Int>> {
+internal fun annexBStartCodes(data: ByteArray): List<Pair<Int, Int>> {
     val starts = ArrayList<Pair<Int, Int>>()
     var index = 0
     while (index + 3 <= data.size) {

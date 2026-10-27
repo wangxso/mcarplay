@@ -1,6 +1,8 @@
 package com.mcarplay.app.net
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -8,6 +10,7 @@ import android.net.NetworkRequest
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.SystemClock
+import androidx.annotation.WorkerThread
 import com.mcarplay.app.util.Bg
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -51,10 +54,20 @@ class WifiCarPlayConnector(
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-    private val callback = AtomicReference<ConnectivityManager.NetworkCallback?>(null)
+    private val binding =
+        NetworkBinding<Network, ConnectivityManager.NetworkCallback>(
+            bindProcess = { connectivityManager.bindProcessToNetwork(it) },
+            isUsable = { network ->
+                val live =
+                    runCatching {
+                        connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                    }.getOrDefault(false)
+                if (!live) log("WiFi: 已丢弃失效的网络绑定（$network），下次连接将重新入网")
+                live
+            },
+        )
 
-    val currentNetwork: Network? get() = boundNetwork.get()
-    private val boundNetwork = AtomicReference<Network?>(null)
+    val currentNetwork: Network? get() = binding.current()
 
     /**
      * 应用专属网络被系统断开（热点关闭/离开范围）时回调。会话层据此提示用户；
@@ -68,7 +81,7 @@ class WifiCarPlayConnector(
      * mDNS 发现失败时的兜底路径。
      */
     fun gatewayAddress(): String? {
-        val network = boundNetwork.get() ?: return null
+        val network = currentNetwork ?: return null
         return try {
             connectivityManager
                 .getLinkProperties(network)
@@ -87,7 +100,7 @@ class WifiCarPlayConnector(
      * mDNS 会跨网发现电脑的 AirPlay 接收器——非本网段地址一律不是车机。
      */
     fun localIpv4Address(): String? {
-        val network = boundNetwork.get() ?: return null
+        val network = currentNetwork ?: return null
         return try {
             connectivityManager
                 .getLinkProperties(network)
@@ -101,25 +114,55 @@ class WifiCarPlayConnector(
     }
 
     /**
-     * The currently connected Wi-Fi SSID, including Same-LAN networks that are
-     * not the active network because cellular still carries Internet traffic.
+     * Reads existing Wi-Fi identities without requesting another connection.
+     * Android 12+ always redacts SSIDs from synchronous getNetworkCapabilities;
+     * location permission plus FLAG_INCLUDE_LOCATION_INFO are required here.
      */
-    fun currentWifiSsid(): String? =
-        try {
-            connectivityManager.allNetworks.firstNotNullOfOrNull { network ->
-                val capabilities = connectivityManager.getNetworkCapabilities(network)
-                if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true) {
-                    null
-                } else {
-                    WifiIdentity.normalizeSsid((capabilities.transportInfo as? WifiInfo)?.ssid)
+    @WorkerThread
+    fun currentWifiSsid(): String? {
+        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return null
+        val result = AtomicReference<String?>(null)
+        val latch = CountDownLatch(1)
+        val observer =
+            object : ConnectivityManager.NetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    capabilities: NetworkCapabilities,
+                ) {
+                    val ssid = WifiIdentity.normalizeSsid((capabilities.transportInfo as? WifiInfo)?.ssid) ?: return
+                    if (result.compareAndSet(null, ssid)) latch.countDown()
                 }
             }
+        val request =
+            NetworkRequest
+                .Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+        return try {
+            connectivityManager.registerNetworkCallback(request, observer)
+            latch.await(1_000, TimeUnit.MILLISECONDS)
+            result.get()
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
         } catch (_: Exception) {
             null
+        } finally {
+            runCatching { connectivityManager.unregisterNetworkCallback(observer) }
         }
+    }
 
     /** Match a live system Wi-Fi without opening the specifier confirmation dialog. */
     fun isConnectedTo(ssid: String): Boolean = WifiIdentity.matches(ssid, currentWifiSsid())
+
+    /** Availability only; does not infer the identity of a Wi-Fi whose SSID is redacted. */
+    fun hasExistingWifi(): Boolean =
+        runCatching {
+            connectivityManager.allNetworks.any {
+                connectivityManager.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            }
+        }.getOrDefault(false)
 
     /**
      * 本机在当前绑定网络上的全部 IPv6 地址。
@@ -128,7 +171,7 @@ class WifiCarPlayConnector(
      * 旧过滤只按 IPv4 前缀判定，会把车机本身也当成「非本网段」丢掉（2026-10-19）。
      */
     fun localIpv6Addresses(): List<String> {
-        val network = boundNetwork.get() ?: return emptyList()
+        val network = currentNetwork ?: return emptyList()
         return try {
             connectivityManager
                 .getLinkProperties(network)
@@ -163,6 +206,8 @@ class WifiCarPlayConnector(
         quickFallback: (() -> Network?)? = null,
         /** 重发窗也无回调后的深度兜底（connect-network，10s 量级——本轮窗口已过，为下一轮省时间）。 */
         deepFallback: (() -> Network?)? = null,
+        /** 参数为请求发出时刻（uptimeMillis）；返回 true 表示系统选择框正等用户选择。 */
+        userChoicePending: ((Long) -> Boolean)? = null,
     ): JoinResult {
         val specifier =
             buildSpecifier(ssid, passphrase, securityType)
@@ -187,12 +232,14 @@ class WifiCarPlayConnector(
         //     已过，价值是让手机先挂上热点，下一轮（车机 0.17s 即重连 BT）走「已连着」近路。
         // 旧 20s 首窗的教训：第 1 轮首窗没走完车机就拆链（15.2s），排在首窗**之后**的
         // 任何兜底都轮不到执行；第 2 轮 20s+1.6s=21.6s 入网时 7000 端口已拒绝连接。
-        // 已知代价：首次连接的系统授权弹窗若被用户攥过 5s，本轮请求会被撤回重发、
-        // 弹窗重出一次——一次性 UX 代价，远小于整车连接失败。
+        // 系统选择框正在等用户时不按首窗撤回：挂起形态没有选择框，重发才有意义；框在屏
+        // 时重发只会撤掉用户正在看的框（提示「该应用已取消选择设备的请求」）再弹一次，
+        // 2026-10-27 小米实测。此时首窗延长到用户选择或关闭框，最长 timeoutMillis。
         val firstWindowMs = minOf(timeoutMillis, 5_000L)
         val secondWindowMs = minOf(timeoutMillis - firstWindowMs, 20_000L).coerceAtLeast(0)
         val unavailable = AtomicBoolean(false)
-        var network = requestAndAwait(ssid, request, firstWindowMs, isCancelled, unavailable)
+        var network =
+            requestAndAwait(ssid, request, firstWindowMs, isCancelled, unavailable, userChoicePending, timeoutMillis)
         // 系统明确拒绝（onUnavailable：用户拒了授权框/热点不在范围）后重发无意义，
         // 只会再拒一次——与挂起（零回调）必须区分开。
         if (network == null && !isCancelled() && !unavailable.get() && secondWindowMs > 0) {
@@ -235,27 +282,36 @@ class WifiCarPlayConnector(
         timeoutMillis: Long,
         isCancelled: () -> Boolean,
         unavailable: AtomicBoolean,
+        userChoicePending: ((Long) -> Boolean)? = null,
+        holdLimitMillis: Long = timeoutMillis,
     ): Network? {
         val latch = CountDownLatch(1)
         val result = AtomicReference<Network?>(null)
         val newCallback =
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    val bound = connectivityManager.bindProcessToNetwork(network)
-                    boundNetwork.set(network)
+                    if (!binding.bind(this, network)) {
+                        if (binding.isCurrent(this)) {
+                            log("WiFi: 应用专属网络绑定失败（$network），网络可能已失效")
+                            unavailable.set(true)
+                            latch.countDown()
+                        }
+                        return
+                    }
                     result.set(network)
-                    log("WiFi: 已加入应用专属网络 \"$ssid\"（$network bindProcessToNetwork=$bound）——不影响其它应用联网")
+                    log("WiFi: 已加入应用专属网络 \"$ssid\"（$network bindProcessToNetwork=true）——不影响其它应用联网")
                     latch.countDown()
                 }
 
                 override fun onUnavailable() {
+                    if (!binding.isCurrent(this)) return
+                    unavailable.set(true)
                     log("WiFi: 系统未允许加入 \"$ssid\"（用户拒绝或热点不在范围内）")
                     latch.countDown()
                 }
 
                 override fun onLost(network: Network) {
-                    if (boundNetwork.compareAndSet(network, null)) {
-                        connectivityManager.bindProcessToNetwork(null)
+                    if (binding.lost(this, network)) {
                         log("WiFi: 应用专属网络 \"$ssid\" 已断开（$network）")
                         onNetworkLost?.invoke(ssid)
                     }
@@ -263,21 +319,34 @@ class WifiCarPlayConnector(
             }
         // 先撤上一任回调：快速兜底的 bindCurrentWifi 与本请求共用 callback 槽位，
         // 直接覆盖会让旧 callback 滞留在 ConnectivityManager 里直到 disconnect。
-        callback.getAndSet(null)?.let {
+        binding.replaceRequest(newCallback)?.let {
             runCatching { connectivityManager.unregisterNetworkCallback(it) }
         }
-        callback.set(newCallback)
+        val requestedAt = SystemClock.uptimeMillis()
         val accepted =
             try {
                 connectivityManager.requestNetwork(request, newCallback)
+                if (!binding.isCurrent(newCallback)) {
+                    runCatching { connectivityManager.unregisterNetworkCallback(newCallback) }
+                    return null
+                }
                 true
             } catch (error: Exception) {
                 log("WiFi: 发起应用专属网络请求失败（${error.message}）——可能需要位置权限或系统不支持")
                 false
             }
         if (!accepted) return null
-        val deadline = SystemClock.uptimeMillis() + timeoutMillis
-        while (SystemClock.uptimeMillis() < deadline) {
+        val deadline = requestedAt + timeoutMillis
+        val holdDeadline = requestedAt + maxOf(timeoutMillis, holdLimitMillis)
+        var holdLogged = false
+        while (true) {
+            val now = SystemClock.uptimeMillis()
+            val holding = userChoicePending?.invoke(requestedAt) == true
+            if (!shouldKeepWaiting(now, deadline, holdDeadline, holding)) break
+            if (holding && now >= deadline && !holdLogged) {
+                holdLogged = true
+                log("WiFi: 系统选择框正等待用户选择——继续等待，不撤回重发")
+            }
             if (isCancelled()) return null
             try {
                 if (latch.await(200, TimeUnit.MILLISECONDS)) break
@@ -285,7 +354,7 @@ class WifiCarPlayConnector(
                 return null
             }
         }
-        return result.get()
+        return result.get()?.takeIf { it == currentNetwork }
     }
 
     /** 构造 specifier；WEP 或参数不合法返回 null（走旧路径）。 */
@@ -352,7 +421,7 @@ class WifiCarPlayConnector(
             java.util.concurrent.atomic
                 .AtomicBoolean(false)
         val newCallback =
-            object : ConnectivityManager.NetworkCallback() {
+            object : ConnectivityManager.NetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
                 override fun onAvailable(network: Network) {
                     tryBind(network)
                 }
@@ -365,18 +434,18 @@ class WifiCarPlayConnector(
                 }
 
                 override fun onUnavailable() {
+                    if (!binding.isCurrent(this)) return
                     log("WiFi: 没有可用的WiFi连接——请先在系统设置里加入接收端热点")
                     if (reported.compareAndSet(false, true)) onResult(false)
                 }
 
                 override fun onLost(network: Network) {
-                    if (boundNetwork.compareAndSet(network, null)) {
+                    if (binding.lost(this, network)) {
                         // 熄火/离开范围：解绑进程网络，否则所有 socket 继续指向死网络；
                         // 并通知会话层（英雄卡不能停在「已连接」）。
                         // 与 specifier 路径同语义：兜底入网（bindCurrentWifi）是奥迪 3315
                         // 的主路径，不转发 onLost 会停在假「已连接」拖到心跳超时才死
                         // （2026-10-23 审阅定谳）。
-                        connectivityManager.bindProcessToNetwork(null)
                         log("WiFi: 绑定的 WiFi 网络已断开（$network）")
                         ssidHint?.let { onNetworkLost?.invoke(it) }
                     }
@@ -387,7 +456,7 @@ class WifiCarPlayConnector(
                     capabilities: NetworkCapabilities? =
                         connectivityManager.getNetworkCapabilities(network),
                 ) {
-                    if (reported.get()) return
+                    if (reported.get() || !binding.isCurrent(this)) return
                     if (expectedSsid != null) {
                         val actual =
                             WifiIdentity.normalizeSsid(
@@ -395,8 +464,7 @@ class WifiCarPlayConnector(
                             )
                         if (!WifiIdentity.matches(expectedSsid, actual)) return
                     }
-                    boundNetwork.set(network)
-                    val bound = connectivityManager.bindProcessToNetwork(network)
+                    val bound = binding.bind(this, network)
                     log(
                         "WiFi: 已绑定现有WiFi网络 $network " +
                             "ssid=${expectedSsid ?: "unknown"} bindProcessToNetwork=$bound",
@@ -404,8 +472,14 @@ class WifiCarPlayConnector(
                     if (bound && reported.compareAndSet(false, true)) onResult(true)
                 }
             }
-        callback.set(newCallback)
+        binding.replaceRequest(newCallback)?.let {
+            runCatching { connectivityManager.unregisterNetworkCallback(it) }
+        }
         connectivityManager.requestNetwork(request, newCallback)
+        if (!binding.isCurrent(newCallback)) {
+            runCatching { connectivityManager.unregisterNetworkCallback(newCallback) }
+            return
+        }
         // 提示性看门狗（**不决定成败**）：requestNetwork 在「手机尚未连上 WiFi」时
         // 会一直挂起，等系统关联+DCHP 完成才回调 onAvailable——实测用户手动加入
         // 热点时可达 10s+。这里只在 5s 时给用户一句指引，超时判定由调用方的
@@ -416,19 +490,37 @@ class WifiCarPlayConnector(
             } catch (_: InterruptedException) {
                 return@run
             }
-            if (!reported.get()) {
+            if (!reported.get() && binding.isCurrent(newCallback)) {
                 log("WiFi: 5 秒尚未绑定（手机可能还没连上热点）——请到 设置>WLAN 加入接收端热点，加入后本轮绑定会自动完成")
             }
         }
     }
 
     fun release() {
-        callback.getAndSet(null)?.let {
+        binding.replaceRequest(null)?.let {
             runCatching { connectivityManager.unregisterNetworkCallback(it) }
         }
-        if (boundNetwork.getAndSet(null) != null) {
-            connectivityManager.bindProcessToNetwork(null)
-        }
+    }
+
+    companion object {
+        /** 窗口内继续等；窗口已过但选择框仍在等用户时，等到 [holdDeadline]。 */
+        internal fun shouldKeepWaiting(
+            now: Long,
+            deadline: Long,
+            holdDeadline: Long,
+            userChoicePending: Boolean,
+        ): Boolean = now < deadline || (userChoicePending && now < holdDeadline)
+
+        /**
+         * 系统选择框是浮窗：它只让本应用 onPause、界面仍可见（不 onStop）。按 Home、切换应用、
+         * 锁屏都会 onStop，此时不能延长首窗，否则挂起无框时的快速兜底被推迟到总超时。
+         * 请求发出前已离开本应用同样无法区分，按原 5 秒首窗处理。
+         */
+        internal fun isUserChoicePending(
+            uiPausedAtMs: Long?,
+            uiStopped: Boolean,
+            requestedAtMs: Long,
+        ): Boolean = !uiStopped && uiPausedAtMs != null && uiPausedAtMs >= requestedAtMs
     }
 }
 

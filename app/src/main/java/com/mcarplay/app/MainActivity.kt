@@ -551,8 +551,43 @@ class MainActivity : AppCompatActivity() {
         projectionLauncher.launch(manager.createScreenCaptureIntent())
     }
 
-    /** 「启动连接」主体（权限检查留在这里；会话启动交给 [SessionController]，幂等不双开）。 */
+    /**
+     * CarWith 入口在 RECORD 之后、应用多半已在后台时才打开：小米未允许「后台弹出界面」时
+     * 会被静默拒绝（7240 一直 ECONNREFUSED），故连接前先提示授权，用户仍可选择继续。
+     */
     private fun startConnectionNow() {
+        runOnUiThread {
+            if (CarLifeLauncher.isAvailable(this) && CarLifeLauncher.backgroundStartAllowed(this) == false) {
+                log("CARLIFE: 未允许「后台弹出界面」，CarPlay 会话建立后可能无法打开 CarWith 入口")
+                showBackgroundStartGuidance()
+            } else {
+                startConnectionUnchecked()
+            }
+        }
+    }
+
+    private fun showBackgroundStartGuidance() {
+        DarkMessageDialog.show(
+            activity = this,
+            title = "需要允许「后台弹出界面」",
+            message =
+                "CarPlay 会话建立时 mcarplay 通常已在系统 WLAN 设置之后，" +
+                    "此时需要从后台打开 CarWith。小米未授权时系统会静默拒绝，车机将没有画面。\n\n" +
+                    "请在权限页把「后台弹出界面」设为允许，返回后重新点「启动连接」。",
+            actions =
+                listOf(
+                    DarkMessageDialog.Action("仍然连接") { startConnectionUnchecked() },
+                    DarkMessageDialog.Action("去授权", DarkMessageDialog.Emphasis.PRIMARY) {
+                        if (!CarLifeLauncher.openBackgroundStartSettings(this)) {
+                            log("CARLIFE: 无法打开权限页，请到 设置 → 应用 → mcarplay → 权限 手动开启")
+                        }
+                    },
+                ),
+        )
+    }
+
+    /** 「启动连接」主体（权限检查留在这里；会话启动交给 [SessionController]，幂等不双开）。 */
+    private fun startConnectionUnchecked() {
         runOnUiThread {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) !=
                 PackageManager.PERMISSION_GRANTED
@@ -2450,6 +2485,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        SessionController.onMainUiVisibilityChanged(true)
         mainHandler.post(heroTick)
         // 旋转/重建后尚未接受：用原截止时刻续弹（不重新等 10 秒）
         if (needsDisclaimerAtLaunch(
@@ -2591,7 +2627,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        SessionController.onMainUiVisibilityChanged(false)
         mainHandler.removeCallbacks(heroTick)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        SessionController.onMainUiStopped()
     }
 
     override fun onDestroy() {

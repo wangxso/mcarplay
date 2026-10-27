@@ -1,0 +1,73 @@
+#!/bin/sh
+# mcarplay pre-commit hook: run the CI checks that apply to the staged files.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Skip one commit:         git commit --no-verify     (or MCARPLAY_SKIP_HOOKS=1 git commit)
+# Skip only unit tests:    MCARPLAY_HOOK_SKIP_TESTS=1 git commit
+#
+# Gradle and Python check the working tree, so unstaged edits are checked as well.
+set -eu
+
+if [ "${MCARPLAY_SKIP_HOOKS:-0}" = 1 ]; then
+    echo "pre-commit: skipped (MCARPLAY_SKIP_HOOKS=1)"
+    exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+fail() {
+    echo "pre-commit: $1" >&2
+    echo "pre-commit: bypass only if you are sure: git commit --no-verify" >&2
+    exit 1
+}
+
+# 1. Signing material, local configuration and vehicle replay fixtures never belong in Git, even with `git add -f`.
+blocked=$(printf '%s\n' "$staged" | grep -E \
+    -e '(^|/)(local\.properties|keystore\.properties|\.env(\.[^/]*)?)$' \
+    -e '\.(jks|keystore|p12|pfx|key|pem|apk|aab|apks|h264|pcap|pcapng)$' \
+    -e '^app/src/test/resources/carplay/fixtures/[^/]*\.jsonl$' || true)
+if [ -n "$blocked" ]; then
+    printf '%s\n' "$blocked" | sed 's/^/  /' >&2
+    fail "these files must not be committed; unstage them with: git restore --staged <file>"
+fi
+
+# tools/prepare_upload.py lists the PEM markers it scans for, so it is excluded here.
+if git diff --cached -U0 -- . ':(exclude)tools/prepare_upload.py' | grep -E -q '^\+.*-----BEGIN [A-Z ]*PRIVATE KEY-----'; then
+    fail "a staged change adds a PEM private key"
+fi
+
+# 2. Decide which checks the staged paths need. Documentation-only commits skip both, as CI does.
+run_gradle=false
+run_python=false
+for path in $staged; do
+    case "$path" in
+        app/* | gradle/* | *.gradle.kts | gradle.properties | gradlew | .editorconfig) run_gradle=true ;;
+        tools/*) run_python=true ;;
+    esac
+done
+
+if [ "$run_python" = true ]; then
+    python=python3
+    [ -x .venv/bin/python ] && python=.venv/bin/python
+    echo "pre-commit: Python tool tests ($python)"
+    "$python" -m unittest discover -s tools -p 'test_*.py' -q ||
+        fail "Python tool tests failed (set up .venv with: python3 -m pip install -r tools/requirements.txt)"
+fi
+
+if [ "$run_gradle" = true ]; then
+    tasks="spotlessCheck :app:lintStandardDebug"
+    if [ "${MCARPLAY_HOOK_SKIP_TESTS:-0}" = 1 ]; then
+        echo "pre-commit: unit tests skipped (MCARPLAY_HOOK_SKIP_TESTS=1)"
+    else
+        tasks="$tasks :app:testStandardDebugUnitTest"
+    fi
+    echo "pre-commit: ./gradlew $tasks"
+    # shellcheck disable=SC2086 # tasks are intentionally split into separate arguments
+    ./gradlew --quiet $tasks ||
+        fail "Gradle checks failed (formatting: ./gradlew spotlessApply; reports: app/build/reports/)"
+fi
+
+exit 0

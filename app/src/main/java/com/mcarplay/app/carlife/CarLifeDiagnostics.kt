@@ -36,7 +36,10 @@ object CarLifeDiagnostics {
                     }
                 },
                 onEnded = { reason ->
-                    attempt?.let { ConnectionDiagnostics.selfTest.finish(it, DiagnosticCode.CARWITH_FAILED, true, reason) }
+                    attempt?.let {
+                        val code = created?.endDiagnosticCode ?: DiagnosticCode.CARWITH_FAILED
+                        ConnectionDiagnostics.selfTest.finish(it, code, true, reason)
+                    }
                     log("CARLIFE: 自检结束 - $reason")
                     created?.let {
                         SessionController.releaseCarLifeSession(it)

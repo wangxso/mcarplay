@@ -1,6 +1,7 @@
 package com.mcarplay.app.carlife
 
 import android.app.Application
+import com.mcarplay.app.diagnostics.DiagnosticCode
 import java.io.EOFException
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
@@ -22,6 +23,7 @@ class CarLifeSession(
     private val onEnded: (String) -> Unit,
     private val log: (String) -> Unit,
     private val launchStrategy: CarLifeLaunchStrategy = CarLifeLaunchStrategy.EXPORTED_ENTRY,
+    private val isAppInForeground: () -> Boolean = CarLifeLauncher::isAppInForeground,
     private val connectorFactory: (String, (Int) -> Socket) -> CarLifeChannelConnector =
         { _, connect ->
             CarLifeChannelConnector(connect, log = log)
@@ -47,6 +49,19 @@ class CarLifeSession(
 
     @Volatile
     private var connector: CarLifeChannelConnector? = null
+
+    /** 入口请求发出时本应用不在前台；七口超时时据此提示系统可能拦截了入口。 */
+    @Volatile
+    var entryLaunchedInBackground: Boolean = false
+        private set
+
+    /** 七口等待超时且入口是在后台发起的：诊断按 CARWITH_ENTRY_BLOCKED 归类。 */
+    @Volatile
+    var entryBlockedSuspected: Boolean = false
+        private set
+
+    val endDiagnosticCode: DiagnosticCode
+        get() = if (entryBlockedSuspected) DiagnosticCode.CARWITH_ENTRY_BLOCKED else DiagnosticCode.CARWITH_FAILED
 
     @Volatile
     var videoWidth: Int = CarLifeProtocol.DEFAULT_WIDTH
@@ -77,11 +92,15 @@ class CarLifeSession(
             return false
         }
         if (launchStrategy == CarLifeLaunchStrategy.EXPORTED_ENTRY) {
+            entryLaunchedInBackground = !isAppInForeground()
             if (!CarLifeLauncher.launchPublicEntry(appContext)) {
                 fail("当前 CarWith 版本不允许打开兼容入口，请检查 CarWith 设置")
                 return false
             }
             log("CARLIFE: 已通过应用 Intent 请求 CarWith 公开入口，等待七路端口")
+            if (entryLaunchedInBackground) {
+                log("CARLIFE: 本应用当前不在前台，系统可能拦截 CarWith 入口（小米需允许「后台弹出界面」）")
+            }
         } else {
             log("CARLIFE: 附着已有 CarWith 会话，等待七路端口")
         }
@@ -150,7 +169,10 @@ class CarLifeSession(
             startChannelReader(CarLifeChannel.DATA)
             readCommandLoop(activeConnector)
         } catch (error: Exception) {
-            if (running.get()) fail("CarLife 客户端失败：${error.message ?: error.javaClass.simpleName}")
+            if (running.get()) {
+                entryBlockedSuspected = isEntryBlockedSuspected(error, entryLaunchedInBackground)
+                fail(clientFailureMessage(error, entryBlockedSuspected))
+            }
         } finally {
             // A peer close is already reported by the channel reader. Only
             // report an unexpected return from the command loop here.
@@ -413,7 +435,26 @@ class CarLifeSession(
         stop()
     }
 
-    private companion object {
+    internal companion object {
+        const val ENTRY_BLOCKED_HINT = "CarWith 入口在后台发起，可能被系统拦截"
+
+        fun isEntryBlockedSuspected(
+            error: Exception,
+            launchedInBackground: Boolean,
+        ): Boolean = launchedInBackground && error is CarLifeListenerTimeoutException
+
+        fun clientFailureMessage(
+            error: Exception,
+            entryBlockedSuspected: Boolean,
+        ): String {
+            val base = "CarLife 客户端失败：${error.message ?: error.javaClass.simpleName}"
+            return if (entryBlockedSuspected) {
+                "$ENTRY_BLOCKED_HINT（小米需允许「后台弹出界面」，或保持 mcarplay 在前台后重连）；$base"
+            } else {
+                base
+            }
+        }
+
         const val CONNECT_TIMEOUT_MS = 800
         const val LISTENER_WAIT_MS = 25_000L
         const val VIDEO_HEARTBEAT_INTERVAL_MS = 1_000L

@@ -65,6 +65,7 @@ only a denial is.
 | `PAIRING_FAILED` | AirPlay pairing responses and receiver state. |
 | `SETUP_FAILED` | SETUP status and advertised capabilities. |
 | `CARWITH_FAILED` | Component versions, entry, original permissions, handshake and source video. |
+| `CARWITH_ENTRY_BLOCKED` | CarWith's seven listeners never appeared and the entry was requested while mcarplay was not in the foreground. Android/MIUI can drop such a background activity start without an error; on Xiaomi allow "Display pop-up windows while running in the background" (后台弹出界面) or keep mcarplay in front, then reconnect. When the Xiaomi permission is denied, mcarplay offers a shortcut to it before connecting. |
 | `CARWITH_BUSY` | Stop the standalone self-test before starting a formal CarPlay connection. |
 | `VIDEO_CLOSED` | Transport ended. Status `stopped` after frames were sent (normal end, e.g. receiver off); `failed` if none were sent. Reset/broken pipe alone does not establish receiver crash. |
 | `AUDIO_UNAVAILABLE` | Audio setup failed; video may continue. Inspect format and input/output counts. |
@@ -76,6 +77,8 @@ A missing END may mean an active session, abrupt termination or truncated record
 No exit records does not prove no previous exit. Do not attribute an old low-memory
 record to a later reset without matching timestamps and receiver-side evidence.
 Local car Wi-Fi without Internet validation is not by itself a connection failure.
+Repeated `ENONET` with an active Wi-Fi and `network.bound=unknown` calls for checking
+an expired process network binding before treating it as an AirPlay pairing defect.
 An uncaught exception is associated with the active attempt at capture time; this
 does not prove that attempt created the failing thread. Inspect the stack and timing.
 

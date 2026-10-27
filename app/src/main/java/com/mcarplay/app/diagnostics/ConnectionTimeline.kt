@@ -31,6 +31,7 @@ enum class DiagnosticCode(
     PAIRING_FAILED("未完成 AirPlay 配对，请检查接收端提示，必要时重启接收端后重试"),
     SETUP_FAILED("CarPlay 会话未建立，请提供诊断报告核对接收端响应"),
     CARWITH_FAILED("CarWith 未完成出流，请检查组件版本、原厂连接开关和授权"),
+    CARWITH_ENTRY_BLOCKED("应用在后台时未能打开 CarWith 入口；小米请在应用权限中允许「后台弹出界面」，或保持 mcarplay 在前台后重连"),
     CARWITH_BUSY("CarWith 正被独立自检占用，请先停止自检，再启动 CarPlay 连接"),
     VIDEO_CLOSED("视频连接已结束；仅凭此不能确认接收端崩溃，请检查网络和接收端"),
     AUDIO_UNAVAILABLE("音频未能启用，画面可以继续；请提供报告核对音频协商"),

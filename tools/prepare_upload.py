@@ -14,7 +14,7 @@ ROOT_FILES = {
     "README.md", "README.zh-CN.md", "CHANGELOG.md", "DISCLAIMER.md", "THIRD_PARTY_NOTICES.md",
     "IMPLEMENTATION_PLAN.md", "build.gradle.kts",
     "settings.gradle.kts", "gradle.properties", "gradlew", "gradlew.bat",
-    "keystore.properties.example", "app/build.gradle.kts", "app/lint-baseline.xml",
+    "keystore.properties.example", ".githooks/pre-commit", "app/build.gradle.kts", "app/lint-baseline.xml",
     "gradle/wrapper/gradle-wrapper.jar",
 }
 SOURCE_TREES = (".github", "app/src", "gradle", "tools", "docs")

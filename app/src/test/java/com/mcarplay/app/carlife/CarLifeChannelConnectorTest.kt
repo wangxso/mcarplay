@@ -58,7 +58,8 @@ class CarLifeChannelConnectorTest {
                 sleep = { now += 2 },
                 nowMs = { now },
             )
-        assertThrows(IOException::class.java) {
+        // 超时有独立类型，会话据此区分“入口可能被拦截”与取消/其他失败。
+        assertThrows(CarLifeListenerTimeoutException::class.java) {
             connector.connectAll(timeoutMs = 3, retryDelayMs = 1)
         }
         connector.close()
