@@ -70,14 +70,15 @@ private fun resolveBluetoothMac(
 ): String {
     val cached = DeviceIdentity.cachedBluetoothMac()
     if (cached != null) return cached
-    val mac = DeviceIdentity.bluetoothMac(context, forceRetry = true)
+    val resolved = DeviceIdentity.resolve(context, forceRetry = true)
+    val mac = resolved.mac
     if (mac == DeviceIdentity.PLACEHOLDER_MAC) {
         log(
             "BT: ⚠ 未能解析真实蓝牙 MAC（仍是占位值）——车机会校验 0x4300 的传输标识，" +
-                "占位值可能导致它不下发 0x4301。请确认 Shizuku 已启动并已授权",
+                "占位值可能导致它不下发 0x4301。请启动 Shizuku 或在「本机蓝牙地址」中手动填写",
         )
     } else {
-        log("BT: 本机蓝牙 MAC=$mac（0x4300/0x4E0E 与 ctrl 广播 TXT id 同源）")
+        log("BT: 本机蓝牙 MAC=$mac 来源=${DeviceIdentity.sourceLabel(resolved.source)}（0x4300/0x4E0E 与 ctrl 广播 TXT id 同源）")
     }
     return mac
 }

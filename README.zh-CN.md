@@ -80,8 +80,10 @@ Android 17，CarWith `4.0.20-20260923`，小米 CarLife `8.8.5`（早期 DiPlay 
    启动本机 CarWith 会话前，先断开其他 CarLife 接收端。
 
 CarWith 原生画面、音频和触控使用普通应用 Intent 和本机套接字，无需 root 或 Shizuku。
-WinPlay 1.2.4、1.2.5 等接收端还会校验手机的真实蓝牙身份；ROM 限制读取时，这一步需要
-[Shizuku](https://shizuku.rikka.app/)。可选显示、启动器辅助功能也可能使用它。
+WinPlay 1.2.4、1.2.5 等接收端还会校验手机的真实蓝牙身份，而 Android 不允许普通应用直接读取：
+启动 [Shizuku](https://shizuku.rikka.app/) 后 mcarplay 会自动读取并保存；不用 Shizuku 时，
+在主界面「本机蓝牙地址」中填入手机设置里查到的蓝牙地址。Shizuku 实时读取优先于手动填写。
+可选显示、启动器辅助功能也可能使用 Shizuku。
 接收端能力、蓝牙交接、配对降级和音频记忆遵循[接收端兼容设计](docs/RECEIVER-COMPATIBILITY.md)。
 其中的策略矩阵描述实现与证据边界，不是设备支持清单。
 覆盖安装后若配对停住，可重启测试接收端清理旧会话，再重新连接。

@@ -90,8 +90,11 @@ with the phone, CarWith version, receiver and vehicle.
 
 CarWith's native video, audio and touch use ordinary application intents and local
 sockets without root or Shizuku. Some receivers, including WinPlay 1.2.4 and 1.2.5, also check
-the phone's real Bluetooth identity; on ROMs that restrict access, this step needs
-[Shizuku](https://shizuku.rikka.app/). Optional display/launcher utilities may also use it.
+the phone's real Bluetooth identity. Android does not let ordinary apps read it: with
+[Shizuku](https://shizuku.rikka.app/) running, mcarplay reads and remembers it; without
+Shizuku, enter the address from the phone's settings under **本机蓝牙地址** on the main
+screen. A live Shizuku read takes precedence over a typed address. Optional display/launcher
+utilities may also use Shizuku.
 Receiver capabilities, Bluetooth handoff, pairing fallback and audio memory follow
 the [receiver compatibility design](docs/RECEIVER-COMPATIBILITY.md). Its policy matrix
 describes implementation and evidence boundaries, not a device support list.

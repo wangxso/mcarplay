@@ -16,6 +16,7 @@ import com.mcarplay.app.BuildConfig
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.util.DebugFileLog
+import com.mcarplay.app.util.DeviceIdentity
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
@@ -152,6 +153,8 @@ object SupportReport {
             put("system.uptimeMs", SystemClock.elapsedRealtime().toString())
             put("carwith.version", packageVersion(context, CarLifeLauncher.CARWITH_PACKAGE))
             put("carlife.version", packageVersion(context, CarLifeLauncher.CARLIFE_PACKAGE))
+            // 只记来源（Shizuku/系统设置/手动/已保存/未获取），不记地址本身
+            put("bluetooth.identitySource", value { DeviceIdentity.peek(context).source.name })
             put(
                 "carwith.entry",
                 value {
