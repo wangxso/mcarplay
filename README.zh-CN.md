@@ -24,12 +24,13 @@ CarWith。车机显示的是 CarWith 界面。
 
 | 能力 | 验证结果 |
 | --- | --- |
-| 原生视频 | DiPlay 显示 1280 × 720，约 20fps |
+| 原生视频 | CarWith 按接收端宽高比编码（长边最多 1920），实测 1920 × 1080 与 1280 × 720、30fps；早期 DiPlay 测试实测送达约 20fps |
 | WinPlay 1.2.5 | 默认设置下画面、触控和音乐到达接收端；WinPlay 释放蓝牙后会话持续约 25 分钟；手动断开及手动断网后均能重连 |
 | WinPlay 1.2.4 | 短时实测出画面和声音 |
-| 接收端触控 | 已验证页面切换 |
+| 接收端触控 | 已在 DiPlay 和 WinPlay 1.2.5 上验证点击与页面切换 |
+| 接收端媒体键 | 上一曲／下一曲转发给 CarWith；尚未实机验证 |
 | 原生音乐 | 44.1kHz PCM 转 48kHz AAC-LC，用户确认声音、音调和速度正常 |
-| 音视频同时运行 | 连续约 6 分 36 秒，无音频丢包、欠载或写入错误 |
+| 音视频同时运行 | WinPlay 1.2.5 上带音乐运行约 25 分钟；DiPlay 上连续约 6 分 36 秒，无音频丢包、欠载或写入错误 |
 | mcarplay CarWith 桥接的实车适配 | 尚待验证 |
 | 导航提示 | 日志显示 CarWith 导航语音已到达 WinPlay 1.2.5；听感及打断音乐的效果未单独验证 |
 | 暂停恢复、超过 25 分钟的运行 | 仍需专项验收 |
@@ -74,11 +75,12 @@ Android 17，CarWith `4.0.20-20260923`，小米 CarLife `8.8.5`（早期 DiPlay 
 3. 与无线 CarPlay 接收端完成蓝牙配对，按接收端流程连接 Wi-Fi / 热点，
    在 mcarplay 中选择目标设备并启动连接。
 4. 按需开启声音。mcarplay 的 CarWith 原生音频无需额外录屏授权。
-5. 桌面测试可用另一台 Android 设备运行 [DiPlay](https://github.com/shihabal3amri/DiPlay)。
+5. 桌面测试可用另一台 Android 设备运行 [DiPlay](https://github.com/shihabal3amri/DiPlay)，
+   或在 Windows 电脑上运行 [WinPlay](https://github.com/Roylyl/WinPlay)。
    启动本机 CarWith 会话前，先断开其他 CarLife 接收端。
 
 CarWith 原生画面、音频和触控使用普通应用 Intent 和本机套接字，无需 root 或 Shizuku。
-WinPlay 1.2.4 等接收端还会校验手机的真实蓝牙身份；ROM 限制读取时，这一步需要
+WinPlay 1.2.4、1.2.5 等接收端还会校验手机的真实蓝牙身份；ROM 限制读取时，这一步需要
 [Shizuku](https://shizuku.rikka.app/)。可选显示、启动器辅助功能也可能使用它。
 接收端能力、蓝牙交接、配对降级和音频记忆遵循[接收端兼容设计](docs/RECEIVER-COMPATIBILITY.md)。
 其中的策略矩阵描述实现与证据边界，不是设备支持清单。

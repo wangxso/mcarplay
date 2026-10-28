@@ -26,12 +26,13 @@ October 27, 2026.
 
 | Capability | Validation |
 | --- | --- |
-| Native video | 1280 x 720, approximately 20 fps on DiPlay |
+| Native video | CarWith encodes at the receiver's aspect ratio (long side up to 1920); observed 1920 x 1080 and 1280 x 720 at 30 fps. Earlier DiPlay runs measured about 20 fps delivered |
 | WinPlay 1.2.5 | Default settings: picture, touch and music reached the receiver; one session ran about 25 minutes after WinPlay released Bluetooth; reconnect worked after a manual disconnect and after manual network loss |
 | WinPlay 1.2.4 | Short runs with picture and sound |
-| Receiver touch | Page changes verified on the test receiver |
+| Receiver touch | Taps and page changes verified on DiPlay and WinPlay 1.2.5 |
+| Receiver media keys | Next/previous are forwarded to CarWith; not yet verified on device |
 | Native music | 44.1 kHz PCM converted to 48 kHz AAC-LC; audible playback confirmed |
-| Combined playback | Approximately 6 minutes 36 seconds without audio drops, underruns or write errors |
+| Combined playback | About 25 minutes with music on WinPlay 1.2.5; about 6 minutes 36 seconds on DiPlay without audio drops, underruns or write errors |
 | Real vehicle compatibility | Not yet verified for the mcarplay CarWith bridge |
 | Navigation announcements | Prompt audio from CarWith reached WinPlay 1.2.5 in logs; listening quality and interruption of music not separately verified |
 | Pause/resume, runs longer than 25 minutes | Further validation required |
@@ -83,11 +84,12 @@ with the phone, CarWith version, receiver and vehicle.
    flow. Select the intended receiver in mcarplay and start the connection.
 4. Choose whether to enable sound. Native CarWith audio requires no separate
    screen-recording grant in mcarplay.
-5. For bench testing, use a second Android device running [DiPlay](https://github.com/shihabal3amri/DiPlay).
+5. For bench testing, use a second Android device running [DiPlay](https://github.com/shihabal3amri/DiPlay),
+   or [WinPlay](https://github.com/Roylyl/WinPlay) on a Windows PC.
    Disconnect other CarLife receivers before starting the native session.
 
 CarWith's native video, audio and touch use ordinary application intents and local
-sockets without root or Shizuku. Some receivers, including WinPlay 1.2.4, also check
+sockets without root or Shizuku. Some receivers, including WinPlay 1.2.4 and 1.2.5, also check
 the phone's real Bluetooth identity; on ROMs that restrict access, this step needs
 [Shizuku](https://shizuku.rikka.app/). Optional display/launcher utilities may also use it.
 Receiver capabilities, Bluetooth handoff, pairing fallback and audio memory follow
