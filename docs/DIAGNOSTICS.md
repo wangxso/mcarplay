@@ -25,6 +25,8 @@ still-redacted recent runtime history.
 - Phone/Android/ROM and CarWith/CarLife versions, entry availability, permissions,
   Bluetooth/WLAN and active/bound network transports. Environment fields describe
   export time, not necessarily the state when the problem occurred.
+- `bluetooth.identitySource` records where the phone's Bluetooth address came from
+  (`SHIZUKU`, `SETTINGS`, `MANUAL`, `REMEMBERED` or `NONE`), never the address itself.
 - Random process/attempt IDs correlate stage transitions, warnings, terminal
   reasons, elapsed time, media counts and coarse memory/thread samples. Critical
   events use JSONL schema 1, independently of verbose protocol logs.

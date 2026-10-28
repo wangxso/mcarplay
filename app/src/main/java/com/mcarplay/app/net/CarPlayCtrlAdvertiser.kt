@@ -186,7 +186,9 @@ class CarPlayCtrlAdvertiser(
             var mac = DeviceIdentity.bluetoothMac(context)
             if (mac == DeviceIdentity.PLACEHOLDER_MAC) {
                 mac = DeviceIdentity.bluetoothMac(context, forceRetry = true)
-                log("$TAG: 蓝牙 MAC 解析为占位值，已强制重试${if (mac == DeviceIdentity.PLACEHOLDER_MAC) "（仍未成功——车机可能不会邀请，请确认 Shizuku 已启动）" else "成功"}")
+                log(
+                    "$TAG: 蓝牙 MAC 解析为占位值，已强制重试${if (mac == DeviceIdentity.PLACEHOLDER_MAC) "（仍未成功——车机可能不会邀请，请启动 Shizuku 或在「本机蓝牙地址」中手动填写）" else "成功"}",
+                )
             }
             val info =
                 NsdServiceInfo().apply {
@@ -241,7 +243,7 @@ class CarPlayCtrlAdvertiser(
             ensureForNetwork(registeredSsid ?: "", force = true)
             return
         }
-        log("$TAG: 30s 内未能解析真实蓝牙 MAC——ctrl 广播 id 仍是占位值，车机可能不会邀请（请确认 Shizuku 已启动）")
+        log("$TAG: 30s 内未能解析真实蓝牙 MAC——ctrl 广播 id 仍是占位值，车机可能不会邀请（请启动 Shizuku 或在「本机蓝牙地址」中手动填写）")
     }
 
     private fun acceptLoop() {

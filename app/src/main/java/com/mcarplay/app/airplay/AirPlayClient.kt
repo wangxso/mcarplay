@@ -733,7 +733,7 @@ class AirPlayClient(
         val policy = receiverCompatibility()
         log(ReceiverCompatibility.describe(policy))
         if (policy.requiresRealBluetoothIdentity && deviceId == DeviceIdentity.PLACEHOLDER_MAC) {
-            log("AIRPLAY: 当前接收端要求真实蓝牙身份；请启动并授权 Shizuku 后重连（未发送占位 deviceID）")
+            log("AIRPLAY: 当前接收端要求真实蓝牙身份；请启动 Shizuku，或在「本机蓝牙地址」中手动填写后重连（未发送占位 deviceID）")
             return null
         }
         // 计时端口：catplay 真车实现始终绑定真实 UDP timing server 通告给车机

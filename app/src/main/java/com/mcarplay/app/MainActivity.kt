@@ -48,6 +48,7 @@ import com.mcarplay.app.service.ExternalHuService
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
+import com.mcarplay.app.ui.BtIdentityDialog
 import com.mcarplay.app.ui.DarkMessageDialog
 import com.mcarplay.app.ui.PanelWindow
 import com.mcarplay.app.ui.ReceiverDetectionDialog
@@ -55,6 +56,7 @@ import com.mcarplay.app.ui.ScreenDimmer
 import com.mcarplay.app.ui.SignalWavesView
 import com.mcarplay.app.ui.WallpaperStore
 import com.mcarplay.app.util.Bg
+import com.mcarplay.app.util.DeviceIdentity
 import com.mcarplay.app.util.LogExporter
 import java.util.Locale
 
@@ -77,6 +79,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var shizukuChip: TextView
     private lateinit var shizukuDesc: TextView
     private lateinit var shizukuBadge: TextView
+    private lateinit var btIdentityDesc: TextView
+    private lateinit var btIdentityBadge: TextView
+
+    /** 「本机蓝牙地址」行的后台实时读取是否在进行（Shizuku shell 最长 4 秒，不能压在 UI 线程）。 */
+    @Volatile private var btIdentityProbeRunning = false
     private lateinit var signalWaves: SignalWavesView
     private lateinit var hubPlate: FrameLayout
     private lateinit var hubCar: ImageView
@@ -673,6 +680,8 @@ class MainActivity : AppCompatActivity() {
         shizukuChip = findViewById(R.id.shizukuChip)
         shizukuDesc = findViewById(R.id.shizukuDesc)
         shizukuBadge = findViewById(R.id.shizukuBadge)
+        btIdentityDesc = findViewById(R.id.btIdentityDesc)
+        btIdentityBadge = findViewById(R.id.btIdentityBadge)
         signalWaves = findViewById(R.id.signalWaves)
         hubPlate = findViewById(R.id.hubPlate)
         hubCar = findViewById(R.id.hubCar)
@@ -886,6 +895,10 @@ class MainActivity : AppCompatActivity() {
             findViewById<LinearLayout>(R.id.btnBridgeSetup).setOnClickListener {
                 startActivity(bridgeSetup)
             }
+        }
+
+        findViewById<LinearLayout>(R.id.rowBtIdentity).setOnClickListener {
+            BtIdentityDialog.show(this) { updateReadyRow() }
         }
 
         // ---- Shizuku 状态行：辅助能力，不阻止 CarWith 连接 ----
@@ -1406,6 +1419,7 @@ class MainActivity : AppCompatActivity() {
         val shizukuState = ShizukuGate.state(this)
         if (CarLifeLauncher.isAvailable(this)) ready++
         updateShizukuRow(shizukuState)
+        updateBtIdentityRow(shizukuState)
         if (ssidInput.text
                 .toString()
                 .trim()
@@ -1491,6 +1505,34 @@ class MainActivity : AppCompatActivity() {
         readyCount.text = "$ready/4"
     }
 
+    /** 「本机蓝牙地址」行：只读缓存/本地记录；Shizuku 就绪但尚未读取时在后台读一次再刷新。 */
+    private fun updateBtIdentityRow(state: ShizukuGate.State) {
+        val resolved = DeviceIdentity.peek(this)
+        val ready = resolved.source != DeviceIdentity.Source.NONE
+        btIdentityBadge.background.mutate().setTint(getColor(if (ready) R.color.m3_ok_dot else R.color.m3_amber))
+        btIdentityBadge.setTextColor(getColor(if (ready) R.color.m3_ok else R.color.m3_on_sec_container))
+        btIdentityBadge.text = if (ready) "就绪" else "未设置"
+        btIdentityDesc.text =
+            if (ready) {
+                "${resolved.mac} · ${DeviceIdentity.sourceLabel(resolved.source)}"
+            } else {
+                "未获取 · 启动 Shizuku 或点此手动填写（WinPlay 等接收端需要）"
+            }
+        val live = resolved.source == DeviceIdentity.Source.SHIZUKU || resolved.source == DeviceIdentity.Source.SETTINGS
+        if (!live && state == ShizukuGate.State.READY && !btIdentityProbeRunning) {
+            btIdentityProbeRunning = true
+            val app = applicationContext
+            Bg.run("bt-identity-probe") {
+                try {
+                    DeviceIdentity.resolve(app, forceRetry = true)
+                } finally {
+                    btIdentityProbeRunning = false
+                }
+                runOnUiThread { if (!isFinishing && !isDestroyed) updateBtIdentityRow(ShizukuGate.state(this)) }
+            }
+        }
+    }
+
     /** 「连接准备」里的 Shizuku 状态行；这是可选辅助能力，不是连接门槛。 */
     private fun updateShizukuRow(state: ShizukuGate.State) {
         val ready = state == ShizukuGate.State.READY
@@ -1501,10 +1543,10 @@ class MainActivity : AppCompatActivity() {
         shizukuBadge.text = if (ready) "就绪" else "未就绪"
         shizukuDesc.text =
             when (state) {
-                ShizukuGate.State.READY -> "辅助能力可用 · CarWith 不依赖此项"
-                ShizukuGate.State.NOT_RUNNING -> "可选 · CarWith 连接不受影响"
-                ShizukuGate.State.UNAUTHORIZED -> "可选授权 · CarWith 连接不受影响"
-                ShizukuGate.State.NOT_INSTALLED -> "未安装 · CarWith 连接不受影响"
+                ShizukuGate.State.READY -> "辅助能力可用 · 自动读取本机蓝牙地址"
+                ShizukuGate.State.NOT_RUNNING -> "可选 · 也可手动填写本机蓝牙地址"
+                ShizukuGate.State.UNAUTHORIZED -> "可选授权 · 也可手动填写本机蓝牙地址"
+                ShizukuGate.State.NOT_INSTALLED -> "未安装 · 也可手动填写本机蓝牙地址"
             }
     }
 

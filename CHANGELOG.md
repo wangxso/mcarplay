@@ -3,6 +3,16 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [Unreleased]
+
+### English
+- Add **本机蓝牙地址** to the connection checklist: receivers such as WinPlay check the phone's real Bluetooth address, which Android hides from ordinary apps. A live Shizuku (or system settings) read wins and is now saved for later sessions without Shizuku; otherwise a manually entered address is used. Entries are validated (placeholder, random, multicast and malformed addresses are rejected), and logs and the support report state the source (`bluetooth.identitySource`) without the address.
+- Validation: 546 JVM tests, `spotlessCheck`, `lintStandardDebug` and `assembleRemoteDebug` passed. Not yet verified on device.
+
+### 简体中文
+- 「连接准备」新增 **本机蓝牙地址**：WinPlay 等接收端会核对手机真实蓝牙地址，而 Android 不让普通应用读取。Shizuku（或系统设置）实时读取优先，并会保存下来供之后没有 Shizuku 时使用；否则使用手动填写的地址。填写会校验格式（拒绝占位、随机、组播及格式错误的地址），日志与诊断报告只记录来源（`bluetooth.identitySource`），不记录地址本身。
+- 验证：546 项 JVM 测试、`spotlessCheck`、`lintStandardDebug` 和 `assembleRemoteDebug` 均通过。尚未实机验证。
+
 ## [v0.1.3-test.2] - 2026-10-27
 
 > Experimental prerelease: validated on WinPlay 1.2.5 with a Xiaomi phone (release gate met); this does not establish real-car compatibility.
