@@ -391,8 +391,8 @@ MacPlay 公开源码 `fb132c0796f5aa425ca1a453dd9d394a9ecfacbc` 的 `watch_usbmu
    JmDNS。
 
 结论只覆盖 remoteDebug 的 USB NCM 媒体台架。MacPlay 仍作为显式 AirPlay 接收器，手机没有在它的 USB 设备列表
-中显示为 iPhone；真实车机枚举、角色切换、usbmux/lockdown/carkit、USB 主机侧 iAP2、音频和触控仍未验证。
-完整步骤与边界见 `docs/WIRED-CARPLAY.md`。
+中显示为 iPhone；截至该次一键连接，音频与触控仍未验证，音频随后在下一节完成实际出声确认。真实车机枚举、
+角色切换、usbmux/lockdown/carkit 与 USB 主机侧 iAP2 仍未验证。完整步骤与边界见 `docs/WIRED-CARPLAY.md`。
 
 ## 小米 17 + MacPlay USB NCM 音频数据链（2026-10-29 21:46–21:52）
 
@@ -420,12 +420,13 @@ MacPlay 公开源码 `fb132c0796f5aa425ca1a453dd9d394a9ecfacbc` 的 `watch_usbmu
    因此能确认包已进入 MacPlay 的 CoreAudio 输出管线。
 5. MacPlay 界面显示“播放 iPhone 音频”开启、媒体音量 100%、输出为系统默认的 MacBook Air 扬声器；同期
    macOS 系统“输出音量”为 13% 且“静音”勾选开启。用户没有听到声音与系统静音一致，不能据此判成手机、
-   USB 或 MacPlay 音频失败。取消静音后的实际听感仍待用户确认。
+   USB 或 MacPlay 音频失败。随后用户取消系统静音并再次播放 CarWith 音乐，确认声音正常、无异常，实际扬声器
+   输出已验收。
 
 结论：有线路线当前明确承载了 CarWith 视频和音频；AAC-LC 收包、认证、解密、RTP 解包、AAC 解码与向
-`osxaudiosink` 的供流均有日志和源码路径证据。实际扬声器听感、触控、真实车机 NCM、角色切换及 USB 主机侧
-iAP2 仍未验收。本次网络使用 IPv6 链路本地，但真实车机也可能只用 IPv4；现有入口支持 mDNS、USB 邻居和手动
-地址三类候选，并对每个候选建立独立 IPv4/IPv6 路由。
+`osxaudiosink` 的供流均有日志和源码路径证据，用户也已确认实际听到音乐。触控、真实车机 NCM、角色切换及
+USB 主机侧 iAP2 仍未验收。本次网络使用 IPv6 链路本地，但真实车机也可能只用 IPv4；现有入口支持 mDNS、
+USB 邻居和手动地址三类候选，并对每个候选建立独立 IPv4/IPv6 路由。
 
 ### 健壮化版本复测（22:03–22:10）
 
@@ -434,9 +435,26 @@ iAP2 仍未验收。本次网络使用 IPv6 链路本地，但真实车机也可
 1280x720 视频。22:07 在 MacPlay 画面中播放 CarWith 音乐后，手机连续记录 44.1kHz/2ch PCM 接入、重采样到
 48kHz 和外部 PCM 发包；MacPlay 在 390 秒统计点为视频 5,382 包、音频 7,918 包，音频
 `decrypted=forwarded=7918`、`decodedBuffers=7906`，`invalid`、认证错误、管线错误和 RTP 抖动丢包均为 0。
-macOS 仍是输出静音、音量 13%，因此只确认数据与 CoreAudio 管线，不宣称用户已实际听到。
+本轮观察时 macOS 仍是输出静音、音量 13%；随后用户取消静音并确认 CarWith 音乐正常播放，实际听感已补验。
 
 随后直接执行包装内的 `down` 回滚并结束 App：`usb0` 消失、状态目录删除、`g2` UDC 清空、`g1` 重新绑定
 `a600000.dwc3`、`sys.usb.config=adb`，且 USB adb 重新出现。此前另用 `am force-stop` 模拟进程被杀，
 守护脚本在同一路径完成回滚。双栈 mDNS 中本轮实际走 IPv6；IPv4 mDNS、邻居和手动地址分支由离线测试覆盖，
 真实车机仍需按其 NCM 与角色切换行为实机验证。
+
+### MacPlay“未检测到USB连接的iPhone”的含义
+
+该提示是真实的设备身份差异，不属于本次音视频故障。MacPlay 公开源码的
+[`refreshUSB`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/App/MacPlay.swift#L654-L697)
+枚举 `IOUSBHostDevice`，只把 USB Product Name 含 `iPhone` 的设备放进列表；当前台架脚本明确使用 Linux
+CDC-NCM `1d6b:0104` 和产品名 `mcarplay USB media bench`，因此不会出现在该列表。
+
+MacPlay 的有线会话还通过系统 usbmuxd 找 USB 设备：
+[`watch_usbmuxd`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/bin/livi-helperd/src/wired.rs#L157-L240)
+枚举 usbmuxd 设备，[`open_provider`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/crates/iap2-wired/src/usbmuxd.rs#L104-L135)
+再连接 lockdown、校验 `ProductType` 为 iPhone、读取信任记录并启动 `com.apple.carkit.service`。当前 NCM 台架
+没有这些接口或服务，只借用 USB 网卡承载 AirPlay，所以 MacPlay 显示未检测到 USB iPhone 是准确状态。
+
+让 MacPlay 正常显示并进入“USB iPhone”路径，需要阶段 1/3 的完整 Apple 复合 USB gadget 与
+usbmux/lockdown/carkit 响应；仅把产品名改成 `iPhone` 会让 UI 误报检测成功，随后仍会在 usbmuxd 会话处失败，
+因此不能作为修复。真实音频现已由用户确认；触控、真实车机角色切换、NCM 和 USB 主机侧 iAP2 仍未验收。

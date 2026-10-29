@@ -183,7 +183,8 @@ object UsbNcmAutoConnector {
                 update(
                     runId,
                     Phase.CONNECTED,
-                    "$iface → ${peer.addresses.first()}:${peer.port}，视频${if (enableAudio) "和声音" else ""}正在建立",
+                    "$iface → ${peer.addresses.first()}:${peer.port}，USB NCM 视频${if (enableAudio) "和声音" else ""}" +
+                        "正在建立；当前不声明 iPhone/usbmux 身份",
                 )
             } catch (error: Throwable) {
                 if (generation.get() != runId) {

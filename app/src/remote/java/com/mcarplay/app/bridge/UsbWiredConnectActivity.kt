@@ -27,7 +27,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "USB 有线连接（实验）"
+        title = "USB NCM 有线媒体（实验）"
         val pad = (20 * resources.displayMetrics.density).toInt()
         val root =
             LinearLayout(this).apply {
@@ -37,7 +37,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
             }
         root.addView(
             TextView(this).apply {
-                text = "USB 有线媒体"
+                text = "USB NCM 媒体台架"
                 setTextColor(Color.WHITE)
                 textSize = 25f
                 gravity = Gravity.CENTER
@@ -47,8 +47,8 @@ class UsbWiredConnectActivity : AppCompatActivity() {
         root.addView(
             TextView(this).apply {
                 text =
-                    "保持手机与 Mac 的 USB 连接。MacPlay 中请选择“有线CarPlay”并先点击“启动接收”。" +
-                    "默认同时尝试视频和 CarWith 声音。"
+                    "保持手机与 Mac 的 USB 连接。此台架只通过 USB NCM 承载 AirPlay，不会让 MacPlay 把手机" +
+                    "识别成 USB iPhone。MacPlay 中请选择“有线CarPlay”并先点击“启动接收”；默认同时尝试视频和 CarWith 声音。"
                 setTextColor(0xFFB8C2C8.toInt())
                 textSize = 14f
                 gravity = Gravity.CENTER
@@ -123,7 +123,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
                         UsbNcmAutoConnector.Phase.PREPARING_USB -> "正在建立 USB NCM"
                         UsbNcmAutoConnector.Phase.FINDING_PEER -> "正在查找 MacPlay"
                         UsbNcmAutoConnector.Phase.STARTING_AIRPLAY -> "正在连接 AirPlay"
-                        UsbNcmAutoConnector.Phase.CONNECTED -> "USB 媒体已启动"
+                        UsbNcmAutoConnector.Phase.CONNECTED -> "USB NCM 媒体已启动（不冒充 iPhone）"
                         UsbNcmAutoConnector.Phase.STOPPING -> "正在断开"
                         UsbNcmAutoConnector.Phase.FAILED -> "连接失败"
                     }
@@ -132,7 +132,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
                     if (snapshot.phase == UsbNcmAutoConnector.Phase.IDLE) View.GONE else View.VISIBLE
                 if (snapshot.phase == UsbNcmAutoConnector.Phase.CONNECTED && !returnedToMain) {
                     returnedToMain = true
-                    Toast.makeText(this, "USB 媒体已启动，正在返回主界面", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "USB NCM 媒体已启动，正在返回主界面", Toast.LENGTH_SHORT).show()
                     startActivity(
                         Intent(this, MainActivity::class.java)
                             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),

@@ -63,7 +63,7 @@
     <string name="main_disclaimer_title">免责声明</string>
     <string name="main_disclaimer_desc">测试范围 · 驾驶风险 · 系统权限</string>
     <string name="main_wired_title">USB 有线连接</string>
-    <string name="main_wired_desc">root 实验 · 自动配置 USB 网络 · 不占用 Wi-Fi</string>
+    <string name="main_wired_desc">USB NCM 媒体台架 · 不冒充 USB iPhone · 不占用 Wi-Fi</string>
     <string name="main_bridge_title">远程调试</string>
     <string name="main_bridge_desc">服务器地址 · 配对码 · 日志上报</string>
     <string name="main_footer_service">连接由前台服务保活 · 退出本界面不影响会话</string>
