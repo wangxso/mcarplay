@@ -1,6 +1,7 @@
 package com.mcarplay.app.carlife
 
 import android.content.Context
+import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionStage
@@ -81,16 +82,18 @@ object CarLifeDiagnostics {
     }
 
     @Synchronized
-    fun status(): String {
-        val active = session ?: return "未运行"
+    fun status(context: Context): String {
+        val active = session ?: return context.getString(R.string.ma_hu_step_idle)
         val phase =
-            when (active.state) {
-                CarLifeStateMachine.State.CONNECTED -> "等待 CarWith 七口监听"
-                CarLifeStateMachine.State.VIDEO_RUNNING ->
-                    if (active.accessUnitCount > 0) "收到真实视频帧" else "视频已初始化，等待首帧"
-                CarLifeStateMachine.State.FAILED -> "握手失败"
-                else -> "七口已连接，协议握手中"
-            }
+            context.getString(
+                when (active.state) {
+                    CarLifeStateMachine.State.CONNECTED -> R.string.cl_waiting_listeners
+                    CarLifeStateMachine.State.VIDEO_RUNNING ->
+                        if (active.accessUnitCount > 0) R.string.cl_real_frames else R.string.cl_waiting_first_frame
+                    CarLifeStateMachine.State.FAILED -> R.string.cl_handshake_failed
+                    else -> R.string.cl_handshaking
+                },
+            )
         return "$phase ${active.videoInfo()} ${active.videoStats}"
     }
 

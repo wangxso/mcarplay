@@ -9,6 +9,8 @@ import android.graphics.Typeface
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import com.mcarplay.app.R
+import com.mcarplay.app.i18n.AppLanguage
 
 /**
  * 「强制横屏未生效」提示：探测 + 几何计算 + 提示卡绘制。
@@ -264,16 +266,23 @@ internal object LetterboxCardPainter {
 
     fun marginPx(density: Float): Float = MARGIN_DP * density
 
+    /** 卡片文案随界面语言（车机屏没有 Activity，经应用 Context 取资源）。 */
+    private fun labels(): (Int) -> String {
+        val context = VirtualLauncher.appContext()?.let(AppLanguage::localized)
+        return { id -> context?.getString(id).orEmpty() }
+    }
+
     /** 卡片允许的最大宽度（黑边再宽也不铺满，避免在大黑边里变成一块巨幅广告牌）。 */
     fun maxWidthPx(density: Float): Float = MAX_WIDTH_DP * density
 
     /** 卡片最小宽度：由按钮文案与标题实测宽度决定。 */
     fun minWidthPx(density: Float): Float {
+        val text = labels()
         val button = textPaint(BUTTON_SP * density, Color.WHITE, bold = true)
-        val buttonW = button.measureText("强制重启") + 2f * BUTTON_PAD_H_DP * density
+        val buttonW = button.measureText(text(R.string.lh_force_restart)) + 2f * BUTTON_PAD_H_DP * density
         val title = textPaint(TITLE_SP * density, Color.WHITE, bold = true)
-        // 标题至少容纳 5 个汉字（再窄会碎成单字换行）
-        val titleW = title.measureText("横屏未生效")
+        // 标题至少完整容纳「横屏未生效」（再窄会碎成单字换行）
+        val titleW = title.measureText(text(R.string.lh_not_landscape))
         return 2f * PAD_H_DP * density + maxOf(buttonW, titleW)
     }
 
@@ -292,11 +301,15 @@ internal object LetterboxCardPainter {
         val textWidth = width - 2f * PAD_H_DP * density
         if (textWidth <= 0f) return null
         if (width < minWidthPx(density)) return null
+        val text = labels()
         val (titleText, bodyText, buttonText) =
             when (state) {
-                LetterboxCardState.NORMAL -> Triple("横屏未生效", "仍是竖屏窗口", "强制重启")
-                LetterboxCardState.BUSY -> Triple("正在重启", "将以横屏打开", "请稍候")
-                LetterboxCardState.FAILED -> Triple("仍然竖屏", "可能不支持", "关闭")
+                LetterboxCardState.NORMAL ->
+                    Triple(text(R.string.lh_not_landscape), text(R.string.lh_still_portrait_window), text(R.string.lh_force_restart))
+                LetterboxCardState.BUSY ->
+                    Triple(text(R.string.lh_restarting), text(R.string.lh_opens_landscape), text(R.string.lh_please_wait))
+                LetterboxCardState.FAILED ->
+                    Triple(text(R.string.lh_still_portrait), text(R.string.lh_maybe_unsupported), text(R.string.action_close))
             }
         val titlePaint = textPaint(TITLE_SP * density, TITLE_COLOR, bold = true)
         val bodyPaint = textPaint(BODY_SP * density, BODY_COLOR, bold = false)

@@ -36,6 +36,8 @@ import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.diagnostics.DiagnosticRedactor
+import com.mcarplay.app.diagnostics.DiagnosticText
+import com.mcarplay.app.i18n.AppLanguage
 import com.mcarplay.app.input.TouchRouter
 import com.mcarplay.app.launcher.VirtualLauncher
 import com.mcarplay.app.launcher.settings.AppOrientationCompat
@@ -55,6 +57,8 @@ import com.mcarplay.app.ui.ReceiverDetectionDialog
 import com.mcarplay.app.ui.ScreenDimmer
 import com.mcarplay.app.ui.SignalWavesView
 import com.mcarplay.app.ui.WallpaperStore
+import com.mcarplay.app.ui.WhatsNewDialog
+import com.mcarplay.app.update.WhatsNew
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DeviceIdentity
 import com.mcarplay.app.util.LogExporter
@@ -69,9 +73,7 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
     private enum class HeroState { IDLE, CONNECTING, CONNECTED }
 
-    /** 连接中的默认副标题（无阶段提示时）。 */
     private companion object {
-        const val DEFAULT_CONNECTING_HINT = "蓝牙 iAP2 握手 → 加入车机热点 → 建立 CarPlay 会话"
         const val KEY_DISCLAIMER_DEADLINE = "disclaimer_deadline"
     }
 
@@ -136,6 +138,7 @@ class MainActivity : AppCompatActivity() {
     private var disclaimerDeadlineAt = 0L
 
     private var activeDisclaimer: androidx.appcompat.app.AlertDialog? = null
+    private var activeWhatsNew: androidx.appcompat.app.AlertDialog? = null
 
     /** Shizuku 授权结果监听（onDestroy 必须注销，否则跨 Activity 泄漏）。 */
     private var shizukuPermissionListener:
@@ -200,7 +203,7 @@ class MainActivity : AppCompatActivity() {
             log(
                 "WALLPAPER: ${if (ok) "壁纸已更新（会话进行中约 1 秒内上车；下次连接自动生效）" else "保存失败"}",
             )
-            if (ok) snack("壁纸已更新") else snack("保存失败")
+            snack(getString(if (ok) R.string.ma_wallpaper_updated else R.string.ma_save_failed))
         }
 
     private val audioPermissionLauncher =
@@ -263,23 +266,22 @@ class MainActivity : AppCompatActivity() {
             buildList {
                 add(
                     DarkMessageDialog.Action(
-                        "仅视频（更流畅）",
+                        getString(R.string.ma_audio_video_only),
                         DarkMessageDialog.Emphasis.PRIMARY,
                     ) { beginWithAudio(enabled = false) },
                 )
-                add(DarkMessageDialog.Action("开启声音") { beginWithAudio(enabled = true) })
-                if (!landscape) add(DarkMessageDialog.Action("取消") {})
+                add(DarkMessageDialog.Action(getString(R.string.ma_audio_enable)) { beginWithAudio(enabled = true) })
+                if (!landscape) add(DarkMessageDialog.Action(getString(R.string.action_cancel)) {})
             }
         DarkMessageDialog.show(
             activity = this,
-            title = "是否在车机侧播放声音？",
+            title = getString(R.string.ma_audio_choice_title),
             message =
-                "开启后手机媒体/导航声音投到车机播放、手机本机静音（不开启则车上无声）。\n" +
-                    "音视频同时传会增加负载，以看视频为主时可先不开启。\n" +
+                getString(R.string.ma_audio_choice_body) +
                     if (CarLifeLauncher.isAvailable(this)) {
-                        "使用 CarWith 原生声音，无需额外录屏授权。"
+                        getString(R.string.ma_audio_choice_carwith)
                     } else {
-                        "开启声音需要「投屏」权限，会一并申请。"
+                        getString(R.string.ma_audio_choice_projection)
                     },
             actions = actions,
         )
@@ -289,12 +291,12 @@ class MainActivity : AppCompatActivity() {
     private fun promptCancelConnecting() {
         DarkMessageDialog.show(
             activity = this,
-            title = "取消连接？",
-            message = "将停止当前连接尝试：蓝牙与 WiFi 链路都会断开，需重新点「启动连接」。",
+            title = getString(R.string.ma_cancel_connect_title),
+            message = getString(R.string.ma_cancel_connect_body),
             actions =
                 listOf(
-                    DarkMessageDialog.Action("继续连接") {},
-                    DarkMessageDialog.Action("取消连接", DarkMessageDialog.Emphasis.DANGER) {
+                    DarkMessageDialog.Action(getString(R.string.ma_keep_connecting)) {},
+                    DarkMessageDialog.Action(getString(R.string.ma_cancel_connect), DarkMessageDialog.Emphasis.DANGER) {
                         // 关闭仍在等待的「加入热点」确认弹窗（其 onChoice(null) 会与
                         // connectCancelled 一起让 autoJoin 流程立即中止）
                         wifiJoinDialog?.cancel()
@@ -314,12 +316,12 @@ class MainActivity : AppCompatActivity() {
             ConnectionDiagnostics.precheck(DiagnosticCode.CARWITH_FAILED)
             DarkMessageDialog.show(
                 this,
-                title = "CarWith 组件未就绪",
-                message = "当前桥接需要小米 CarWith 与小米 CarLife 组件。请先检查系统车联设置；此提示不代表所有 Android 手机均可使用。",
+                title = getString(R.string.ma_carwith_missing_title),
+                message = getString(R.string.ma_carwith_missing_body),
                 actions =
                     listOf(
-                        DarkMessageDialog.Action("导出诊断报告") { exportLogFile() },
-                        DarkMessageDialog.Action("关闭") {},
+                        DarkMessageDialog.Action(getString(R.string.ma_export_report)) { exportLogFile() },
+                        DarkMessageDialog.Action(getString(R.string.action_close)) {},
                     ),
             )
             return
@@ -345,12 +347,12 @@ class MainActivity : AppCompatActivity() {
                 ConnectionDiagnostics.precheck(DiagnosticCode.BT_DISABLED)
                 DarkMessageDialog.show(
                     activity = this,
-                    title = "蓝牙未开启",
-                    message = "与车机的无线配对通信依赖蓝牙。请先开启手机蓝牙，并确认已与车机配对。",
+                    title = getString(R.string.ma_bt_off_title),
+                    message = getString(R.string.ma_bt_off_body),
                     actions =
                         listOf(
-                            DarkMessageDialog.Action("取消") {},
-                            DarkMessageDialog.Action("去开启蓝牙", DarkMessageDialog.Emphasis.PRIMARY) {
+                            DarkMessageDialog.Action(getString(R.string.action_cancel)) {},
+                            DarkMessageDialog.Action(getString(R.string.ma_bt_open_settings), DarkMessageDialog.Emphasis.PRIMARY) {
                                 runCatching {
                                     startActivity(
                                         android.content.Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS),
@@ -400,15 +402,12 @@ class MainActivity : AppCompatActivity() {
             ConnectionDiagnostics.precheck(DiagnosticCode.LOCATION_REQUIRED)
             DarkMessageDialog.show(
                 activity = this,
-                title = "需要开启位置服务",
-                message =
-                    "Android 12 加入车机热点（应用专属 WiFi）要求位置服务开启——系统用它判定" +
-                        "可连接的 WiFi，不会记录你的位置。\n\n请打开位置服务后重试；也可以到" +
-                        "WLAN 设置手动连接热点。",
+                title = getString(R.string.ma_location_title),
+                message = getString(R.string.ma_location_body),
                 actions =
                     listOf(
-                        DarkMessageDialog.Action("取消") {},
-                        DarkMessageDialog.Action("去开启", DarkMessageDialog.Emphasis.PRIMARY) {
+                        DarkMessageDialog.Action(getString(R.string.action_cancel)) {},
+                        DarkMessageDialog.Action(getString(R.string.ma_turn_on), DarkMessageDialog.Emphasis.PRIMARY) {
                             runCatching {
                                 startActivity(
                                     android.content.Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS),
@@ -457,7 +456,7 @@ class MainActivity : AppCompatActivity() {
             if (granted) {
                 ExternalHuService.start(applicationContext)
             } else {
-                snack("亿连发现诊断需要蓝牙、Wi-Fi Direct 与通知权限")
+                snack(getString(R.string.ma_hu_permissions))
             }
         }
 
@@ -468,18 +467,18 @@ class MainActivity : AppCompatActivity() {
     private fun promptDisconnect() {
         DarkMessageDialog.show(
             activity = this,
-            title = "断开连接？",
+            title = getString(R.string.ma_disconnect_title),
             message =
-                "将停止车机推流并关闭保活服务，车机画面会立即中断。" +
+                getString(R.string.ma_disconnect_body) +
                     if (CarLifeLauncher.isAvailable(this)) {
                         ""
                     } else {
-                        "\n\n注意：投屏授权会随服务停止失效，下次如需车机侧声音请重新授权。"
+                        getString(R.string.ma_disconnect_projection_note)
                     },
             actions =
                 listOf(
-                    DarkMessageDialog.Action("取消") {},
-                    DarkMessageDialog.Action("断开", DarkMessageDialog.Emphasis.DANGER) {
+                    DarkMessageDialog.Action(getString(R.string.action_cancel)) {},
+                    DarkMessageDialog.Action(getString(R.string.ma_disconnect), DarkMessageDialog.Emphasis.DANGER) {
                         SessionController.disconnect(this)
                     },
                 ),
@@ -509,11 +508,11 @@ class MainActivity : AppCompatActivity() {
     private fun showShizukuGuidance(state: ShizukuGate.State) {
         val guidance = ShizukuGate.guidanceOf(state)
         val actions = mutableListOf<DarkMessageDialog.Action>()
-        actions += DarkMessageDialog.Action("关闭") {}
+        actions += DarkMessageDialog.Action(getString(R.string.action_close)) {}
         when (state) {
             ShizukuGate.State.NOT_RUNNING ->
                 actions +=
-                    DarkMessageDialog.Action("打开 Shizuku", DarkMessageDialog.Emphasis.PRIMARY) {
+                    DarkMessageDialog.Action(getString(R.string.ma_open_shizuku), DarkMessageDialog.Emphasis.PRIMARY) {
                         packageManager.getLaunchIntentForPackage(ShizukuGate.PACKAGE_NAME)?.let {
                             runCatching { startActivity(it) }
                         }
@@ -521,7 +520,7 @@ class MainActivity : AppCompatActivity() {
 
             ShizukuGate.State.UNAUTHORIZED ->
                 actions +=
-                    DarkMessageDialog.Action("请求授权", DarkMessageDialog.Emphasis.PRIMARY) {
+                    DarkMessageDialog.Action(getString(R.string.ma_request_permission), DarkMessageDialog.Emphasis.PRIMARY) {
                         ShizukuGate.requestPermission()
                     }
 
@@ -529,8 +528,8 @@ class MainActivity : AppCompatActivity() {
         }
         DarkMessageDialog.show(
             activity = this,
-            title = guidance.title,
-            message = guidance.message,
+            title = getString(guidance.title),
+            message = guidance.message?.let { getString(it) }.orEmpty(),
             actions = actions,
         )
     }
@@ -588,16 +587,12 @@ class MainActivity : AppCompatActivity() {
     private fun showBtAddressGuidance() {
         DarkMessageDialog.show(
             activity = this,
-            title = "请填写本机真实蓝牙地址",
-            message =
-                "Shizuku 未就绪，mcarplay 读不到手机的真实蓝牙地址。WinPlay 等接收端会核对这个地址，" +
-                    "用系统占位地址时会拒绝连接或不发邀请。\n\n" +
-                    "请在手机「设置 → 我的设备 → 全部参数与信息」或「状态信息」中查到「蓝牙地址」后填写；" +
-                    "也可以启动 Shizuku 后重新连接，由 mcarplay 自动读取。",
+            title = getString(R.string.ma_bt_address_title),
+            message = getString(R.string.ma_bt_address_body),
             actions =
                 listOf(
-                    DarkMessageDialog.Action("仍然连接") { continueAfterBtIdentityCheck() },
-                    DarkMessageDialog.Action("手动填写", DarkMessageDialog.Emphasis.PRIMARY) {
+                    DarkMessageDialog.Action(getString(R.string.action_connect_anyway)) { continueAfterBtIdentityCheck() },
+                    DarkMessageDialog.Action(getString(R.string.ma_enter_manually), DarkMessageDialog.Emphasis.PRIMARY) {
                         BtIdentityDialog.show(this) {
                             updateReadyRow()
                             // 填好后接着走原来的连接流程；清除或未保存时不自动连接
@@ -622,15 +617,12 @@ class MainActivity : AppCompatActivity() {
     private fun showBackgroundStartGuidance() {
         DarkMessageDialog.show(
             activity = this,
-            title = "需要允许「后台弹出界面」",
-            message =
-                "CarPlay 会话建立时 mcarplay 通常已在系统 WLAN 设置之后，" +
-                    "此时需要从后台打开 CarWith。小米未授权时系统会静默拒绝，车机将没有画面。\n\n" +
-                    "请在权限页把「后台弹出界面」设为允许，返回后重新点「启动连接」。",
+            title = getString(R.string.ma_background_title),
+            message = getString(R.string.ma_background_body),
             actions =
                 listOf(
-                    DarkMessageDialog.Action("仍然连接") { startConnectionUnchecked() },
-                    DarkMessageDialog.Action("去授权", DarkMessageDialog.Emphasis.PRIMARY) {
+                    DarkMessageDialog.Action(getString(R.string.action_connect_anyway)) { startConnectionUnchecked() },
+                    DarkMessageDialog.Action(getString(R.string.action_go_grant), DarkMessageDialog.Emphasis.PRIMARY) {
                         if (!CarLifeLauncher.openBackgroundStartSettings(this)) {
                             log("CARLIFE: 无法打开权限页，请到 设置 → 应用 → mcarplay → 权限 手动开启")
                         }
@@ -665,7 +657,7 @@ class MainActivity : AppCompatActivity() {
                         !ReceiverDetectionRuntime.begin(detectionTarget.address)
                 )
             ) {
-                snack("未开始检测：请确认目标设备与连接状态后重试")
+                snack(getString(R.string.ma_detection_not_started))
                 return@runOnUiThread
             }
             SessionController.startConnection(this)
@@ -693,14 +685,14 @@ class MainActivity : AppCompatActivity() {
                         SessionController.sessionStarting.get() ||
                         SessionController.runningDiagnosticCarLifeSession != null
                     ) {
-                        snack("请先停止当前连接或 CarWith 自检")
+                        snack(getString(R.string.ma_stop_first))
                     } else {
                         pendingDetectionTarget = target
                         resumeConnectionChecks()
                     }
                 },
                 onRetry = {
-                    if (!SessionController.retryReceiverDetection(this)) snack("当前阶段不能重试蓝牙，请继续等待或重新检测")
+                    if (!SessionController.retryReceiverDetection(this)) snack(getString(R.string.ma_retry_not_allowed))
                 },
                 onCancel = {
                     wifiJoinDialog?.cancel()
@@ -810,7 +802,7 @@ class MainActivity : AppCompatActivity() {
                             // Shizuku 刚就绪时补一次通知使用权；失败不影响 CarWith 主链路。
                             ensureNotificationAccessAsync()
                         } else {
-                            snack("未获得 Shizuku 授权——CarWith 连接仍可使用，辅助功能受限")
+                            snack(getString(R.string.ma_shizuku_denied))
                         }
                     }
                 }.also {
@@ -887,7 +879,54 @@ class MainActivity : AppCompatActivity() {
             )
         ) {
             showDisclaimer(requireAcceptance = true)
+        } else {
+            maybeShowWhatsNew()
         }
+    }
+
+    /**
+     * 覆盖安装后首次打开：按界面语言展示本版本的更新内容（免责声明优先，接受后再弹）。
+     * 弹出即记为已看，旋转重建或切换语言不会重复弹。
+     */
+    private fun maybeShowWhatsNew() {
+        if (activeWhatsNew?.isShowing == true || activeDisclaimer?.isShowing == true) return
+        val pending = WhatsNew.pending(this) ?: return
+        WhatsNew.markShown(this, pending.updateTime)
+        activeWhatsNew = WhatsNewDialog.show(this, pending).also { dialog -> dialog.setOnDismissListener { activeWhatsNew = null } }
+    }
+
+    /** 界面语言选择：中文 / English，选中后 Activity 由系统按新语言重建。 */
+    private fun showLanguagePicker() {
+        val current = AppLanguage.current(this)
+        val options =
+            listOf(
+                AppLanguage.Language.ZH to R.string.language_name_zh,
+                AppLanguage.Language.EN to R.string.language_name_en,
+            )
+        DarkMessageDialog.show(
+            activity = this,
+            title = getString(R.string.language_title),
+            message = getString(R.string.language_note),
+            actions =
+                options.map { (language, label) ->
+                    DarkMessageDialog.Action(
+                        if (language == current) "✓ " + getString(label) else getString(label),
+                        if (language == current) DarkMessageDialog.Emphasis.PRIMARY else DarkMessageDialog.Emphasis.TEXT,
+                    ) {
+                        if (language != current) {
+                            log("UI: 界面语言切换为 ${language.tag}")
+                            AppLanguage.set(this, language)
+                        }
+                    }
+                },
+        )
+    }
+
+    private fun updateLanguageRow() {
+        findViewById<TextView>(R.id.languageDesc).text =
+            getString(
+                if (AppLanguage.current(this) == AppLanguage.Language.EN) R.string.language_name_en else R.string.language_name_zh,
+            )
     }
 
     /** 底部「免责声明」入口：只读重看（不限制时长、不要求滑到底）。 */
@@ -908,7 +947,10 @@ class MainActivity : AppCompatActivity() {
                         runCatching { SessionController.disconnect(this) }
                         finishAndRemoveTask()
                     },
-                    onDismiss = { activeDisclaimer = null },
+                    onDismiss = {
+                        activeDisclaimer = null
+                        if (DisclaimerPrefs.hasAcceptedCurrent(this)) maybeShowWhatsNew()
+                    },
                 )
     }
 
@@ -918,6 +960,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnCheckUpdates).setOnClickListener {
             startActivity(Intent(this, com.mcarplay.app.update.UpdateActivity::class.java))
         }
+        findViewById<View>(R.id.btnLanguage).setOnClickListener { showLanguagePicker() }
+        updateLanguageRow()
         // 清理旧版本遗留的模式偏好（模式已固定为「隐形屏」启动器）
         if (preferences.contains("mode")) {
             preferences.edit().remove("mode").apply()
@@ -947,7 +991,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<LinearLayout>(R.id.rowShizuku).setOnClickListener {
             val state = ShizukuGate.state(this)
             if (state == ShizukuGate.State.READY) {
-                snack("Shizuku 已就绪——旧版虚拟屏与辅助网络能力可用")
+                snack(getString(R.string.ma_shizuku_ready_snack))
             } else {
                 showShizukuGuidance(state)
             }
@@ -962,7 +1006,7 @@ class MainActivity : AppCompatActivity() {
             preferences.edit().putBoolean("alwaysOn", checked).apply()
             if (checked) {
                 if (!android.provider.Settings.canDrawOverlays(this)) {
-                    promptOverlayPermission("已开启「常亮+暗幕」。")
+                    promptOverlayPermission(getString(R.string.ma_always_on_enabled))
                 } else {
                     ScreenDimmer
                         .attach(this)
@@ -1004,7 +1048,7 @@ class MainActivity : AppCompatActivity() {
             toggleExternalHu()
         }
         findViewById<TextView>(R.id.btnCarWithSettings).setOnClickListener {
-            if (!CarLifeLauncher.openSettings(this)) snack("无法打开 CarWith 设置")
+            if (!CarLifeLauncher.openSettings(this)) snack(getString(R.string.ma_carwith_settings_failed))
         }
         findViewById<TextView>(R.id.btnWifi).setOnClickListener {
             val ssid = ssidInput.text.toString().trim()
@@ -1013,13 +1057,13 @@ class MainActivity : AppCompatActivity() {
             if (psk != null) {
                 val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("carplay-wifi", psk))
-                snack("热点密码已复制（${psk.length} 位）——粘贴到密码框即可")
+                snack(getString(R.string.ma_psk_copied, psk.length))
                 log(
                     "WiFi: 热点密码已复制到剪贴板，选择 \"$ssid\" 粘贴密码；" +
                         "若提示\"无法访问互联网\"请选择保持连接",
                 )
             } else {
-                snack("暂无热点密码——蓝牙连上后自动获取")
+                snack(getString(R.string.ma_psk_missing))
                 log("WiFi: 尚未拿到热点密码（需蓝牙会话 0x5703）——打开 WLAN 设置手动选择 \"$ssid\"")
             }
             try {
@@ -1037,7 +1081,7 @@ class MainActivity : AppCompatActivity() {
             if (CarLifeLauncher.isAvailable(this)) {
                 SessionController.audioEnabledForSession = true
                 SessionController.maybeStartAudioNow(applicationContext)
-                snack("CarWith 原生音频已请求接入")
+                snack(getString(R.string.ma_native_audio_requested))
                 return@setOnClickListener
             }
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
@@ -1054,7 +1098,7 @@ class MainActivity : AppCompatActivity() {
             if (!ScreenDimmer
                     .isAttached()
             ) {
-                snack("暗幕未就绪（连接成功后自动启用）")
+                snack(getString(R.string.ma_dimmer_not_ready))
                 return@setOnClickListener
             }
             ScreenDimmer
@@ -1074,7 +1118,7 @@ class MainActivity : AppCompatActivity() {
                 WallpaperStore
                     .resetToDefault(this)
             log("WALLPAPER: ${if (ok) "已恢复内置默认（CarPlay 官方深色壁纸）" else "恢复失败"}")
-            snack(if (ok) "已恢复默认壁纸" else "恢复失败")
+            snack(getString(if (ok) R.string.ma_wallpaper_reset else R.string.ma_reset_failed))
         }
 
         // ---- 折叠卡：高级 / 日志 ----
@@ -1105,12 +1149,12 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageView>(R.id.btnCopyLog).setOnClickListener {
             val text = DiagnosticRedactor(diagnosticNames()).redact(SessionController.logText())
             if (text.isEmpty()) {
-                snack("日志为空")
+                snack(getString(R.string.ma_log_empty))
                 return@setOnClickListener
             }
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("mcarplay 日志", text))
-            snack("已复制 ${text.length} 字符脱敏日志；完整信息请导出诊断报告")
+            clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.ma_log_clip_label), text))
+            snack(getString(R.string.ma_log_copied, text.length))
         }
         findViewById<ImageView>(R.id.btnExportLog).setOnClickListener { exportLogFile() }
         findViewById<View>(R.id.btnExportDiagnostics).setOnClickListener { exportLogFile() }
@@ -1139,7 +1183,7 @@ class MainActivity : AppCompatActivity() {
         // 启动即检查：常亮开 + 无悬浮窗权限 → 主动请求
         if (ScreenDimmer.enabled) {
             if (!android.provider.Settings.canDrawOverlays(this)) {
-                promptOverlayPermission("「常亮+暗幕」已开启。")
+                promptOverlayPermission(getString(R.string.ma_always_on_already))
             } else {
                 // attach 只挂触摸探针、不排自动暗幕定时器：自动暗幕/常亮由会话驱动
                 // （ScreenDimmer.setSessionActive），否则未连接时也会 45s 后变黑
@@ -1179,7 +1223,7 @@ class MainActivity : AppCompatActivity() {
     private fun tickHero() {
         val diagnosis = ConnectionDiagnostics.timeline.snapshot()
         findViewById<TextView>(R.id.diagnosticStatus).text =
-            ConnectionDiagnostics.latestSnapshot()?.summary() ?: getString(R.string.diagnostic_empty)
+            ConnectionDiagnostics.latestSnapshot()?.let { DiagnosticText.summary(this, it) } ?: getString(R.string.diagnostic_empty)
         val s =
             when {
                 SessionController.videoSender?.let { it.isRunning && it.framesSentTotal > 0 } == true -> HeroState.CONNECTED
@@ -1194,16 +1238,17 @@ class MainActivity : AppCompatActivity() {
         }
         // 连接中：副标题跟随阶段提示（英雄卡内即可见，不必划到底部看日志）
         if (s == HeroState.CONNECTING) {
-            heroSubline.text = SessionController.phaseHint ?: DEFAULT_CONNECTING_HINT
+            heroSubline.text = SessionController.phaseHint ?: getString(R.string.ma_connecting_hint)
         }
         if (s != HeroState.CONNECTED && diagnosis?.status == "failed") {
-            heroStateText.text = if (s == HeroState.CONNECTING) "等待重连" else "连接未完成"
-            heroSubline.text = diagnosis.code?.advice
+            heroStateText.text =
+                getString(if (s == HeroState.CONNECTING) R.string.ma_hero_waiting_reconnect else R.string.ma_hero_incomplete)
+            heroSubline.text = diagnosis.code?.let { DiagnosticText.advice(this, it) }
         }
         // 启动残留屏检查进行中：状态与副标题临时切换为检查提示
         if (s == HeroState.IDLE && startupCheckRunning) {
-            heroStateText.text = "检查中"
-            heroSubline.text = "正在检查残留屏…"
+            heroStateText.text = getString(R.string.ma_hero_checking)
+            heroSubline.text = getString(R.string.ma_hero_checking_residual)
             heroProgress.visibility = View.VISIBLE
         }
         updateConnectedSubline()
@@ -1221,17 +1266,19 @@ class MainActivity : AppCompatActivity() {
                 ?.takeIf { it.binding == binding }
                 ?.state
         findViewById<TextView>(R.id.receiverDetectionDesc).text =
-            when (detectionState) {
-                ReceiverDetection.State.COLLECTING -> "检测中 · 点此查看进度并确认效果"
-                ReceiverDetection.State.SAVING -> "正在保存适配结果…"
-                ReceiverDetection.State.SAVED -> "已保存本地适配结果 · 点此查看或重新检测"
-                else ->
-                    if (ReceiverDetectionRuntime.saved(selected?.address) != null) {
-                        "已有本地适配记录 · 点此查看或重新检测"
-                    } else {
-                        "检测连接参数，确认效果后保存到本机"
-                    }
-            }
+            getString(
+                when (detectionState) {
+                    ReceiverDetection.State.COLLECTING -> R.string.ma_detection_collecting
+                    ReceiverDetection.State.SAVING -> R.string.ma_detection_saving
+                    ReceiverDetection.State.SAVED -> R.string.ma_detection_saved
+                    else ->
+                        if (ReceiverDetectionRuntime.saved(selected?.address) != null) {
+                            R.string.ma_detection_has_record
+                        } else {
+                            R.string.main_detection_idle
+                        }
+                },
+            )
     }
 
     private fun toggleCarLifeSelfTest() {
@@ -1242,7 +1289,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             if (!CarLifeLauncher.isAvailable(this)) {
                 ConnectionDiagnostics.precheck(DiagnosticCode.CARWITH_FAILED, ConnectionDiagnostics.selfTest)
-                snack("未安装 CarWith 或 CarLife 组件")
+                snack(getString(R.string.ma_carwith_not_installed))
                 return
             }
             log("CARLIFE: 用户请求启动 CarWith 出流自检")
@@ -1259,7 +1306,7 @@ class MainActivity : AppCompatActivity() {
             )
         carLifeSelfTestDesc.text =
             if (running) {
-                CarLifeDiagnostics.status()
+                CarLifeDiagnostics.status(this)
             } else {
                 getString(R.string.carlife_self_test_idle)
             }
@@ -1272,7 +1319,7 @@ class MainActivity : AppCompatActivity() {
             log("HU-SIM: 用户停止亿连发现诊断")
         } else {
             if (!packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)) {
-                snack("本机不支持 Wi-Fi Direct，无法模拟 CarWith 无线车机")
+                snack(getString(R.string.ma_no_wifi_direct))
                 return
             }
             val missing =
@@ -1307,21 +1354,23 @@ class MainActivity : AppCompatActivity() {
             )
         externalHuDesc.text =
             if (!snapshot.running && snapshot.step == ExternalHuController.Step.FAILED) {
-                "启动失败 · ${snapshot.detail}"
+                getString(R.string.ma_hu_start_failed, snapshot.detail)
             } else if (!snapshot.running) {
                 getString(R.string.carlife_hu_bridge_idle)
             } else {
                 val stage =
-                    when (snapshot.step) {
-                        ExternalHuController.Step.STARTING -> "启动中"
-                        ExternalHuController.Step.SDP_LISTENING -> "SDP 已监听"
-                        ExternalHuController.Step.HU_CONNECTED -> "HU 已连接"
-                        ExternalHuController.Step.P2P_GROUP_READY -> "P2P 组已建立"
-                        ExternalHuController.Step.MDNS_PUBLISHED -> "mDNS 已发布"
-                        ExternalHuController.Step.ACCEPTED -> "10930 已接受"
-                        ExternalHuController.Step.FAILED -> "失败"
-                        ExternalHuController.Step.IDLE -> "未运行"
-                    }
+                    getString(
+                        when (snapshot.step) {
+                            ExternalHuController.Step.STARTING -> R.string.ma_hu_step_starting
+                            ExternalHuController.Step.SDP_LISTENING -> R.string.ma_hu_step_sdp
+                            ExternalHuController.Step.HU_CONNECTED -> R.string.ma_hu_step_hu
+                            ExternalHuController.Step.P2P_GROUP_READY -> R.string.ma_hu_step_p2p
+                            ExternalHuController.Step.MDNS_PUBLISHED -> R.string.ma_hu_step_mdns
+                            ExternalHuController.Step.ACCEPTED -> R.string.ma_hu_step_accepted
+                            ExternalHuController.Step.FAILED -> R.string.ma_hu_step_failed
+                            ExternalHuController.Step.IDLE -> R.string.ma_hu_step_idle
+                        },
+                    )
                 "$stage · ${snapshot.detail}"
             }
     }
@@ -1337,8 +1386,7 @@ class MainActivity : AppCompatActivity() {
         val fps = sent - lastSentFrames
         lastSentFrames = sent
         heroStats.text =
-            "分辨率 ${SessionController.activeScalePercent}% · " +
-            "$fps/${SessionController.activeTargetFps} fps"
+            getString(R.string.ma_hero_stats, SessionController.activeScalePercent, fps.toInt(), SessionController.activeTargetFps)
     }
 
     private fun applyHeroState(s: HeroState) {
@@ -1376,11 +1424,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         heroStateText.text =
-            when (s) {
-                HeroState.IDLE -> "未连接"
-                HeroState.CONNECTING -> "正在连接"
-                HeroState.CONNECTED -> "已连接"
-            }
+            getString(
+                when (s) {
+                    HeroState.IDLE -> R.string.main_hero_idle
+                    HeroState.CONNECTING -> R.string.ma_hero_connecting
+                    HeroState.CONNECTED -> R.string.ma_hero_connected
+                },
+            )
         heroProgress.visibility = if (s == HeroState.CONNECTING) View.VISIBLE else View.GONE
         heroStats.visibility = if (s == HeroState.CONNECTED) View.VISIBLE else View.GONE
 
@@ -1389,20 +1439,20 @@ class MainActivity : AppCompatActivity() {
                 val pending = pendingResidualDisplays
                 heroSubline.text =
                     if (pending != null) {
-                        "上次会话异常退出，遗留 ${pending.size} 个虚拟屏待清理"
+                        getString(R.string.ma_hero_residual, pending.size)
                     } else {
-                        "与车机蓝牙完成配对后，点击下方按钮发起无线连接"
+                        getString(R.string.main_hero_idle_hint)
                     }
-                styleCta(R.drawable.bg_cta_fill, R.color.m3_on_primary, R.drawable.ic_play, "启动连接")
+                styleCta(R.drawable.bg_cta_fill, R.color.m3_on_primary, R.drawable.ic_play, getString(R.string.main_cta_start))
                 audioTag.visibility = View.GONE
             }
             HeroState.CONNECTING -> {
-                heroSubline.text = SessionController.phaseHint ?: DEFAULT_CONNECTING_HINT
-                styleCta(R.drawable.bg_cta_fill, R.color.m3_on_primary, R.drawable.ic_close, "取消连接")
+                heroSubline.text = SessionController.phaseHint ?: getString(R.string.ma_connecting_hint)
+                styleCta(R.drawable.bg_cta_fill, R.color.m3_on_primary, R.drawable.ic_close, getString(R.string.ma_cancel_connect))
                 audioTag.visibility = View.GONE
             }
             HeroState.CONNECTED -> {
-                styleCta(R.drawable.bg_cta_outline_err, R.color.m3_error, R.drawable.ic_power, "断开连接")
+                styleCta(R.drawable.bg_cta_outline_err, R.color.m3_error, R.drawable.ic_power, getString(R.string.ma_cta_disconnect))
                 audioTag.visibility = View.VISIBLE
             }
         }
@@ -1436,8 +1486,8 @@ class MainActivity : AppCompatActivity() {
             ssidInput.text
                 .toString()
                 .trim()
-                .ifEmpty { "车机热点" }
-        heroSubline.text = String.format(Locale.US, "已连接 · %s · %02d:%02d · 视频推流中", ssid, mm, ss)
+                .ifEmpty { getString(R.string.main_hotspot_title) }
+        heroSubline.text = getString(R.string.ma_connected_subline, ssid, mm, ss)
     }
 
     private fun updateAudioTag() {
@@ -1452,7 +1502,7 @@ class MainActivity : AppCompatActivity() {
             )!!
         DrawableCompat.setTint(icon.mutate(), getColor(if (on) R.color.m3_ok else R.color.m3_outline))
         audioTag.setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null)
-        audioTag.text = if (on) "车机侧声音 · 开启" else "车机侧声音 · 关闭"
+        audioTag.text = getString(if (on) R.string.main_audio_tag_on else R.string.ma_audio_tag_off)
     }
 
     /** 连接准备计数：CarWith/CarLife 组件 / 热点 SSID / 蓝牙配对 / 音频来源。 */
@@ -1491,19 +1541,19 @@ class MainActivity : AppCompatActivity() {
             val target = TargetDevicePrefs.get(this)
             if (bondedCount > 0) {
                 btBadge.background.mutate().setTint(getColor(R.color.m3_ok_dot))
-                btBadge.text = "就绪"
+                btBadge.text = getString(R.string.main_badge_ready)
                 btDesc.text =
                     if (target != null) {
-                        "目标「${target.name}」· 只向该设备发请求"
+                        getString(R.string.ma_bt_target, target.name)
                     } else if (bondedCount > 1) {
-                        "已配对 $bondedCount 台 · 未指定目标将逐个尝试"
+                        getString(R.string.ma_bt_multi, bondedCount)
                     } else {
-                        "已与 $bondedCount 台设备配对 · 连接自动回连"
+                        getString(R.string.ma_bt_single, bondedCount)
                     }
             } else {
                 btBadge.background.mutate().setTint(getColor(R.color.m3_amber))
-                btBadge.text = "未配对"
-                btDesc.text = "尚未配对——点「选择设备」扫描并配对车机"
+                btBadge.text = getString(R.string.ma_badge_unpaired)
+                btDesc.text = getString(R.string.ma_bt_none)
             }
             // 目标设备已不在已配对列表（如系统里删了配对）时提示重选
             if (target != null && bondedCount > 0) {
@@ -1518,8 +1568,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 if (!stillBonded) {
                     btBadge.background.mutate().setTint(getColor(R.color.m3_amber))
-                    btBadge.text = "需重选"
-                    btDesc.text = "目标「${target.name}」已不在配对列表——请重新选择设备"
+                    btBadge.text = getString(R.string.ma_badge_repick)
+                    btDesc.text = getString(R.string.ma_bt_target_gone, target.name)
                 }
             }
             // 弹窗内可扫描并直接配对未配对设备，因此不再只在「已有配对」时显示：
@@ -1532,17 +1582,17 @@ class MainActivity : AppCompatActivity() {
             CarPlayService.mediaProjection != null
         if (CarLifeLauncher.isAvailable(this)) {
             val enabled = SessionController.audioEnabledForSession
-            btnAudio.text = if (enabled) "已开启" else "开启"
+            btnAudio.text = getString(if (enabled) R.string.ma_audio_enabled else R.string.ma_audio_on)
             btnAudio.setTextColor(getColor(if (enabled) R.color.m3_ok else R.color.m3_primary))
-            audioDesc.text = "使用 CarWith 原生声音 · 无需额外录屏授权"
+            audioDesc.text = getString(R.string.ma_audio_carwith_desc)
         } else if (projectionReady) {
-            btnAudio.text = "已授权"
+            btnAudio.text = getString(R.string.ma_audio_granted)
             btnAudio.setTextColor(getColor(R.color.m3_ok))
-            audioDesc.text = "投屏权限已就绪 · 连接时可选开启"
+            audioDesc.text = getString(R.string.ma_audio_projection_ready)
         } else {
-            btnAudio.text = "授权"
+            btnAudio.text = getString(R.string.main_audio_grant)
             btnAudio.setTextColor(getColor(R.color.m3_primary))
-            audioDesc.text = "需要「投屏」权限，可选 · 关闭时车机无声音"
+            audioDesc.text = getString(R.string.main_audio_desc_needs)
         }
         readyCount.text = "$ready/4"
     }
@@ -1553,12 +1603,12 @@ class MainActivity : AppCompatActivity() {
         val ready = resolved.source != DeviceIdentity.Source.NONE
         btIdentityBadge.background.mutate().setTint(getColor(if (ready) R.color.m3_ok_dot else R.color.m3_amber))
         btIdentityBadge.setTextColor(getColor(if (ready) R.color.m3_ok else R.color.m3_on_sec_container))
-        btIdentityBadge.text = if (ready) "就绪" else "未设置"
+        btIdentityBadge.text = getString(if (ready) R.string.main_badge_ready else R.string.ma_badge_not_set)
         btIdentityDesc.text =
             if (ready) {
-                "${resolved.mac} · ${DeviceIdentity.sourceLabel(resolved.source)}"
+                "${resolved.mac} · ${DeviceIdentity.sourceLabel(this, resolved.source)}"
             } else {
-                "未获取 · 启动 Shizuku 或点此手动填写（WinPlay 等接收端需要）"
+                getString(R.string.ma_bt_identity_missing)
             }
         val live = resolved.source == DeviceIdentity.Source.SHIZUKU || resolved.source == DeviceIdentity.Source.SETTINGS
         if (!live && state == ShizukuGate.State.READY && !btIdentityProbeRunning) {
@@ -1582,14 +1632,16 @@ class MainActivity : AppCompatActivity() {
             getColor(if (ready) R.color.m3_ok_dot else R.color.m3_amber),
         )
         shizukuBadge.setTextColor(getColor(if (ready) R.color.m3_ok else R.color.m3_on_sec_container))
-        shizukuBadge.text = if (ready) "就绪" else "未就绪"
+        shizukuBadge.text = getString(if (ready) R.string.main_badge_ready else R.string.ma_badge_not_ready)
         shizukuDesc.text =
-            when (state) {
-                ShizukuGate.State.READY -> "辅助能力可用 · 自动读取本机蓝牙地址"
-                ShizukuGate.State.NOT_RUNNING -> "可选 · 也可手动填写本机蓝牙地址"
-                ShizukuGate.State.UNAUTHORIZED -> "可选授权 · 也可手动填写本机蓝牙地址"
-                ShizukuGate.State.NOT_INSTALLED -> "未安装 · 也可手动填写本机蓝牙地址"
-            }
+            getString(
+                when (state) {
+                    ShizukuGate.State.READY -> R.string.ma_shizuku_ready
+                    ShizukuGate.State.NOT_RUNNING -> R.string.ma_shizuku_not_running
+                    ShizukuGate.State.UNAUTHORIZED -> R.string.ma_shizuku_unauthorized
+                    ShizukuGate.State.NOT_INSTALLED -> R.string.ma_shizuku_not_installed
+                },
+            )
     }
 
     // ---- 目标车机选择弹窗（扫描/配对状态）----
@@ -1624,8 +1676,8 @@ class MainActivity : AppCompatActivity() {
             } else if (!granted) {
                 pendingTargetScan = false
                 targetPicker?.let { _ ->
-                    updatePickerStatus("未授予「附近的设备」权限——无法扫描；可到系统设置授权后重开本弹窗", warn = true)
-                    pickerToast("未授予「附近的设备」权限——无法扫描附近设备")
+                    updatePickerStatus(getString(R.string.ma_scan_denied_status), warn = true)
+                    pickerToast(getString(R.string.ma_scan_denied_toast))
                 }
             }
         }
@@ -1642,7 +1694,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showTargetPicker() {
         if (ReceiverDetectionRuntime.detection.snapshot()?.state == ReceiverDetection.State.COLLECTING) {
-            snack("请先取消当前检测，再切换设备")
+            snack(getString(R.string.ma_cancel_detection_first))
             return
         }
         val adapter =
@@ -1653,7 +1705,7 @@ class MainActivity : AppCompatActivity() {
                 null
             }
         if (adapter == null || !adapter.isEnabled) {
-            snack("蓝牙未开启——请先开启蓝牙")
+            snack(getString(R.string.ma_bt_off_snack))
             return
         }
         val view = layoutInflater.inflate(R.layout.dialog_target_picker, null)
@@ -1695,9 +1747,9 @@ class MainActivity : AppCompatActivity() {
             removeAllViews()
             addView(
                 inflateTargetRow(
-                    name = "自动（不指定目标）",
-                    address = "逐个尝试 · 接受任一设备连入",
-                    action = if (current == null) "当前" else "选择",
+                    name = getString(R.string.ma_target_auto),
+                    address = getString(R.string.ma_target_auto_desc),
+                    action = getString(if (current == null) R.string.ma_target_current else R.string.ma_target_select),
                     highlighted = current == null,
                     iconTint = R.color.m3_outline,
                 ) {
@@ -1705,7 +1757,7 @@ class MainActivity : AppCompatActivity() {
                     log("TARGET: 已取消目标指定——出站逐个尝试已配对设备，入站接受任一设备")
                     // 先关弹窗再提示（snackbar 在 Activity 窗口内，会被弹窗盖住）
                     targetPicker?.dismiss()
-                    snack("已切换为自动（不指定目标）")
+                    snack(getString(R.string.ma_target_auto_set))
                 },
             )
         }
@@ -1719,7 +1771,7 @@ class MainActivity : AppCompatActivity() {
                 inflateTargetRow(
                     name = name,
                     address = address,
-                    action = if (isCurrent) "当前" else "选择",
+                    action = getString(if (isCurrent) R.string.ma_target_current else R.string.ma_target_select),
                     highlighted = isCurrent,
                     iconTint = R.color.m3_primary,
                 ) {
@@ -1786,7 +1838,7 @@ class MainActivity : AppCompatActivity() {
                 PackageManager.PERMISSION_GRANTED
         if (!granted) {
             pendingTargetScan = true
-            updatePickerStatus("需要「附近的设备」权限才能扫描…", warn = true)
+            updatePickerStatus(getString(R.string.ma_scan_needs_permission), warn = true)
             targetScanPermissionLauncher.launch(Manifest.permission.BLUETOOTH_SCAN)
             return
         }
@@ -1798,7 +1850,7 @@ class MainActivity : AppCompatActivity() {
                 .toSet()
         scannedTargets.clear()
         scannedList.removeAllViews()
-        updatePickerStatus("正在扫描附近的蓝牙设备…")
+        updatePickerStatus(getString(R.string.ma_scanning))
         stopTargetScan()
         val receiver =
             object : BroadcastReceiver() {
@@ -1841,7 +1893,7 @@ class MainActivity : AppCompatActivity() {
                 false
             }
         if (!started) {
-            updatePickerStatus("扫描启动失败——请确认蓝牙已开启后点「重新扫描」", warn = true)
+            updatePickerStatus(getString(R.string.ma_scan_failed), warn = true)
         } else {
             log("BT-SCAN: 开始扫描附近蓝牙设备")
         }
@@ -1867,7 +1919,7 @@ class MainActivity : AppCompatActivity() {
         // 扫描仍在继续：状态行保留并计数，用户知道还可以继续等其它设备。
         // 刻意不走 updatePickerStatus——它会把列表滚到状态行，发现新设备时抢滚动位置。
         dialog.findViewById<TextView>(R.id.scanStatus)?.apply {
-            text = "继续扫描中…已发现 ${scannedTargets.size} 台未配对设备"
+            text = getString(R.string.ma_scan_progress, scannedTargets.size)
             setTextColor(getColor(R.color.m3_mono_dim))
             visibility = View.VISIBLE
         }
@@ -1875,7 +1927,7 @@ class MainActivity : AppCompatActivity() {
             inflateTargetRow(
                 name = name,
                 address = "$address · ${rssi}dBm",
-                action = "配对",
+                action = getString(R.string.ma_target_pair),
                 highlighted = false,
                 iconTint = R.color.m3_amber,
             ) {
@@ -1904,11 +1956,11 @@ class MainActivity : AppCompatActivity() {
             }
         if (ok) {
             log("BT-PAIR: 已发起与「$name」($address) 的配对——请在系统弹窗确认")
-            pickerNotice("正在配对「$name」：请在系统弹窗确认")
+            pickerNotice(getString(R.string.ma_pairing, name))
         } else {
             pendingBondAddress = null
             log("BT-PAIR: 配对「$name」($address) 发起失败（设备可能已配对或蓝牙忙）")
-            pickerNotice("无法发起配对——请在系统蓝牙设置中手动配对")
+            pickerNotice(getString(R.string.ma_pair_start_failed))
         }
     }
 
@@ -2001,7 +2053,7 @@ class MainActivity : AppCompatActivity() {
                 pendingBondAddress = null
                 log("BT-PAIR: 与 $address 配对未完成（用户取消或失败）")
                 // 弹窗仍开着：用 Toast（浮在弹窗之上）+ 弹窗内状态行，不用被遮挡的 snackbar
-                pickerNotice("配对未完成——可再点「配对」重试，或到系统蓝牙设置手动配对")
+                pickerNotice(getString(R.string.ma_pair_incomplete))
             }
             // BOND_BONDING：继续等（系统确认框未应答）
         }
@@ -2030,7 +2082,7 @@ class MainActivity : AppCompatActivity() {
                     ""
                 },
         )
-        snack("目标已设为「$name」——只向该设备发请求")
+        snack(getString(R.string.ma_target_set, name))
         updateReadyRow()
     }
 
@@ -2073,7 +2125,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 device.address
             } catch (_: SecurityException) {
-                "未知设备"
+                getString(R.string.ma_unknown_device)
             }
         }
 
@@ -2093,7 +2145,7 @@ class MainActivity : AppCompatActivity() {
             ShizukuGate
                 .state(this) ==
                 ShizukuGate.State.READY
-        shizukuChip.text = if (ready) "车机服务在线" else "Shizuku 未就绪"
+        shizukuChip.text = getString(if (ready) R.string.main_shizuku_chip_online else R.string.ma_shizuku_chip_off)
         shizukuChip.compoundDrawables.getOrNull(0)?.let {
             DrawableCompat.setTint(
                 it.mutate(),
@@ -2101,7 +2153,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
         // 副标题与原型一致：设备名 · Shizuku 状态（点色随状态）
-        deviceSubtitle.text = "${deviceName()} · ${if (ready) "Shizuku 就绪" else "Shizuku 未就绪"}"
+        deviceSubtitle.text = getString(if (ready) R.string.ma_subtitle_shizuku_ready else R.string.ma_subtitle_shizuku_off, deviceName())
         deviceSubtitle.compoundDrawables.getOrNull(0)?.let {
             DrawableCompat.setTint(
                 it.mutate(),
@@ -2137,7 +2189,7 @@ class MainActivity : AppCompatActivity() {
      * 存储满/媒体库异常失败）。
      */
     private fun exportLogFile(scope: LogExporter.Scope = LogExporter.Scope.SUPPORT) {
-        snack("正在生成脱敏诊断报告…")
+        snack(getString(R.string.ma_exporting))
         val fallback = SessionController.logText()
         val knownNames = diagnosticNames()
         Bg.run("export-log") {
@@ -2145,38 +2197,43 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 if (result == null) {
-                    snack("导出失败——请检查存储空间后重试", 4_000L)
+                    snack(getString(R.string.ma_export_failed), 4_000L)
                     return@runOnUiThread
                 }
                 log("日志已导出（${scope.label}）: ${result.displayPath}（${result.bytes} 字节）")
                 val scopeNote =
-                    if (scope == LogExporter.Scope.SUPPORT) {
-                        "包含环境、连接阶段、媒体计数、异常、系统退出记录及最近历史。运行日志尾部最多 512KB，关键事件最多 256KB。"
-                    } else if (scope == LogExporter.Scope.CURRENT_SESSION) {
-                        "仅含本次 App 启动之后的日志。需要更早的历史，请长按导出按钮。"
-                    } else {
-                        "包含最近两段历史日志（最多约 4MB），更早记录可能已滚动覆盖。"
-                    }
+                    getString(
+                        if (scope == LogExporter.Scope.SUPPORT) {
+                            R.string.ma_scope_support
+                        } else if (scope == LogExporter.Scope.CURRENT_SESSION) {
+                            R.string.ma_scope_current
+                        } else {
+                            R.string.ma_scope_all
+                        },
+                    )
                 DarkMessageDialog.show(
                     this,
-                    title = "脱敏诊断报告已导出",
+                    title = getString(R.string.ma_export_done_title),
                     message =
-                        "文件位置：\n${result.displayPath}\n\n" +
-                            "报告编号：${result.reportId.take(8)}\n大小：${formatBytes(result.bytes)}\n$scopeNote\n\n" +
-                            "已自动处理常见敏感字段；分享前仍请检查。请同时说明复现步骤、故障时间、接收端型号和屏幕提示。\n\n" +
-                            "可在「文件管理 → 下载 → mcarplay」中找到，也可直接分享给开发者排查问题。",
+                        getString(
+                            R.string.ma_export_done_body,
+                            result.displayPath,
+                            result.reportId.take(8),
+                            formatBytes(result.bytes),
+                            scopeNote,
+                        ),
                     actions =
                         listOf(
-                            DarkMessageDialog.Action("打开文件", DarkMessageDialog.Emphasis.PRIMARY) {
+                            DarkMessageDialog.Action(getString(R.string.ma_open_file), DarkMessageDialog.Emphasis.PRIMARY) {
                                 openExportedFile(result.uri, result.displayPath)
                             },
-                            DarkMessageDialog.Action("打开文件夹") {
+                            DarkMessageDialog.Action(getString(R.string.ma_open_folder)) {
                                 openExportFolder(result.displayPath)
                             },
-                            DarkMessageDialog.Action("分享文件") {
+                            DarkMessageDialog.Action(getString(R.string.ma_share_file)) {
                                 shareExportedFile(result.uri)
                             },
-                            DarkMessageDialog.Action("关闭", onClick = {}),
+                            DarkMessageDialog.Action(getString(R.string.action_close), onClick = {}),
                         ),
                 )
             }
@@ -2193,7 +2250,7 @@ class MainActivity : AppCompatActivity() {
     /** 人类可读大小：<1KB 显示字节（整数除法会显示成误导性的「0 KB」）。 */
     private fun formatBytes(bytes: Long): String =
         when {
-            bytes < 1024 -> "$bytes 字节"
+            bytes < 1024 -> getString(R.string.ma_bytes, bytes.toInt())
             bytes < 1024 * 1024 -> "${bytes / 1024} KB"
             else -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
         }
@@ -2239,11 +2296,11 @@ class MainActivity : AppCompatActivity() {
             }
         for (intent in listOf(explicit, implicit, storageRoot)) {
             if (runCatching { startActivity(intent) }.isSuccess) {
-                if (intent !== explicit) snack("请按路径打开：$folder", 5_000L)
+                if (intent !== explicit) snack(getString(R.string.ma_open_by_path, folder), 5_000L)
                 return
             }
         }
-        snack("请到「文件管理 → 下载 → mcarplay」查看", 5_000L)
+        snack(getString(R.string.ma_open_downloads), 5_000L)
     }
 
     /** 用系统默认应用打开（多数 ROM 会落到文件管理器 / 文本查看器预览）。 */
@@ -2267,10 +2324,10 @@ class MainActivity : AppCompatActivity() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
         if (runCatching { startActivity(storageRoot) }.isSuccess) {
-            snack("请按路径打开：$displayPath", 5_000L)
+            snack(getString(R.string.ma_open_by_path, displayPath), 5_000L)
             return
         }
-        snack("没有可打开文件的应用——请到文件管理器中按上述路径查找", 5_000L)
+        snack(getString(R.string.ma_no_viewer), 5_000L)
     }
 
     /** 分享日志文件（微信/QQ/邮件等），内容 URI 带临时读权限。 */
@@ -2281,8 +2338,8 @@ class MainActivity : AppCompatActivity() {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-        runCatching { startActivity(Intent.createChooser(send, "分享日志文件")) }
-            .onFailure { snack("没有可分享的应用") }
+        runCatching { startActivity(Intent.createChooser(send, getString(R.string.ma_share_chooser))) }
+            .onFailure { snack(getString(R.string.ma_no_share_app)) }
     }
 
     private fun updateLogBottomButton() {
@@ -2312,7 +2369,7 @@ class MainActivity : AppCompatActivity() {
         // 改文本前已在底部（或用户上翻阅读中）：决定本次是否自动跟底
         val follow = consoleAtBottom()
         logText.text =
-            if (SessionController.logEnabled) text else "界面日志已隐藏；文件诊断仍在记录，可直接导出报告"
+            if (SessionController.logEnabled) text else getString(R.string.ma_log_hidden)
         logText.post {
             if (follow) scrollConsoleToBottom() else updateLogBottomButton()
         }
@@ -2379,7 +2436,7 @@ class MainActivity : AppCompatActivity() {
             startupCheckRunning = true
             tickHero()
         }
-        shellStateText.text = "读取中…"
+        shellStateText.text = getString(R.string.ma_shell_reading)
         Bg.run("shell-state") {
             if (ShizukuGate
                     .state(this) !=
@@ -2388,7 +2445,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     startupCheckRunning = false
                     if (heroState == HeroState.IDLE) applyHeroState(HeroState.IDLE)
-                    shellStateText.text = "Shizuku 未就绪——shell 状态读取需要 Shizuku"
+                    shellStateText.text = getString(R.string.ma_shell_needs_shizuku)
                 }
                 return@run
             }
@@ -2407,13 +2464,18 @@ class MainActivity : AppCompatActivity() {
             val timeout = sh("settings get system screen_off_timeout").ifBlank { "?" }
             val text =
                 buildString {
-                    appendLine("letterbox 宽高比: $letterbox  （1.05=会话调优生效；0.0=系统默认）")
-                    appendLine("force_resizable: $forceResizable  （平板模式实验；默认 null/0）")
-                    appendLine("overlay_display_devices: $overlay  （叠加屏实验残留；应为 null）")
+                    appendLine(getString(R.string.ma_shell_letterbox, letterbox))
+                    appendLine(getString(R.string.ma_shell_resizable, forceResizable))
+                    appendLine(getString(R.string.ma_shell_overlay, overlay))
                     appendLine("wm size: $wmSize")
                     appendLine("wm density: $wmDensity")
-                    appendLine("CarPlay 虚拟屏: " + displays.trim().replace("\n", ", ").ifEmpty { "无" })
-                    appendLine("screen_off_timeout: $timeout  （App 常亮功能管理）")
+                    appendLine(
+                        getString(
+                            R.string.ma_shell_displays,
+                            displays.trim().replace("\n", ", ").ifEmpty { getString(R.string.ma_shell_none) },
+                        ),
+                    )
+                    appendLine(getString(R.string.ma_shell_timeout, timeout))
                 }
             runOnUiThread { shellStateText.text = text.trim() }
             if (startupCheck) {
@@ -2490,14 +2552,12 @@ class MainActivity : AppCompatActivity() {
         val names = residual.joinToString("\n") { "· ${it.second}（displayId=${it.first}）" }
         DarkMessageDialog.show(
             activity = this,
-            title = "检测到残留虚拟屏",
-            message =
-                "发现 ${residual.size} 个上次会话遗留的 CarPlay 虚拟屏：\n$names\n\n" +
-                    "残留屏会持续占用显示资源，并可能影响下次连接。是否立即清理？",
+            title = getString(R.string.ma_residual_title),
+            message = getString(R.string.ma_residual_body, residual.size, names),
             actions =
                 listOf(
-                    DarkMessageDialog.Action("暂不") {},
-                    DarkMessageDialog.Action("清理", DarkMessageDialog.Emphasis.PRIMARY) {
+                    DarkMessageDialog.Action(getString(R.string.action_not_now)) {},
+                    DarkMessageDialog.Action(getString(R.string.ma_clean), DarkMessageDialog.Emphasis.PRIMARY) {
                         pendingResidualDisplays = null
                         updateResidualChip()
                         if (heroState == HeroState.IDLE) applyHeroState(HeroState.IDLE)
@@ -2505,7 +2565,7 @@ class MainActivity : AppCompatActivity() {
                             val released = releaseDisplays(residual.map { it.first })
                             log("SHELL: 残留虚拟屏清理完成（释放 $released/${residual.size}）")
                             runOnUiThread {
-                                snack("已释放 $released/${residual.size} 个残留屏")
+                                snack(getString(R.string.ma_residual_released, released, residual.size))
                                 refreshShellState()
                             }
                         }
@@ -2554,13 +2614,13 @@ class MainActivity : AppCompatActivity() {
 
     /** 一键把 shell 全局状态复位为系统默认值（含残留虚拟屏释放，保留当前会话屏）。 */
     private fun resetShellState() {
-        shellStateText.text = "复位中…"
+        shellStateText.text = getString(R.string.ma_shell_resetting)
         Bg.run("shell-reset") {
             if (ShizukuGate
                     .state(this) !=
                 ShizukuGate.State.READY
             ) {
-                runOnUiThread { shellStateText.text = "Shizuku 未就绪——shell 复位需要 Shizuku" }
+                runOnUiThread { shellStateText.text = getString(R.string.ma_shell_reset_needs_shizuku) }
                 return@run
             }
 
@@ -2569,8 +2629,8 @@ class MainActivity : AppCompatActivity() {
                     .exec(cmd, 5_000L)
             val steps =
                 listOf(
-                    "letterbox 宽高比" to "cmd window reset-letterbox-style aspectRatio",
-                    "overlay 叠加屏" to "settings delete global overlay_display_devices",
+                    getString(R.string.ma_shell_step_letterbox) to "cmd window reset-letterbox-style aspectRatio",
+                    getString(R.string.ma_shell_step_overlay) to "settings delete global overlay_display_devices",
                     "force_resizable" to "settings delete global force_resizable_activities",
                     "wm size" to "wm size reset",
                     "wm density" to "wm density reset",
@@ -2590,9 +2650,7 @@ class MainActivity : AppCompatActivity() {
             val summary = results.joinToString("；") + "；残留屏释放 $released/${ids.size}"
             log("SHELL-RESET: $summary")
             runOnUiThread {
-                shellStateText.text = "复位结果：\n" + results.joinToString("\n") +
-                    "\n残留虚拟屏: 释放 $released/${ids.size}（保留当前会话屏）\n" +
-                    "提示：letterbox 调优会在下次连接时自动重新应用"
+                shellStateText.text = getString(R.string.ma_shell_reset_result, results.joinToString("\n"), released, ids.size)
                 refreshShellState()
             }
         }
@@ -2603,17 +2661,14 @@ class MainActivity : AppCompatActivity() {
         if (android.provider.Settings.canDrawOverlays(this)) return
         DarkMessageDialog.show(
             activity = this,
-            title = "需要「显示在其他应用上层」权限",
-            message =
-                "$reason\n\n" +
-                    "用途：无操作时真息屏（屏幕断电但不锁屏，防止手机锁屏后车机触摸失效）。" +
-                    "不会读取或遮挡其他应用内容，点击屏幕立即恢复。",
+            title = getString(R.string.ma_overlay_title),
+            message = getString(R.string.ma_overlay_body, reason),
             actions =
                 listOf(
-                    DarkMessageDialog.Action("暂不") {
+                    DarkMessageDialog.Action(getString(R.string.action_not_now)) {
                         log("DIMMER: 用户暂未授权悬浮窗（暗幕不可用，常亮仍生效）")
                     },
-                    DarkMessageDialog.Action("去授权", DarkMessageDialog.Emphasis.PRIMARY) {
+                    DarkMessageDialog.Action(getString(R.string.action_go_grant), DarkMessageDialog.Emphasis.PRIMARY) {
                         try {
                             startActivity(
                                 android.content.Intent(
@@ -2788,6 +2843,8 @@ class MainActivity : AppCompatActivity() {
         // 强制声明不得随 Activity 销毁残留窗口（旋转时 Activity 重建，onResume 会续弹）
         runCatching { activeDisclaimer?.dismiss() }
         activeDisclaimer = null
+        runCatching { activeWhatsNew?.dismiss() }
+        activeWhatsNew = null
         shizukuPermissionListener?.let {
             runCatching { rikka.shizuku.Shizuku.removeRequestPermissionResultListener(it) }
         }

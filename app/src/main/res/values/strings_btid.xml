@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
+    <string name="bt_identity_intro">WinPlay 等接收端会核对手机的真实蓝牙地址，Android 不允许普通应用直接读取。已启动 Shizuku 时自动读取并保存；不用 Shizuku 时，请在手机设置里查到「蓝牙地址」后填在这里（通常在「设置 → 我的设备 → 全部参数与信息」或「状态信息」中）。</string>
+    <string name="bt_identity_current">当前使用：%1$s</string>
+    <string name="bt_identity_value">%1$s（%2$s）</string>
+    <string name="bt_identity_unknown">尚未获取</string>
+    <string name="bt_identity_mismatch">\n手动填写的 %1$s 与实时读取不一致，连接时以实时读取为准。</string>
+    <string name="bt_identity_hint">例如 AA:BB:CC:DD:EE:FF</string>
+    <string name="bt_identity_clear">清除手动地址</string>
+    <string name="action_save">保存</string>
+    <string name="bt_identity_empty">请输入 12 位十六进制蓝牙地址</string>
+    <string name="bt_identity_invalid">地址格式不对，或不是手机的公共蓝牙地址（例如 02:00:00:00:00:00 是系统占位值）</string>
+</resources>

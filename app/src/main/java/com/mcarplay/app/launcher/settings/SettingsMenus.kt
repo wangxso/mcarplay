@@ -1,5 +1,6 @@
 package com.mcarplay.app.launcher.settings
 
+import androidx.annotation.StringRes
 import androidx.fragment.app.Fragment
 import com.mcarplay.app.R
 
@@ -14,22 +15,23 @@ object SettingsMenus {
 
     data class Item(
         val id: Int,
-        val title: String,
-        val desc: String,
+        @StringRes val title: Int,
+        @StringRes val desc: Int,
         val iconRes: Int,
     )
 
     val ALL =
         listOf(
-            Item(DESKTOP, "管理桌面应用", "勾选的应用显示在车机桌面", R.drawable.ic_menu_grid),
-            Item(SUPERSAMPLE, "应用超采样", "竖屏应用渲染更精细，可三态调节", R.drawable.ic_menu_zoom),
-            Item(ORIENTATION, "应用横屏", "竖屏应用在车机横屏全屏显示", R.drawable.ic_screen_rotation),
-            Item(DOCK, "dock 栏设置", "壁纸暗幕透明度与模糊程度", R.drawable.ic_menu_dock),
-            Item(DEFAULT_MAP, "默认地图", "仪表盘地图屏使用的地图应用", R.drawable.ic_menu_map),
-            Item(DISPLAY, "显示", "流分辨率缩放与目标帧率", R.drawable.ic_menu_display),
+            Item(DESKTOP, R.string.lay_manage_apps, R.string.sm_desktop_desc, R.drawable.ic_menu_grid),
+            Item(SUPERSAMPLE, R.string.lay_supersample, R.string.sm_supersample_desc, R.drawable.ic_menu_zoom),
+            Item(ORIENTATION, R.string.lay_landscape, R.string.sm_orientation_desc, R.drawable.ic_screen_rotation),
+            Item(DOCK, R.string.lay_dock, R.string.sm_dock_desc, R.drawable.ic_menu_dock),
+            Item(DEFAULT_MAP, R.string.lay_default_map, R.string.sm_map_desc, R.drawable.ic_menu_map),
+            Item(DISPLAY, R.string.lay_display, R.string.sm_display_desc, R.drawable.ic_menu_display),
         )
 
-    fun titleOf(id: Int): String = ALL.first { it.id == id }.title
+    @StringRes
+    fun titleOf(id: Int): Int = ALL.first { it.id == id }.title
 
     fun createFragment(id: Int): Fragment =
         when (id) {

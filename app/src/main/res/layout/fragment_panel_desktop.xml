@@ -28,7 +28,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
             android:gravity="center"
-            android:text="正在读取应用列表…"
+            android:text="@string/lay_loading_apps"
             android:textColor="#7C8B8B"
             android:textSize="12.5sp" />
 

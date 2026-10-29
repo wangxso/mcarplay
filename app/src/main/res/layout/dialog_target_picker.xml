@@ -14,7 +14,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="选择目标车机"
+        android:text="@string/lay_pick_target"
         android:textColor="@color/m3_on_surface"
         android:textSize="17sp"
         android:textStyle="bold" />
@@ -23,7 +23,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="已配对设备可直接选用；点击未配对的设备会发起系统蓝牙配对"
+        android:text="@string/lay_pick_target_desc"
         android:textColor="@color/m3_on_var"
         android:textSize="11.5sp" />
 
@@ -55,7 +55,7 @@
                 android:paddingTop="4dp"
                 android:paddingEnd="4dp"
                 android:paddingBottom="7dp"
-                android:text="已配对"
+                android:text="@string/lay_paired"
                 android:textColor="@color/m3_mono_key"
                 android:textSize="11.5sp"
                 android:textStyle="bold" />
@@ -74,7 +74,7 @@
                 android:paddingTop="2dp"
                 android:paddingEnd="4dp"
                 android:paddingBottom="8dp"
-                android:text="暂无已配对设备——请在下方扫描并点击配对"
+                android:text="@string/lay_no_paired"
                 android:textColor="@color/m3_mono_dim"
                 android:textSize="11.5sp"
                 android:visibility="gone" />
@@ -92,7 +92,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:paddingStart="4dp"
-                    android:text="附近的设备"
+                    android:text="@string/lay_nearby"
                     android:textColor="@color/m3_mono_key"
                     android:textSize="11.5sp"
                     android:textStyle="bold" />
@@ -107,7 +107,7 @@
                     android:paddingTop="3dp"
                     android:paddingEnd="10dp"
                     android:paddingBottom="3dp"
-                    android:text="重新扫描"
+                    android:text="@string/lay_rescan"
                     android:textColor="@color/m3_primary"
                     android:textSize="11sp"
                     android:textStyle="bold" />
@@ -121,7 +121,7 @@
                 android:paddingTop="6dp"
                 android:paddingEnd="4dp"
                 android:paddingBottom="4dp"
-                android:text="正在扫描附近的蓝牙设备…"
+                android:text="@string/ma_scanning"
                 android:textColor="@color/m3_mono_dim"
                 android:textSize="11.5sp" />
 
@@ -140,7 +140,7 @@
         android:layout_marginTop="10dp"
         android:background="@drawable/bg_tbtn"
         android:gravity="center"
-        android:text="取消"
+        android:text="@string/action_cancel"
         android:textColor="@color/m3_on_var"
         android:textSize="13.5sp"
         android:textStyle="bold" />

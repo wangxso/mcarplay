@@ -31,7 +31,7 @@
             android:paddingTop="6dp"
             android:paddingRight="10dp"
             android:paddingBottom="6dp"
-            android:text="桌面"
+            android:text="@string/lay_home"
             android:textColor="#FF0A84FF"
             android:textSize="13sp" />
 
@@ -42,7 +42,7 @@
             android:layout_marginTop="12dp"
             android:layout_marginRight="8dp"
             android:letterSpacing="0.14"
-            android:text="车机设置"
+            android:text="@string/car_settings"
             android:textColor="#FF636366"
             android:textSize="11sp"
             android:textStyle="bold" />
@@ -69,7 +69,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginLeft="9dp"
-                android:text="管理桌面应用"
+                android:text="@string/lay_manage_apps"
                 android:textColor="#FFF5F5F7"
                 android:textSize="14sp"
                 android:textStyle="bold" />
@@ -97,7 +97,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginLeft="9dp"
-                android:text="应用超采样"
+                android:text="@string/lay_supersample"
                 android:textColor="#FF8E8E93"
                 android:textSize="14sp" />
         </LinearLayout>
@@ -124,7 +124,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginLeft="9dp"
-                android:text="应用横屏"
+                android:text="@string/lay_landscape"
                 android:textColor="#FF8E8E93"
                 android:textSize="14sp" />
         </LinearLayout>
@@ -151,7 +151,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginLeft="9dp"
-                android:text="dock 栏设置"
+                android:text="@string/lay_dock"
                 android:textColor="#FF8E8E93"
                 android:textSize="14sp" />
         </LinearLayout>
@@ -178,7 +178,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginLeft="9dp"
-                android:text="默认地图"
+                android:text="@string/lay_default_map"
                 android:textColor="#FF8E8E93"
                 android:textSize="14sp" />
         </LinearLayout>
@@ -205,7 +205,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginLeft="9dp"
-                android:text="显示"
+                android:text="@string/lay_display"
                 android:textColor="#FF8E8E93"
                 android:textSize="14sp" />
         </LinearLayout>

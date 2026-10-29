@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cd_home">Back to home</string>
+    <string name="lay_home">Home</string>
+    <string name="lay_manage_apps">Home apps</string>
+    <string name="lay_supersample">App supersampling</string>
+    <string name="lay_landscape">Landscape apps</string>
+    <string name="lay_dock">Dock</string>
+    <string name="lay_default_map">Default map</string>
+    <string name="lay_display">Display</string>
+    <string name="lay_map_desc">The map app used on the dashboard map screen; takes effect when selected.</string>
+    <string name="lay_disclaimer_intro">Please read this in full before first use. After accepting, you can reread it at the bottom of the main screen.</string>
+    <string name="lay_decline">Don\'t use</string>
+    <string name="lay_auto">Auto</string>
+    <string name="lay_off">Off</string>
+    <string name="lay_ss_desc">Supersampling renders at 1.5× resolution and scales back down, which shrinks the empty band above portrait apps; turn it off for landscape apps (sharper and smoother). Auto = on when a portrait app is detected.</string>
+    <string name="lay_loading_apps">Loading apps…</string>
+    <string name="cd_back">Back</string>
+    <string name="lay_media">Media</string>
+    <string name="lay_not_playing">Not playing</string>
+    <string name="lay_media_unavailable">Media info not connected</string>
+    <string name="cd_bt_device">Bluetooth device</string>
+    <string name="lay_display_desc">The video stream renders the virtual display and encoded picture at a percentage of the head-unit resolution (the logical layout is unchanged). Resolution changes apply on the next connection; frame rate is the streaming refresh rate and applies immediately.</string>
+    <string name="lay_screen_off">Turn the panel off while connected</string>
+    <string name="lay_on">On</string>
+    <string name="lay_off_short">Off</string>
+    <string name="lay_screen_off_desc">After connecting, the phone panel is physically powered off (the system stays awake and the virtual display keeps rendering); when off, only dimming is used. Press the power button twice to restore the screen.</string>
+    <string name="lay_auto_connect">Connect automatically in the car</string>
+    <string name="lay_auto_connect_desc">Starts a session when the head unit connects over Bluetooth (Shizuku must be running). Starting in the background needs the \"Display over other apps\" permission, which is granted automatically if missing.</string>
+    <string name="lay_hid_raw">Raw HID log</string>
+    <string name="lay_hid_raw_desc">For key calibration: when on, each HID report is logged as a HID-RAW line (uuid + hex bytes) so you can match steering-wheel/knob presses to key mappings. Keep it off normally to avoid flooding the log.</string>
+    <string name="lay_plain_fallback">Fallback: try unencrypted after pairing fails</string>
+    <string name="lay_plain_fallback_desc">Off by default. When pairing fails (except 403) but the receiver is reachable, try one unencrypted session. Turn on only if the receiver always stalls at pairing and you know it supports only unencrypted sessions; applies on the next connection.</string>
+    <string name="lay_audio_fallback">Fallback: try audio when no format is declared</string>
+    <string name="lay_audio_fallback_desc">Off by default. When the receiver declares no usable media audio format, still try the default PCM 48k. Turn on only if the car can play sound but mcarplay always sends video only; this may cause silence or a disconnect. Applies on the next connection.</string>
+    <string name="lay_stream_resolution">Stream resolution</string>
+    <string name="lay_next_connection">Applies on the next connection</string>
+    <string name="lay_target_fps">Target frame rate</string>
+    <string name="lay_target_fps_desc">Changes apply immediately while connected; the status card shows actual/target frame rate</string>
+    <string name="lay_touch_throttle">Touch injection throttle</string>
+    <string name="lay_touch_throttle_desc">Raise it if touch lags while the frame rate is normal (events piling up); applies as you drag</string>
+    <string name="lay_orientation_desc">When on, portrait apps render full-screen landscape on the car display. The switch is saved and applies on the next connection; the system override lasts only for the session and is undone automatically afterwards, so apps return to their normal orientation. Note: some text may get larger or smaller. Toggling restarts the app right away (a running app loses unsaved screen state).</string>
+    <string name="lay_pick_target">Choose the target head unit</string>
+    <string name="lay_pick_target_desc">Paired devices can be selected directly; tapping an unpaired device starts system Bluetooth pairing</string>
+    <string name="lay_paired">Paired</string>
+    <string name="lay_no_paired">No paired devices yet; scan below and tap one to pair</string>
+    <string name="lay_nearby">Nearby devices</string>
+    <string name="lay_rescan">Scan again</string>
+    <string name="lay_dock_desc">Adjust the dimming opacity and blur of the dock wallpaper; applies as you drag.</string>
+    <string name="lay_dim_opacity">Dimming opacity</string>
+    <string name="lay_blur">Background blur</string>
+    <string name="lay_dock_width">Dock width</string>
+    <string name="lay_dock_width_desc" formatted="false">Scales the whole dock (icons, clock, text) from 50% to 100%; applies on the next connection</string>
+</resources>

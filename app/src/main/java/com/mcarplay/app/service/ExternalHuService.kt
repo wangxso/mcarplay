@@ -10,8 +10,10 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.mcarplay.app.MainActivity
+import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.carlife.ExternalHuController
+import com.mcarplay.app.i18n.AppLanguage
 
 /**
  * Keeps the user-started secondary-HU emulation alive while CarWith connects.
@@ -58,14 +60,15 @@ class ExternalHuService : Service() {
     }
 
     private fun startForegroundNow() {
+        val text = AppLanguage.localized(this)
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                "CarWith 亿连发现诊断",
+                text.getString(R.string.carlife_hu_bridge_title),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "保持 CarWith 亿连发现链与 10930 应答"
+                description = text.getString(R.string.notif_hu_channel_desc)
                 setShowBadge(false)
             },
         )
@@ -82,8 +85,8 @@ class ExternalHuService : Service() {
             NotificationCompat
                 .Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-                .setContentTitle("CarWith 亿连发现诊断运行中")
-                .setContentText("等待 SDP → P2P → mDNS → 10930 握手")
+                .setContentTitle(text.getString(R.string.notif_hu_title))
+                .setContentText(text.getString(R.string.notif_hu_text))
                 .setContentIntent(contentIntent)
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)

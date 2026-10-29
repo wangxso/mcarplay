@@ -6,6 +6,8 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.IBinder
 import android.util.Log
+import androidx.annotation.StringRes
+import com.mcarplay.app.R
 import com.mcarplay.app.util.Bg
 import moe.shizuku.server.IShizukuService
 import java.io.FileInputStream
@@ -60,47 +62,21 @@ object ShizukuGate {
     internal fun guidanceOf(state: State): ShizukuGuidance =
         when (state) {
             State.NOT_INSTALLED ->
-                ShizukuGuidance(
-                    title = "需要先安装 Shizuku",
-                    message =
-                        "CarWith 画面与触控不依赖 Shizuku，可以直接连接。\n\n" +
-                            "若要使用旧版虚拟屏、物理息屏或自动网络切换，请安装 Shizuku App " +
-                            "并按官方说明启动服务（无线调试激活，免 root）。",
-                    primaryLabel = null,
-                )
-
+                ShizukuGuidance(R.string.shizuku_not_installed_title, R.string.shizuku_not_installed_body, primaryLabel = null)
             State.NOT_RUNNING ->
-                ShizukuGuidance(
-                    title = "Shizuku 服务未运行",
-                    message =
-                        "CarWith 画面与触控仍可正常连接；Shizuku 仅用于旧版虚拟屏、" +
-                            "物理息屏和部分自动网络操作。\n\n" +
-                            "需要这些辅助能力时，请打开 Shizuku App 点「启动」" +
-                            "（手机重启后需要重新启动一次）。",
-                    primaryLabel = "打开 Shizuku",
-                )
-
+                ShizukuGuidance(R.string.shizuku_not_running_title, R.string.shizuku_not_running_body, R.string.ma_open_shizuku)
             State.UNAUTHORIZED ->
-                ShizukuGuidance(
-                    title = "未授权本应用使用 Shizuku",
-                    message =
-                        "CarWith 画面与触控不依赖此授权，可以直接连接；授权仅影响旧版虚拟屏、" +
-                            "物理息屏和部分自动网络操作。\n\n" +
-                            "需要这些辅助能力时，请点「请求授权」并允许；若之前拒绝过，" +
-                            "请到 Shizuku App →「授权应用」里手动允许本应用。",
-                    primaryLabel = "请求授权",
-                )
-
-            State.READY -> ShizukuGuidance("Shizuku 就绪", "", null)
+                ShizukuGuidance(R.string.shizuku_unauthorized_title, R.string.shizuku_unauthorized_body, R.string.ma_request_permission)
+            State.READY -> ShizukuGuidance(R.string.shizuku_ready_title, null, null)
         }
 }
 
-/** Shizuku 未就绪时的引导内容（见 [ShizukuGate.guidanceOf]）。 */
+/** Shizuku 未就绪时的引导内容（字符串资源，随界面语言；见 [ShizukuGate.guidanceOf]）。 */
 internal data class ShizukuGuidance(
-    val title: String,
-    val message: String,
+    @StringRes val title: Int,
+    @StringRes val message: Int?,
     /** null = 本机没有可执行的主操作（未安装时无处可跳）。 */
-    val primaryLabel: String?,
+    @StringRes val primaryLabel: Int?,
 )
 
 /** 以 shell 身份执行命令（等同 adb shell）。Shizuku api 13 需经 IShizukuService binder 调 newProcess。 */

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="disclaimer_reread">You can come back to this notice at any time (current version v%1$d).</string>
+    <string name="disclaimer_accept">Accept</string>
+    <string name="disclaimer_accept_countdown">Accept (%1$ds)</string>
+    <string name="disclaimer_scroll_and_wait">Scroll to the bottom and wait %1$d s</string>
+    <string name="disclaimer_wait">Wait %1$d s before accepting</string>
+    <string name="disclaimer_scroll">Scroll to the bottom</string>
+</resources>

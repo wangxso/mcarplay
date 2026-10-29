@@ -51,7 +51,7 @@
                         android:gravity="center_vertical"
                         android:textColor="#7C8B8B"
                         android:textSize="11.5sp"
-                        android:text="设备检测中" />
+                        android:text="@string/main_device_detecting" />
                 </LinearLayout>
 
                 <TextView
@@ -64,7 +64,7 @@
                     android:gravity="center_vertical"
                     android:paddingStart="12dp"
                     android:paddingEnd="12dp"
-                    android:text="车机服务在线"
+                    android:text="@string/main_shizuku_chip_online"
                     android:textColor="@color/m3_on_var"
                     android:textSize="11.5sp"
                     android:textStyle="bold" />
@@ -140,7 +140,7 @@
                             android:layout_width="38dp"
                             android:layout_height="38dp"
                             android:layout_gravity="center"
-                            android:contentDescription="车机"
+                            android:contentDescription="@string/cd_head_unit"
                             android:src="@drawable/ic_car" />
                     </FrameLayout>
 
@@ -169,7 +169,7 @@
                         android:id="@+id/heroStateText"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="未连接"
+                        android:text="@string/main_hero_idle"
                         android:textColor="#EDF4F4"
                         android:textSize="25sp"
                         android:textStyle="bold" />
@@ -184,7 +184,7 @@
                         android:paddingTop="5dp"
                         android:paddingEnd="11dp"
                         android:paddingBottom="5dp"
-                        android:text="清理残留屏"
+                        android:text="@string/main_cleanup_residual"
                         android:textColor="#FFB4AB"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
@@ -198,7 +198,7 @@
                     android:layout_marginTop="7dp"
                     android:gravity="center"
                     android:maxWidth="300dp"
-                    android:text="与车机蓝牙完成配对后，点击下方按钮发起无线连接"
+                    android:text="@string/main_hero_idle_hint"
                     android:textColor="@color/m3_on_var"
                     android:textSize="12.5sp" />
 
@@ -218,7 +218,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:text="分辨率 100% · 30/30 fps"
+                    android:text="@string/main_hero_stats_sample"
                     android:textColor="#8E8E93"
                     android:textSize="11.5sp"
                     android:visibility="gone" />
@@ -239,7 +239,7 @@
                         android:id="@+id/ctaIcon"
                         android:layout_width="19dp"
                         android:layout_height="19dp"
-                        android:contentDescription="操作"
+                        android:contentDescription="@string/cd_action"
                         android:src="@drawable/ic_play" />
 
                     <TextView
@@ -248,7 +248,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginStart="9dp"
                         android:letterSpacing="0.06"
-                        android:text="启动连接"
+                        android:text="@string/main_cta_start"
                         android:textColor="@color/m3_on_primary"
                         android:textSize="15.5sp"
                         android:textStyle="bold" />
@@ -265,7 +265,7 @@
                     android:gravity="center_vertical"
                     android:paddingStart="13dp"
                     android:paddingEnd="13dp"
-                    android:text="车机侧声音 · 开启"
+                    android:text="@string/main_audio_tag_on"
                     android:textColor="@color/m3_on_var"
                     android:textSize="11.5sp"
                     android:textStyle="bold"
@@ -324,7 +324,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:letterSpacing="0.06"
-                        android:text="连接准备"
+                        android:text="@string/main_ready_title"
                         android:textColor="#8FA09F"
                         android:textSize="12.5sp"
                         android:textStyle="bold" />
@@ -390,7 +390,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="检查中…"
+                            android:text="@string/main_checking"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -404,7 +404,7 @@
                         android:paddingTop="4dp"
                         android:paddingEnd="10dp"
                         android:paddingBottom="4dp"
-                        android:text="就绪"
+                        android:text="@string/main_badge_ready"
                         android:textColor="@color/m3_ok"
                         android:textSize="11.5sp"
                         android:textStyle="bold" />
@@ -438,7 +438,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="本机蓝牙地址"
+                            android:contentDescription="@string/main_bt_identity_title"
                             android:src="@drawable/ic_id_card" />
                     </FrameLayout>
 
@@ -452,7 +452,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="本机蓝牙地址"
+                            android:text="@string/main_bt_identity_title"
                             android:textColor="@color/m3_on_surface"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -462,7 +462,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="检查中…"
+                            android:text="@string/main_checking"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -476,7 +476,7 @@
                         android:paddingTop="4dp"
                         android:paddingEnd="10dp"
                         android:paddingBottom="4dp"
-                        android:text="就绪"
+                        android:text="@string/main_badge_ready"
                         android:textColor="@color/m3_ok"
                         android:textSize="11.5sp"
                         android:textStyle="bold" />
@@ -507,7 +507,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="蓝牙"
+                            android:contentDescription="@string/cd_bluetooth"
                             android:src="@drawable/ic_bluetooth" />
                     </FrameLayout>
 
@@ -528,7 +528,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="蓝牙配对"
+                                android:text="@string/main_bt_title"
                                 android:textColor="@color/m3_on_surface"
                                 android:textSize="14.5sp"
                                 android:textStyle="bold" />
@@ -545,7 +545,7 @@
                                 android:paddingTop="4dp"
                                 android:paddingEnd="10dp"
                                 android:paddingBottom="4dp"
-                                android:text="选择设备"
+                                android:text="@string/main_pick_device"
                                 android:textColor="@color/m3_primary"
                                 android:textSize="12sp"
                                 android:textStyle="bold" />
@@ -556,7 +556,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="与车机蓝牙配对后 · 连接自动回连"
+                            android:text="@string/main_bt_desc_default"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -570,7 +570,7 @@
                         android:paddingTop="4dp"
                         android:paddingEnd="10dp"
                         android:paddingBottom="4dp"
-                        android:text="就绪"
+                        android:text="@string/main_badge_ready"
                         android:textColor="@color/m3_ok"
                         android:textSize="11sp"
                         android:textStyle="bold" />
@@ -604,7 +604,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="检测当前车机"
+                            android:contentDescription="@string/main_detection_title"
                             android:src="@drawable/ic_scan" />
                     </FrameLayout>
 
@@ -618,7 +618,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="检测当前车机"
+                            android:text="@string/main_detection_title"
                             android:textColor="@color/m3_on_surface"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -628,7 +628,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="检测连接参数，确认效果后保存到本机"
+                            android:text="@string/main_detection_idle"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -636,7 +636,7 @@
                     <ImageView
                         android:layout_width="22dp"
                         android:layout_height="22dp"
-                        android:contentDescription="进入"
+                        android:contentDescription="@string/cd_enter"
                         android:src="@drawable/ic_chev_right" />
                 </LinearLayout>
 
@@ -827,7 +827,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="热点"
+                            android:contentDescription="@string/cd_hotspot"
                             android:src="@drawable/ic_wifi" />
                     </FrameLayout>
 
@@ -841,7 +841,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="车机热点"
+                            android:text="@string/main_hotspot_title"
                             android:textColor="@color/m3_on_surface"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -852,7 +852,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
                             android:background="@drawable/bg_ssid_sel"
-                            android:hint="接收端热点 SSID（0x5703 下发）"
+                            android:hint="@string/main_hotspot_hint"
                             android:importantForAutofill="no"
                             android:inputType="text"
                             android:paddingStart="10dp"
@@ -875,7 +875,7 @@
                         android:paddingTop="9dp"
                         android:paddingEnd="12dp"
                         android:paddingBottom="9dp"
-                        android:text="去连接"
+                        android:text="@string/main_hotspot_go"
                         android:textColor="@color/m3_primary"
                         android:textSize="13sp"
                         android:textStyle="bold" />
@@ -906,7 +906,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="声音"
+                            android:contentDescription="@string/cd_sound"
                             android:src="@drawable/ic_speaker" />
                     </FrameLayout>
 
@@ -920,7 +920,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="车机侧声音"
+                            android:text="@string/main_audio_title"
                             android:textColor="@color/m3_on_surface"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -930,7 +930,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="需要「投屏」权限，可选 · 关闭时车机无声音"
+                            android:text="@string/main_audio_desc_needs"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -945,7 +945,7 @@
                         android:paddingTop="9dp"
                         android:paddingEnd="12dp"
                         android:paddingBottom="9dp"
-                        android:text="授权"
+                        android:text="@string/main_audio_grant"
                         android:textColor="@color/m3_primary"
                         android:textSize="13sp"
                         android:textStyle="bold" />
@@ -967,7 +967,7 @@
                     android:layout_height="wrap_content"
                     android:paddingTop="14dp"
                     android:letterSpacing="0.06"
-                    android:text="车机显示"
+                    android:text="@string/main_display_title"
                     android:textColor="#8FA09F"
                     android:textSize="12.5sp"
                     android:textStyle="bold" />
@@ -991,7 +991,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="常亮"
+                            android:contentDescription="@string/cd_always_on"
                             android:src="@drawable/ic_brightness" />
                     </FrameLayout>
 
@@ -1005,7 +1005,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="常亮 + 暗幕"
+                            android:text="@string/main_always_on_title"
                             android:textColor="@color/m3_on_surface"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -1014,7 +1014,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="手机不锁屏，无操作时真息屏（断电） · 车机不受影响"
+                            android:text="@string/main_always_on_desc"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -1059,7 +1059,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="假息屏"
+                            android:contentDescription="@string/cd_fake_off"
                             android:src="@drawable/ic_moon" />
                     </FrameLayout>
 
@@ -1073,7 +1073,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="立即假息屏"
+                            android:text="@string/main_dim_title"
                             android:textColor="@color/m3_on_surface"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -1082,7 +1082,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="点击手机屏幕任意处恢复"
+                            android:text="@string/main_dim_desc"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -1090,7 +1090,7 @@
                     <ImageView
                         android:layout_width="22dp"
                         android:layout_height="22dp"
-                        android:contentDescription="进入"
+                        android:contentDescription="@string/cd_enter"
                         android:src="@drawable/ic_chev_right" />
                 </LinearLayout>
 
@@ -1119,7 +1119,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="壁纸"
+                            android:contentDescription="@string/cd_wallpaper"
                             android:src="@drawable/ic_wallpaper" />
                     </FrameLayout>
 
@@ -1133,7 +1133,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="车机壁纸"
+                            android:text="@string/main_wallpaper_title"
                             android:textColor="@color/m3_on_surface"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -1142,7 +1142,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="全屏 aspectFill"
+                            android:text="@string/main_wallpaper_desc"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -1157,7 +1157,7 @@
                         android:paddingTop="9dp"
                         android:paddingEnd="12dp"
                         android:paddingBottom="9dp"
-                        android:text="更换"
+                        android:text="@string/main_wallpaper_change"
                         android:textColor="@color/m3_primary"
                         android:textSize="13sp"
                         android:textStyle="bold" />
@@ -1173,7 +1173,7 @@
                         android:paddingTop="9dp"
                         android:paddingEnd="12dp"
                         android:paddingBottom="9dp"
-                        android:text="恢复默认"
+                        android:text="@string/main_wallpaper_reset"
                         android:textColor="@color/m3_primary"
                         android:textSize="13sp"
                         android:textStyle="bold" />
@@ -1206,7 +1206,7 @@
                         android:layout_width="20dp"
                         android:layout_height="20dp"
                         android:layout_gravity="center"
-                        android:contentDescription="横屏"
+                        android:contentDescription="@string/cd_landscape"
                         android:src="@drawable/ic_menu_grid" />
                 </FrameLayout>
 
@@ -1220,7 +1220,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="车机设置"
+                        android:text="@string/car_settings"
                         android:textColor="@color/m3_on_surface"
                         android:textSize="14.5sp"
                         android:textStyle="bold" />
@@ -1229,7 +1229,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="桌面应用 · 应用横屏 · 超采样 · dock 栏 · 默认地图"
+                        android:text="@string/main_car_settings_desc"
                         android:textColor="@color/m3_on_var"
                         android:textSize="12sp" />
                 </LinearLayout>
@@ -1237,7 +1237,7 @@
                 <ImageView
                     android:layout_width="22dp"
                     android:layout_height="22dp"
-                    android:contentDescription="进入"
+                    android:contentDescription="@string/cd_enter"
                     android:src="@drawable/ic_chev_right" />
             </LinearLayout>
 
@@ -1277,7 +1277,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="终端"
+                            android:contentDescription="@string/cd_terminal"
                             android:src="@drawable/ic_terminal" />
                     </FrameLayout>
 
@@ -1291,7 +1291,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Shell 全局状态"
+                            android:text="@string/main_shell_title"
                             android:textColor="@color/m3_on_surface"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -1300,7 +1300,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="letterbox / 虚拟屏 / wm 覆盖 —— 调试排查用"
+                            android:text="@string/main_shell_desc"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -1309,7 +1309,7 @@
                         android:id="@+id/advChevron"
                         android:layout_width="22dp"
                         android:layout_height="22dp"
-                        android:contentDescription="展开"
+                        android:contentDescription="@string/cd_expand"
                         android:src="@drawable/ic_chev_down" />
                 </LinearLayout>
 
@@ -1329,7 +1329,7 @@
                         android:background="@drawable/bg_console"
                         android:fontFamily="monospace"
                         android:padding="12dp"
-                        android:text="(点「刷新」读取)"
+                        android:text="@string/main_shell_placeholder"
                         android:textColor="@color/m3_mono_dim"
                         android:textIsSelectable="true"
                         android:textSize="11sp" />
@@ -1355,7 +1355,7 @@
                             <ImageView
                                 android:layout_width="15dp"
                                 android:layout_height="15dp"
-                                android:contentDescription="刷新"
+                                android:contentDescription="@string/main_refresh"
                                 android:src="@drawable/ic_refresh" />
 
                             <TextView
@@ -1363,7 +1363,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="7dp"
                                 android:letterSpacing="0.03"
-                                android:text="刷新"
+                                android:text="@string/main_refresh"
                                 android:textColor="@color/m3_on_sec_container"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
@@ -1384,7 +1384,7 @@
                             <ImageView
                                 android:layout_width="15dp"
                                 android:layout_height="15dp"
-                                android:contentDescription="复位"
+                                android:contentDescription="@string/cd_reset"
                                 android:src="@drawable/ic_restart" />
 
                             <TextView
@@ -1392,7 +1392,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="7dp"
                                 android:letterSpacing="0.03"
-                                android:text="复位默认"
+                                android:text="@string/main_shell_reset"
                                 android:textColor="@color/m3_on_err_container"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
@@ -1437,7 +1437,7 @@
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_gravity="center"
-                            android:contentDescription="日志"
+                            android:contentDescription="@string/cd_log"
                             android:src="@drawable/ic_doc" />
                     </FrameLayout>
 
@@ -1451,7 +1451,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="运行日志"
+                            android:text="@string/main_log_title"
                             android:textColor="@color/m3_on_surface"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -1460,7 +1460,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="最近日志 · 可复制反馈问题"
+                            android:text="@string/main_log_desc"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -1469,7 +1469,7 @@
                         android:id="@+id/logChevron"
                         android:layout_width="22dp"
                         android:layout_height="22dp"
-                        android:contentDescription="展开"
+                        android:contentDescription="@string/cd_expand"
                         android:src="@drawable/ic_chev_down" />
                 </LinearLayout>
 
@@ -1492,7 +1492,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginEnd="4dp"
-                            android:text="显示日志"
+                            android:text="@string/main_log_show"
                             android:textColor="@color/m3_on_var"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -1515,7 +1515,7 @@
                             android:layout_width="36dp"
                             android:layout_height="36dp"
                             android:background="@drawable/bg_ripple_circle"
-                            android:contentDescription="清空界面日志"
+                            android:contentDescription="@string/cd_clear_log"
                             android:padding="9dp"
                             android:src="@drawable/ic_trash" />
 
@@ -1525,7 +1525,7 @@
                             android:layout_height="36dp"
                             android:layout_marginStart="4dp"
                             android:background="@drawable/bg_ripple_circle"
-                            android:contentDescription="复制日志"
+                            android:contentDescription="@string/cd_copy_log"
                             android:padding="9dp"
                             android:src="@drawable/ic_copy" />
 
@@ -1535,7 +1535,7 @@
                             android:layout_height="36dp"
                             android:layout_marginStart="4dp"
                             android:background="@drawable/bg_ripple_circle"
-                            android:contentDescription="导出日志文件"
+                            android:contentDescription="@string/cd_export_log"
                             android:padding="9dp"
                             android:src="@drawable/ic_export" />
                     </LinearLayout>
@@ -1567,13 +1567,75 @@
                             android:layout_gravity="bottom|end"
                             android:layout_margin="8dp"
                             android:background="@drawable/bg_icon_tile"
-                            android:contentDescription="跳到底部"
+                            android:contentDescription="@string/cd_scroll_bottom"
                             android:elevation="4dp"
                             android:padding="7dp"
                             android:src="@drawable/ic_chev_down"
                             android:visibility="gone" />
                     </FrameLayout>
                 </LinearLayout>
+            </LinearLayout>
+
+            <!-- 界面语言：中文 / English（日志与诊断报告不随语言变化） -->
+            <LinearLayout
+                android:id="@+id/btnLanguage"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_card"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="60dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="6dp">
+
+                <FrameLayout
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_icon_tile">
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@string/language_title"
+                        android:src="@drawable/ic_language" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="14dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/language_title"
+                        android:textColor="@color/m3_on_surface"
+                        android:textSize="14.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/languageDesc"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/language_name_zh"
+                        android:textColor="@color/m3_on_var"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:contentDescription="@string/cd_enter"
+                    android:src="@drawable/ic_chev_right" />
             </LinearLayout>
 
             <!-- 检查更新：与免责声明同款入口卡片 -->
@@ -1625,7 +1687,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="从 GitHub 发布页检查新版本"
+                        android:text="@string/main_update_desc"
                         android:textColor="@color/m3_on_var"
                         android:textSize="12sp" />
                 </LinearLayout>
@@ -1633,7 +1695,7 @@
                 <ImageView
                     android:layout_width="22dp"
                     android:layout_height="22dp"
-                    android:contentDescription="进入"
+                    android:contentDescription="@string/cd_enter"
                     android:src="@drawable/ic_chev_right" />
             </LinearLayout>
 
@@ -1663,7 +1725,7 @@
                         android:layout_width="20dp"
                         android:layout_height="20dp"
                         android:layout_gravity="center"
-                        android:contentDescription="免责声明"
+                        android:contentDescription="@string/main_disclaimer_title"
                         android:src="@drawable/ic_info_circle" />
                 </FrameLayout>
 
@@ -1677,7 +1739,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="免责声明"
+                        android:text="@string/main_disclaimer_title"
                         android:textColor="@color/m3_on_surface"
                         android:textSize="14.5sp"
                         android:textStyle="bold" />
@@ -1686,7 +1748,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="测试范围 · 驾驶风险 · 系统权限"
+                        android:text="@string/main_disclaimer_desc"
                         android:textColor="@color/m3_on_var"
                         android:textSize="12sp" />
                 </LinearLayout>
@@ -1694,7 +1756,7 @@
                 <ImageView
                     android:layout_width="22dp"
                     android:layout_height="22dp"
-                    android:contentDescription="进入"
+                    android:contentDescription="@string/cd_enter"
                     android:src="@drawable/ic_chev_right" />
             </LinearLayout>
 
@@ -1725,7 +1787,7 @@
                         android:layout_width="20dp"
                         android:layout_height="20dp"
                         android:layout_gravity="center"
-                        android:contentDescription="远程调试"
+                        android:contentDescription="@string/main_bridge_title"
                         android:src="@drawable/ic_remote_debug" />
                 </FrameLayout>
 
@@ -1739,7 +1801,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="远程调试"
+                        android:text="@string/main_bridge_title"
                         android:textColor="@color/m3_on_surface"
                         android:textSize="14.5sp"
                         android:textStyle="bold" />
@@ -1748,7 +1810,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="服务器地址 · 配对码 · 日志上报"
+                        android:text="@string/main_bridge_desc"
                         android:textColor="@color/m3_on_var"
                         android:textSize="12sp" />
                 </LinearLayout>
@@ -1756,7 +1818,7 @@
                 <ImageView
                     android:layout_width="22dp"
                     android:layout_height="22dp"
-                    android:contentDescription="进入"
+                    android:contentDescription="@string/cd_enter"
                     android:src="@drawable/ic_chev_right" />
             </LinearLayout>
 
@@ -1765,7 +1827,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:gravity="center"
-                android:text="连接由前台服务保活 · 退出本界面不影响会话"
+                android:text="@string/main_footer_service"
                 android:textColor="#576767"
                 android:textSize="11sp" />
 

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_not_installed_title">Install Shizuku first</string>
+    <string name="shizuku_not_installed_body">CarWith video and touch do not need Shizuku; you can connect right away.\n\nTo use legacy virtual displays, physical screen-off or automatic network switching, install the Shizuku app and start its service as its documentation describes (activated over wireless debugging, no root).</string>
+    <string name="shizuku_not_running_title">Shizuku service is not running</string>
+    <string name="shizuku_not_running_body">CarWith video and touch still connect normally; Shizuku is only used for legacy virtual displays, physical screen-off and some automatic network steps.\n\nIf you need them, open the Shizuku app and tap Start (once again after each phone restart).</string>
+    <string name="shizuku_unauthorized_title">mcarplay is not allowed to use Shizuku</string>
+    <string name="shizuku_unauthorized_body">CarWith video and touch do not need this permission; you can connect right away. It only affects legacy virtual displays, physical screen-off and some automatic network steps.\n\nIf you need them, tap Request permission and allow it; if you denied it before, allow mcarplay in the Shizuku app under Authorized applications.</string>
+    <string name="shizuku_ready_title">Shizuku is ready</string>
+    <string name="id_source_shizuku">read by Shizuku</string>
+    <string name="id_source_settings">read from system settings</string>
+    <string name="id_source_manual">entered manually</string>
+    <string name="id_source_remembered">saved from an earlier read</string>
+    <string name="id_source_none">not available</string>
+</resources>
