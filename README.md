@@ -115,6 +115,18 @@ same base version; use the release page for those. The `remote` flavor is exclud
 from standard APK updates. Offline checks pass; on-device installation is pending.
 See [update behavior, limitations and acceptance checks](docs/UPDATES.md).
 
+## Language and release notes
+
+The interface is available in Simplified Chinese (default) and English. Change it under
+**界面语言 / Language** on the main screen; on Android 13 and later it also appears in the
+system per-app language settings. Logs and diagnostic reports stay in Chinese so they can
+be compared with existing evidence.
+
+After each update, the first launch shows that version's release notes in the chosen
+language, taken from the `CHANGELOG.md` entry bundled into the APK (validation lines are
+omitted). A fresh install shows the disclaimer instead. The update page shows release
+notes in the chosen language as well.
+
 ## Connection troubleshooting
 
 Tap **导出脱敏诊断报告** on the main connection card, review it, then share the file

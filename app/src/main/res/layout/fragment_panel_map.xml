@@ -13,7 +13,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
         android:layout_marginBottom="11dp"
-        android:text="仪表盘地图屏使用的地图应用，选中即生效。"
+        android:text="@string/lay_map_desc"
         android:textColor="#FF8E8E93"
         android:textSize="12sp" />
 

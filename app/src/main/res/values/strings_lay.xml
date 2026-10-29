@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
+    <string name="cd_home">回到桌面</string>
+    <string name="lay_home">桌面</string>
+    <string name="lay_manage_apps">管理桌面应用</string>
+    <string name="lay_supersample">应用超采样</string>
+    <string name="lay_landscape">应用横屏</string>
+    <string name="lay_dock">dock 栏设置</string>
+    <string name="lay_default_map">默认地图</string>
+    <string name="lay_display">显示</string>
+    <string name="lay_map_desc">仪表盘地图屏使用的地图应用，选中即生效。</string>
+    <string name="lay_disclaimer_intro">首次使用前请完整阅读。接受后可在主界面底部随时重看。</string>
+    <string name="lay_decline">放弃使用</string>
+    <string name="lay_auto">自动</string>
+    <string name="lay_off">关闭</string>
+    <string name="lay_ss_desc">超采样以 1.5× 分辨率渲染再缩回，竖屏应用顶部空带更小；横屏应用建议关闭（更清晰流畅）。自动 = 检测为竖屏应用时开启。</string>
+    <string name="lay_loading_apps">正在读取应用列表…</string>
+    <string name="cd_back">返回</string>
+    <string name="lay_media">媒体</string>
+    <string name="lay_not_playing">未在播放</string>
+    <string name="lay_media_unavailable">媒体信息未连接</string>
+    <string name="cd_bt_device">蓝牙设备</string>
+    <string name="lay_display_desc">视频流按车机分辨率的百分比生成虚拟屏与编码画面（逻辑布局不变）。分辨率改动下次连接起效；帧率为推流刷新频率，切换实时生效。</string>
+    <string name="lay_screen_off">连接时真息屏</string>
+    <string name="lay_on">开</string>
+    <string name="lay_off_short">关</string>
+    <string name="lay_screen_off_desc">连接成功后物理断电手机面板（系统保持唤醒、虚拟屏照常渲染）；关闭则只用暗幕。按电源键两次可恢复屏幕。</string>
+    <string name="lay_auto_connect">上车自动连接</string>
+    <string name="lay_auto_connect_desc">车机蓝牙连上时自动拉起会话（需 Shizuku 已启动）。需要「显示在其他应用上层」权限才能在后台启动；该权限缺失时会自动补授。</string>
+    <string name="lay_hid_raw">HID 原始日志</string>
+    <string name="lay_hid_raw_desc">键位校准用：打开后每帧 HID 报文写一行 HID-RAW（uuid + hex 字节），对照按下方向盘/旋钮时打印的字节调整键位映射。平时请关闭，避免日志刷屏。</string>
+    <string name="lay_plain_fallback">兼容兜底：配对失败后尝试明文</string>
+    <string name="lay_plain_fallback_desc">默认关。配对失败（403 除外）但已连上接收端时，再试一次不加密的明文会话。仅当接收端始终卡在配对且确认它只支持明文时打开；下次连接起效。</string>
+    <string name="lay_audio_fallback">兼容兜底：音频格式未声明时仍尝试</string>
+    <string name="lay_audio_fallback_desc">默认关。接收端没有声明可用的媒体音频格式时，仍按默认 PCM 48k 尝试出声。仅当车机能播声音却总是只推视频时打开；可能出现无声或断开，下次连接起效。</string>
+    <string name="lay_stream_resolution">流分辨率</string>
+    <string name="lay_next_connection">保存后下次连接起效</string>
+    <string name="lay_target_fps">目标帧率</string>
+    <string name="lay_target_fps_desc">连接中切换实时生效；英雄卡实时显示「实际/目标」帧率</string>
+    <string name="lay_touch_throttle">触摸注入节流</string>
+    <string name="lay_touch_throttle_desc">交互滞后但帧率正常（事件派发堆积）时调高试验；拖动即时生效</string>
+    <string name="lay_orientation_desc">开启后竖屏应用在车机屏以横屏全屏渲染。开关本身持久保存，下次连接自动生效；系统覆盖仅在会话期间生效，会话结束自动复原，应用回到正常方向，无需手动处理。注意：部分界面文字可能变大或变小。切换开关时系统会立即重启目标应用使其生效（正在运行的应用会丢失未保存的界面状态）。</string>
+    <string name="lay_pick_target">选择目标车机</string>
+    <string name="lay_pick_target_desc">已配对设备可直接选用；点击未配对的设备会发起系统蓝牙配对</string>
+    <string name="lay_paired">已配对</string>
+    <string name="lay_no_paired">暂无已配对设备——请在下方扫描并点击配对</string>
+    <string name="lay_nearby">附近的设备</string>
+    <string name="lay_rescan">重新扫描</string>
+    <string name="lay_dock_desc">调整 dock 栏壁纸的暗幕透明度与高斯模糊程度，拖动即时生效。</string>
+    <string name="lay_dim_opacity">暗幕透明度</string>
+    <string name="lay_blur">背景模糊程度</string>
+    <string name="lay_dock_width">栏宽度</string>
+    <string name="lay_dock_width_desc" formatted="false">整条 Dock（图标/时钟/文字）等比缩放，50%–100%；保存后下次连接起效</string>
+</resources>

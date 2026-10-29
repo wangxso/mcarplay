@@ -13,7 +13,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
         android:layout_marginBottom="11dp"
-        android:text="超采样以 1.5× 分辨率渲染再缩回，竖屏应用顶部空带更小；横屏应用建议关闭（更清晰流畅）。自动 = 检测为竖屏应用时开启。"
+        android:text="@string/lay_ss_desc"
         android:textColor="#FF8E8E93"
         android:textSize="12sp" />
 
@@ -28,7 +28,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
             android:gravity="center"
-            android:text="正在读取应用列表…"
+            android:text="@string/lay_loading_apps"
             android:textColor="#7C8B8B"
             android:textSize="12.5sp" />
 

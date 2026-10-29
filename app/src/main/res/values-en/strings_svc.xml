@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notif_channel_connection">mcarplay connection</string>
+    <string name="notif_channel_connection_desc">Keeps the connection to the head unit</string>
+    <string name="notif_running_title">mcarplay is running</string>
+    <string name="notif_running_text">Keeping the connection to the head unit; open the app to see the log</string>
+    <string name="notif_hu_channel_desc">Keeps the CarWith EasyConn discovery chain and the 10930 responder</string>
+    <string name="notif_hu_title">CarWith EasyConn discovery diagnostics running</string>
+    <string name="notif_hu_text">Waiting for the SDP → P2P → mDNS → 10930 handshake</string>
+    <string name="cl_waiting_listeners">Waiting for CarWith to listen on its seven ports</string>
+    <string name="cl_real_frames">Receiving real video frames</string>
+    <string name="cl_waiting_first_frame">Video initialized, waiting for the first frame</string>
+    <string name="cl_handshake_failed">Handshake failed</string>
+    <string name="cl_handshaking">Seven ports connected, protocol handshake in progress</string>
+</resources>

@@ -22,7 +22,7 @@
             android:layout_width="18dp"
             android:layout_height="18dp"
             android:layout_gravity="center"
-            android:contentDescription="蓝牙设备"
+            android:contentDescription="@string/cd_bt_device"
             android:src="@drawable/ic_bluetooth" />
     </FrameLayout>
 
@@ -65,7 +65,7 @@
         android:paddingTop="4dp"
         android:paddingEnd="11dp"
         android:paddingBottom="4dp"
-        android:text="选择"
+        android:text="@string/ma_target_select"
         android:textColor="@color/m3_primary"
         android:textSize="11.5sp"
         android:textStyle="bold" />

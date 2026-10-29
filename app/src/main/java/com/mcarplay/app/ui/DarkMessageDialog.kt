@@ -52,7 +52,7 @@ object DarkMessageDialog {
     fun show(
         activity: Activity,
         title: String,
-        message: String,
+        message: CharSequence,
         actions: List<Action>,
         cancelable: Boolean = true,
         onCancel: (() -> Unit)? = null,

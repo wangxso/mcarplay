@@ -46,12 +46,12 @@ object SettingsRows {
         val offDesktop = apps.filter { it.component.flattenToString() !in selected }
         val rows = ArrayList<SettingsRow>(apps.size * 2)
         if (onDesktop.isNotEmpty()) {
-            rows += SettingsRow.Header("在桌面的应用（${onDesktop.size}）", "on")
+            rows += SettingsRow.Header(context.getString(R.string.sr_on_home, onDesktop.size), "on")
             // 扁平直出（清单本身按拼音有序，过滤后仍有序），不分字母节、不进导航条
             rows += onDesktop.map { SettingsRow.App(it) }
         }
         if (offDesktop.isNotEmpty()) {
-            rows += SettingsRow.Header("不在桌面的应用（${offDesktop.size}）", "off")
+            rows += SettingsRow.Header(context.getString(R.string.sr_off_home, offDesktop.size), "off")
             rows += letterRows(offDesktop)
         }
         return rows

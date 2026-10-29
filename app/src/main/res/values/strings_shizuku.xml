@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
+    <string name="shizuku_not_installed_title">需要先安装 Shizuku</string>
+    <string name="shizuku_not_installed_body">CarWith 画面与触控不依赖 Shizuku，可以直接连接。\n\n若要使用旧版虚拟屏、物理息屏或自动网络切换，请安装 Shizuku App 并按官方说明启动服务（无线调试激活，免 root）。</string>
+    <string name="shizuku_not_running_title">Shizuku 服务未运行</string>
+    <string name="shizuku_not_running_body">CarWith 画面与触控仍可正常连接；Shizuku 仅用于旧版虚拟屏、物理息屏和部分自动网络操作。\n\n需要这些辅助能力时，请打开 Shizuku App 点「启动」（手机重启后需要重新启动一次）。</string>
+    <string name="shizuku_unauthorized_title">未授权本应用使用 Shizuku</string>
+    <string name="shizuku_unauthorized_body">CarWith 画面与触控不依赖此授权，可以直接连接；授权仅影响旧版虚拟屏、物理息屏和部分自动网络操作。\n\n需要这些辅助能力时，请点「请求授权」并允许；若之前拒绝过，请到 Shizuku App →「授权应用」里手动允许本应用。</string>
+    <string name="shizuku_ready_title">Shizuku 就绪</string>
+    <string name="id_source_shizuku">Shizuku 读取</string>
+    <string name="id_source_settings">系统设置读取</string>
+    <string name="id_source_manual">手动填写</string>
+    <string name="id_source_remembered">此前读取并保存</string>
+    <string name="id_source_none">未获取</string>
+</resources>

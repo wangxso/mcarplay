@@ -21,14 +21,14 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:layout_marginBottom="11dp"
-            android:text="视频流按车机分辨率的百分比生成虚拟屏与编码画面（逻辑布局不变）。分辨率改动下次连接起效；帧率为推流刷新频率，切换实时生效。"
+            android:text="@string/lay_display_desc"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="连接时真息屏"
+            android:text="@string/lay_screen_off"
             android:textColor="#FFF5F5F7"
             android:textSize="14sp" />
 
@@ -49,7 +49,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="开"
+                android:text="@string/lay_on"
                 android:textColor="#FFFFFFFF"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -63,7 +63,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="关"
+                android:text="@string/lay_off_short"
                 android:textColor="#FF8E8E93"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -74,7 +74,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="连接成功后物理断电手机面板（系统保持唤醒、虚拟屏照常渲染）；关闭则只用暗幕。按电源键两次可恢复屏幕。"
+            android:text="@string/lay_screen_off_desc"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
 
@@ -82,7 +82,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="上车自动连接"
+            android:text="@string/lay_auto_connect"
             android:textColor="#FFF5F5F7"
             android:textSize="14sp" />
 
@@ -103,7 +103,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="开"
+                android:text="@string/lay_on"
                 android:textColor="#FFFFFFFF"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -117,7 +117,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="关"
+                android:text="@string/lay_off_short"
                 android:textColor="#FF8E8E93"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -128,7 +128,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="车机蓝牙连上时自动拉起会话（需 Shizuku 已启动）。需要「显示在其他应用上层」权限才能在后台启动；该权限缺失时会自动补授。"
+            android:text="@string/lay_auto_connect_desc"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
 
@@ -136,7 +136,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="HID 原始日志"
+            android:text="@string/lay_hid_raw"
             android:textColor="#FFF5F5F7"
             android:textSize="14sp" />
 
@@ -157,7 +157,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="开"
+                android:text="@string/lay_on"
                 android:textColor="#FFFFFFFF"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -171,7 +171,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="关"
+                android:text="@string/lay_off_short"
                 android:textColor="#FF8E8E93"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -182,7 +182,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="键位校准用：打开后每帧 HID 报文写一行 HID-RAW（uuid + hex 字节），对照按下方向盘/旋钮时打印的字节调整键位映射。平时请关闭，避免日志刷屏。"
+            android:text="@string/lay_hid_raw_desc"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
 
@@ -190,7 +190,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="兼容兜底：配对失败后尝试明文"
+            android:text="@string/lay_plain_fallback"
             android:textColor="#FFF5F5F7"
             android:textSize="14sp" />
 
@@ -210,7 +210,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="开"
+                android:text="@string/lay_on"
                 android:textColor="#FF8E8E93"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -225,7 +225,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="关"
+                android:text="@string/lay_off_short"
                 android:textColor="#FFFFFFFF"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -235,7 +235,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="默认关。配对失败（403 除外）但已连上接收端时，再试一次不加密的明文会话。仅当接收端始终卡在配对且确认它只支持明文时打开；下次连接起效。"
+            android:text="@string/lay_plain_fallback_desc"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
 
@@ -243,7 +243,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="兼容兜底：音频格式未声明时仍尝试"
+            android:text="@string/lay_audio_fallback"
             android:textColor="#FFF5F5F7"
             android:textSize="14sp" />
 
@@ -263,7 +263,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="开"
+                android:text="@string/lay_on"
                 android:textColor="#FF8E8E93"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -278,7 +278,7 @@
                 android:paddingTop="6dp"
                 android:paddingRight="18dp"
                 android:paddingBottom="6dp"
-                android:text="关"
+                android:text="@string/lay_off_short"
                 android:textColor="#FFFFFFFF"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -288,7 +288,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="默认关。接收端没有声明可用的媒体音频格式时，仍按默认 PCM 48k 尝试出声。仅当车机能播声音却总是只推视频时打开；可能出现无声或断开，下次连接起效。"
+            android:text="@string/lay_audio_fallback_desc"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
 
@@ -296,7 +296,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="流分辨率"
+            android:text="@string/lay_stream_resolution"
             android:textColor="#FFF5F5F7"
             android:textSize="14sp" />
 
@@ -329,7 +329,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="保存后下次连接起效"
+            android:text="@string/lay_next_connection"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
 
@@ -337,7 +337,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="目标帧率"
+            android:text="@string/lay_target_fps"
             android:textColor="#FFF5F5F7"
             android:textSize="14sp" />
 
@@ -382,7 +382,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="连接中切换实时生效；英雄卡实时显示「实际/目标」帧率"
+            android:text="@string/lay_target_fps_desc"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
 
@@ -390,7 +390,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="触摸注入节流"
+            android:text="@string/lay_touch_throttle"
             android:textColor="#FFF5F5F7"
             android:textSize="14sp" />
 
@@ -422,7 +422,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="交互滞后但帧率正常（事件派发堆积）时调高试验；拖动即时生效"
+            android:text="@string/lay_touch_throttle_desc"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
     </LinearLayout>

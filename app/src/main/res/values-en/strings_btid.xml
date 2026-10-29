@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="bt_identity_intro">Receivers such as WinPlay check the phone\'s real Bluetooth address, which Android does not let ordinary apps read. With Shizuku running it is read and saved automatically; without Shizuku, find Bluetooth address in the phone settings and enter it here (usually under Settings → My device → All specs, or Status).</string>
+    <string name="bt_identity_current">In use: %1$s</string>
+    <string name="bt_identity_value">%1$s (%2$s)</string>
+    <string name="bt_identity_unknown">not available yet</string>
+    <string name="bt_identity_mismatch">\nThe manually entered %1$s differs from the live read; the live read is used when connecting.</string>
+    <string name="bt_identity_hint">e.g. AA:BB:CC:DD:EE:FF</string>
+    <string name="bt_identity_clear">Clear manual address</string>
+    <string name="action_save">Save</string>
+    <string name="bt_identity_empty">Enter a 12-digit hexadecimal Bluetooth address</string>
+    <string name="bt_identity_invalid">The format is wrong, or this is not the phone\'s public Bluetooth address (02:00:00:00:00:00, for example, is the system placeholder)</string>
+</resources>

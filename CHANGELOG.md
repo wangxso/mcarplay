@@ -6,14 +6,18 @@ Test releases are experimental and do not establish real-vehicle compatibility.
 ## [Unreleased]
 
 ### English
+- Add **界面语言 / Language**: the interface can switch between Simplified Chinese (the default, regardless of the system language) and English, covering the main screen, dialogs, car settings, the detection panel, the update page, notifications, the car dashboard and the disclaimer. Android 13 and later also list both languages in the system per-app language settings. Logs, diagnostic reports and protocol fields stay in Chinese.
+- After each update, the first launch shows that version's release notes in the chosen language, from the `CHANGELOG.md` entry bundled into the APK; validation lines are omitted, and a fresh install shows the disclaimer instead. The update page also shows only the chosen language's half of the release notes.
 - When a target head unit is selected, log once per connection start which Bluetooth services it advertises over SDP and whether the wireless CarPlay iAP2 service (`…caff`) is among them, so a head unit that lacks wireless CarPlay can be told apart from one that is not in its pairing window. An SDP timeout is reported as undetermined, not as missing.
 - Add a root-only wired CarPlay bench tool (`WiredGadgetMain`, run through `su` + `app_process`, never from the app): it probes the phone's USB gadget and role-switch support, presents the phone to a head unit as an iPhone over FunctionFS, logs every control request, switches to USB host on the role-switch request and rolls back on timeout, failure or if the phone starts sourcing VBUS; rollback hands USB back through the Gadget HAL (`svc usb resetUsbGadget`). It never writes Type-C `data_role`, which starts a PD role swap; a manual swap made a Xiaomi 17 black-screen and reboot. A USB host iAP2 stream is added but not yet wired into connections. Without root, wired-only head units should use a wired-to-wireless adapter. See `docs/WIRED-CARPLAY.md`; nothing here is verified on a phone or head unit.
-- Validation: 584 JVM tests, `spotlessCheck`, `lintStandardDebug`, `assembleStandardDebug` and `assembleRemoteDebug` passed. Not yet verified on device.
+- Validation: 604 JVM tests, `spotlessCheck`, `lintStandardDebug`, `assembleStandardDebug`, `lintRemoteDebug` and `assembleRemoteDebug` passed. The SDP log, language switching, the release-notes popup and the wired bench tool's role switch are not yet verified on device.
 
 ### 简体中文
+- 新增 **界面语言**：界面可在简体中文（默认，不跟随系统语言）和英文之间切换，覆盖首页、各类弹窗、车机设置、检测面板、更新页、通知、车机仪表盘和免责声明；Android 13 及以上也会出现在系统「应用语言」设置中。日志、诊断报告和协议字段保持中文。
+- 每次更新后首次打开，按所选语言弹出该版本的更新内容，来源为打包进 APK 的 `CHANGELOG.md` 条目，不显示验证条目；全新安装则先显示免责声明。更新页的发行说明也只显示所选语言那一半。
 - 指定目标车机时，每次启动连接记录一次它通过 SDP 声明的蓝牙服务，以及其中是否有无线 CarPlay 的 iAP2 服务（`…caff`），用于区分「车机不支持无线 CarPlay」与「支持但未进入配对窗口」。SDP 超时记为「未确定」，不记为没有。
 - 新增仅限 root 的有线 CarPlay 台架工具（`WiredGadgetMain`，经 `su` + `app_process` 运行，不由 App 调用）：探测手机 USB gadget 与角色切换能力，通过 FunctionFS 让手机对车机呈现为 iPhone，记录全部控制请求，收到角色切换请求后切为 USB 主机；超时、失败或手机开始向 VBUS 供电时回滚，并通过 Gadget HAL（`svc usb resetUsbGadget`）交还 USB。不会写 Type-C `data_role`（会发起 PD 角色互换；手动互换曾导致小米 17 黑屏重启）。另新增 USB 主机 iAP2 流，尚未接入连接流程。免 root 时，只支持有线的车机建议使用有线转无线盒子。详见 `docs/WIRED-CARPLAY.md`；以上均未在手机或车机上验证。
-- 验证：584 项 JVM 测试、`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 和 `assembleRemoteDebug` 均通过。尚未实机验证。
+- 验证：604 项 JVM 测试、`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug`、`lintRemoteDebug` 和 `assembleRemoteDebug` 均通过。SDP 日志、语言切换、更新内容弹窗以及有线台架工具的角色切换尚未实机验证。
 
 ## [v0.1.3-test.3] - 2026-10-29
 

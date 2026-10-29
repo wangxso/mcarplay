@@ -45,8 +45,8 @@ class PhoneSettingsActivity : AppCompatActivity() {
         ) {
             val item = SettingsMenus.ALL[position]
             holder.icon.setImageResource(item.iconRes)
-            holder.title.text = item.title
-            holder.desc.text = item.desc
+            holder.title.setText(item.title)
+            holder.desc.setText(item.desc)
             holder.itemView.setOnClickListener {
                 SettingsContentActivity.start(this@PhoneSettingsActivity, item)
             }
@@ -73,7 +73,7 @@ class SettingsContentActivity :
         val menuId = intent.getIntExtra(EXTRA_MENU, SettingsMenus.DESKTOP)
         setContentView(R.layout.activity_settings_content)
         findViewById<ImageView>(R.id.btnBack).setOnClickListener { finish() }
-        findViewById<TextView>(R.id.contentTitle).text = SettingsMenus.titleOf(menuId)
+        findViewById<TextView>(R.id.contentTitle).setText(SettingsMenus.titleOf(menuId))
 
         if (supportFragmentManager.findFragmentById(R.id.settingsContainer) == null) {
             supportFragmentManager

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
     <string name="update_title">检查更新</string>
     <string name="update_safety">请停车并断开车机后操作。仅从本仓库 GitHub Releases 下载；安装前检查哈希、包名、版本和签名，仍需系统确认。不会自动卸载或清数据。</string>
     <string name="update_preview">包含预发布版本（实验功能，可能不稳定）</string>
@@ -23,7 +23,7 @@
     <string name="update_latest">当前已是此频道最新版本：%1$s</string>
     <string name="update_older">当前构建版本高于远程版本 %1$s，不会降级。</string>
     <string name="update_same_base">远程为 %1$s，基础版本相同；本地构建缺少发行标签，无法判断预览序号，请打开发行页手动更新。</string>
-    <string name="update_release_notes">%1$s\n%2$d KB\n\n%3$s</string>
+    <string name="update_release_notes">%1$s\n%2$d KB\n\n</string>
     <string name="update_no_notes">此版本未提供更新说明</string>
     <string name="update_debug_warning">\n\n提示：当前为调试包，发行包签名可能不同；签名不符时会拒绝安装。</string>
     <string name="update_remote_warning">\n\nremote 调试版不能由标准发行 APK 覆盖，请使用对应构建渠道。</string>

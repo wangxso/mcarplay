@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dc_bt_permission">Allow the Nearby devices / Bluetooth permission and try again</string>
+    <string name="dc_bt_disabled">Turn on Bluetooth and make sure the phone is paired with the receiver</string>
+    <string name="dc_bt_link_closed">The Bluetooth control link ended before the session started; check the receiver and reconnect</string>
+    <string name="dc_endpoint_pending">Bluetooth is connected; still waiting for the receiver to send its hotspot and address</string>
+    <string name="dc_location_required">Android 12 needs the location permission and location services to join the hotspot</string>
+    <string name="dc_wifi_lost">The car network was lost; check the receiver hotspot and the phone Wi-Fi, then reconnect</string>
+    <string name="dc_wifi_permission">Allow the Nearby Wi-Fi devices permission and try again</string>
+    <string name="dc_wifi_join_failed">Could not bind to the car network; check Wi-Fi, the Nearby devices permission and the system join prompt</string>
+    <string name="dc_pairing_failed">AirPlay pairing did not complete; check the receiver\'s prompts and restart it if needed</string>
+    <string name="dc_setup_failed">The CarPlay session was not set up; send a diagnostic report so the receiver\'s response can be checked</string>
+    <string name="dc_carwith_failed">CarWith did not start streaming; check the component versions, the factory connection switch and permissions</string>
+    <string name="dc_carwith_entry_blocked">CarWith could not be opened while the app was in the background; on Xiaomi allow \"Display pop-up windows while running in the background\", or keep mcarplay in the foreground and reconnect</string>
+    <string name="dc_carwith_busy">CarWith is busy with the self-test; stop the self-test before starting CarPlay</string>
+    <string name="dc_video_closed">The video connection ended; this alone does not mean the receiver crashed, so check the network and receiver</string>
+    <string name="dc_audio_unavailable">Audio could not be enabled; video can continue. Send a report so the audio negotiation can be checked</string>
+    <string name="dc_connection_incomplete">The connection has not completed; check the last stage and the receiver\'s prompts</string>
+    <string name="dc_detection_timeout">Detection reached its time limit; undetermined items stay unverified. Check the head unit and detect again</string>
+    <string name="dc_uncaught_exception">An app thread hit an exception; share the diagnostic report, not just a screenshot</string>
+    <string name="dc_user_stop">Stopped by the user, not a connection fault</string>
+    <string name="dc_superseded">A new connection attempt replaced the previous one</string>
+    <string name="stage_precheck">Preparing</string>
+    <string name="stage_bluetooth">Waiting for head-unit Bluetooth</string>
+    <string name="stage_wifi">Joining the car network</string>
+    <string name="stage_discovery">Resolving the receiver</string>
+    <string name="stage_pairing">AirPlay pairing</string>
+    <string name="stage_setup">Setting up the CarPlay session</string>
+    <string name="stage_carwith">Waiting for the first CarWith frame</string>
+    <string name="stage_streaming">Streaming video</string>
+    <string name="stage_self_test">CarWith self-test (not CarPlay)</string>
+    <string name="status_waiting">in progress</string>
+    <string name="status_streaming">video sent</string>
+    <string name="status_receiving_source">receiving native video</string>
+    <string name="status_failed">failed</string>
+    <string name="status_stopped">ended</string>
+    <string name="summary_header">Session %1$s · %2$s · %3$s · %4$ds</string>
+    <string name="summary_video_stalled">No new video frame sent in the last %1$ds; check the receiver\'s picture and export a report</string>
+    <string name="summary_source_only">CarWith video received, but no frame has been sent to the receiver yet</string>
+    <string name="summary_waiting_carwith">Still waiting for the first CarWith frame; check the factory permissions and export a report</string>
+    <string name="summary_default">If something goes wrong, export a diagnostic report and note what the receiver showed</string>
+    <string name="language_note">Logs and diagnostic reports stay in Chinese so developers can compare them.</string>
+</resources>

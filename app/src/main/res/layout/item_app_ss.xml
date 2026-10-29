@@ -47,7 +47,7 @@
             android:paddingTop="5dp"
             android:paddingRight="11dp"
             android:paddingBottom="5dp"
-            android:text="自动"
+            android:text="@string/lay_auto"
             android:textColor="#FFF5F5F7"
             android:textSize="12sp" />
 
@@ -59,7 +59,7 @@
             android:paddingTop="5dp"
             android:paddingRight="11dp"
             android:paddingBottom="5dp"
-            android:text="开启"
+            android:text="@string/ma_audio_on"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
 
@@ -71,7 +71,7 @@
             android:paddingTop="5dp"
             android:paddingRight="11dp"
             android:paddingBottom="5dp"
-            android:text="关闭"
+            android:text="@string/lay_off"
             android:textColor="#FF8E8E93"
             android:textSize="12sp" />
     </LinearLayout>

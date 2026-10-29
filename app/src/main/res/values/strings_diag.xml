@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
+    <string name="dc_bt_permission">请允许附近设备/蓝牙权限后重试</string>
+    <string name="dc_bt_disabled">请开启蓝牙，并确认已与接收端配对</string>
+    <string name="dc_bt_link_closed">建立会话前蓝牙控制链路已结束，请检查接收端状态后重连</string>
+    <string name="dc_endpoint_pending">蓝牙已连接，仍在等待接收端提供热点和地址信息</string>
+    <string name="dc_location_required">Android 12 需允许位置权限并开启位置服务以加入热点</string>
+    <string name="dc_wifi_lost">车机网络已丢失，请检查接收端热点及手机 WLAN 后重连</string>
+    <string name="dc_wifi_permission">请允许「附近 WLAN 设备」权限后重试</string>
+    <string name="dc_wifi_join_failed">未能绑定车机网络，请检查 WLAN、附近设备权限及系统加入确认框</string>
+    <string name="dc_pairing_failed">未完成 AirPlay 配对，请检查接收端提示，必要时重启接收端后重试</string>
+    <string name="dc_setup_failed">CarPlay 会话未建立，请提供诊断报告核对接收端响应</string>
+    <string name="dc_carwith_failed">CarWith 未完成出流，请检查组件版本、原厂连接开关和授权</string>
+    <string name="dc_carwith_entry_blocked">应用在后台时未能打开 CarWith 入口；小米请在应用权限中允许「后台弹出界面」，或保持 mcarplay 在前台后重连</string>
+    <string name="dc_carwith_busy">CarWith 正被独立自检占用，请先停止自检，再启动 CarPlay 连接</string>
+    <string name="dc_video_closed">视频连接已结束；仅凭此不能确认接收端崩溃，请检查网络和接收端</string>
+    <string name="dc_audio_unavailable">音频未能启用，画面可以继续；请提供报告核对音频协商</string>
+    <string name="dc_connection_incomplete">连接尚未完成，请结合最后阶段和接收端提示排查</string>
+    <string name="dc_detection_timeout">适配检测等待达到上限；未确定的项目仍为未验证，可检查车机后重新检测</string>
+    <string name="dc_uncaught_exception">应用线程发生异常，请分享诊断报告，不要只提供界面截图</string>
+    <string name="dc_user_stop">用户主动停止，非连接故障</string>
+    <string name="dc_superseded">新的连接尝试替代了上一轮</string>
+    <string name="stage_precheck">连接准备</string>
+    <string name="stage_bluetooth">等待车机蓝牙</string>
+    <string name="stage_wifi">连接车机网络</string>
+    <string name="stage_discovery">解析接收端</string>
+    <string name="stage_pairing">AirPlay 配对</string>
+    <string name="stage_setup">建立 CarPlay 会话</string>
+    <string name="stage_carwith">等待 CarWith 首帧</string>
+    <string name="stage_streaming">传输画面</string>
+    <string name="stage_self_test">CarWith 独立自检（非 CarPlay）</string>
+    <string name="status_waiting">进行中</string>
+    <string name="status_streaming">已发送视频</string>
+    <string name="status_receiving_source">收到原生视频</string>
+    <string name="status_failed">失败</string>
+    <string name="status_stopped">已结束</string>
+    <string name="summary_header">会话 %1$s · %2$s · %3$s · %4$ds</string>
+    <string name="summary_video_stalled">最近 %1$ds 未发出新视频帧；请确认接收端画面，并导出报告</string>
+    <string name="summary_source_only">已收到 CarWith 视频，尚未向接收端发出视频帧</string>
+    <string name="summary_waiting_carwith">仍在等待 CarWith 首帧，请检查原厂授权并导出报告</string>
+    <string name="summary_default">遇到问题请导出诊断报告，并补充接收端当时的提示</string>
+    <string name="language_note">日志和诊断报告保持中文，便于开发者对照。</string>
+</resources>

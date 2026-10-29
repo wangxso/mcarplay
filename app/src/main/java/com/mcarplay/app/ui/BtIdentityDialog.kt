@@ -46,21 +46,22 @@ object BtIdentityDialog {
                 setLineSpacing(dp(3).toFloat(), 1f)
                 body.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) })
             }
-        text("本机蓝牙地址", 17f, R.color.m3_on_surface, bold = true, top = 0)
+        text(activity.getString(R.string.main_bt_identity_title), 17f, R.color.m3_on_surface, bold = true, top = 0)
         text(
-            "WinPlay 等接收端会核对手机的真实蓝牙地址，Android 不允许普通应用直接读取。" +
-                "已启动 Shizuku 时自动读取并保存；不用 Shizuku 时，请在手机设置里查到「蓝牙地址」后填在这里" +
-                "（通常在「设置 → 我的设备 → 全部参数与信息」或「状态信息」中）。",
+            activity.getString(R.string.bt_identity_intro),
             12.5f,
             R.color.m3_on_var,
         )
         val current = DeviceIdentity.cachedResolution()
         val manual = DeviceIdentity.manualMac(activity)
         text(
-            "当前使用：" +
-                (current?.let { "${it.mac}（${DeviceIdentity.sourceLabel(it.source)}）" } ?: "尚未获取") +
+            activity.getString(
+                R.string.bt_identity_current,
+                current?.let { activity.getString(R.string.bt_identity_value, it.mac, DeviceIdentity.sourceLabel(activity, it.source)) }
+                    ?: activity.getString(R.string.bt_identity_unknown),
+            ) +
                 if (manual != null && current != null && current.source != DeviceIdentity.Source.MANUAL && current.mac != manual) {
-                    "\n手动填写的 $manual 与实时读取不一致，连接时以实时读取为准。"
+                    activity.getString(R.string.bt_identity_mismatch, manual)
                 } else {
                     ""
                 },
@@ -71,7 +72,7 @@ object BtIdentityDialog {
         val input =
             EditText(activity).apply {
                 setText(manual.orEmpty())
-                hint = "例如 AA:BB:CC:DD:EE:FF"
+                hint = activity.getString(R.string.bt_identity_hint)
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                 isSingleLine = true
                 importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO
@@ -122,22 +123,22 @@ object BtIdentityDialog {
                     .apply { if (actions.childCount > 0) marginStart = dp(6) },
             )
         }
-        action("取消", primary = false) { dialog.dismiss() }
+        action(activity.getString(R.string.action_cancel), primary = false) { dialog.dismiss() }
         if (manual != null) {
-            action("清除手动地址", primary = false) {
+            action(activity.getString(R.string.bt_identity_clear), primary = false) {
                 DeviceIdentity.setManualMac(activity, null)
                 dialog.dismiss()
                 onChanged()
             }
         }
-        action("保存", primary = true) {
+        action(activity.getString(R.string.action_save), primary = true) {
             val raw = input.text.toString()
             if (raw.isBlank()) {
-                error.text = "请输入 12 位十六进制蓝牙地址"
+                error.text = activity.getString(R.string.bt_identity_empty)
                 return@action
             }
             if (DeviceIdentity.setManualMac(activity, raw) == null) {
-                error.text = "地址格式不对，或不是手机的公共蓝牙地址（例如 02:00:00:00:00:00 是系统占位值）"
+                error.text = activity.getString(R.string.bt_identity_invalid)
                 return@action
             }
             dialog.dismiss()

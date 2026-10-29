@@ -1,5 +1,6 @@
 package com.mcarplay.app.ui
 
+import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -54,16 +55,23 @@ object ReceiverDetectionDialog {
                 setLineSpacing(dp(3).toFloat(), 1f)
                 body.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) })
             }
-        text("检测当前车机", size = 17f, color = R.color.m3_on_surface, bold = true, top = 0)
+        text(activity.getString(R.string.main_detection_title), size = 17f, color = R.color.m3_on_surface, bold = true, top = 0)
         val target = TargetDevicePrefs.get(activity)
-        text(target?.let { "当前设备：${it.name}" } ?: "请先选择已配对的车机", size = 14f, color = R.color.m3_on_surface, top = 10)
-        text("检测会尝试当前设备的连接参数。画面、声音和触控需实际确认，保存后下次自动复用。")
+        text(
+            target?.let {
+                activity.getString(R.string.rd_current_device, it.name)
+            } ?: activity.getString(R.string.rd_pick_first),
+            size = 14f,
+            color = R.color.m3_on_surface,
+            top = 10,
+        )
+        text(activity.getString(R.string.rd_intro))
         val status = text("", size = 13f, color = R.color.m3_primary, top = 10)
         val counters = text("", size = 12f)
 
-        val video = Choice(activity, body, "车机画面", ::dp)
-        val audio = Choice(activity, body, "车机扬声器声音（含速度与音调）", ::dp)
-        val touch = Choice(activity, body, "点击与滑动位置", ::dp)
+        val video = Choice(activity, body, activity.getString(R.string.rd_check_video), ::dp)
+        val audio = Choice(activity, body, activity.getString(R.string.rd_check_audio), ::dp)
+        val touch = Choice(activity, body, activity.getString(R.string.rd_check_touch), ::dp)
 
         fun button(
             label: String,
@@ -98,15 +106,19 @@ object ReceiverDetectionDialog {
                 }
                 body.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             }
-        val save = button("保存已确认的适配结果", primary = true).apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(16) }
-        val start = button(if (target == null) "选择设备" else "开始检测（含声音）", primary = true)
-        val retry = button("蓝牙阶段重试")
-        val cancel = button("取消检测并断开")
-        val delete = button("删除这台设备的适配记录", danger = true)
+        val save =
+            button(activity.getString(R.string.rd_save), primary = true).apply {
+                (layoutParams as LinearLayout.LayoutParams).topMargin =
+                    dp(16)
+            }
+        val start = button(activity.getString(if (target == null) R.string.main_pick_device else R.string.rd_start), primary = true)
+        val retry = button(activity.getString(R.string.rd_retry_bt))
+        val cancel = button(activity.getString(R.string.rd_cancel))
+        val delete = button(activity.getString(R.string.rd_delete), danger = true)
         val message = text("", size = 12.5f, color = R.color.m3_primary)
         val close =
             TextView(activity).apply {
-                text = "收起"
+                text = activity.getString(R.string.rd_collapse)
                 textSize = 13f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(activity.getColor(R.color.m3_primary))
@@ -141,21 +153,30 @@ object ReceiverDetectionDialog {
                     }
                     status.text =
                         when {
-                            ReceiverDetectionRuntime.storageError -> "本地记录读取失败，原文件已保留；请导出诊断报告。"
-                            !ReceiverDetectionRuntime.ready -> "正在读取本地适配记录…"
-                            draft != null -> stateText(draft)
+                            ReceiverDetectionRuntime.storageError -> activity.getString(R.string.rd_storage_error)
+                            !ReceiverDetectionRuntime.ready -> activity.getString(R.string.rd_loading)
+                            draft != null -> stateText(activity, draft)
                             stored != null && !ReceiverDetectionRuntime.environmentMatches(stored) ->
-                                "手机或 CarWith 环境已变化，旧记录保留；请重新检测。"
-                            stored != null -> "已有本地配置：画面${checkText(
-                                stored.verification.video,
-                            )}，声音${checkText(stored.verification.audio)}，触控${checkText(stored.verification.touch)}。"
-                            else -> "尚未检测。请确认车机已打开无线 CarPlay 配对入口。"
+                                activity.getString(R.string.rd_env_changed)
+                            stored != null ->
+                                activity.getString(
+                                    R.string.rd_stored,
+                                    checkText(activity, stored.verification.video),
+                                    checkText(activity, stored.verification.audio),
+                                    checkText(activity, stored.verification.touch),
+                                )
+                            else -> activity.getString(R.string.rd_not_detected)
                         }
                     counters.text =
                         draft?.let {
-                            "源视频 ${it.sourceFrames} 帧 · 已发送 ${it.videoFrames} 帧\n" +
-                                "原生音频 ${it.audioChunks} 段 · 已发音频 ${it.audioPackets} 包 · 已转发触控 ${it.touches} 次\n" +
-                                "计数只用于检查链路，请根据车机实际效果确认。"
+                            activity.getString(
+                                R.string.rd_counters,
+                                it.sourceFrames,
+                                it.videoFrames,
+                                it.audioChunks,
+                                it.audioPackets,
+                                it.touches,
+                            )
                         } ?: ""
                     video.isEnabled = draft?.canConfirmVideo == true
                     audio.isEnabled = draft?.canConfirmVideo == true
@@ -204,11 +225,11 @@ object ReceiverDetectionDialog {
         retry.setOnClickListener {
             DarkMessageDialog.show(
                 activity,
-                "尝试另一种蓝牙连接方式？",
-                "本轮会暂时断开这台设备的蓝牙通话／音乐连接，再尝试 CarPlay。只进行一次对照；原适配记录会保留。",
+                activity.getString(R.string.rd_retry_title),
+                activity.getString(R.string.rd_retry_body),
                 listOf(
-                    DarkMessageDialog.Action("继续等待") {},
-                    DarkMessageDialog.Action("断开后重试") { onRetry() },
+                    DarkMessageDialog.Action(activity.getString(R.string.sc_keep_waiting)) {},
+                    DarkMessageDialog.Action(activity.getString(R.string.rd_retry_action)) { onRetry() },
                 ),
             )
         }
@@ -223,7 +244,7 @@ object ReceiverDetectionDialog {
                 ),
             ) { ok ->
                 activity.runOnUiThread {
-                    if (dialog.isShowing) message.text = if (ok) "适配结果已保存到本机。" else "未能保存，请检查视频已确认、待确认项的链路证据及存储状态。"
+                    if (dialog.isShowing) message.text = activity.getString(if (ok) R.string.rd_saved else R.string.rd_save_failed)
                 }
             }
         }
@@ -231,13 +252,18 @@ object ReceiverDetectionDialog {
             val address = target?.address ?: return@setOnClickListener
             DarkMessageDialog.show(
                 activity,
-                "删除本地适配记录？",
-                "只删除这台设备的适配参数，下次使用通用协商。",
+                activity.getString(R.string.rd_delete_title),
+                activity.getString(R.string.rd_delete_body),
                 listOf(
-                    DarkMessageDialog.Action("保留") {},
-                    DarkMessageDialog.Action("删除", DarkMessageDialog.Emphasis.DANGER) {
+                    DarkMessageDialog.Action(activity.getString(R.string.sc_saved_keep)) {},
+                    DarkMessageDialog.Action(activity.getString(R.string.rd_delete_action), DarkMessageDialog.Emphasis.DANGER) {
                         ReceiverDetectionRuntime.delete(address) { ok ->
-                            activity.runOnUiThread { if (dialog.isShowing) message.text = if (ok) "已删除本地适配记录。" else "删除失败，原记录已保留。" }
+                            activity.runOnUiThread {
+                                if (dialog.isShowing) {
+                                    message.text =
+                                        activity.getString(if (ok) R.string.rd_deleted else R.string.rd_delete_failed)
+                                }
+                            }
                         }
                     },
                 ),
@@ -257,7 +283,7 @@ object ReceiverDetectionDialog {
         title: String,
         dp: (Int) -> Int,
     ) {
-        private val options = listOf("未验证", "确认正常", "有问题")
+        private val options = listOf(R.string.rd_unverified, R.string.rd_confirmed_ok, R.string.rd_has_problem).map(activity::getString)
         private val selectedColor = 0xFFFFFFFF.toInt()
         private val idleColor = 0xFF8E8E93.toInt()
         private val row =
@@ -311,42 +337,61 @@ object ReceiverDetectionDialog {
         }
     }
 
-    private fun stateText(draft: ReceiverDetection.Draft): String =
+    private fun stateText(
+        context: Context,
+        draft: ReceiverDetection.Draft,
+    ): String =
         when (draft.state) {
-            ReceiverDetection.State.SAVING -> "正在保存…"
-            ReceiverDetection.State.SAVED -> "已保存到本机。可收起面板继续使用，重新连接时自动复用。"
-            ReceiverDetection.State.CANCELLED -> "检测已取消，原适配记录保留。"
-            ReceiverDetection.State.STOPPED -> "本轮检测已停止：${issueText(draft.issue)}。已记录的结果可继续确认。"
+            ReceiverDetection.State.SAVING -> context.getString(R.string.rd_state_saving)
+            ReceiverDetection.State.SAVED -> context.getString(R.string.rd_state_saved)
+            ReceiverDetection.State.CANCELLED -> context.getString(R.string.rd_state_cancelled)
+            ReceiverDetection.State.STOPPED -> context.getString(R.string.rd_state_stopped, issueText(context, draft.issue))
             ReceiverDetection.State.COLLECTING -> {
                 val stage =
                     mapOf(
-                        "BLUETOOTH" to "等待车机蓝牙与连接信息",
-                        "WIFI" to "加入车机网络",
-                        "DISCOVERY" to "发现接收端",
-                        "PAIRING" to "AirPlay 配对",
-                        "SETUP" to "建立媒体会话",
-                        "CARWITH" to "等待 CarWith 首帧",
-                        "STREAMING" to "正在发送画面，请确认实际效果",
-                    )[draft.stage] ?: "连接准备"
-                "${if (draft.trial == 0) "基础检测" else "蓝牙对照"}：$stage" + (draft.issue?.let { "\n${issueText(it)}" } ?: "")
+                        "BLUETOOTH" to R.string.rd_stage_bluetooth,
+                        "WIFI" to R.string.rd_stage_wifi,
+                        "DISCOVERY" to R.string.rd_stage_discovery,
+                        "PAIRING" to R.string.stage_pairing,
+                        "SETUP" to R.string.rd_stage_setup,
+                        "CARWITH" to R.string.stage_carwith,
+                        "STREAMING" to R.string.rd_stage_streaming,
+                    )[draft.stage] ?: R.string.stage_precheck
+                context.getString(
+                    R.string.rd_collecting,
+                    context.getString(if (draft.trial == 0) R.string.rd_trial_basic else R.string.rd_trial_bluetooth),
+                    context.getString(stage),
+                ) + (draft.issue?.let { "\n${issueText(context, it)}" } ?: "")
             }
         }
 
-    private fun checkText(check: ReceiverCheck): String =
-        when (check) {
-            ReceiverCheck.CONFIRMED -> "已确认"
-            ReceiverCheck.FAILED -> "有问题"
-            ReceiverCheck.UNVERIFIED -> "未验证"
-        }
+    private fun checkText(
+        context: Context,
+        check: ReceiverCheck,
+    ): String =
+        context.getString(
+            when (check) {
+                ReceiverCheck.CONFIRMED -> R.string.rd_check_confirmed
+                ReceiverCheck.FAILED -> R.string.rd_has_problem
+                ReceiverCheck.UNVERIFIED -> R.string.rd_unverified
+            },
+        )
 
-    private fun issueText(issue: String?): String =
+    private fun issueText(
+        context: Context,
+        issue: String?,
+    ): String =
         when (issue) {
-            "BUDGET_EXHAUSTED" -> "检测等待已达到上限，未确定的项目没有判为不支持"
-            "ENVIRONMENT_CHANGED" -> "环境已变化，请重新检测"
-            "SAVE_FAILED" -> "保存失败，原适配记录保留"
+            "BUDGET_EXHAUSTED" -> context.getString(R.string.rd_issue_budget)
+            "ENVIRONMENT_CHANGED" -> context.getString(R.string.rd_issue_env)
+            "SAVE_FAILED" -> context.getString(R.string.rd_issue_save_failed)
             else ->
                 com.mcarplay.app.diagnostics.DiagnosticCode.entries
                     .firstOrNull { it.name == issue }
-                    ?.advice ?: "连接已结束"
+                    ?.let {
+                        com.mcarplay.app.diagnostics.DiagnosticText
+                            .advice(context, it)
+                    }
+                    ?: context.getString(R.string.rd_issue_ended)
         }
 }

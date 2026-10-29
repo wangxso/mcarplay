@@ -13,6 +13,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
+import com.mcarplay.app.i18n.AppLanguage
 import com.mcarplay.app.ui.PanelWindow
 
 /**
@@ -58,12 +59,12 @@ object DisclaimerDialog {
         renderSections(activity, sections)
 
         if (requireAcceptance) {
-            subtitle.text = "首次使用前请完整阅读。接受后可在主界面底部随时重看。"
+            subtitle.setText(R.string.lay_disclaimer_intro)
         } else {
-            subtitle.text = "你可以随时回来查看本声明（当前版本 v${DisclaimerPrefs.CURRENT_VERSION}）。"
+            subtitle.text = activity.getString(R.string.disclaimer_reread, DisclaimerPrefs.CURRENT_VERSION)
             btnDecline.visibility = View.GONE
             btnAccept.isEnabled = true
-            btnAccept.text = "关闭"
+            btnAccept.setText(R.string.action_close)
             blockHint.visibility = View.GONE
         }
 
@@ -103,15 +104,27 @@ object DisclaimerDialog {
                 val countdownDone = remainingMs <= 0L
                 val enabled = canAcceptDisclaimer(countdownDone, contentScrollable, scrolledToBottom)
                 btnAccept.isEnabled = enabled
-                btnAccept.text = if (countdownDone) "接受" else "接受（${remainingSeconds}s）"
+                btnAccept.text =
+                    if (countdownDone) {
+                        activity.getString(
+                            R.string.disclaimer_accept,
+                        )
+                    } else {
+                        activity.getString(R.string.disclaimer_accept_countdown, remainingSeconds)
+                    }
                 val reason =
                     disclaimerBlockReason(
                         countdownDone = countdownDone,
                         contentScrollable = contentScrollable,
                         scrolledToBottom = scrolledToBottom,
-                        remainingSeconds = remainingSeconds,
                     )
-                blockHint.text = reason.orEmpty()
+                blockHint.text =
+                    when (reason) {
+                        DisclaimerBlock.SCROLL_AND_WAIT -> activity.getString(R.string.disclaimer_scroll_and_wait, remainingSeconds)
+                        DisclaimerBlock.WAIT -> activity.getString(R.string.disclaimer_wait, remainingSeconds)
+                        DisclaimerBlock.SCROLL -> activity.getString(R.string.disclaimer_scroll)
+                        null -> ""
+                    }
                 blockHint.visibility = if (reason == null) View.GONE else View.VISIBLE
             }
 
@@ -162,7 +175,7 @@ object DisclaimerDialog {
         container: LinearLayout,
     ) {
         val density = activity.resources.displayMetrics.density
-        DisclaimerContent.sections.forEachIndexed { index, section ->
+        DisclaimerContent.sectionsFor(AppLanguage.current(activity)).forEachIndexed { index, section ->
             val title = TextView(activity)
             title.text = section.title
             title.setTextColor(activity.getColor(R.color.m3_primary))

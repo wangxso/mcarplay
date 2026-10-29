@@ -13,14 +13,14 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
         android:layout_marginBottom="11dp"
-        android:text="调整 dock 栏壁纸的暗幕透明度与高斯模糊程度，拖动即时生效。"
+        android:text="@string/lay_dock_desc"
         android:textColor="#FF8E8E93"
         android:textSize="12sp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="暗幕透明度"
+        android:text="@string/lay_dim_opacity"
         android:textColor="#FFF5F5F7"
         android:textSize="14sp" />
 
@@ -52,7 +52,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="14dp"
-        android:text="背景模糊程度"
+        android:text="@string/lay_blur"
         android:textColor="#FFF5F5F7"
         android:textSize="14sp" />
 
@@ -84,7 +84,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="14dp"
-        android:text="栏宽度"
+        android:text="@string/lay_dock_width"
         android:textColor="#FFF5F5F7"
         android:textSize="14sp" />
 
@@ -116,7 +116,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="整条 Dock（图标/时钟/文字）等比缩放，50%–100%；保存后下次连接起效"
+        android:text="@string/lay_dock_width_desc"
         android:textColor="#FF8E8E93"
         android:textSize="12sp" />
 </LinearLayout>

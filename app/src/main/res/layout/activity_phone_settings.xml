@@ -22,7 +22,7 @@
             android:layout_width="38dp"
             android:layout_height="38dp"
             android:background="@drawable/bg_ripple_circle"
-            android:contentDescription="返回"
+            android:contentDescription="@string/cd_back"
             android:padding="8dp"
             android:src="@drawable/ic_chev_left" />
 
@@ -30,7 +30,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="10dp"
-            android:text="车机设置"
+            android:text="@string/car_settings"
             android:textColor="#EDF3F3"
             android:textSize="18sp"
             android:textStyle="bold" />

@@ -13,7 +13,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
         android:layout_marginBottom="11dp"
-        android:text="开启后竖屏应用在车机屏以横屏全屏渲染。开关本身持久保存，下次连接自动生效；系统覆盖仅在会话期间生效，会话结束自动复原，应用回到正常方向，无需手动处理。注意：部分界面文字可能变大或变小。切换开关时系统会立即重启目标应用使其生效（正在运行的应用会丢失未保存的界面状态）。"
+        android:text="@string/lay_orientation_desc"
         android:textColor="#FF8E8E93"
         android:textSize="12sp" />
 
@@ -60,7 +60,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
             android:gravity="center"
-            android:text="正在读取应用列表…"
+            android:text="@string/lay_loading_apps"
             android:textColor="#7C8B8B"
             android:textSize="12.5sp" />
 

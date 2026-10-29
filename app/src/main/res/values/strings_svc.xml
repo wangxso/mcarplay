@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
+    <string name="notif_channel_connection">mcarplay 连接</string>
+    <string name="notif_channel_connection_desc">保持与车机的连接</string>
+    <string name="notif_running_title">mcarplay 运行中</string>
+    <string name="notif_running_text">正在保持与车机的连接，点开应用可查看日志</string>
+    <string name="notif_hu_channel_desc">保持 CarWith 亿连发现链与 10930 应答</string>
+    <string name="notif_hu_title">CarWith 亿连发现诊断运行中</string>
+    <string name="notif_hu_text">等待 SDP → P2P → mDNS → 10930 握手</string>
+    <string name="cl_waiting_listeners">等待 CarWith 七口监听</string>
+    <string name="cl_real_frames">收到真实视频帧</string>
+    <string name="cl_waiting_first_frame">视频已初始化，等待首帧</string>
+    <string name="cl_handshake_failed">握手失败</string>
+    <string name="cl_handshaking">七口已连接，协议握手中</string>
+</resources>

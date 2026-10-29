@@ -4,6 +4,7 @@ import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.os.SystemClock
 import android.provider.Settings
+import com.mcarplay.app.R
 import com.mcarplay.app.shizuku.Shell
 
 /**
@@ -109,6 +110,21 @@ object DeviceIdentity {
         }
         return normalized
     }
+
+    /** 界面用（随界面语言）；日志继续用不带 Context 的中文版本。 */
+    fun sourceLabel(
+        context: Context,
+        source: Source,
+    ): String =
+        context.getString(
+            when (source) {
+                Source.SHIZUKU -> R.string.id_source_shizuku
+                Source.SETTINGS -> R.string.id_source_settings
+                Source.MANUAL -> R.string.id_source_manual
+                Source.REMEMBERED -> R.string.id_source_remembered
+                Source.NONE -> R.string.id_source_none
+            },
+        )
 
     fun sourceLabel(source: Source): String =
         when (source) {
