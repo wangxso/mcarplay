@@ -286,8 +286,8 @@ USB 物理网卡和 AirPlay 媒体，没有 Apple usbmux、lockdown 或 carkit �
 
 remote debug 入口新增“优先使用 iPhone 兼容 USB 身份”开关，默认开启；关闭后直接使用 Linux NCM。开启时台架
 保留同一个 `ncm.mcarplay_bench` 功能，只把复合设备的 VID/PID 和字符串改为 `05ac:12a8`、`Apple Inc.` 与
-`iPhone`，并使用随机 40 位十六进制序列号。若 30 秒内没有枚举出 NCM 网卡，连接器会执行完整回滚，再以原来的
-`1d6b:0104` 身份重试。
+`iPhone`，并使用应用首次运行时生成、之后稳定复用的随机 40 位十六进制伪序列号；该值不读取或复用手机硬件标识。
+若 30 秒内没有枚举出 NCM 网卡，连接器会执行完整回滚，再以原来的 `1d6b:0104` 身份重试。
 
 1. 小米 17 成功申请 root，5 秒内枚举出 `usb0`。macOS IORegistry 显示 `USB Product Name=iPhone`、
    `idVendor=1452`（`0x05ac`）、`idProduct=4776`（`0x12a8`）、`USB Vendor Name=Apple Inc.`，同时 NCM

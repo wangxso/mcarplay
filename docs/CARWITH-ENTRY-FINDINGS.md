@@ -451,9 +451,10 @@ USB 邻居和手动地址三类候选，并对每个候选建立独立 IPv4/IPv6
 Linux CDC-NCM `1d6b:0104` / `mcarplay USB media bench`。
 
 小米 17 实测中，macOS IORegistry 显示 `USB Product Name=iPhone`、`idVendor=1452`、`idProduct=4776`、
-`USB Vendor Name=Apple Inc.`，随机序列号为 40 位十六进制；`usb0` 同时拥有 IPv4 与链路本地 IPv6。MacPlay
-随后完成 AirPlay 控制、认证、音频 SETUP 和视频 SETUP，手机发送 `1280x720` 首帧并持续出流。这证明兼容身份
-可以满足 MacPlay 的设备列表筛选，且没有破坏现有 NCM 音视频链路。
+`USB Vendor Name=Apple Inc.`，序列号为应用内生成并稳定复用的 40 位十六进制伪标识，不读取手机硬件标识；
+`usb0` 同时拥有 IPv4 与链路本地 IPv6。MacPlay 随后完成 AirPlay 控制、认证、音频 SETUP 和视频 SETUP，
+手机发送 `1280x720` 首帧并持续出流。这证明兼容身份可以满足 MacPlay 的设备列表筛选，且没有破坏现有 NCM
+音视频链路。另行强制结束并重新启动两次，macOS 读到的伪序列号一致，便于 MacPlay 保持稳定的设备选择键。
 
 MacPlay 的有线会话还通过系统 usbmuxd 找 USB 设备：
 [`watch_usbmuxd`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/bin/livi-helperd/src/wired.rs#L157-L240)

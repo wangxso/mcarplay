@@ -54,9 +54,12 @@ object UsbNcmAutoConnector {
 
     private const val REMOTE_SCRIPT = "/data/local/tmp/mcarplay-ncm-bench.sh"
     private const val REMOTE_LOG = "/data/local/tmp/mcarplay-ncm-bench.log"
+    private const val IDENTITY_PREFS = "usb_ncm_identity"
+    private const val PSEUDO_SERIAL_KEY = "pseudo_serial_v1"
     private const val LEASE_SECONDS = 1_800
     private val ROOT_SU_CANDIDATES =
         listOf("/system/bin/su", "/system/xbin/su", "/sbin/su", "/debug_ramdisk/su")
+    private val PSEUDO_SERIAL = Regex("[0-9a-f]{40}")
     private val generation = AtomicInteger()
     private val random = SecureRandom()
 
@@ -126,7 +129,7 @@ object UsbNcmAutoConnector {
                 checkActive(runId)
 
                 val identityAttempts = UsbNcmIdentityMode.attempts(preferIphoneIdentity)
-                val token = ByteArray(20).also(random::nextBytes).joinToString("") { "%02x".format(it) }
+                val token = stablePseudoSerial(appContext)
                 val deviceMac = randomLocalMac()
                 val hostMac = randomLocalMac()
                 var interfaceInfo: String? = null
@@ -458,6 +461,18 @@ object UsbNcmAutoConnector {
     }
 
     private fun randomLocalMac(): String = UsbNcmDiscovery.formatLocalMac(ByteArray(6).also(random::nextBytes))
+
+    /**
+     * MacPlay 把 USB 序列号当作设备选择键。使用应用内固定的随机伪序列号，既能跨重连保持同一目标，
+     * 也不需要读取或复用手机的真实硬件标识。
+     */
+    private fun stablePseudoSerial(context: Context): String {
+        val preferences = context.getSharedPreferences(IDENTITY_PREFS, Context.MODE_PRIVATE)
+        preferences.getString(PSEUDO_SERIAL_KEY, null)?.takeIf(PSEUDO_SERIAL::matches)?.let { return it }
+        val generated = ByteArray(20).also(random::nextBytes).joinToString("") { "%02x".format(it) }
+        check(preferences.edit().putString(PSEUDO_SERIAL_KEY, generated).commit()) { "无法保存本地台架身份" }
+        return generated
+    }
 
     private fun checkActive(runId: Int) {
         check(generation.get() == runId) { "连接已取消" }
