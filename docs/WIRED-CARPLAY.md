@@ -74,8 +74,10 @@ adb shell "su -c 'CLASSPATH=`$(pm path com.mcarplay.app.rd | cut -d: -f2) app_pr
 root（`uid=0`），无线 adb，USB 口未接线。HyperOS、CarWith 版本未记录；尚未运行 `up`，未接车机。
 
 - `sys.usb.config=none`，`sys.usb.controller=a600000.dwc3`；UDC 只有 `a600000.dwc3`；configfs 有 `g1`、`g2` 两个 gadget。
-  属性为 `none` 且有两个 gadget，推断 USB 由 Gadget HAL 管理（待增强版 `probe` 的 gadget/HAL 输出确认）。
   据此修正：准备阶段解绑任何占着 UDC 的 gadget，回滚改用 `svc usb resetUsbGadget`，不再写默认 `mtp,adb`。
+- 增强版 `probe`（`23ef683`）确认由 Gadget HAL 管理：`init.svc.vendor.usbgadget-hal=running`；`g1` 绑定 UDC，
+  `idVendor=0x18d1`，`b.1` 只挂 `function0`；`g2` 未绑定、无函数；`svc usb getFunctions` 为空（未接线、仅充电）。
+  `up` 要解绑的就是 `g1`，回滚依赖 HAL 重建它。
 - functionfs 内核支持：是；`cdc_ncm` 与 `usbnet` 主机驱动已加载（阶段 4 的内核前提满足）。
 - 角色节点三个：`/sys/class/usb_role/a600000.ssusb-role-switch/role`（当前 `none`）、
   `/sys/class/typec/port0/data_role`（`[host] device`）、`/sys/devices/platform/soc/a600000.ssusb/mode`（`none`）。

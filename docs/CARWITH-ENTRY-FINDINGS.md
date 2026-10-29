@@ -317,7 +317,7 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 小米 17（2509FPN0BC，`popsicle`）已 root，经无线 adb 运行 remote 包（`feat/wired-carplay-root`，`906671c`）的 `WiredGadgetMain probe`，USB 口未接线、未接车机。HyperOS、CarWith 版本未记录。
 
 1. functionfs 内核支持、`cdc_ncm`/`usbnet` 主机驱动已加载；唯一 UDC 为 `a600000.dwc3`。
-2. `sys.usb.config=none`，configfs 有 `g1`、`g2`：推断 USB 由 Gadget HAL 管理，原先「回滚写 `mtp,adb`」的假设不适用，已改为 `svc usb resetUsbGadget`。
+2. `sys.usb.config=none`，configfs 有 `g1`、`g2`；增强版 probe 确认 `vendor.usbgadget-hal` 在运行、`g1`（`0x18d1`）占着 UDC，即 USB 由 Gadget HAL 管理，原先「回滚写 `mtp,adb`」的假设不适用，已改为 `svc usb resetUsbGadget`。
 3. 有 `usb_role`、Type-C `data_role` 与高通 `ssusb/mode` 三个角色切换节点；能否写入、能否在无 PD 的线缆上切成主机尚未验证。
 
 结论：只说明本机满足有线实验的软件前提，不代表支持有线 CarPlay。完整输出与后续步骤见 `docs/WIRED-CARPLAY.md`。
