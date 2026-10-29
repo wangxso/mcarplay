@@ -62,6 +62,57 @@ class Iap2BluetoothClient(
 
         /** SDP 服务探测等待窗（fetchUuidsWithSdp → ACTION_UUID 广播）。 */
         private const val SDP_PROBE_TIMEOUT_MILLIS = 2_500L
+
+        private val KNOWN_SERVICES =
+            mapOf(
+                0x1101 to "SPP",
+                0x1105 to "OPP",
+                0x110A to "A2DP源",
+                0x110B to "A2DP接收",
+                0x110C to "AVRCP目标",
+                0x110E to "AVRCP",
+                0x1112 to "HSP网关",
+                0x1115 to "PANU",
+                0x1116 to "NAP",
+                0x111E to "HFP",
+                0x111F to "HFP网关",
+                0x112F to "PBAP",
+                0x1132 to "MAP",
+                0x1200 to "DID",
+            )
+        private const val BASE_UUID_SUFFIX = "-0000-1000-8000-00805f9b34fb"
+
+        /**
+         * 目标设备 SDP 声明的服务摘要：已知蓝牙标准服务写简称，其余（含厂商私有 UUID）写全称，
+         * 并单列是否声明了无线 CarPlay 的 iAP2 服务。`completed=false` 表示 SDP 未在等待窗内返回，
+         * 此时列表只是系统缓存，不能据此判定车机不支持。
+         */
+        fun describeServices(
+            uuids: List<UUID>,
+            completed: Boolean,
+        ): String {
+            val names =
+                uuids.distinct().map { uuid ->
+                    val text = uuid.toString().lowercase()
+                    when {
+                        uuid == ACCESSORY_IAP2_UUID -> "iAP2(…caff)"
+                        text.endsWith(BASE_UUID_SUFFIX) && text.startsWith("0000") ->
+                            text.substring(4, 8).toInt(16).let { short ->
+                                KNOWN_SERVICES[short]
+                                    ?: String.format(java.util.Locale.ROOT, "0x%04X", short)
+                            }
+                        else -> text
+                    }
+                }
+            val iap2 =
+                when {
+                    ACCESSORY_IAP2_UUID in uuids -> "有"
+                    completed -> "无"
+                    else -> "未确定（SDP 未返回）"
+                }
+            return "声明 ${names.size} 个服务${if (completed) "" else "（SDP 未在 ${SDP_PROBE_TIMEOUT_MILLIS}ms 内返回，仅为系统缓存）"}：" +
+                (names.joinToString(" / ").ifEmpty { "无" }) + "；无线 CarPlay iAP2 服务=$iap2"
+        }
     }
 
     private var thread: Thread? = null
@@ -88,6 +139,9 @@ class Iap2BluetoothClient(
     /** 「无 iAP2 服务→跳过」日志去重（每地址一次即可，重复轮询不刷屏）。 */
     private val skippedNoService = java.util.Collections.synchronizedSet(HashSet<String>())
 
+    /** 指定目标的 SDP 诊断已记录的地址（每轮 start 每台一次）。 */
+    private val targetServicesReported = java.util.Collections.synchronizedSet(HashSet<String>())
+
     /** 「是否提供 iAP2 服务」结论缓存（地址→结论）：SDP 查询不便宜，勿每 3s 重查。 */
     private val iap2ServiceCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
@@ -101,16 +155,22 @@ class Iap2BluetoothClient(
     @SuppressLint("MissingPermission")
     private fun awaitIap2Service(device: BluetoothDevice): Boolean {
         iap2ServiceCache[device.address]?.let { return it }
-
-        fun cachedHas(): Boolean =
-            runCatching {
-                device.uuids?.any { it == ACCESSORY_IAP2_UUID } == true
-            }.getOrDefault(false)
-
-        if (cachedHas()) {
+        if (cachedUuids(device).contains(ACCESSORY_IAP2_UUID)) {
             iap2ServiceCache[device.address] = true
             return true
         }
+        val has = probeServices(device).second.contains(ACCESSORY_IAP2_UUID)
+        iap2ServiceCache[device.address] = has
+        return has
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun cachedUuids(device: BluetoothDevice): List<UUID> =
+        runCatching { device.uuids?.map { it.uuid }.orEmpty() }.getOrDefault(emptyList())
+
+    /** 触发一次 SDP 并等结果；返回（是否在等待窗内返回，服务 UUID 列表）。 */
+    @SuppressLint("MissingPermission")
+    private fun probeServices(device: BluetoothDevice): Pair<Boolean, List<UUID>> {
         val latch = java.util.concurrent.CountDownLatch(1)
         val receiver =
             object : android.content.BroadcastReceiver() {
@@ -133,17 +193,29 @@ class Iap2BluetoothClient(
                 )
                 device.fetchUuidsWithSdp()
             }.getOrDefault(false)
+        var completed = false
         if (started) {
             try {
-                latch.await(SDP_PROBE_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
+                completed = latch.await(SDP_PROBE_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
             }
         }
         runCatching { context.unregisterReceiver(receiver) }
-        val has = cachedHas()
-        iap2ServiceCache[device.address] = has
-        return has
+        return completed to cachedUuids(device)
+    }
+
+    /**
+     * 指定目标时连接不经 SDP 闸门；这里只做一次诊断，记下车机声明了哪些服务，
+     * 用来区分「车机不提供无线 CarPlay」与「提供但未进配对窗口」（2026-10-28 小米 SU7 实测无法区分）。
+     */
+    private fun reportTargetServices(
+        device: BluetoothDevice,
+        name: String,
+    ) {
+        val (completed, uuids) = probeServices(device)
+        if (uuids.contains(ACCESSORY_IAP2_UUID)) iap2ServiceCache[device.address] = true
+        log("BT-C: 目标「$name」SDP ${describeServices(uuids, completed)}")
     }
 
     /** 「蓝牙已连接→已断开」日志节流时间戳。 */
@@ -174,6 +246,7 @@ class Iap2BluetoothClient(
         // 每轮启动重置 SDP 结论与跳过日志（新配对/换固件后重新探测）
         iap2ServiceCache.clear()
         skippedNoService.clear()
+        targetServicesReported.clear()
         running = true
         val myGeneration = generation.incrementAndGet()
         val target = targetProvider()
@@ -233,6 +306,9 @@ class Iap2BluetoothClient(
                 // 没有 iAP2 服务，连不上还白白被断 HFP/A2DP（设备级断开兜底更会波及
                 // 其它在线设备）——确认提供 …caff 才进入「断开+连接」流程。选定目标
                 // 的设备不过闸（用户显式指定，保持原路径与时序）。
+                if (targetProvider() != null && targetServicesReported.add(device.address)) {
+                    reportTargetServices(device, name)
+                }
                 if (targetProvider() == null && !awaitIap2Service(device)) {
                     if (skippedNoService.add(device.address)) {
                         log("BT-C: 跳过「$name」（未发现 iAP2 服务——非 CarPlay 设备，保持其音频连接）")
