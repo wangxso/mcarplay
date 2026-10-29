@@ -134,6 +134,20 @@ UDC 列表为空。为了让 Pad 当主机，**手动**（不在 `WiredGadgetMai
 - 因此它既测不了有线路径，也测不了无线路径：安卓手机不实现 usbmux/lockdown，不会出现在它的设备列表里。
   启动后没有主窗口（只有设置窗口），菜单栏也没有可见入口，与「没有已连接设备」一致。
 
+### 2026-10-29 小米 17 `up` 接 Mac（MacPlay 1.2.4 有线模式等待中）
+
+MacPlay（`Roylyl/MacPlay` 1.2.4，ad-hoc 签名）选「有线CarPlay」并启动接收；手机 USB 直连 Mac，
+`probe` 确认 `data_role=host [device]`、`power_role=source [sink]`（PD）。adb 先切到 Wi-Fi 再跑 `up --timeout 60`。
+
+- macOS 枚举为「Apple Inc. / iPhone」（`idVendor=1452`、`idProduct=4776`），选中配置 1，分配 1000 mA。
+- 收到两条厂商请求：
+  - `bmRequestType=0xc0 bRequest=0x45 wLength=4`：设备到主机的厂商读取，按现有策略 STALL。按 libimobiledevice
+    usbmuxd 的命名这是 Apple 的「查询 USB 模式」请求（未在 Apple 文档核实），真 iPhone 会回 4 字节当前模式。
+  - `bmRequestType=0x40 bRequest=0x40 wValue=1000 wIndex=500`：充电请求，与 Windows（`wValue=100`）编号相同、电流不同。
+- 60 秒内无角色切换请求，`GADGET_UP 超时` 回滚；USB adb（`sys.usb.config=adb`）与 macOS 中的小米设备随即恢复。
+- MacPlay 有线模式经 usbmuxd 打开 iPhone 的 CarPlay 服务（源码日志 `usbmuxd carkit up`），本 gadget 没有 usbmux 接口，
+  预期无法被它识别；它本身也不发车机的角色切换请求，所以不能替代车机测试第 2 步。
+
 ## 未核实事项
 
 以下来自公开逆向资料或经验值，均需台架或实车核对后再修正代码与本文：

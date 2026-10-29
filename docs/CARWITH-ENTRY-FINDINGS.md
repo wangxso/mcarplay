@@ -329,3 +329,5 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 小米 17 经 USB-C 直连 vivo Pad Air，PD 协商为手机主机兼供电（`[host]`/`[source]`，`usb_power_delivery`）。为让 Pad 当主机，经无线 adb 以 root 手动依次写 `/sys/class/typec/port0/power_role=sink`、`data_role=device`（均返回 0），随后 adb 掉线、手机黑屏，拔掉 USB 后重启。未运行 `up`，未建立 iPhone gadget；无法区分是哪一次互换触发，未取得内核日志。
 
 结论与处置：在这台手机上写 Type-C 角色节点有风险；`WiredGadgetMain` 的 `up`/`down` 已不再自动写 `data_role`，`probe` 只读显示。普通平板不适合作为有线 CarPlay 测试台。详见 `docs/WIRED-CARPLAY.md`。
+
+同日接 Mac（MacPlay 1.2.4 有线模式等待中）再空跑 `up --timeout 60`：手机为 PD 设备兼接收方；macOS 枚举为 Apple iPhone（`05ac:12a8`，分配 1000 mA），先发设备到主机的厂商请求 `0x45`（`wLength=4`，按现有策略 STALL），再发充电请求 `0x40`（`wValue=1000 wIndex=500`）。无角色切换请求，60 秒后回滚，USB adb 恢复。MacPlay 有线模式依赖 usbmuxd，不能代替车机测试角色切换。
