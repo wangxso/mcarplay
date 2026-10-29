@@ -568,6 +568,48 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startConnectionNow() {
         runOnUiThread {
+            if (needsBtAddressPrompt()) {
+                log("IDENTITY: 未获取本机真实蓝牙地址（Shizuku 未就绪且未手动填写）——提示手动填写")
+                showBtAddressGuidance()
+            } else {
+                continueAfterBtIdentityCheck()
+            }
+        }
+    }
+
+    /**
+     * 不用 Shizuku 时读不到真实蓝牙地址：WinPlay 等接收端会拒绝占位地址（SETUP 403 / 不邀请）。
+     * Shizuku 就绪时连接过程会实时读取，不需要提示；已手动填写或保存过也不提示。
+     */
+    private fun needsBtAddressPrompt(): Boolean =
+        ShizukuGate.state(this) != ShizukuGate.State.READY &&
+            DeviceIdentity.peek(this).source == DeviceIdentity.Source.NONE
+
+    private fun showBtAddressGuidance() {
+        DarkMessageDialog.show(
+            activity = this,
+            title = "请填写本机真实蓝牙地址",
+            message =
+                "Shizuku 未就绪，mcarplay 读不到手机的真实蓝牙地址。WinPlay 等接收端会核对这个地址，" +
+                    "用系统占位地址时会拒绝连接或不发邀请。\n\n" +
+                    "请在手机「设置 → 我的设备 → 全部参数与信息」或「状态信息」中查到「蓝牙地址」后填写；" +
+                    "也可以启动 Shizuku 后重新连接，由 mcarplay 自动读取。",
+            actions =
+                listOf(
+                    DarkMessageDialog.Action("仍然连接") { continueAfterBtIdentityCheck() },
+                    DarkMessageDialog.Action("手动填写", DarkMessageDialog.Emphasis.PRIMARY) {
+                        BtIdentityDialog.show(this) {
+                            updateReadyRow()
+                            // 填好后接着走原来的连接流程；清除或未保存时不自动连接
+                            if (DeviceIdentity.peek(this).source != DeviceIdentity.Source.NONE) continueAfterBtIdentityCheck()
+                        }
+                    },
+                ),
+        )
+    }
+
+    private fun continueAfterBtIdentityCheck() {
+        runOnUiThread {
             if (CarLifeLauncher.isAvailable(this) && CarLifeLauncher.backgroundStartAllowed(this) == false) {
                 log("CARLIFE: 未允许「后台弹出界面」，CarPlay 会话建立后可能无法打开 CarWith 入口")
                 showBackgroundStartGuidance()
