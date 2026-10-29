@@ -43,6 +43,16 @@ class FunctionFsTest {
     }
 
     @Test
+    fun usbMuxDescriptorsUseAppleInterfaceAndPreferredEndpoints() {
+        val blob = FunctionFs.usbMuxDescriptors()
+        val fullSpeedInterface = blob.copyOfRange(20, 29)
+        assertArrayEquals(byteArrayOf(9, 4, 0, 0, 2, 0xFF.toByte(), 0xFE.toByte(), 0x02, 1), fullSpeedInterface)
+        assertArrayEquals(byteArrayOf(7, 5, 0x04, 2, 64, 0, 0), blob.copyOfRange(29, 36))
+        assertArrayEquals(byteArrayOf(7, 5, 0x85.toByte(), 2, 64, 0, 0), blob.copyOfRange(36, 43))
+        assertArrayEquals(byteArrayOf(7, 5, 0x85.toByte(), 2, 0, 2, 0), blob.copyOfRange(66 - 7, 66))
+    }
+
+    @Test
     fun stringsBlockIsNulTerminatedEnglishTable() {
         val blob = FunctionFs.strings("iAP Interface")
 

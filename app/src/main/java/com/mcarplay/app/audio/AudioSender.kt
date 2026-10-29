@@ -127,6 +127,9 @@ class AudioSender(
 
     @Volatile private var nonceCounter = 0L
 
+    /** 音频包发送失败的宽限判定（只在推流线程访问）。 */
+    private val sendGate = UdpSendGate()
+
     /** 首个音频包标记（打完就清）；AAC 自检只跑一次。 */
     private var markerPending = true
     private var selfChecked = false
@@ -487,6 +490,7 @@ class AudioSender(
             }
         syncSocket = client
         log("AUDIO: 同步包已启用 → $host:$controlPort（每 ${SYNC_INTERVAL_MILLIS}ms 一个，建立 RTP↔NTP 锚点）")
+        val syncGate = UdpSendGate()
         val worker =
             Thread(
                 {
@@ -498,7 +502,15 @@ class AudioSender(
                             val current = (next - samplesPerPacket).coerceAtLeast(0L)
                             val ntp = TimingServer.ntpFromNanos(System.nanoTime())
                             val packet = AudioSyncPacket.build(syncSequence, current, next, ntp, first)
-                            client.send(DatagramPacket(packet, packet.size))
+                            try {
+                                client.send(DatagramPacket(packet, packet.size))
+                                syncGate.onSuccess()?.let { log("AUDIO: 同步包发送已恢复（丢 $it 个）") }
+                            } catch (error: IOException) {
+                                if (!syncGate.onFailure()) throw error
+                                if (syncGate.dropped == 1) log("AUDIO: 同步包发送失败，宽限期内重试 - ${error.message}")
+                                Thread.sleep(SYNC_INTERVAL_MILLIS)
+                                continue
+                            }
                             syncSequence = (syncSequence + 1) and 0xFFFF
                             if (first) {
                                 first = false
@@ -613,7 +625,10 @@ class AudioSender(
         }
     }
 
-    /** 封包 + 发送一包（同步更新 seq/ts/nonce 游标）。返回 false 表示链路已断。 */
+    /**
+     * 封包 + 发送一包（同步更新 seq/ts/nonce 游标）。返回 false 表示链路已断。
+     * 短暂断路时丢弃当前包仍推进游标，接收端据此按丢包处理。
+     */
     private fun sendPayload(payload: ByteArray): Boolean {
         val wire = sealPacket(payload, sequence, timestamp, nonceCounter, markerPending)
         markerPending = false
@@ -626,10 +641,16 @@ class AudioSender(
             runCatching { onPacketSent?.invoke() }
             packetsSent++
             bytesSent += wire.size
+            sendGate.onSuccess()?.let { log("AUDIO: UDP 发送已恢复（期间丢 $it 包）") }
             true
         } catch (error: IOException) {
-            log("AUDIO: UDP 发送失败 - ${error.message}")
-            false
+            val keepGoing = sendGate.onFailure()
+            if (!keepGoing) {
+                log("AUDIO: UDP 持续发送失败 ${sendGate.failingMillis()}ms（丢 ${sendGate.dropped} 包）- ${error.message}")
+            } else if (sendGate.dropped == 1) {
+                log("AUDIO: UDP 发送失败，宽限期内丢包重试 - ${error.message}")
+            }
+            keepGoing
         }
     }
 

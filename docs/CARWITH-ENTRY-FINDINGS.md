@@ -467,3 +467,18 @@ MacPlay 的有线会话还通过系统 usbmuxd 找 USB 设备：
 `sys.usb.config=adb`、`g1/UDC=a600000.dwc3`、台架状态目录删除，USB adb 重新出现，macOS 设备名恢复为
 `Xiaomi 17 Pro Max`。完整 Apple 复合 USB gadget 与 usbmux/lockdown/carkit 仍是下一阶段。真实音频现已由
 用户确认；触控、真实车机角色切换、NCM 和 USB 主机侧 iAP2 仍未验收。
+
+## 小米 17 + MacPlay 完整有线 CarPlay 会话（2026-10-30 00:30–00:55）
+
+环境同 10-29：`2509FPN0BC`、HyperOS `OS4.0.4.0.XPBCNXM`、CarWith `4.0.20-20260923`、小米 CarLife `8.8.5`、
+KernelSU；MacPlay `1.2.4`（41）有线模式。台架为 NCM + FunctionFS usbmux 复合 iPhone 身份。
+
+- MacPlay 经系统 usbmuxd 打开 `com.apple.carkit.service`，有线 iAP2 识别、MFi 认证通过，下发
+  `CarPlayStartSession port=17000`；手机随后经 USB NCM 的链路本地 IPv6 完成 AirPlay 配对与 RECORD。
+- 首次会话 38.7 秒断开：HyperOS Greezer 在 CarWith 启动高德时以 `LM FZ` 冻结本应用 uid，超时解冻时遗漏，
+  进程冻结 63 秒（`dumpsys greezer` 记录 `frozen=63s`）；`connectedDevice` 前台服务不构成豁免。
+- 台架加入 Greezer 守护后，启动初期约 5 秒内仍被 `quick freeze` 多次，均在 0.6 秒内解冻。
+- 音频曾因台架每秒重建 peer 策略规则出现 `ENETUNREACH` 并停止；规则改为幂等、音频与同步包增加 3 秒发送宽限后，
+  240 秒内视频 4,480 包、音频 9,914 包，`invalid=0`、认证错误 0、RTP 抖动丢包 0，触控事件到达手机。
+
+结论只适用于 Mac 台架，不代表真实车机的 USB 角色切换或有线 CarPlay 已支持。详见 `docs/WIRED-CARPLAY.md`。

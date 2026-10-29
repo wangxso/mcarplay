@@ -3,8 +3,9 @@ package com.mcarplay.app.usb
 /**
  * USB NCM 台架向主机声明的设备身份。
  *
- * [IPHONE_COMPAT] 只复用 Apple 的 USB 枚举特征，让 MacPlay 的设备列表能识别当前台架；
- * 它不实现 usbmux、lockdown 或 carkit。若该身份导致 NCM 无法枚举，连接器会退回 [GENERIC]。
+ * [IPHONE_COMPAT] 复用 Apple 的 USB 枚举特征，并由同一声明暴露最小
+ * usbmux、lockdown 和 carkit 服务。连接器只在网卡本身无法枚举时退回 [GENERIC]；
+ * 网卡已出现但地址尚未就绪不会重建 gadget，以免破坏已经完成的 Apple 设备枚举。
  */
 enum class UsbNcmIdentityMode(
     val wireValue: String,

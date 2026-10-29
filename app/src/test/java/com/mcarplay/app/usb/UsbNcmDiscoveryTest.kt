@@ -69,6 +69,28 @@ class UsbNcmDiscoveryTest {
     }
 
     @Test
+    fun boundInterfaceAndAddressOutputCanBeParsedInSeparateStages() {
+        val bound = "usb0\n42\n"
+        assertEquals("usb0", UsbNcmDiscovery.parseInterfaceName(bound))
+        assertEquals(42, UsbNcmDiscovery.parseIfindex(bound))
+        assertEquals(UsbNcmDiscovery.LocalAddresses(null, null), UsbNcmDiscovery.parseLocalAddresses(bound, "usb0"))
+
+        val addressed =
+            """
+            usb0
+            42
+            fe80000000000000021122fffe334455 0000002a 40 00 82 usb0
+            IPV4=169.254.34.86
+            """.trimIndent()
+        val addresses = UsbNcmDiscovery.parseLocalAddresses(addressed, "usb0")
+        assertEquals("169.254.34.86", addresses.ipv4)
+        assertEquals(
+            listOf("fe80:0000:0000:0000:0211:22ff:fe33:4455", "169.254.34.86"),
+            addresses.mdnsBindAddresses,
+        )
+    }
+
+    @Test
     fun mdnsCandidatesRejectWifiPrivateAddressesEvenForTheExpectedPort() {
         val scope = 42
         val expectedIpv6 =

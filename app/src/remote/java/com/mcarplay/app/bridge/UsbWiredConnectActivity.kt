@@ -16,7 +16,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.mcarplay.app.MainActivity
 
-/** remote-debug 主界面卡片打开的一键 USB NCM 入口。 */
+/** remote-debug 主界面卡片打开的一键 USB 有线 CarPlay 入口。 */
 class UsbWiredConnectActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var detail: TextView
@@ -28,7 +28,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "USB NCM 有线媒体（实验）"
+        title = "USB 有线 CarPlay（root 实验）"
         val pad = (20 * resources.displayMetrics.density).toInt()
         val root =
             LinearLayout(this).apply {
@@ -38,7 +38,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
             }
         root.addView(
             TextView(this).apply {
-                text = "USB NCM 媒体台架"
+                text = "USB 有线 CarPlay 台架"
                 setTextColor(Color.WHITE)
                 textSize = 25f
                 gravity = Gravity.CENTER
@@ -48,8 +48,9 @@ class UsbWiredConnectActivity : AppCompatActivity() {
         root.addView(
             TextView(this).apply {
                 text =
-                    "保持手机与 Mac 的 USB 连接。台架会优先以 iPhone 兼容的 USB 描述符辅助 MacPlay 识别，" +
-                    "但媒体仍走 USB NCM，身份不包含 usbmux/lockdown/carkit。枚举失败会自动回退到 Linux NCM。"
+                    "保持手机与接收端的 USB 直连。台架以 iPhone 兼容身份提供 NCM 和最小 " +
+                    "usbmux/lockdown/carkit，音视频仍经 USB NCM 上的 AirPlay 传输；" +
+                    "枚举或握手失败会自动回滚并恢复 Android USB。"
                 setTextColor(0xFFB8C2C8.toInt())
                 textSize = 14f
                 gravity = Gravity.CENTER
@@ -130,10 +131,10 @@ class UsbWiredConnectActivity : AppCompatActivity() {
                     when (snapshot.phase) {
                         UsbNcmAutoConnector.Phase.IDLE -> "等待连接"
                         UsbNcmAutoConnector.Phase.REQUESTING_ROOT -> "正在请求 root"
-                        UsbNcmAutoConnector.Phase.PREPARING_USB -> "正在建立 USB NCM"
+                        UsbNcmAutoConnector.Phase.PREPARING_USB -> "正在建立 USB 有线设备"
                         UsbNcmAutoConnector.Phase.FINDING_PEER -> "正在查找 MacPlay"
                         UsbNcmAutoConnector.Phase.STARTING_AIRPLAY -> "正在连接 AirPlay"
-                        UsbNcmAutoConnector.Phase.CONNECTED -> "USB NCM 媒体已启动"
+                        UsbNcmAutoConnector.Phase.CONNECTED -> "USB 有线 CarPlay 已启动"
                         UsbNcmAutoConnector.Phase.STOPPING -> "正在断开"
                         UsbNcmAutoConnector.Phase.FAILED -> "连接失败"
                     }
@@ -142,7 +143,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
                     if (snapshot.phase == UsbNcmAutoConnector.Phase.IDLE) View.GONE else View.VISIBLE
                 if (snapshot.phase == UsbNcmAutoConnector.Phase.CONNECTED && !returnedToMain) {
                     returnedToMain = true
-                    Toast.makeText(this, "USB NCM 媒体已启动，正在返回主界面", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "USB 有线 CarPlay 已启动，正在返回主界面", Toast.LENGTH_SHORT).show()
                     startActivity(
                         Intent(this, MainActivity::class.java)
                             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),

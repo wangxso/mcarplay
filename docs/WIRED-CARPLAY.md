@@ -1,10 +1,10 @@
 # 有线 CarPlay（root 实验）
 
-更新：2026-10-29。本文记录「手机通过 USB 线直连只支持有线 CarPlay 的车机」的调研结论、已实现的台架工具与后续步骤。
-**目前已验证 USB NCM 上的 CarWith → AirPlay → MacPlay 视频路径，并验证音频包持续到达、解密、解码、进入
-MacPlay 的 CoreAudio 管线且由用户确认实际听到声音**；可选的 iPhone 兼容身份也已让 macOS 把台架枚举为
-`Apple Inc. / iPhone`。真实车机发起 USB 角色切换、完整 Apple usbmux/lockdown/carkit 入口仍不可用，也没有
-实体车机证据。本功能不代表任何手机或车机已支持，也不进入 `standard` 的连接流程。
+更新：2026-10-30。本文记录「手机通过 USB 线直连只支持有线 CarPlay 的车机」的调研结论、已实现的台架工具与后续步骤。
+**2026-10-30 已在 Mac 台架上走通完整有线 CarPlay 路径**：MacPlay 经系统 usbmuxd 发现台架、通过 lockdown
+启动 `com.apple.carkit.service`、在有线 iAP2 上完成 MFi 认证并下发 `CarPlayStartSession`，随后 CarWith
+音视频经 USB NCM 上的 AirPlay 持续播放，触控事件回传。真实车机发起 USB 角色切换仍未验证，也没有实体车机
+证据。本功能不代表任何手机或车机已支持，也不进入 `standard` 的连接流程。
 
 ## 结论
 
@@ -20,11 +20,11 @@ MacPlay 的 CoreAudio 管线且由用户确认实际听到声音**；可选的 i
 
 | 环节 | 内容 | 本分支状态 |
 | --- | --- | --- |
-| 1. 冒充 iPhone | configfs gadget 用 Apple VID/PID 枚举；FunctionFS 接收发给设备本身的厂商控制请求（`FUNCTIONFS_ALL_CTRL_RECIP`） | FunctionFS 和 NCM 两种台架均已在电脑上枚举为 Apple iPhone；完整 usbmux/lockdown/carkit 尚未实现，未接车机 |
+| 1. 冒充 iPhone | configfs gadget 用 Apple VID/PID 枚举；FunctionFS 接收发给设备本身的厂商控制请求（`FUNCTIONFS_ALL_CTRL_RECIP`） | NCM + FunctionFS usbmux 复合台架被 macOS usbmuxd 接受，lockdown 配对/TLS 会话与 carkit 服务在 MacPlay 上可用；未接车机 |
 | 2. 角色切换 | 车机请求 iPhone 改当 USB 主机，自己转为 USB 设备 | 已实现状态机与节点探测（`usb/WiredSwitchMachine`、`usb/UsbRoleNodes`；不自动写 Type-C 节点），未实机 |
-| 3. iAP2 走 USB | 车机 iAP2 接口的 bulk IN/OUT 承载与蓝牙相同的链路层字节流 | 已实现 `UsbHostDuplexStream`，尚未接入会话 |
+| 3. iAP2 走 USB | 车机 iAP2 接口的 bulk IN/OUT 承载与蓝牙相同的链路层字节流 | Mac 台架经 usbmux 上的 carkit 通道完成识别、MFi 认证与 `CarPlayStartSession`；车机 USB 主机侧 `UsbHostDuplexStream` 尚未接入 |
 | 4. 网络 | AirPlay 跑在车机的 CDC-NCM 网卡上（IPv4 和/或 IPv6，经 mDNS 或显式地址发现） | Mac 台架已验证链路本地 IPv6；IPv4/IPv6 候选、邻居与手动地址降级已有离线测试；真实车机 NCM 未验证 |
-| 5. 媒体 | 与无线相同的 AirPlay 视频/音频/触控 | 视频已在 USB NCM 上出画；音频已连续解密、解码并进入 MacPlay 的 CoreAudio 管线，用户确认实际出声正常；触控未确认 |
+| 5. 媒体 | 与无线相同的 AirPlay 视频/音频/触控 | 有线会话下视频、音频持续播放，MacPlay 触控事件到达手机；车机未验证 |
 
 MFi 认证只需车机向手机证明自己，手机侧不需要 Apple 密钥，与现有无线路径一致。
 
@@ -300,6 +300,35 @@ remote debug 入口新增“优先使用 iPhone 兼容 USB 身份”开关，默
 4. 实测 `am force-stop` 和入口内“停止并恢复 USB”两条回滚路径：`sys.usb.config=adb`、
    `g1/UDC=a600000.dwc3`、台架状态目录删除、USB adb 返回，macOS 设备名恢复为 `Xiaomi 17 Pro Max`。
 
+### 2026-10-30 00:30–00:55 MacPlay 完整有线会话、冻结与音频断流修复
+
+设备为小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，小米 CarLife
+`8.8.5`，KernelSU；接收端 MacPlay `1.2.4`（41），选择“有线CarPlay”。无线 adb 只用于控制与观察。台架以
+`tools/wired_ncm_bench.py up --identity iphone-ui` 建立 NCM + FunctionFS usbmux 复合 gadget，再在 MacPlay
+点击“启动接收”，收到 `CarPlayStartSession` 后用 adb 启动 `UsbMediaBenchActivity`。
+
+1. 控制链路：MacPlay 日志依次为 `usbmuxd carkit up`、`wired: identification accepted`、`wired: MFi auth succeeded`、
+   `CarPlayStartSession sent`；手机端记录 secure lockdown `StartService com.apple.carkit.service`、有线 iAP2
+   就绪，并收到端口 `17000` 与 Mac 链路本地 IPv6。此前的 usbmux 断开源于纯 ACK 晚于业务响应写出；ACK 改为先写
+   后唤醒读者，之后未再出现 duplicate packet 或 bulk 读 `kIOReturnAborted`。
+2. 首次有线会话只发出 3 帧视频，38.7 秒后 MacPlay `heartbeat timeout idleMs=15006` 断开。手机日志在
+   `00:31:14` 到 `00:32:17` 之间完全空白，`dumpsys greezer` 显示 CarWith 启动高德时执行 `LM FZ`，冻结了
+   本应用 uid，3 秒后的 `LM timeout THAW` 唯独漏掉该 uid，统计为 `frozen=63s`。前台服务
+   （`connectedDevice`）不能阻止此冻结；百度 CarLife 在云端白名单中，不受影响。
+3. 台架脚本现于 `up` 时执行 `cmd greezer unmonitor`、加入 deviceidle 白名单，并在主循环每秒检查
+   `/sys/fs/cgroup/apps/uid_<uid>/pid_*/cgroup.events`，冻结时先用 `cmd greezer thuid` 解冻，失败再写
+   `cgroup.freeze=0`；`restore` 只撤销本台架添加的项。复测中仅 unmonitor 与白名单仍挡不住启动后约 5 秒内的
+   `quick freeze`，守护在 0.6 秒内逐次解冻，此后不再冻结。
+4. 音频在播放后 4 秒出现 `ENETUNREACH`，音频发送器随即停止，视频不受影响。原因是脚本每秒对 peer 先删后加
+   策略规则；`usb0` 不属于 netd 网络，规则空窗内未缓存路由的 UDP `sendto` 会失败。规则改为已存在即跳过；
+   `AudioSender` 的音频包与同步包改为 3 秒宽限，宽限内丢包继续，持续失败才停止。旧日志 `22:09:55` 的同一
+   错误也解释了此前无线 NCM 长测中音频包数停止增长的现象。
+5. 修复后复测（attempt `ABC35495`）：240 秒时视频 4,480 包、音频 9,914 包，约 20 fps 与 47 包/秒；
+   音频解密 9,914、`invalid=0`、认证错误 0、RTP 抖动丢包 0；MacPlay 触控事件到达手机。
+
+Python 台架等待 macOS 枚举的上限由 15 秒改为 45 秒；新伪序列号首次枚举曾耗时约 25 秒。`up` 中首个 peer 路由
+失败不再触发回滚，交给主循环重试。上述结果只覆盖 Mac 台架；真实车机的角色切换、USB 主机侧 iAP2 与网络仍需实测。
+
 ## 未核实事项
 
 以下来自公开逆向资料或经验值，均需台架或实车核对后再修正代码与本文：
@@ -313,8 +342,8 @@ remote debug 入口新增“优先使用 iPhone 兼容 USB 身份”开关，默
 
 ## 后续步骤
 
-1. MacPlay 专项：扩展 Apple 复合 USB gadget，补齐系统 usbmuxd 可发现的传输、lockdown 服务及
-   `com.apple.carkit.service`；只用产品名伪装 `iPhone` 不算完成。
+1. 产品化 Mac 台架路径：remote 入口内置 usbmux 复合身份与 Greezer 守护，自动完成从 `CarPlayStartSession`
+   到媒体桥的衔接，无需手动 `am start`。
 2. 阶段 3：App 侧用 `UsbManager` 打开车机设备，按 `WiredAccessoryInterfaces.match` 选接口，经 `UsbHostDuplexStream`
    接入 `Iap2LinkChannel`；`Iap2SenderSession` 增加有线模式，跳过 Wi-Fi 交换。
 3. 阶段 4：把现有 NCM 台架接到真实车机的 USB 主机 iAP2 会话之后；验证车机暴露的网卡、IPv4/IPv6 地址与 mDNS。

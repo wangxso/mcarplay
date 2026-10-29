@@ -49,6 +49,31 @@ def mac_interface(host_mac: str) -> dict | None:
     return None
 
 
+def launch_arguments(
+    seconds: int,
+    token: str,
+    device_mac: str,
+    host_mac: str,
+    peer: str | None,
+    identity: str,
+) -> list[str]:
+    """Build the fixed shell argument layout shared with the Android connector."""
+    return [
+        "setsid",
+        "sh",
+        REMOTE_SCRIPT,
+        "up",
+        str(seconds),
+        token,
+        device_mac,
+        host_mac,
+        peer or "",
+        "",
+        "" if peer is None else "1",
+        identity,
+    ]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", required=True, help="Connected adb transport; USB adb disconnects after daemon launch")
@@ -60,7 +85,7 @@ def main():
         "--identity",
         choices=("iphone-ui", "generic"),
         default="iphone-ui",
-        help="USB device identity; iphone-ui still carries NCM and does not implement usbmux/lockdown/carkit",
+        help="USB device identity; iphone-ui carries NCM plus the minimal usbmux/lockdown/carkit bench",
     )
     peer = commands.add_parser("peer")
     peer.add_argument("address")
@@ -96,19 +121,14 @@ def main():
         script = Path(temporary) / "ncm.sh"
         script.write_text(SCRIPT)
         subprocess.run(["adb", "-s", args.serial, "push", str(script), REMOTE_SCRIPT], check=True)
-    arguments = [
-        "setsid",
-        "sh",
-        REMOTE_SCRIPT,
-        "up",
-        str(args.seconds),
+    arguments = launch_arguments(
+        args.seconds,
         secrets.token_hex(20),
         device_mac,
         host_mac,
-        args.peer or "",
-        "" if args.peer is None else "1",
+        args.peer,
         args.identity,
-    ]
+    )
     launch = (
         "command -v setsid >/dev/null && umask 077 && "
         + shlex.join(arguments)
@@ -126,7 +146,8 @@ def main():
         code = None
     if code not in (None, 0, 255):
         raise RuntimeError(f"Could not dispatch the USB daemon (adb exit {code})")
-    deadline = time.monotonic() + 15
+    # A fresh serial is a new accessory to macOS; first enumeration took ~25s.
+    deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
         info = mac_interface(host_mac)
         if info and info["address"]:

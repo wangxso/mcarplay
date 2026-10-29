@@ -32,8 +32,59 @@ object FunctionFs {
 
     /** iAP 接口：一个厂商自定义接口 + bulk IN/OUT 各一。 */
     fun iapDescriptors(identity: AppleUsbIdentity): ByteArray {
-        val fullSpeed = iapInterface(identity, FULL_SPEED_BULK_PACKET)
-        val highSpeed = iapInterface(identity, HIGH_SPEED_BULK_PACKET)
+        val fullSpeed =
+            bulkVendorInterface(
+                interfaceClass = identity.iapInterfaceClass,
+                interfaceSubclass = identity.iapInterfaceSubclass,
+                interfaceProtocol = identity.iapInterfaceProtocol,
+                firstEndpoint = 0x81,
+                secondEndpoint = 0x02,
+                maxPacket = FULL_SPEED_BULK_PACKET,
+            )
+        val highSpeed =
+            bulkVendorInterface(
+                interfaceClass = identity.iapInterfaceClass,
+                interfaceSubclass = identity.iapInterfaceSubclass,
+                interfaceProtocol = identity.iapInterfaceProtocol,
+                firstEndpoint = 0x81,
+                secondEndpoint = 0x02,
+                maxPacket = HIGH_SPEED_BULK_PACKET,
+            )
+        return bulkInterfaceDescriptors(fullSpeed, highSpeed)
+    }
+
+    /**
+     * Apple USBMUX 接口：`ff/fe/02` + bulk OUT 0x04 / IN 0x85。
+     *
+     * 这组端点与 DiPlay 的 CarPlay 配置匹配器首选值一致；单配置复合 gadget 仍由 NCM
+     * function 提供 CarPlay 媒体网卡。
+     */
+    fun usbMuxDescriptors(): ByteArray {
+        val fullSpeed =
+            bulkVendorInterface(
+                interfaceClass = 0xFF,
+                interfaceSubclass = 0xFE,
+                interfaceProtocol = 0x02,
+                firstEndpoint = 0x04,
+                secondEndpoint = 0x85,
+                maxPacket = FULL_SPEED_BULK_PACKET,
+            )
+        val highSpeed =
+            bulkVendorInterface(
+                interfaceClass = 0xFF,
+                interfaceSubclass = 0xFE,
+                interfaceProtocol = 0x02,
+                firstEndpoint = 0x04,
+                secondEndpoint = 0x85,
+                maxPacket = HIGH_SPEED_BULK_PACKET,
+            )
+        return bulkInterfaceDescriptors(fullSpeed, highSpeed)
+    }
+
+    private fun bulkInterfaceDescriptors(
+        fullSpeed: ByteArray,
+        highSpeed: ByteArray,
+    ): ByteArray {
         val flags = FLAG_HAS_FS_DESC or FLAG_HAS_HS_DESC or FLAG_ALL_CTRL_RECIP or FLAG_CONFIG0_SETUP
         val body = ByteArrayOutputStream()
         body.write(le32(flags))
@@ -83,8 +134,12 @@ object FunctionFs {
 
     private const val DESCRIPTOR_COUNT = 3
 
-    private fun iapInterface(
-        identity: AppleUsbIdentity,
+    private fun bulkVendorInterface(
+        interfaceClass: Int,
+        interfaceSubclass: Int,
+        interfaceProtocol: Int,
+        firstEndpoint: Int,
+        secondEndpoint: Int,
         maxPacket: Int,
     ): ByteArray {
         val out = ByteArrayOutputStream()
@@ -96,14 +151,14 @@ object FunctionFs {
                 0,
                 0,
                 2,
-                identity.iapInterfaceClass.toByte(),
-                identity.iapInterfaceSubclass.toByte(),
-                identity.iapInterfaceProtocol.toByte(),
+                interfaceClass.toByte(),
+                interfaceSubclass.toByte(),
+                interfaceProtocol.toByte(),
                 1,
             ),
         )
-        out.write(bulkEndpoint(0x81, maxPacket))
-        out.write(bulkEndpoint(0x02, maxPacket))
+        out.write(bulkEndpoint(firstEndpoint, maxPacket))
+        out.write(bulkEndpoint(secondEndpoint, maxPacket))
         return out.toByteArray()
     }
 
