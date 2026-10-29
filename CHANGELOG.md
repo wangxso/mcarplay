@@ -3,6 +3,16 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [Unreleased]
+
+### English
+- When a target head unit is selected, log once per connection start which Bluetooth services it advertises over SDP and whether the wireless CarPlay iAP2 service (`…caff`) is among them, so a head unit that lacks wireless CarPlay can be told apart from one that is not in its pairing window. An SDP timeout is reported as undetermined, not as missing.
+- Validation: 548 JVM tests, `spotlessCheck`, `lintStandardDebug` and `assembleRemoteDebug` passed. Not yet verified on device.
+
+### 简体中文
+- 指定目标车机时，每次启动连接记录一次它通过 SDP 声明的蓝牙服务，以及其中是否有无线 CarPlay 的 iAP2 服务（`…caff`），用于区分「车机不支持无线 CarPlay」与「支持但未进入配对窗口」。SDP 超时记为「未确定」，不记为没有。
+- 验证：548 项 JVM 测试、`spotlessCheck`、`lintStandardDebug` 和 `assembleRemoteDebug` 均通过。尚未实机验证。
+
 ## [v0.1.3-test.3] - 2026-10-29
 
 > Experimental prerelease: lets phones without Shizuku supply their real Bluetooth address; the new address flow has not been verified on device and this does not establish real-car compatibility.
