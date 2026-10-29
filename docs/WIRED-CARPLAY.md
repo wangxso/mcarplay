@@ -98,7 +98,10 @@ root（`uid=0`），无线 adb，USB 口未接线。HyperOS、CarWith 版本未�
   （来自 Windows 的 Apple 驱动，100 mA）。用零长度 `Os.read` 应答，没有报错。
 - 电脑不会发角色切换请求；30 秒后 `GADGET_UP 超时` 并回滚，进程正常退出。
 
-尚未确认：回滚后 USB adb 与 g1 是否恢复（等用户回报）；`0x51` 角色切换仍需车机验证。
+- 回滚后用户确认 USB 已恢复：USB adb 连接重新出现，`probe` 中 `g1` 的 `UDC` 回到 `a600000.dwc3`。
+  `svc usb resetUsbGadget` 在这台 Gadget HAL 机型上能把 USB 交还系统。
+
+尚未验证：`0x51` 角色切换、切主机与 VBUS，需要接车机。
 
 ## 未核实事项
 

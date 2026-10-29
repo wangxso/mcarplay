@@ -322,4 +322,4 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 
 结论：只说明本机满足有线实验的软件前提，不代表支持有线 CarPlay。完整输出与后续步骤见 `docs/WIRED-CARPLAY.md`。
 
-同日空跑 `up --timeout 30`（USB 接 Windows 电脑，不接车机）：gadget 绑定成功，Windows 以 `VID_05AC&PID_12A8` 枚举为 Apple Mobile Device 复合设备（接口实例带 `RESTORE_MODE`，接口布局仍与真 iPhone 不同）；收到并应答 Apple 充电请求 `0x40`（`wValue=100`）；30 秒超时后回滚。只验证了「冒充 iPhone」这一环，不涉及角色切换和车机。
+同日空跑 `up --timeout 30`（USB 接 Windows 电脑，不接车机）：gadget 绑定成功，Windows 以 `VID_05AC&PID_12A8` 枚举为 Apple Mobile Device 复合设备（接口实例带 `RESTORE_MODE`，接口布局仍与真 iPhone 不同）；收到并应答 Apple 充电请求 `0x40`（`wValue=100`）；30 秒超时后回滚，用户确认 USB adb 与 `g1` 的 UDC 均恢复。只验证了「冒充 iPhone」这一环，不涉及角色切换和车机。
