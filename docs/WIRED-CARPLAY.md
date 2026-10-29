@@ -146,7 +146,7 @@ MacPlay（`Roylyl/MacPlay` 1.2.4，ad-hoc 签名）选「有线CarPlay」并启�
   - `bmRequestType=0x40 bRequest=0x40 wValue=1000 wIndex=500`：充电请求，与 Windows（`wValue=100`）编号相同、电流不同。
 - 60 秒内无角色切换请求，`GADGET_UP 超时` 回滚；USB adb（`sys.usb.config=adb`）与 macOS 中的小米设备随即恢复。
 - MacPlay 有线模式经 usbmuxd 打开 iPhone 的 CarPlay 服务（源码日志 `usbmuxd carkit up`），本 gadget 没有 usbmux 接口，
-  预期无法被它识别；它本身也不发车机的角色切换请求，所以不能替代车机测试第 2 步。
+  无法被它识别：用户确认 MacPlay 全程停在等待 iPhone 连接。它本身也不发车机的角色切换请求，所以不能替代车机测试第 2 步。
 
 ## 未核实事项
 

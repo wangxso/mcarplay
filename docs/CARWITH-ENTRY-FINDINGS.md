@@ -330,4 +330,4 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 
 结论与处置：在这台手机上写 Type-C 角色节点有风险；`WiredGadgetMain` 的 `up`/`down` 已不再自动写 `data_role`，`probe` 只读显示。普通平板不适合作为有线 CarPlay 测试台。详见 `docs/WIRED-CARPLAY.md`。
 
-同日接 Mac（MacPlay 1.2.4 有线模式等待中）再空跑 `up --timeout 60`：手机为 PD 设备兼接收方；macOS 枚举为 Apple iPhone（`05ac:12a8`，分配 1000 mA），先发设备到主机的厂商请求 `0x45`（`wLength=4`，按现有策略 STALL），再发充电请求 `0x40`（`wValue=1000 wIndex=500`）。无角色切换请求，60 秒后回滚，USB adb 恢复。MacPlay 有线模式依赖 usbmuxd，不能代替车机测试角色切换。
+同日接 Mac（MacPlay 1.2.4 有线模式等待中）再空跑 `up --timeout 60`：手机为 PD 设备兼接收方；macOS 枚举为 Apple iPhone（`05ac:12a8`，分配 1000 mA），先发设备到主机的厂商请求 `0x45`（`wLength=4`，按现有策略 STALL），再发充电请求 `0x40`（`wValue=1000 wIndex=500`）。无角色切换请求，60 秒后回滚，USB adb 恢复。MacPlay 全程停在等待 iPhone 连接；它的有线模式依赖 usbmuxd，不能代替车机测试角色切换。
