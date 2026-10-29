@@ -22,6 +22,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
     private lateinit var detail: TextView
     private lateinit var stop: Button
     private lateinit var audio: CheckBox
+    private lateinit var iphoneIdentity: CheckBox
     private lateinit var directHost: EditText
     private var returnedToMain = false
 
@@ -47,8 +48,8 @@ class UsbWiredConnectActivity : AppCompatActivity() {
         root.addView(
             TextView(this).apply {
                 text =
-                    "保持手机与 Mac 的 USB 连接。此台架只通过 USB NCM 承载 AirPlay，不会让 MacPlay 把手机" +
-                    "识别成 USB iPhone。MacPlay 中请选择“有线CarPlay”并先点击“启动接收”；默认同时尝试视频和 CarWith 声音。"
+                    "保持手机与 Mac 的 USB 连接。台架会优先以 iPhone 兼容的 USB 描述符辅助 MacPlay 识别，" +
+                    "但媒体仍走 USB NCM，身份不包含 usbmux/lockdown/carkit。枚举失败会自动回退到 Linux NCM。"
                 setTextColor(0xFFB8C2C8.toInt())
                 textSize = 14f
                 gravity = Gravity.CENTER
@@ -79,6 +80,14 @@ class UsbWiredConnectActivity : AppCompatActivity() {
                 textSize = 14f
             }
         root.addView(audio, matchWrap(top = 18))
+        iphoneIdentity =
+            CheckBox(this).apply {
+                text = "优先使用 iPhone 兼容 USB 身份（失败自动回退）"
+                isChecked = true
+                setTextColor(Color.WHITE)
+                textSize = 14f
+            }
+        root.addView(iphoneIdentity, matchWrap(top = 6))
         directHost =
             EditText(this).apply {
                 hint = "自动发现失败时的直连地址（可选，端口固定 17000）"
@@ -98,6 +107,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
                         this@UsbWiredConnectActivity,
                         enableAudio = audio.isChecked,
                         manualHost = directHost.text?.toString(),
+                        preferIphoneIdentity = iphoneIdentity.isChecked,
                     )
                 }
             },
@@ -123,7 +133,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
                         UsbNcmAutoConnector.Phase.PREPARING_USB -> "正在建立 USB NCM"
                         UsbNcmAutoConnector.Phase.FINDING_PEER -> "正在查找 MacPlay"
                         UsbNcmAutoConnector.Phase.STARTING_AIRPLAY -> "正在连接 AirPlay"
-                        UsbNcmAutoConnector.Phase.CONNECTED -> "USB NCM 媒体已启动（不冒充 iPhone）"
+                        UsbNcmAutoConnector.Phase.CONNECTED -> "USB NCM 媒体已启动"
                         UsbNcmAutoConnector.Phase.STOPPING -> "正在断开"
                         UsbNcmAutoConnector.Phase.FAILED -> "连接失败"
                     }
@@ -142,7 +152,11 @@ class UsbWiredConnectActivity : AppCompatActivity() {
             }
         }
         if (UsbNcmAutoConnector.snapshotPhase() == UsbNcmAutoConnector.Phase.IDLE) {
-            UsbNcmAutoConnector.connect(this, enableAudio = audio.isChecked)
+            UsbNcmAutoConnector.connect(
+                this,
+                enableAudio = audio.isChecked,
+                preferIphoneIdentity = iphoneIdentity.isChecked,
+            )
         }
     }
 

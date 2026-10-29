@@ -7,6 +7,7 @@ import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.usb.UsbMediaEndpoint
 import com.mcarplay.app.usb.UsbNcmDiscovery
+import com.mcarplay.app.usb.UsbNcmIdentityMode
 import com.mcarplay.app.util.Bg
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -77,6 +78,7 @@ object UsbNcmAutoConnector {
         context: Context,
         enableAudio: Boolean = true,
         manualHost: String? = null,
+        preferIphoneIdentity: Boolean = true,
     ) {
         if (
             snapshot.phase in
@@ -123,18 +125,43 @@ object UsbNcmAutoConnector {
                 runRoot("sh ${UsbNcmDiscovery.shellQuote(REMOTE_SCRIPT)} down", 20_000L)
                 checkActive(runId)
 
-                update(runId, Phase.PREPARING_USB, "正在配置 USB NCM，期间 USB ADB 会暂时断开…")
-                val token = ByteArray(12).also(random::nextBytes).joinToString("") { "%02x".format(it) }
+                val identityAttempts = UsbNcmIdentityMode.attempts(preferIphoneIdentity)
+                val token = ByteArray(20).also(random::nextBytes).joinToString("") { "%02x".format(it) }
                 val deviceMac = randomLocalMac()
                 val hostMac = randomLocalMac()
-                launchRootDaemon(token, deviceMac, hostMac)
-                rootStarted = true
-
-                val interfaceInfo = awaitInterface(runId)
-                SessionController.appendLog("USB-BENCH: interface=${interfaceInfo.replace('\n', '|').take(240)}")
-                val iface = UsbNcmDiscovery.parseInterfaceName(interfaceInfo) ?: error("root 输出中没有有效 USB 网卡名")
-                val ifindex = UsbNcmDiscovery.parseIfindex(interfaceInfo) ?: error("无法读取 $iface 的 ifindex")
-                val localAddresses = UsbNcmDiscovery.parseLocalAddresses(interfaceInfo, iface)
+                var interfaceInfo: String? = null
+                var identityMode = UsbNcmIdentityMode.GENERIC
+                for ((index, mode) in identityAttempts.withIndex()) {
+                    if (index > 0) {
+                        update(runId, Phase.PREPARING_USB, "${identityAttempts[index - 1].displayName}未就绪，正在回退到${mode.displayName}…")
+                        stopRootResources()
+                    } else {
+                        update(runId, Phase.PREPARING_USB, "正在配置 USB NCM（${mode.displayName}），期间 USB ADB 会暂时断开…")
+                    }
+                    launchRootDaemon(token, deviceMac, hostMac, mode)
+                    rootStarted = true
+                    val ready =
+                        runCatching { awaitInterface(runId) }
+                            .getOrElse { error ->
+                                SessionController.appendLog(
+                                    "USB-BENCH: ${mode.displayName}失败：${error.message ?: error.javaClass.simpleName}",
+                                )
+                                null
+                            }
+                    if (ready != null) {
+                        interfaceInfo = ready
+                        identityMode = mode
+                        break
+                    }
+                    if (index == identityAttempts.lastIndex) {
+                        error("${mode.displayName}未在 30 秒内枚举出 USB NCM")
+                    }
+                }
+                val readyOutput = checkNotNull(interfaceInfo) { "所有 USB 身份均未枚举出 NCM" }
+                SessionController.appendLog("USB-BENCH: interface=${readyOutput.replace('\n', '|').take(240)}")
+                val iface = UsbNcmDiscovery.parseInterfaceName(readyOutput) ?: error("root 输出中没有有效 USB 网卡名")
+                val ifindex = UsbNcmDiscovery.parseIfindex(readyOutput) ?: error("无法读取 $iface 的 ifindex")
+                val localAddresses = UsbNcmDiscovery.parseLocalAddresses(readyOutput, iface)
                 val mdnsAddresses = localAddresses.mdnsBindAddresses
                 check(mdnsAddresses.isNotEmpty()) { "$iface 没有可绑定的 IPv4/IPv6 地址" }
                 SessionController.appendLog(
@@ -184,7 +211,8 @@ object UsbNcmAutoConnector {
                     runId,
                     Phase.CONNECTED,
                     "$iface → ${peer.addresses.first()}:${peer.port}，USB NCM 视频${if (enableAudio) "和声音" else ""}" +
-                        "正在建立；当前不声明 iPhone/usbmux 身份",
+                        "正在建立；${identityMode.displayName}" +
+                        if (identityMode == UsbNcmIdentityMode.IPHONE_COMPAT) "仅用于设备列表，不含 usbmux/lockdown" else "",
                 )
             } catch (error: Throwable) {
                 if (generation.get() != runId) {
@@ -242,6 +270,7 @@ object UsbNcmAutoConnector {
         token: String,
         deviceMac: String,
         hostMac: String,
+        identityMode: UsbNcmIdentityMode,
     ) {
         val arguments =
             listOf(
@@ -256,6 +285,7 @@ object UsbNcmAutoConnector {
                 "",
                 Process.myPid().toString(),
                 "",
+                identityMode.wireValue,
             ).joinToString(" ") { UsbNcmDiscovery.shellQuote(it) }
         val command =
             "command -v setsid >/dev/null && umask 077 && $arguments " +

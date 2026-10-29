@@ -2,9 +2,9 @@
 
 更新：2026-10-29。本文记录「手机通过 USB 线直连只支持有线 CarPlay 的车机」的调研结论、已实现的台架工具与后续步骤。
 **目前已验证 USB NCM 上的 CarWith → AirPlay → MacPlay 视频路径，并验证音频包持续到达、解密、解码、进入
-MacPlay 的 CoreAudio 管线且由用户确认实际听到声音**；真实车机发起 USB 角色切换、
-iPhone usbmux/lockdown/carkit 入口仍不可用，也没有实体车机证据。本功能不代表任何手机或车机已支持，
-也不进入 `standard` 的连接流程。
+MacPlay 的 CoreAudio 管线且由用户确认实际听到声音**；可选的 iPhone 兼容身份也已让 macOS 把台架枚举为
+`Apple Inc. / iPhone`。真实车机发起 USB 角色切换、完整 Apple usbmux/lockdown/carkit 入口仍不可用，也没有
+实体车机证据。本功能不代表任何手机或车机已支持，也不进入 `standard` 的连接流程。
 
 ## 结论
 
@@ -20,7 +20,7 @@ iPhone usbmux/lockdown/carkit 入口仍不可用，也没有实体车机证据�
 
 | 环节 | 内容 | 本分支状态 |
 | --- | --- | --- |
-| 1. 冒充 iPhone | configfs gadget 用 Apple VID/PID 枚举；FunctionFS 接收发给设备本身的厂商控制请求（`FUNCTIONFS_ALL_CTRL_RECIP`） | 电脑已枚举并收到充电请求；重复运行发生 gadget 名称冲突，见台架记录；未接车机 |
+| 1. 冒充 iPhone | configfs gadget 用 Apple VID/PID 枚举；FunctionFS 接收发给设备本身的厂商控制请求（`FUNCTIONFS_ALL_CTRL_RECIP`） | FunctionFS 和 NCM 两种台架均已在电脑上枚举为 Apple iPhone；完整 usbmux/lockdown/carkit 尚未实现，未接车机 |
 | 2. 角色切换 | 车机请求 iPhone 改当 USB 主机，自己转为 USB 设备 | 已实现状态机与节点探测（`usb/WiredSwitchMachine`、`usb/UsbRoleNodes`；不自动写 Type-C 节点），未实机 |
 | 3. iAP2 走 USB | 车机 iAP2 接口的 bulk IN/OUT 承载与蓝牙相同的链路层字节流 | 已实现 `UsbHostDuplexStream`，尚未接入会话 |
 | 4. 网络 | AirPlay 跑在车机的 CDC-NCM 网卡上（IPv4 和/或 IPv6，经 mDNS 或显式地址发现） | Mac 台架已验证链路本地 IPv6；IPv4/IPv6 候选、邻居与手动地址降级已有离线测试；真实车机 NCM 未验证 |
@@ -272,14 +272,33 @@ IPv4 或同时给两类地址，仍需以实体车机日志为准。
 
 MacPlay 同时显示“未检测到USB连接的iPhone”，这也是当前实现下的准确结果。其公开源码的
 [`refreshUSB`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/App/MacPlay.swift#L654-L697)
-只枚举 USB Product Name 含 `iPhone` 的 `IOUSBHostDevice`；台架却是 Linux CDC-NCM `1d6b:0104`，产品名
-`mcarplay USB media bench`。有线会话辅助程序还会经系统 usbmuxd 打开 lockdown 的
+只枚举 USB Product Name 含 `iPhone` 的 `IOUSBHostDevice`。未启用兼容身份时，台架是 Linux CDC-NCM
+`1d6b:0104`、产品名 `mcarplay USB media bench`，因此不会出现在该列表。有线会话辅助程序还会经系统 usbmuxd 打开 lockdown 的
 `com.apple.carkit.service`，见
 [`watch_usbmuxd`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/bin/livi-helperd/src/wired.rs#L157-L240)
 和
 [`open_provider`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/crates/iap2-wired/src/usbmuxd.rs#L104-L135)。
-当前台架只实现了 USB 物理网卡和 AirPlay 媒体，没有 Apple 复合 USB、usbmux、lockdown 或 carkit 服务，因此 MacPlay
-无法把手机列成 USB iPhone。只改产品名会让 UI 虚假通过并在后续 usbmuxd 阶段失败，不能作为修复。
+当前默认兼容模式会同时声明 `05ac:12a8`、`Apple Inc.` 和 `iPhone`，所以已经满足上述设备列表筛选；但它仍只实现
+USB 物理网卡和 AirPlay 媒体，没有 Apple usbmux、lockdown 或 carkit 服务。这种“列出 iPhone”与“完成有线 iPhone
+会话”是两个不同层次，不能因为列表检测成功就声明后者可用。
+
+### iPhone 兼容 NCM 身份实测（22:27）
+
+remote debug 入口新增“优先使用 iPhone 兼容 USB 身份”开关，默认开启；关闭后直接使用 Linux NCM。开启时台架
+保留同一个 `ncm.mcarplay_bench` 功能，只把复合设备的 VID/PID 和字符串改为 `05ac:12a8`、`Apple Inc.` 与
+`iPhone`，并使用随机 40 位十六进制序列号。若 30 秒内没有枚举出 NCM 网卡，连接器会执行完整回滚，再以原来的
+`1d6b:0104` 身份重试。
+
+1. 小米 17 成功申请 root，5 秒内枚举出 `usb0`。macOS IORegistry 显示 `USB Product Name=iPhone`、
+   `idVendor=1452`（`0x05ac`）、`idProduct=4776`（`0x12a8`）、`USB Vendor Name=Apple Inc.`，同时 NCM
+   数据接口仍为活动状态。
+2. MacPlay `:17000` 的 AirPlay 控制、认证、音频 SETUP 和视频 SETUP 均成功；手机记录首帧
+   `1280x720` 并持续向 `usb0` 发送媒体。兼容身份没有破坏已经验收的 NCM 音视频路径。
+3. MacPlay 的 3 秒 USB 刷新按公开源码会接受这个 Product Name；其有线辅助进程仍尝试 usbmux/lockdown，
+   因台架没有相应接口而不会建立第二条控制会话。本次媒体成功来自既有 AirPlay/NCM 路径，与完整 USB-iPhone
+   会话无关。
+4. 实测 `am force-stop` 和入口内“停止并恢复 USB”两条回滚路径：`sys.usb.config=adb`、
+   `g1/UDC=a600000.dwc3`、台架状态目录删除、USB adb 返回，macOS 设备名恢复为 `Xiaomi 17 Pro Max`。
 
 ## 未核实事项
 

@@ -63,7 +63,7 @@
     <string name="main_disclaimer_title">Disclaimer</string>
     <string name="main_disclaimer_desc">Test scope · driving risks · system permissions</string>
     <string name="main_wired_title">USB wired connection</string>
-    <string name="main_wired_desc">USB NCM media bench · no iPhone identity · no Wi-Fi media</string>
+    <string name="main_wired_desc">USB NCM bench · iPhone identity compatibility · automatic fallback</string>
     <string name="main_bridge_title">Remote debugging</string>
     <string name="main_bridge_desc">Server address · pairing code · log upload</string>
     <string name="main_footer_service">A foreground service keeps the connection · leaving this screen does not end the session</string>

@@ -442,19 +442,27 @@ USB 邻居和手动地址三类候选，并对每个候选建立独立 IPv4/IPv6
 守护脚本在同一路径完成回滚。双栈 mDNS 中本轮实际走 IPv6；IPv4 mDNS、邻居和手动地址分支由离线测试覆盖，
 真实车机仍需按其 NCM 与角色切换行为实机验证。
 
-### MacPlay“未检测到USB连接的iPhone”的含义
+### MacPlay iPhone 兼容身份实测（22:27）
 
-该提示是真实的设备身份差异，不属于本次音视频故障。MacPlay 公开源码的
+“未检测到USB连接的iPhone”来自设备身份筛选，不属于音视频故障。MacPlay 公开源码的
 [`refreshUSB`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/App/MacPlay.swift#L654-L697)
-枚举 `IOUSBHostDevice`，只把 USB Product Name 含 `iPhone` 的设备放进列表；当前台架脚本明确使用 Linux
-CDC-NCM `1d6b:0104` 和产品名 `mcarplay USB media bench`，因此不会出现在该列表。
+枚举 `IOUSBHostDevice`，只把 USB Product Name 含 `iPhone` 的设备放进列表。remote debug 入口现在默认
+先声明 `05ac:12a8`、`Apple Inc.` 与 `iPhone`，同时保留 NCM 功能；iPhone 身份枚举失败会回退到原来的
+Linux CDC-NCM `1d6b:0104` / `mcarplay USB media bench`。
+
+小米 17 实测中，macOS IORegistry 显示 `USB Product Name=iPhone`、`idVendor=1452`、`idProduct=4776`、
+`USB Vendor Name=Apple Inc.`，随机序列号为 40 位十六进制；`usb0` 同时拥有 IPv4 与链路本地 IPv6。MacPlay
+随后完成 AirPlay 控制、认证、音频 SETUP 和视频 SETUP，手机发送 `1280x720` 首帧并持续出流。这证明兼容身份
+可以满足 MacPlay 的设备列表筛选，且没有破坏现有 NCM 音视频链路。
 
 MacPlay 的有线会话还通过系统 usbmuxd 找 USB 设备：
 [`watch_usbmuxd`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/bin/livi-helperd/src/wired.rs#L157-L240)
 枚举 usbmuxd 设备，[`open_provider`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/crates/iap2-wired/src/usbmuxd.rs#L104-L135)
 再连接 lockdown、校验 `ProductType` 为 iPhone、读取信任记录并启动 `com.apple.carkit.service`。当前 NCM 台架
-没有这些接口或服务，只借用 USB 网卡承载 AirPlay，所以 MacPlay 显示未检测到 USB iPhone 是准确状态。
+没有这些接口或服务，只借用 USB 网卡承载 AirPlay。因此“设备列表看到 iPhone”可以成立，但 MacPlay 的辅助进程
+仍无法建立完整的 USB-iPhone 控制会话；本次媒体成功来自既有 AirPlay/NCM 路径。
 
-让 MacPlay 正常显示并进入“USB iPhone”路径，需要阶段 1/3 的完整 Apple 复合 USB gadget 与
-usbmux/lockdown/carkit 响应；仅把产品名改成 `iPhone` 会让 UI 误报检测成功，随后仍会在 usbmuxd 会话处失败，
-因此不能作为修复。真实音频现已由用户确认；触控、真实车机角色切换、NCM 和 USB 主机侧 iAP2 仍未验收。
+实测两条回滚路径均通过：强制结束 App 后由守护脚本恢复；在入口界面点击“停止并恢复 USB”后，
+`sys.usb.config=adb`、`g1/UDC=a600000.dwc3`、台架状态目录删除，USB adb 重新出现，macOS 设备名恢复为
+`Xiaomi 17 Pro Max`。完整 Apple 复合 USB gadget 与 usbmux/lockdown/carkit 仍是下一阶段。真实音频现已由
+用户确认；触控、真实车机角色切换、NCM 和 USB 主机侧 iAP2 仍未验收。

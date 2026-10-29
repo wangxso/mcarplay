@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Root-only USB NCM display bench. Borrows an idle g2 and restores its attributes.
 
-This is a media transport bench, not iPhone emulation or a head-unit role switch.
+This is a media transport bench, not a complete iPhone emulation or a head-unit role switch.
+The optional Apple identity only changes USB enumeration for receiver discovery.
 The detached daemon survives adb loss and rolls back at its deadline.
 """
 
@@ -55,6 +56,12 @@ def main():
     up = commands.add_parser("up")
     up.add_argument("--seconds", type=int, default=300)
     up.add_argument("--peer", help="Previously observed Mac USB IPv6 address; also launches the remote debug media bench")
+    up.add_argument(
+        "--identity",
+        choices=("iphone-ui", "generic"),
+        default="iphone-ui",
+        help="USB device identity; iphone-ui still carries NCM and does not implement usbmux/lockdown/carkit",
+    )
     peer = commands.add_parser("peer")
     peer.add_argument("address")
     commands.add_parser("down")
@@ -95,11 +102,12 @@ def main():
         REMOTE_SCRIPT,
         "up",
         str(args.seconds),
-        secrets.token_hex(12),
+        secrets.token_hex(20),
         device_mac,
         host_mac,
         args.peer or "",
         "" if args.peer is None else "1",
+        args.identity,
     ]
     launch = (
         "command -v setsid >/dev/null && umask 077 && "

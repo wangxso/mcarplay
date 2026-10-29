@@ -1,5 +1,8 @@
 #!/system/bin/sh
 set -eu
+# The NCM function stays the same in both modes. "iphone-ui" only changes the
+# composite device identity so receivers that filter on an iPhone product name
+# can list it; it does not implement Apple usbmux/lockdown/carkit.
 G=/config/usb_gadget/g2
 C=$G/configs/b.1
 F=$G/functions/ncm.mcarplay_bench
@@ -176,6 +179,14 @@ up) ;;
 esac
 
 [ "$(id -u)" = 0 ]
+[ "$#" -ge 8 ] && [ "$#" -le 9 ]
+identity_mode=${9:-generic}
+case "$identity_mode" in
+    iphone-ui|generic) ;;
+    *) echo "NCM: invalid identity mode"; exit 1 ;;
+esac
+[ "${#3}" -eq 40 ]
+case "$3" in *[!0-9a-f]*) echo "NCM: invalid serial"; exit 1 ;; esac
 [ -d "$G" ] && [ -d "$C/strings/0x409" ] && [ -d "$G/strings/0x409" ]
 [ -z "$(cat "$G/UDC")" ]
 [ -z "$(ls -A "$G/functions")" ]
@@ -187,6 +198,7 @@ umask 077
 mkdir "$S"
 echo mcarplay-ncm-bench-v1 > "$S/owner"
 echo $$ > "$S/pid"
+echo "$identity_mode" > "$S/identity"
 echo "$4" > "$S/device_mac"
 trap 'restore' EXIT
 timerpid=''
@@ -200,18 +212,38 @@ udc=$(getprop sys.usb.controller)
 case "$udc" in ''|*[!a-zA-Z0-9._:-]*) exit 1;; esac
 
 # Prepare while the system gadget is still active; touch the cable only at bind.
-echo 0x1d6b > "$G/idVendor"
-echo 0x0104 > "$G/idProduct"
+case "$identity_mode" in
+    iphone-ui)
+        vendor_id=0x05ac
+        product_id=0x12a8
+        bcd_device=0x0100
+        manufacturer='Apple Inc.'
+        product_name='iPhone'
+        configuration_name='CarPlay'
+        max_power=500
+        ;;
+    generic)
+        vendor_id=0x1d6b
+        product_id=0x0104
+        bcd_device=0x0100
+        manufacturer='mcarplay'
+        product_name='mcarplay USB media bench'
+        configuration_name='USB NCM bench'
+        max_power=250
+        ;;
+esac
+echo "$vendor_id" > "$G/idVendor"
+echo "$product_id" > "$G/idProduct"
 echo 0x0200 > "$G/bcdUSB"
-echo 0x0100 > "$G/bcdDevice"
+echo "$bcd_device" > "$G/bcdDevice"
 echo 0xef > "$G/bDeviceClass"
 echo 0x02 > "$G/bDeviceSubClass"
 echo 0x01 > "$G/bDeviceProtocol"
-echo mcarplay > "$G/strings/0x409/manufacturer"
-echo 'mcarplay USB media bench' > "$G/strings/0x409/product"
+printf '%s\n' "$manufacturer" > "$G/strings/0x409/manufacturer"
+printf '%s\n' "$product_name" > "$G/strings/0x409/product"
 echo "$3" > "$G/strings/0x409/serialnumber"
-echo 'USB NCM bench' > "$C/strings/0x409/configuration"
-echo 250 > "$C/MaxPower"
+printf '%s\n' "$configuration_name" > "$C/strings/0x409/configuration"
+echo "$max_power" > "$C/MaxPower"
 echo 0x80 > "$C/bmAttributes"
 mkdir "$F"
 echo "$4" > "$F/dev_addr"
@@ -240,7 +272,7 @@ if [ -n "$link_local" ]; then
         ip -6 addr replace "$link_local/64" dev "$iface" || true
 fi
 touch "$S/ready"
-echo "NCM: ready iface=$iface"
+echo "NCM: ready iface=$iface identity=$identity_mode"
 if [ -n "${6:-}" ]; then
     sleep 3
     sh /data/local/tmp/mcarplay-ncm-bench.sh peer "$6"
