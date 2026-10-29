@@ -122,6 +122,18 @@ UDC 列表为空。为了让 Pad 当主机，**手动**（不在 `WiredGadgetMai
 任何人都不要在这台手机上手写 Type-C `power_role`/`data_role`。另外，普通安卓平板即使角色换对，
 其 App 也难以完成「先当主机、再切成 USB 设备」，测试台应使用真正支持有线 CarPlay 的后装车机。
 
+### 2026-10-29 Apple CarPlay Simulator 不能作测试台
+
+在 Mac（macOS 26.6.2，Xcode 27.1）上安装 Additional Tools for Xcode 27 中的 CarPlay Simulator（Apple 签名
+`com.apple.CarPlaySimulator`），只做了静态检查和启动，没有连上手机：
+
+- 设备来源是 `MobileDevice.framework`：通过 `AMDeviceNotification` 发现设备，用 `AMDeviceConnect`/`StartSession`/
+  `PairWithCallback` 建立 lockdown 会话，并读取 `kAMDBluetoothAddressKey`、`kAMDDeviceClassKey` 等属性；
+  不是 iPhone/iPad 的设备直接忽略。有线模式在 lockdown 服务上跑 iAP2（`iAPUSBLockdownConnection`），
+  不发车机的角色切换请求；无线模式用从 MobileDevice 读到的蓝牙地址去连，同样以设备先被 Mac 识别为前提。
+- 因此它既测不了有线路径，也测不了无线路径：安卓手机不实现 usbmux/lockdown，不会出现在它的设备列表里。
+  启动后没有主窗口（只有设置窗口），菜单栏也没有可见入口，与「没有已连接设备」一致。
+
 ## 未核实事项
 
 以下来自公开逆向资料或经验值，均需台架或实车核对后再修正代码与本文：
