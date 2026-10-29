@@ -49,6 +49,7 @@ CarPlay 的座舱项目，但「提供 IVI」不等于 CarPlay 接收端协议�
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | WinPlay 1.2.5（Windows） | 桌面基线 | — | WinPlay（开源） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | [2026-10-27](CARWITH-ENTRY-FINDINGS.md) |
 | DiPlay（Android 平板） | 桌面基线 | — | DiPlay（开源） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | [2026-10-25/27](CARWITH-ENTRY-FINDINGS.md) |
+| 小米 SU7 Max | 未知 | 小米（待查）/ 待查 / 待查 | 未知 | ✗ | · | · | · | · | · | · | · | [2026-10-28](CARWITH-ENTRY-FINDINGS.md)：iAP2 RFCOMM 未被接受，车机未回连，未拿到协议指纹；尚不能判定是否支持无线 CarPlay |
 | 奇瑞 瑞虎 / 艾瑞泽（年款待定） | `DESAY_SV` | 德赛西威 / 待查 / 待查 | 未知 | · | · | · | · | · | · | · | · | — |
 | 吉利 / 领克（车型待定） | `ECARX_CLOUDPEAK` 或 `NEUSOFT_NAGIVI` | 待查 | 未知 | · | · | · | · | · | · | · | · | — |
 | Volvo EX30 | `ECARX_CLOUDPEAK` | 亿咖通 / 待查 / 待查 | 未知 | · | · | · | · | · | · | · | · | — |
