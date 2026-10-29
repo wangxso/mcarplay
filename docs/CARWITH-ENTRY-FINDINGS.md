@@ -323,3 +323,9 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 结论：只说明本机满足有线实验的软件前提，不代表支持有线 CarPlay。完整输出与后续步骤见 `docs/WIRED-CARPLAY.md`。
 
 同日空跑 `up --timeout 30`（USB 接 Windows 电脑，不接车机）：gadget 绑定成功，Windows 以 `VID_05AC&PID_12A8` 枚举为 Apple Mobile Device 复合设备（接口实例带 `RESTORE_MODE`，接口布局仍与真 iPhone 不同）；收到并应答 Apple 充电请求 `0x40`（`wValue=100`）；30 秒超时后回滚，用户确认 USB adb 与 `g1` 的 UDC 均恢复。只验证了「冒充 iPhone」这一环，不涉及角色切换和车机。
+
+## 小米 17 手动 PD 角色互换后黑屏重启（2026-10-29）
+
+小米 17 经 USB-C 直连 vivo Pad Air，PD 协商为手机主机兼供电（`[host]`/`[source]`，`usb_power_delivery`）。为让 Pad 当主机，经无线 adb 以 root 手动依次写 `/sys/class/typec/port0/power_role=sink`、`data_role=device`（均返回 0），随后 adb 掉线、手机黑屏，拔掉 USB 后重启。未运行 `up`，未建立 iPhone gadget；无法区分是哪一次互换触发，未取得内核日志。
+
+结论与处置：在这台手机上写 Type-C 角色节点有风险；`WiredGadgetMain` 的 `up`/`down` 已不再自动写 `data_role`，`probe` 只读显示。普通平板不适合作为有线 CarPlay 测试台。详见 `docs/WIRED-CARPLAY.md`。

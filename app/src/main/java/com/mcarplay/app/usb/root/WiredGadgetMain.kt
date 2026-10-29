@@ -93,8 +93,11 @@ object WiredGadgetMain {
         out("functionfs 内核支持=${File("/proc/filesystems").readTextOrNull()?.contains("functionfs") == true}")
         out("cdc_ncm 主机驱动已加载=${File("/sys/module/cdc_ncm").exists()} usbnet=${File("/sys/module/usbnet").exists()}")
         val nodes = discoverRoleNodes()
-        if (nodes.isEmpty()) out("没有找到可写的角色切换节点：原生有线 CarPlay 在本机基本不可行")
-        nodes.forEach { out("角色节点 ${it.source} ${it.path} 当前=${File(it.path).readTextOrNull()?.trim()}") }
+        if (UsbRoleNodes.forAutomaticSwitch(nodes).isEmpty()) out("没有可自动写入的角色切换节点：原生有线 CarPlay 在本机基本不可行")
+        nodes.forEach {
+            val mode = if (it.source.autoWritable) "" else "（只读：up/down 不写入）"
+            out("角色节点 ${it.source} ${it.path} 当前=${File(it.path).readTextOrNull()?.trim()}$mode")
+        }
         typecPorts().forEach { port ->
             val roles =
                 listOf(
@@ -114,7 +117,7 @@ object WiredGadgetMain {
     }
 
     private fun down(usbConfig: String): Int {
-        discoverRoleNodes().forEach { sh(listOf(it.deviceCommand() + " 2>/dev/null || true")) }
+        UsbRoleNodes.forAutomaticSwitch(discoverRoleNodes()).forEach { sh(listOf(it.deviceCommand() + " 2>/dev/null || true")) }
         val (code, output) = sh(GadgetPlan(AppleUsbIdentity()).teardown(usbConfig))
         out("已回滚 exit=$code ${output.trim()}")
         return if (code == 0) EXIT_ATTACHED else EXIT_ERROR
@@ -127,7 +130,8 @@ object WiredGadgetMain {
     ) {
         private val plan = GadgetPlan(identity)
         private val previousUsbConfig = getprop("sys.usb.config")
-        private val machine = WiredSwitchMachine(discoverRoleNodes(), awaitRoleSwitchMillis = timeoutSeconds * 1000)
+        private val machine =
+            WiredSwitchMachine(UsbRoleNodes.forAutomaticSwitch(discoverRoleNodes()), awaitRoleSwitchMillis = timeoutSeconds * 1000)
         private val lock = Object()
         private var ep0: FileDescriptor? = null
         private var currentSetup: UsbSetupPacket? = null

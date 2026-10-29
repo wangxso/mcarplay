@@ -16,7 +16,7 @@
 | 环节 | 内容 | 本分支状态 |
 | --- | --- | --- |
 | 1. 冒充 iPhone | configfs gadget 用 Apple VID/PID 枚举；FunctionFS 接收发给设备本身的厂商控制请求（`FUNCTIONFS_ALL_CTRL_RECIP`） | 已实现（`usb/GadgetPlan`、`usb/FunctionFs`），未实机 |
-| 2. 角色切换 | 车机请求 iPhone 改当 USB 主机，自己转为 USB 设备 | 已实现状态机与节点探测（`usb/WiredSwitchMachine`、`usb/UsbRoleNodes`），未实机 |
+| 2. 角色切换 | 车机请求 iPhone 改当 USB 主机，自己转为 USB 设备 | 已实现状态机与节点探测（`usb/WiredSwitchMachine`、`usb/UsbRoleNodes`；不自动写 Type-C 节点），未实机 |
 | 3. iAP2 走 USB | 车机 iAP2 接口的 bulk IN/OUT 承载与蓝牙相同的链路层字节流 | 已实现 `UsbHostDuplexStream`，尚未接入会话 |
 | 4. 网络 | AirPlay 跑在车机的 CDC-NCM 网卡上（IPv6 链路本地 + mDNS） | 未开始 |
 | 5. 媒体 | 与无线相同的 AirPlay 视频/音频/触控 | 复用现有代码，未开始联调 |
@@ -66,6 +66,9 @@ adb shell "su -c 'CLASSPATH=`$(pm path com.mcarplay.app.rd | cut -d: -f2) app_pr
   `up` 切主机后会读回所有 Type-C 端口的 `power_role`，一旦出现 `[source]` 立即写回设备值并回滚。
   这只是软件读回，首次台架仍请串接 USB 电流表观察。
 - 任何失败路径都只回滚一次并恢复 Android 的 USB 配置（`WiredSwitchMachineTest` 覆盖）；`down` 可随时手动恢复。
+- **不要写 Type-C `power_role`/`data_role`**：写入会向对端发起 PD 角色互换，小米 17 曾因此黑屏重启（见台架记录）。
+  `up`/`down` 只自动写 `usb_role`、高通 `ssusb/mode` 与 dwc3 debugfs 节点。
+- 手机与对端经 PD 协商成主机兼供电方时（例如两台都是 USB-C 设备直连），不要强行改角色；换用把手机当设备的对端。
 
 ## 台架记录
 
@@ -102,6 +105,22 @@ root（`uid=0`），无线 adb，USB 口未接线。HyperOS、CarWith 版本未�
   `svc usb resetUsbGadget` 在这台 Gadget HAL 机型上能把 USB 交还系统。
 
 尚未验证：`0x51` 角色切换、切主机与 VBUS，需要接车机。
+
+### 2026-10-29 事故：手动 PD 角色互换后小米 17 黑屏重启
+
+接线：小米 17 经 USB-C 直连 vivo Pad Air（`2d95:6001`，以 USB 设备身份只暴露 adb 接口），由 Mac 经无线 adb 操作。
+PD 协商结果是手机为主机兼供电方：`data_role=[host]`、`power_role=[source]`、`power_operation_mode=usb_power_delivery`，
+UDC 列表为空。为了让 Pad 当主机，**手动**（不在 `WiredGadgetMain` 里）依次执行：
+
+1. `echo sink > /sys/class/typec/port0/power_role`，返回 0；
+2. 2 秒后 `echo device > /sys/class/typec/port0/data_role`，返回 0。
+
+随后无线 adb 掉线、再连超时，手机黑屏；用户拔掉 USB 后手机重启。没有运行 `up`，没有建立 iPhone gadget。
+无法区分是供电角色互换还是数据角色互换触发的，也没有拿到重启前的内核日志。
+
+处置：`up`/`down` 不再自动写 Type-C `data_role`（`UsbRoleNode.Source.autoWritable`），`probe` 仍只读显示；
+任何人都不要在这台手机上手写 Type-C `power_role`/`data_role`。另外，普通安卓平板即使角色换对，
+其 App 也难以完成「先当主机、再切成 USB 设备」，测试台应使用真正支持有线 CarPlay 的后装车机。
 
 ## 未核实事项
 
