@@ -38,7 +38,13 @@ class UsbMediaBenchActivity : Activity() {
                 return
             }
         // 仍在前台时启动 connectedDevice FGS，后续协议与媒体都在后台线程执行。
-        runCatching { SessionController.startUsbMediaBench(this, endpoint) }.onFailure {
+        runCatching {
+            SessionController.startUsbMediaBench(
+                this,
+                endpoint,
+                audioEnabled = intent.getBooleanExtra("audio", true),
+            )
+        }.onFailure {
             SessionController.appendLog("USB-BENCH: 启动失败：${it.message}")
             Toast.makeText(this, "USB 台架启动失败：${it.message}", Toast.LENGTH_LONG).show()
         }

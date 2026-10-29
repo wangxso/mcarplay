@@ -45,6 +45,12 @@ object UsbNcmAutoConnector {
         val detail: String,
     )
 
+    private data class PeerResult(
+        val addresses: List<String>,
+        val port: Int,
+        val source: String,
+    )
+
     private const val REMOTE_SCRIPT = "/data/local/tmp/mcarplay-ncm-bench.sh"
     private const val REMOTE_LOG = "/data/local/tmp/mcarplay-ncm-bench.log"
     private const val LEASE_SECONDS = 1_800
@@ -67,8 +73,21 @@ object UsbNcmAutoConnector {
     fun snapshotPhase(): Phase = snapshot.phase
 
     @Synchronized
-    fun connect(context: Context) {
-        if (snapshot.phase in setOf(Phase.REQUESTING_ROOT, Phase.PREPARING_USB, Phase.FINDING_PEER, Phase.STARTING_AIRPLAY)) {
+    fun connect(
+        context: Context,
+        enableAudio: Boolean = true,
+        manualHost: String? = null,
+    ) {
+        if (
+            snapshot.phase in
+            setOf(
+                Phase.REQUESTING_ROOT,
+                Phase.PREPARING_USB,
+                Phase.FINDING_PEER,
+                Phase.STARTING_AIRPLAY,
+                Phase.STOPPING,
+            )
+        ) {
             return
         }
         if (snapshot.phase == Phase.CONNECTED || SessionController.isSessionRunning() || SessionController.sessionStarting.get()) {
@@ -77,6 +96,15 @@ object UsbNcmAutoConnector {
         }
         val runId = generation.incrementAndGet()
         val appContext = context.applicationContext
+        val directHost =
+            manualHost
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { UsbNcmDiscovery.normalizePeerAddress(it) }
+        if (manualHost?.isNotBlank() == true && directHost == null) {
+            publish(Snapshot(Phase.FAILED, "直连地址无效"))
+            return
+        }
         SessionController.ensure(appContext)
         Bg.run("usb-ncm-connect") {
             var rootStarted = false
@@ -106,28 +134,57 @@ object UsbNcmAutoConnector {
                 SessionController.appendLog("USB-BENCH: interface=${interfaceInfo.replace('\n', '|').take(240)}")
                 val iface = UsbNcmDiscovery.parseInterfaceName(interfaceInfo) ?: error("root 输出中没有有效 USB 网卡名")
                 val ifindex = UsbNcmDiscovery.parseIfindex(interfaceInfo) ?: error("无法读取 $iface 的 ifindex")
-                val localAddress =
-                    UsbNcmDiscovery.parseLocalLinkLocal(interfaceInfo, iface) ?: error("无法读取 $iface 的链路本地 IPv6 地址")
-                SessionController.appendLog("USB-BENCH: $iface 已就绪 ifindex=$ifindex，正在发现 Mac 接收端")
+                val localAddresses = UsbNcmDiscovery.parseLocalAddresses(interfaceInfo, iface)
+                val mdnsAddresses = localAddresses.mdnsBindAddresses
+                check(mdnsAddresses.isNotEmpty()) { "$iface 没有可绑定的 IPv4/IPv6 地址" }
+                SessionController.appendLog(
+                    "USB-BENCH: $iface 已就绪 ifindex=$ifindex " +
+                        "v6=${localAddresses.ipv6LinkLocal ?: "无"} v4=${localAddresses.ipv4 ?: "无"}",
+                )
 
-                update(runId, Phase.FINDING_PEER, "请在 MacPlay 选择“有线CarPlay”并点击“启动接收”…")
-                val peer = awaitPeer(iface, ifindex, localAddress, runId)
-                runRoot(
-                    "sh ${UsbNcmDiscovery.shellQuote(REMOTE_SCRIPT)} peer ${UsbNcmDiscovery.shellQuote(peer)}",
-                    20_000L,
-                ).also { check(it.exitCode == 0) { "USB 单目标路由建立失败：${it.output.takeLast(180)}" } }
+                val peer =
+                    if (directHost != null) {
+                        SessionController.appendLog("USB-BENCH: 使用手动直连地址 $directHost:17000")
+                        PeerResult(listOf(directHost), 17000, "手动")
+                    } else {
+                        update(runId, Phase.FINDING_PEER, "请在 MacPlay 选择“有线CarPlay”并点击“启动接收”…")
+                        awaitPeer(
+                            iface = iface,
+                            ifindex = ifindex,
+                            localAddresses = mdnsAddresses,
+                            localIpv4 = localAddresses.ipv4,
+                            runId = runId,
+                        )
+                    }
+                configurePeerRoutes(peer.addresses)
                 checkActive(runId)
 
-                update(runId, Phase.STARTING_AIRPLAY, "已发现 $iface / $peer，正在连接 MacPlay :17000…")
+                update(
+                    runId,
+                    Phase.STARTING_AIRPLAY,
+                    "通过${peer.source}发现 ${peer.addresses.joinToString()}，正在连接 :${peer.port}（声音自动降级）…",
+                )
                 SessionController.startUsbMediaBench(
                     appContext,
-                    UsbMediaEndpoint(iface, peer, 17000, ifindex),
+                    UsbMediaEndpoint(iface, peer.addresses, peer.port, ifindex),
+                    audioEnabled = enableAudio,
                     cleanup = {
-                        stopRootResources()
-                        publish(Snapshot(Phase.IDLE, "USB 台架已停止并回滚"))
+                        runCatching(::stopRootResources).fold(
+                            onSuccess = {
+                                publish(Snapshot(Phase.IDLE, "USB 台架已停止并回滚"))
+                            },
+                            onFailure = { error ->
+                                val detail = error.message?.take(240) ?: error.javaClass.simpleName
+                                publish(Snapshot(Phase.FAILED, "媒体已停止，但 USB 回滚失败：$detail"))
+                            },
+                        )
                     },
                 )
-                update(runId, Phase.CONNECTED, "$iface → $peer:17000，视频正在建立")
+                update(
+                    runId,
+                    Phase.CONNECTED,
+                    "$iface → ${peer.addresses.first()}:${peer.port}，视频${if (enableAudio) "和声音" else ""}正在建立",
+                )
             } catch (error: Throwable) {
                 if (generation.get() != runId) {
                     if (rootStarted) runCatching(::stopRootResources)
@@ -148,10 +205,16 @@ object UsbNcmAutoConnector {
             SessionController.disconnect(context)
         } else {
             Bg.run("usb-ncm-stop") {
-                runCatching(::stopRootResources).onFailure {
-                    SessionController.appendLog("USB-BENCH: 停止失败：${it.message}")
-                }
-                publish(Snapshot(Phase.IDLE, "USB 台架已停止并回滚"))
+                runCatching(::stopRootResources).fold(
+                    onSuccess = {
+                        publish(Snapshot(Phase.IDLE, "USB 台架已停止并回滚"))
+                    },
+                    onFailure = { error ->
+                        val detail = error.message?.take(240) ?: error.javaClass.simpleName
+                        SessionController.appendLog("USB-BENCH: 停止失败：$detail")
+                        publish(Snapshot(Phase.FAILED, "USB 回滚失败：$detail"))
+                    },
+                )
             }
         }
     }
@@ -210,18 +273,71 @@ object UsbNcmAutoConnector {
     private fun awaitPeer(
         iface: String,
         ifindex: Int,
+        localAddresses: List<String>,
+        localIpv4: String?,
+        runId: Int,
+    ): PeerResult {
+        val discovered =
+            localAddresses
+                .asSequence()
+                .mapNotNull { localAddress ->
+                    checkActive(runId)
+                    awaitPeerOnAddress(iface, ifindex, localAddress, runId)
+                }.firstOrNull()
+        checkActive(runId)
+        val neighbors =
+            runRoot(
+                "sh ${UsbNcmDiscovery.shellQuote(REMOTE_SCRIPT)} peers",
+                10_000L,
+            ).also {
+                if (it.exitCode != 0) {
+                    SessionController.appendLog("USB-BENCH: 邻居地址读取失败：${it.output.takeLast(160)}")
+                }
+            }.output
+        val neighborHosts =
+            runCatching {
+                UsbNcmDiscovery.parseNeighborAddresses(neighbors, iface, limit = 8)
+            }.getOrDefault(emptyList())
+        val addresses = (discovered?.addresses.orEmpty() + neighborHosts).distinct().take(8)
+        if (addresses.isEmpty()) {
+            error("USB 已建立，但 $iface 上既没有 MacPlay mDNS，也没有可用邻居地址；可在入口填写直连 IP 后重试")
+        }
+        val source =
+            when {
+                discovered != null && neighborHosts.isEmpty() -> " mDNS "
+                discovered != null -> " mDNS/邻居回退 "
+                else -> " USB 邻居回退 "
+            }
+        if (discovered == null) {
+            SessionController.appendLog("USB-BENCH: mDNS 未发现服务，降级尝试 USB 邻居 ${addresses.joinToString()} :17000")
+        } else if (neighborHosts.isNotEmpty()) {
+            SessionController.appendLog("USB-BENCH: 追加邻居候选 ${neighborHosts.joinToString()}")
+        }
+        if (localIpv4 != null && addresses.any { it.contains('.') }) {
+            SessionController.appendLog("USB-BENCH: IPv4 候选将通过 $iface 的 $localIpv4 路由")
+        }
+        return PeerResult(addresses, discovered?.port ?: 17000, source.trim())
+    }
+
+    private fun awaitPeerOnAddress(
+        iface: String,
+        ifindex: Int,
         localAddress: String,
         runId: Int,
-    ): String {
+    ): PeerResult? {
         val address =
-            runCatching {
+            try {
                 val parsed = InetAddress.getByName(localAddress)
-                check(parsed is Inet6Address) { "$localAddress 不是 IPv6" }
-                Inet6Address.getByAddress(null, parsed.address, ifindex)
-            }.getOrElse { error ->
-                throw IllegalStateException("无法为 $iface 绑定 mDNS 地址：${error.message}", error)
+                if (parsed is Inet6Address) {
+                    Inet6Address.getByAddress(null, parsed.address, ifindex)
+                } else {
+                    parsed
+                }
+            } catch (error: Exception) {
+                SessionController.appendLog("USB-BENCH: 无法为 $iface 绑定 mDNS 地址 $localAddress：${error.message}")
+                return null
             }
-        val resolved = AtomicReference<Inet6Address?>()
+        val resolved = AtomicReference<PeerResult?>()
         val latch = CountDownLatch(1)
         val serviceType = "_airplay._tcp.local."
         val listener =
@@ -233,43 +349,81 @@ object UsbNcmAutoConnector {
 
                 override fun serviceResolved(event: ServiceEvent) {
                     val info = event.info ?: return
-                    val candidate =
-                        info.inet6Addresses
-                            .firstOrNull { it.isLinkLocalAddress }
-                            ?.let(::withInterfaceScope)
+                    val preferred =
+                        info.port > 0 && (info.port == 17000 || event.name.contains("macplay", ignoreCase = true))
+                    val advertised = info.inet4Addresses.toList() + info.inet6Addresses.toList()
+                    val candidates =
+                        advertised
+                            .asSequence()
+                            .mapNotNull { UsbNcmDiscovery.endpointHostFromMdns(it, ifindex) }
+                            .distinct()
+                            .take(8)
+                            .toList()
                     SessionController.appendLog(
-                        "USB-BENCH: mDNS ${event.name} → ${info.hostAddresses.joinToString()} port=${info.port}",
+                        "USB-BENCH: mDNS ${event.name} → ${candidates.joinToString()} port=${info.port} " +
+                            "advertised=${advertised.joinToString()}" +
+                            when {
+                                !preferred -> "（非 MacPlay，忽略）"
+                                candidates.isEmpty() -> "（没有 USB 链路本地地址，忽略）"
+                                else -> ""
+                            },
                     )
-                    if (info.port == 17000 && candidate != null && resolved.compareAndSet(null, candidate)) {
+                    if (preferred &&
+                        candidates.isNotEmpty() &&
+                        resolved.compareAndSet(null, PeerResult(candidates, info.port, "mDNS"))
+                    ) {
                         latch.countDown()
                     }
                 }
 
                 override fun serviceRemoved(event: ServiceEvent) = Unit
-
-                fun withInterfaceScope(candidate: Inet6Address): Inet6Address = Inet6Address.getByAddress(null, candidate.address, ifindex)
             }
         val mdns =
             try {
-                JmDNS.create(address, "mcarplay-usb-$runId")
+                val family = if (address is Inet6Address) "v6" else "v4"
+                JmDNS.create(address, "mcarplay-usb-$runId-$family")
             } catch (error: Exception) {
-                throw IllegalStateException("USB 网卡 mDNS 初始化失败：${error.message}", error)
+                SessionController.appendLog("USB-BENCH: $localAddress 上的 mDNS 初始化失败：${error.message}")
+                return null
             }
         try {
             mdns.addServiceListener(serviceType, listener)
             SessionController.appendLog("USB-BENCH: 正在通过 $iface/$localAddress 查询 $serviceType")
-            latch.await(18, TimeUnit.SECONDS)
+            latch.await(10, TimeUnit.SECONDS)
         } finally {
             runCatching { mdns.removeServiceListener(serviceType, listener) }
             runCatching { mdns.close() }
         }
         checkActive(runId)
-        return resolved.get()?.hostAddress?.substringBefore('%')
-            ?: error("USB 已建立，但 $iface 上没有发现 MacPlay 的 _airplay._tcp（:17000）")
+        return resolved.get().also { peer ->
+            if (peer == null) {
+                SessionController.appendLog("USB-BENCH: $localAddress 上 10 秒内未发现 MacPlay，尝试下一候选")
+            }
+        }
+    }
+
+    private fun configurePeerRoutes(addresses: List<String>) {
+        var configured = 0
+        for (host in addresses) {
+            val result =
+                runRoot(
+                    "sh ${UsbNcmDiscovery.shellQuote(REMOTE_SCRIPT)} peer ${UsbNcmDiscovery.shellQuote(host)}",
+                    20_000L,
+                )
+            if (result.exitCode == 0) {
+                configured++
+            } else {
+                SessionController.appendLog("USB-BENCH: 候选 $host 路由失败：${result.output.takeLast(160)}")
+            }
+        }
+        check(configured > 0) { "所有 USB 候选地址的独立路由均建立失败" }
     }
 
     private fun stopRootResources() {
-        runRoot("sh ${UsbNcmDiscovery.shellQuote(REMOTE_SCRIPT)} down", 20_000L)
+        val result = runRoot("sh ${UsbNcmDiscovery.shellQuote(REMOTE_SCRIPT)} down", 20_000L)
+        check(result.exitCode == 0) {
+            "停止脚本失败：${result.output.takeLast(240).ifBlank { "exit=${result.exitCode}" }}"
+        }
     }
 
     private fun randomLocalMac(): String = UsbNcmDiscovery.formatLocalMac(ByteArray(6).also(random::nextBytes))

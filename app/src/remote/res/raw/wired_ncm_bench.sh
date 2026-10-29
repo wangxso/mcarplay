@@ -9,16 +9,65 @@ PREF=8997
 TABLE=742
 FILES="idVendor idProduct bcdUSB bcdDevice bDeviceClass bDeviceSubClass bDeviceProtocol strings/0x409/manufacturer strings/0x409/product strings/0x409/serialnumber configs/b.1/MaxPower configs/b.1/bmAttributes configs/b.1/strings/0x409/configuration"
 
+add_peer_route() {
+    host=$1
+    iface=$(cat "$F/ifname")
+    case "$host" in
+        *:*)
+            family=6
+            prefix=128
+            ;;
+        *.*)
+            family=4
+            prefix=32
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    ip -"$family" route replace "$host/$prefix" dev "$iface" table "$TABLE" || return 1
+    ip -"$family" rule del pref "$PREF" to "$host/$prefix" lookup "$TABLE" 2>/dev/null || true
+    ip -"$family" rule add pref "$PREF" to "$host/$prefix" lookup "$TABLE"
+}
+
+ipv4_from_mac() {
+    mac=$1
+    old_ifs=$IFS
+    IFS=:
+    set -- $mac
+    IFS=$old_ifs
+    [ "$#" -eq 6 ] || return 1
+    mac5=$5
+    mac6=$6
+    echo "169.254.$((0x$mac5 % 254 + 1)).$((0x$mac6 % 254 + 1))"
+}
+
+link_local_from_mac() {
+    mac=$1
+    old_ifs=$IFS
+    IFS=:
+    set -- $mac
+    IFS=$old_ifs
+    [ "$#" -eq 6 ] || return 1
+    first=$(printf '%02x' "$((0x$1 ^ 2))")
+    echo "fe80::$first$2:${3}ff:fe$4:$5$6"
+}
+
 restore() {
     [ -f "$S/owner" ] && [ "$(cat "$S/owner")" = mcarplay-ncm-bench-v1 ] || return 1
-    if [ -f "$S/peer" ]; then
-        peer=$(cat "$S/peer")
-        ip -6 rule del pref "$PREF" to "$peer/128" lookup "$TABLE" 2>/dev/null || true
-        ip -6 route flush table "$TABLE" 2>/dev/null || true
-    fi
+    iface=$(cat "$F/ifname" 2>/dev/null || cat "$S/iface" 2>/dev/null || true)
+    while ip -6 rule del pref "$PREF" 2>/dev/null; do :; done
+    while ip -4 rule del pref "$PREF" 2>/dev/null; do :; done
+    ip -6 route flush table "$TABLE" 2>/dev/null || true
+    ip -4 route flush table "$TABLE" 2>/dev/null || true
+    echo '' > "$G/UDC" || true
     if [ -L "$L" ]; then
-        echo '' > "$G/UDC" || true
         rm -f "$L"
+    fi
+    if [ -n "$iface" ] && [ -d "/sys/class/net/$iface" ]; then
+        ip -4 addr flush dev "$iface" 2>/dev/null || true
+        ip -6 addr flush dev "$iface" 2>/dev/null || true
+        ip link set "$iface" down 2>/dev/null || true
     fi
     rmdir "$F" 2>/dev/null || true
     for f in $FILES; do
@@ -27,7 +76,9 @@ restore() {
     done
     if [ -f "$S/android_config" ]; then
         previous=$(cat "$S/android_config")
-        [ -n "$previous" ] && [ "$previous" != none ] && setprop sys.usb.config "$previous" || true
+        if [ -n "$previous" ] && [ "$previous" != none ]; then
+            svc usb setFunctions "$previous" 2>/dev/null || setprop sys.usb.config "$previous" || true
+        fi
     fi
     svc usb resetUsbGadget || true
     rm -rf "$S"
@@ -40,12 +91,35 @@ wait-iface)
     i=0
     while [ "$i" -lt 300 ]; do
         iface=$(cat "$F/ifname" 2>/dev/null || true)
-        ipv6=$(cat /proc/net/if_inet6 2>/dev/null | grep " $iface$" || true)
-        if [ -n "$iface" ] && [ -d "/sys/class/net/$iface" ] && [ -n "$ipv6" ]; then
-            echo "$iface"
-            cat "/sys/class/net/$iface/ifindex"
-            echo "$ipv6"
-            exit 0
+        if [ -n "$iface" ] && [ -d "/sys/class/net/$iface" ]; then
+            [ -f "$S/ready" ] || { sleep 0.1; i=$((i + 1)); continue; }
+            link_state=$(ip link show dev "$iface" 2>/dev/null || true)
+            carrier=$(cat "/sys/class/net/$iface/carrier" 2>/dev/null || true)
+            case "$link_state" in
+                *LOWER_UP*) ;;
+                *) [ "$carrier" = 1 ] || { sleep 0.1; i=$((i + 1)); continue; } ;;
+            esac
+            ip link set "$iface" up || { sleep 0.1; i=$((i + 1)); continue; }
+            device_mac=$(cat "$S/device_mac" 2>/dev/null || true)
+            ipv4_host=$(ipv4_from_mac "$device_mac" 2>/dev/null || true)
+            link_local=$(link_local_from_mac "$device_mac" 2>/dev/null || true)
+            [ -n "$ipv4_host" ] && ip -4 addr replace "$ipv4_host/16" dev "$iface" || true
+            if [ -n "$link_local" ]; then
+                ip -6 addr replace "$link_local/64" dev "$iface" nodad ||
+                    ip -6 addr replace "$link_local/64" dev "$iface" || true
+            fi
+            # nodad 通常立即可用；保留短窗口兼容不识别 nodad 的旧 ip 工具。
+            sleep 0.2
+            ipv6=$(cat /proc/net/if_inet6 2>/dev/null | grep " $iface$" || true)
+            ipv4=$(ip -4 addr show dev "$iface" 2>/dev/null | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
+            if { [ -n "$ipv6" ] || [ -n "$ipv4" ]; }; then
+                echo "$iface"
+                cat "/sys/class/net/$iface/ifindex"
+                echo "$ipv6"
+                [ -n "$ipv4" ] && echo "IPV4=$ipv4"
+                [ -n "$link_local" ] && echo "LINKLOCAL=$link_local"
+                exit 0
+            fi
         fi
         sleep 0.1
         i=$((i + 1))
@@ -62,27 +136,43 @@ down)
     if [ -f "$S/pid" ] && kill -0 "$(cat "$S/pid")" 2>/dev/null; then
         pid=$(cat "$S/pid")
         case "$(tr '\000' ' ' < /proc/$pid/cmdline)" in
-            *mcarplay-ncm-bench.sh*) kill -TERM "$pid"; exit 0;;
+            *mcarplay-ncm-bench.sh*)
+                kill -TERM "$pid" 2>/dev/null || true
+                i=0
+                while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 50 ]; do
+                    sleep 0.1
+                    i=$((i + 1))
+                done
+                kill -KILL "$pid" 2>/dev/null || true
+                ;;
             *) echo 'NCM: stale pid, restoring saved gadget';;
         esac
     fi
-    restore
+    [ ! -d "$S" ] || restore
+    echo 'NCM: restored Android USB'
     exit 0
     ;;
 peer)
     [ -f "$S/owner" ] && [ "$(cat "$S/owner")" = mcarplay-ncm-bench-v1 ]
-    [ ! -f "$S/peer" ]
-    [ -z "$(ip -6 rule show | grep "^$PREF:" || true)" ]
-    [ -z "$(ip -6 route show table "$TABLE" 2>/dev/null)" ]
+    [ "$#" -eq 2 ]
+    host=$2
+    touch "$S/peers"
+    if ! grep -Fxq "$host" "$S/peers"; then
+        printf '%s\n' "$host" >> "$S/peers"
+    fi
+    add_peer_route "$host"
+    echo "NCM: peer route ready on $(cat "$F/ifname")"
+    exit 0
+    ;;
+peers)
+    [ -f "$S/owner" ] && [ "$(cat "$S/owner")" = mcarplay-ncm-bench-v1 ]
     iface=$(cat "$F/ifname")
-    printf '%s' "$2" > "$S/peer"
-    ip -6 route add "$2/128" dev "$iface" table "$TABLE"
-    ip -6 rule add pref "$PREF" to "$2/128" lookup "$TABLE"
-    echo "NCM: peer route ready on $iface"
+    ip -4 neigh show dev "$iface" 2>/dev/null || true
+    ip -6 neigh show dev "$iface" 2>/dev/null || true
     exit 0
     ;;
 up) ;;
-*) echo 'NCM: expected up, peer or down'; exit 1;;
+*) echo 'NCM: expected up, peer, peers or down'; exit 1;;
 esac
 
 [ "$(id -u)" = 0 ]
@@ -97,6 +187,7 @@ umask 077
 mkdir "$S"
 echo mcarplay-ncm-bench-v1 > "$S/owner"
 echo $$ > "$S/pid"
+echo "$4" > "$S/device_mac"
 trap 'restore' EXIT
 timerpid=''
 trap 'kill "$timerpid" 2>/dev/null || true; exit 130' INT TERM HUP
@@ -134,8 +225,21 @@ for gadget in /config/usb_gadget/*; do
 done
 echo "$udc" > "$G/UDC"
 iface=$(cat "$F/ifname")
+echo "$iface" > "$S/iface"
 ip link set "$iface" up
 echo 0 > "/proc/sys/net/ipv6/conf/$iface/disable_ipv6"
+ip -4 addr flush dev "$iface" 2>/dev/null || true
+ip -6 addr flush dev "$iface" 2>/dev/null || true
+mac4=$(printf '%s' "$4" | cut -d: -f5)
+mac5=$(printf '%s' "$4" | cut -d: -f6)
+ipv4_host="169.254.$((0x$mac4 % 254 + 1)).$((0x$mac5 % 254 + 1))"
+ip -4 addr replace "$ipv4_host/16" dev "$iface" || true
+link_local=$(link_local_from_mac "$4" 2>/dev/null || true)
+if [ -n "$link_local" ]; then
+    ip -6 addr replace "$link_local/64" dev "$iface" nodad ||
+        ip -6 addr replace "$link_local/64" dev "$iface" || true
+fi
+touch "$S/ready"
 echo "NCM: ready iface=$iface"
 if [ -n "${6:-}" ]; then
     sleep 3
@@ -150,9 +254,10 @@ while [ "$(cut -d. -f1 /proc/uptime)" -lt "$((began + $2))" ]; do
         echo 'NCM: app process exited'
         break
     fi
-    if [ -f "$S/peer" ]; then
-        peer=$(cat "$S/peer")
-        ip -6 route replace "$peer/128" dev "$iface" table "$TABLE"
+    if [ -f "$S/peers" ]; then
+        while IFS= read -r peer; do
+            [ -n "$peer" ] && add_peer_route "$peer" || true
+        done < "$S/peers"
     fi
     if [ "$launch_bench" = 1 ] && [ -n "${6:-}" ] && [ "$launched" = 0 ] &&
         [ "$(cut -d. -f1 /proc/uptime)" -ge "$((began + 6))" ]; then

@@ -734,6 +734,7 @@ object SessionController {
     internal fun startUsbMediaBench(
         context: Context,
         endpoint: UsbMediaEndpoint,
+        audioEnabled: Boolean = true,
         cleanup: (() -> Unit)? = null,
     ) {
         check(BuildConfig.DEBUG && BuildConfig.FLAVOR == "remote") { "USB 媒体台架仅限 remote debug" }
@@ -747,8 +748,11 @@ object SessionController {
         usbMediaEndpoint = endpoint
         usbMediaCleanup = cleanup
         connectCancelled = false
-        audioEnabledForSession = false
-        appendLog("USB-BENCH: ${endpoint.interfaceName} scope=${endpoint.scopeId ?: "auto"} 媒体台架；不代表车机枚举或角色切换成功")
+        audioEnabledForSession = audioEnabled
+        appendLog(
+            "USB-BENCH: ${endpoint.interfaceName} scope=${endpoint.scopeId ?: "auto"} " +
+                "addresses=${endpoint.addresses} audio=$audioEnabled；不代表车机枚举或角色切换成功",
+        )
         CarPlayService.start(context)
         sessionStarting.set(true)
         Bg.run("usb-media-ready") {
@@ -2190,7 +2194,7 @@ object SessionController {
         vararg args: Any,
     ): String = appContext?.let { AppLanguage.localized(it).getString(id, *args) }.orEmpty()
 
-    private fun audioBaselineAllowed(): Boolean = appContext?.let(CompatibilityPrefs::audioBaseline) == true
+    private fun audioBaselineAllowed(): Boolean = usbMediaEndpoint != null || appContext?.let(CompatibilityPrefs::audioBaseline) == true
 
     /** 该车机上「所有可能用到的档位键」——用于判断是否已全部试穿。 */
     private fun audioCandidateKeys(identity: String): Set<String> =

@@ -1,7 +1,8 @@
 # 有线 CarPlay（root 实验）
 
 更新：2026-10-29。本文记录「手机通过 USB 线直连只支持有线 CarPlay 的车机」的调研结论、已实现的台架工具与后续步骤。
-**目前已验证 USB NCM 上的 CarWith → AirPlay → MacPlay 视频路径**；真实车机发起 USB 角色切换、
+**目前已验证 USB NCM 上的 CarWith → AirPlay → MacPlay 视频路径，并验证音频包持续到达、解密、解码并进入
+MacPlay 的 CoreAudio 管线**；真实车机发起 USB 角色切换、
 iPhone usbmux/lockdown/carkit 入口仍不可用，也没有实体车机证据。本功能不代表任何手机或车机已支持，
 也不进入 `standard` 的连接流程。
 
@@ -22,8 +23,8 @@ iPhone usbmux/lockdown/carkit 入口仍不可用，也没有实体车机证据�
 | 1. 冒充 iPhone | configfs gadget 用 Apple VID/PID 枚举；FunctionFS 接收发给设备本身的厂商控制请求（`FUNCTIONFS_ALL_CTRL_RECIP`） | 电脑已枚举并收到充电请求；重复运行发生 gadget 名称冲突，见台架记录；未接车机 |
 | 2. 角色切换 | 车机请求 iPhone 改当 USB 主机，自己转为 USB 设备 | 已实现状态机与节点探测（`usb/WiredSwitchMachine`、`usb/UsbRoleNodes`；不自动写 Type-C 节点），未实机 |
 | 3. iAP2 走 USB | 车机 iAP2 接口的 bulk IN/OUT 承载与蓝牙相同的链路层字节流 | 已实现 `UsbHostDuplexStream`，尚未接入会话 |
-| 4. 网络 | AirPlay 跑在车机的 CDC-NCM 网卡上（IPv6 链路本地 + mDNS） | USB NCM 与显式 IPv6 端点已在 Mac 台架验证；真实车机 NCM 未验证 |
-| 5. 媒体 | 与无线相同的 AirPlay 视频/音频/触控 | 视频已在 USB NCM 上出画 3 分钟；音频与触控未联调 |
+| 4. 网络 | AirPlay 跑在车机的 CDC-NCM 网卡上（IPv4 和/或 IPv6，经 mDNS 或显式地址发现） | Mac 台架已验证链路本地 IPv6；IPv4/IPv6 候选、邻居与手动地址降级已有离线测试；真实车机 NCM 未验证 |
+| 5. 媒体 | 与无线相同的 AirPlay 视频/音频/触控 | 视频已在 USB NCM 上出画；音频包已连续解密、解码并进入 MacPlay 的 CoreAudio 管线；实际听感和触控未确认 |
 
 MFi 认证只需车机向手机证明自己，手机侧不需要 Apple 密钥，与现有无线路径一致。
 
@@ -213,8 +214,9 @@ USB 角色切换、USB 主机侧 iAP2，以及音频/触控均未由此验证。
 
 本轮把台架入口接进 App：主界面的「USB 有线连接」卡片只在存在 `UsbWiredConnectActivity` 的 `remote` 包显示；
 `standard` manifest 没有该 Activity，因此正式连接流程不可见、不可调用。点击后依次自动请求 root、安装固定脚本、
-配置 `g2`/`usb0`、等待链路本地 IPv6、通过绑定到 USB 网卡的 mDNS 解析 MacPlay `_airplay._tcp`（强制选择
-`:17000`），再启动现有 USB AirPlay 媒体链路并返回主界面。失败页和「停止并恢复 USB」都保留在入口内。
+配置 `g2`/`usb0`、等待 IPv4/IPv6 地址、通过绑定到 USB 网卡的 mDNS 解析 MacPlay `_airplay._tcp`，再启动现有
+USB AirPlay 媒体链路并返回主界面。自动发现失败时依次尝试 USB 邻居地址和入口中的手动地址；失败页和
+「停止并恢复 USB」都保留在入口内。
 
 设备为小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，小米 CarLife
 `8.8.5`（274），root 管理器为 KernelSU；接收端为 MacPlay `1.2.4`（41）。手机 USB 直连 Mac，无线 adb
@@ -222,7 +224,7 @@ USB 角色切换、USB 主机侧 iAP2，以及音频/触控均未由此验证。
 
 1. remote 一键 root 请求成功并返回 `uid=0` 后，KernelSU 的 `su -c` 对多行轮询参数报
    `no closing quote`，而 Android 17 的 `ping6 -I usb0 ff02::1` 对 NCM 接口返回 `sendmsg: EINVAL`。实现改为：root 调用一律使用
-   `/system/bin/su` 等绝对路径；网卡和 IPv6 等待放进固定脚本；App 用 JmDNS 绑定该地址查询
+   `/system/bin/su` 等绝对路径；网卡和 IPv4/IPv6 等待放进固定脚本；App 用 JmDNS 绑定该地址查询
    `_airplay._tcp.local.`，不依赖机型的 all-nodes ping 行为。
 2. 点击入口后约 15 秒，mDNS 同时发现 MacPlay `:17000` 和系统 AirPlay 接收器 `:7000`，App 仅选择前者。
    macOS 上 `:17000` 随即出现来自 USB 网卡的已建立 TCP 连接。
@@ -236,6 +238,37 @@ USB 角色切换、USB 主机侧 iAP2，以及音频/触控均未由此验证。
 真实车机角色切换、usbmux/lockdown/carkit、USB 主机侧 iAP2、音频或触控可用。原始地址、MAC、SSID 和完整日志
 不进入仓库。
 
+### 2026-10-29 21:46 USB NCM 音视频与地址/音频降级
+
+设备仍为小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，小米 CarLife
+`8.8.5`（274），KernelSU；接收端为 MacPlay `1.2.4`（41）。无线 adb 仅用于控制与观察，媒体继续走 USB NCM。
+
+1. mDNS 同时发现系统 AirPlay `:7000` 与 MacPlay `:17000`。前者被名称和端口规则拒绝，后者解析为 USB 链路本地
+   IPv6；macOS 的 `/info` 日志记录 `family=IPv6`，手机时序应答带 `%usb0`。链路本地 IPv6 候选会排除
+   `TENTATIVE`/`DADFAILED` 地址；实机 `/proc/net/if_inet6` 曾同时出现 `0xc4`（含 tentative）和可用地址，
+   旧筛选可能选中前者，本轮已修正。
+2. remote 入口默认开启声音。音频协商先选 `type=102/media/AAC-LC 48kHz 2ch`，再以 `type=100` 的
+   media/compatibility/default PCM 档作为会话内替换路径。CarWith 原生 MEDIA 输入为 44.1kHz/2ch/16-bit，
+   手机将其重采样到 48kHz 后编码为 AAC-LC；首个 PCM 帧 `nonzero=true`，丢帧为 0。
+3. 连续观察约 550 秒：MacPlay 在 540 秒统计点收到并解密 24,219 个音频包，向播放器转发 24,219 个，解码
+   24,207 个缓冲；
+   `invalid=0`、认证错误 0、拒绝 0、管线错误 0，RTP 抖动丢包/迟到/重复均为 0，队列缓冲为 0ms。手机侧同时
+   持续递增外部 PCM 包计数。公开源码中该统计探针位于 `volume` 之前，后续链路为
+   `audioconvert → audioresample → queue → osxaudiosink`，因此这证明音频已进入 CoreAudio 输出管线。
+4. 本轮 MacPlay 选择“播放 iPhone 音频”，媒体音量为 100%，输出为系统默认的 MacBook Air 扬声器；但 macOS
+   系统输出同时处于静音，音量仅 13%。所以本轮没有把“解码成功”记成“用户听到声音”，也没有从手机或 MacPlay
+   统计推断扬声器实际出声。取消系统静音后的听感仍需单独确认。
+5. 本轮之后又安装包含双栈 mDNS 回退、邻居/手动替换和网卡清理的新 remote APK，复测约 6 分钟。触发 CarWith
+   音乐后，MacPlay 在 390 秒统计点为音频 7,918 包、解密/转发各 7,918、解码 7,906 个缓冲；认证、管线与 RTP
+   抖动丢包均为 0。主动执行台架 `down` 后 `usb0` 消失、状态目录删除、`g1` 重新绑定 UDC 且 USB adb 恢复；
+   另一次 `am force-stop` 模拟进程退出，也由守护脚本完成同类回滚。macOS 仍为静音，实际听感仍未确认。
+
+网络替换路径按以下顺序执行：USB 网卡绑定的 IPv6 mDNS → IPv4 mDNS → USB 邻居表 → 入口中的手动地址；每个
+候选地址建立独立的 IPv4/IPv6 策略路由，策略规则创建失败会使该候选失败，而不会把只有路由表条目误报为可用。
+mDNS 同时给出 A/AAAA 时由现有连接器逐个尝试，单个地址连接超时后继续下一个。回滚会清空本台架网卡地址，避免
+重启后台架复用上一轮地址。Mac 台架本次实际走 IPv6；这不能说明真实车机必须使用 IPv6，NCM 主机实现也可能只给
+IPv4 或同时给两类地址，仍需以实体车机日志为准。
+
 ## 未核实事项
 
 以下来自公开逆向资料或经验值，均需台架或实车核对后再修正代码与本文：
@@ -245,12 +278,14 @@ USB 角色切换、USB 主机侧 iAP2，以及音频/触控均未由此验证。
 - FunctionFS 上零长度 `Os.write` 能否 STALL（零长度 `Os.read` 应答 OUT 请求已在空跑中未报错）。
 - 在 A 转 C 线（无 PD）上写数据角色节点能否真正切到主机。
 - 有线模式下 iAP2 会话是否省略 Wi-Fi 凭据交换（`0x5702/0x5703`），以及车机在 NCM 上广播的服务。
+- MacPlay 已解码音频能否在取消系统静音后被用户实际听到，以及真实车机扬声器的音频、触控和导航提示。
 
 ## 后续步骤
 
 1. 阶段 3：App 侧用 `UsbManager` 打开车机设备，按 `WiredAccessoryInterfaces.match` 选接口，经 `UsbHostDuplexStream`
    接入 `Iap2LinkChannel`；`Iap2SenderSession` 增加有线模式，跳过 Wi-Fi 交换。
-2. 阶段 4：把现有 NCM 台架接到真实车机的 USB 主机 iAP2 会话之后；验证车机暴露的网卡、IPv6 地址与 mDNS。
+2. 阶段 4：把现有 NCM 台架接到真实车机的 USB 主机 iAP2 会话之后；验证车机暴露的网卡、IPv4/IPv6 地址与 mDNS。
    remoteDebug 已用 JmDNS 按 USB 网卡地址自动发现 MacPlay，但仍需确认真实车机服务名和网络命名空间行为。
-3. 阶段 5：与无线共用 AirPlay 媒体链路并由车机验证视频、音频和触控。USB 媒体入口只放在 `remote` 或新的
+3. 阶段 5：与无线共用 AirPlay 媒体链路并由车机验证视频、音频和触控；先取消 Mac 系统静音，补充用户听感确认。
+   USB 媒体入口只放在 `remote` 或新的
    root flavor，绝不进入 `standard`。

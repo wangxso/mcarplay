@@ -393,3 +393,50 @@ MacPlay 公开源码 `fb132c0796f5aa425ca1a453dd9d394a9ecfacbc` 的 `watch_usbmu
 结论只覆盖 remoteDebug 的 USB NCM 媒体台架。MacPlay 仍作为显式 AirPlay 接收器，手机没有在它的 USB 设备列表
 中显示为 iPhone；真实车机枚举、角色切换、usbmux/lockdown/carkit、USB 主机侧 iAP2、音频和触控仍未验证。
 完整步骤与边界见 `docs/WIRED-CARPLAY.md`。
+
+## 小米 17 + MacPlay USB NCM 音频数据链（2026-10-29 21:46–21:52）
+
+设备为小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`（104000020），
+小米 CarLife `8.8.5`（274），KernelSU；接收端为 MacPlay `1.2.4`（41，公开源码
+`fb132c0796f5aa425ca1a453dd9d394a9ecfacbc`）。USB 直连 Mac，无线 adb 仅用于控制和观察。
+
+1. 一键入口自动取得 root，配置 CDC-NCM 后同时得到 IPv4 与多个链路本地 IPv6 地址。mDNS 同时解析到系统
+   AirPlay `:7000` 和 MacPlay `:17000`；名称与端口筛选只接受后者，MacPlay 日志随后记录
+   `control-connected family=IPv6`。手机时序应答地址带 `%usb0`，媒体连接不是 Wi-Fi。
+2. MacPlay 的 `/info` 给出可用媒体档。手机按 `type=102/media/AAC-LC 48kHz 2ch` 优先协商，保留
+   `type=100` media/compatibility/default PCM 作为同会话替换档。CarWith MEDIA 通道初始化
+   `44100Hz 2ch 16bit`，首个 PCM 包 `nonzero=true`，应用把 44.1kHz 重采样为 48kHz 并编码为 AAC-LC。
+3. 连续观察约 550 秒。MacPlay 在 540 秒统计点为：视频 10,389 包，音频 24,219 包；音频统计中
+   `decrypted=24219`、`forwarded=24219`、`decodedBuffers=24207`、`rejected=0`、`invalid=0`、
+   `authenticationErrors=0`、`pipelineErrors=0`，RTP 抖动丢包/迟到/重复为 0，队列缓冲为 0ms，
+   平均抖动约 4.575ms，播放提前量约 16.410ms。手机侧同时持续记录 CarWith PCM 接入和非零外部 PCM 包。
+4. 本轮没有用 `decodedBuffers` 直接宣称“已听到”。核对 MacPlay 公开源码后，统计探针在
+   [`volume` 前的 sink pad probe](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-gst-video/rust/audioplayer/src/lib.rs#L194-L200)，
+   统计链路在
+   [`pipeline_desc`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-gst-video/rust/audioplayer/src/lib.rs#L73-L84)
+   中继续经过 `audioconvert → clocksync → volume → audioconvert → audioresample → queue → osxaudiosink`；
+   收包转发路径见
+   [`audio_recv.rs`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-gst-video/rust/addon/src/audio_recv.rs#L25-L36)。
+   因此能确认包已进入 MacPlay 的 CoreAudio 输出管线。
+5. MacPlay 界面显示“播放 iPhone 音频”开启、媒体音量 100%、输出为系统默认的 MacBook Air 扬声器；同期
+   macOS 系统“输出音量”为 13% 且“静音”勾选开启。用户没有听到声音与系统静音一致，不能据此判成手机、
+   USB 或 MacPlay 音频失败。取消静音后的实际听感仍待用户确认。
+
+结论：有线路线当前明确承载了 CarWith 视频和音频；AAC-LC 收包、认证、解密、RTP 解包、AAC 解码与向
+`osxaudiosink` 的供流均有日志和源码路径证据。实际扬声器听感、触控、真实车机 NCM、角色切换及 USB 主机侧
+iAP2 仍未验收。本次网络使用 IPv6 链路本地，但真实车机也可能只用 IPv4；现有入口支持 mDNS、USB 邻居和手动
+地址三类候选，并对每个候选建立独立 IPv4/IPv6 路由。
+
+### 健壮化版本复测（22:03–22:10）
+
+安装包含 IPv6/IPv4 mDNS 依次回退、邻居/手动地址替换和完整网卡清理的新 remote APK 后复测一次。USB NCM
+同时有 IPv4 与两个链路本地 IPv6 地址，入口先在 `usb0` 的可用 IPv6 上发现 MacPlay `:17000`，随后建立
+1280x720 视频。22:07 在 MacPlay 画面中播放 CarWith 音乐后，手机连续记录 44.1kHz/2ch PCM 接入、重采样到
+48kHz 和外部 PCM 发包；MacPlay 在 390 秒统计点为视频 5,382 包、音频 7,918 包，音频
+`decrypted=forwarded=7918`、`decodedBuffers=7906`，`invalid`、认证错误、管线错误和 RTP 抖动丢包均为 0。
+macOS 仍是输出静音、音量 13%，因此只确认数据与 CoreAudio 管线，不宣称用户已实际听到。
+
+随后直接执行包装内的 `down` 回滚并结束 App：`usb0` 消失、状态目录删除、`g2` UDC 清空、`g1` 重新绑定
+`a600000.dwc3`、`sys.usb.config=adb`，且 USB adb 重新出现。此前另用 `am force-stop` 模拟进程被杀，
+守护脚本在同一路径完成回滚。双栈 mDNS 中本轮实际走 IPv6；IPv4 mDNS、邻居和手动地址分支由离线测试覆盖，
+真实车机仍需按其 NCM 与角色切换行为实机验证。

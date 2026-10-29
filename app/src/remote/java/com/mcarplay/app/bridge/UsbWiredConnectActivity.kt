@@ -3,9 +3,12 @@ package com.mcarplay.app.bridge
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -18,6 +21,8 @@ class UsbWiredConnectActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var detail: TextView
     private lateinit var stop: Button
+    private lateinit var audio: CheckBox
+    private lateinit var directHost: EditText
     private var returnedToMain = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,7 +46,9 @@ class UsbWiredConnectActivity : AppCompatActivity() {
         )
         root.addView(
             TextView(this).apply {
-                text = "保持手机与 Mac 的 USB 连接。MacPlay 中请选择“有线CarPlay”并先点击“启动接收”。"
+                text =
+                    "保持手机与 Mac 的 USB 连接。MacPlay 中请选择“有线CarPlay”并先点击“启动接收”。" +
+                    "默认同时尝试视频和 CarWith 声音。"
                 setTextColor(0xFFB8C2C8.toInt())
                 textSize = 14f
                 gravity = Gravity.CENTER
@@ -64,12 +71,34 @@ class UsbWiredConnectActivity : AppCompatActivity() {
             }
         root.addView(status, matchWrap(top = 28))
         root.addView(detail, matchWrap(top = 10))
+        audio =
+            CheckBox(this).apply {
+                text = "发送 CarWith 声音（AAC-LC → PCM 自动降级）"
+                isChecked = true
+                setTextColor(Color.WHITE)
+                textSize = 14f
+            }
+        root.addView(audio, matchWrap(top = 18))
+        directHost =
+            EditText(this).apply {
+                hint = "自动发现失败时的直连地址（可选，端口固定 17000）"
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                setSingleLine(true)
+                setTextColor(Color.WHITE)
+                setHintTextColor(0xFF8E989D.toInt())
+                textSize = 13f
+            }
+        root.addView(directHost, matchWrap(top = 10))
         root.addView(
             Button(this).apply {
-                text = "重试"
+                text = "开始 / 重试"
                 setOnClickListener {
                     returnedToMain = false
-                    UsbNcmAutoConnector.connect(this@UsbWiredConnectActivity)
+                    UsbNcmAutoConnector.connect(
+                        this@UsbWiredConnectActivity,
+                        enableAudio = audio.isChecked,
+                        manualHost = directHost.text?.toString(),
+                    )
                 }
             },
             matchWrap(top = 24),
@@ -113,7 +142,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
             }
         }
         if (UsbNcmAutoConnector.snapshotPhase() == UsbNcmAutoConnector.Phase.IDLE) {
-            UsbNcmAutoConnector.connect(this)
+            UsbNcmAutoConnector.connect(this, enableAudio = audio.isChecked)
         }
     }
 

@@ -3,6 +3,7 @@ package com.mcarplay.app.usb
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.InetAddress
 
 class UsbMediaEndpointTest {
     @Test
@@ -40,5 +41,19 @@ class UsbMediaEndpointTest {
         val endpoint = UsbMediaEndpoint("usb0", "fe80::1234", 17000, scopeId = 35).receiver
         assertTrue(endpoint.ipAddresses.single().endsWith("%35"))
         assertTrue(runCatching { UsbMediaEndpoint("usb0", "fe80::1234", 17000, scopeId = -1) }.isFailure)
+    }
+
+    @Test
+    fun mixedIpv4AndIpv6AddressesRemainAvailableForTransportFallback() {
+        val endpoint =
+            UsbMediaEndpoint(
+                "usb0",
+                listOf("fe80::1234", "169.254.1.2", "fe80::1234"),
+                port = 17000,
+                scopeId = 35,
+            )
+        val ipv6 = InetAddress.getByName("fe80::1234").hostAddress
+        assertEquals(listOf(ipv6, "169.254.1.2"), endpoint.addresses)
+        assertEquals(listOf("$ipv6%35", "169.254.1.2"), endpoint.receiver.ipAddresses)
     }
 }
