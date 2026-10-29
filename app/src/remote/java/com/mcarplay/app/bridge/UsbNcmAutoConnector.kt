@@ -8,6 +8,7 @@ import com.mcarplay.app.SessionController
 import com.mcarplay.app.usb.UsbMediaEndpoint
 import com.mcarplay.app.usb.UsbNcmDiscovery
 import com.mcarplay.app.usb.UsbNcmIdentityMode
+import com.mcarplay.app.usb.WiredCarPlayStartFile
 import com.mcarplay.app.util.Bg
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -58,6 +59,8 @@ object UsbNcmAutoConnector {
     private const val IDENTITY_PREFS = "usb_ncm_identity"
     private const val PSEUDO_SERIAL_KEY = "pseudo_serial_v1"
     private const val LEASE_SECONDS = 1_800
+    private const val START_SESSION_WAIT_MILLIS = 45_000L
+    private const val START_SESSION_POLL_MILLIS = 500L
     private val ROOT_SU_CANDIDATES =
         listOf("/system/bin/su", "/system/xbin/su", "/sbin/su", "/debug_ramdisk/su")
     private val PSEUDO_SERIAL = Regex("[0-9a-f]{40}")
@@ -201,7 +204,8 @@ object UsbNcmAutoConnector {
                             runId,
                             Phase.FINDING_PEER,
                             if (identityMode == UsbNcmIdentityMode.IPHONE_COMPAT) {
-                                "iPhone 兼容身份与 USBMUX/Lockdown 已启动；请在 MacPlay 选择“有线CarPlay”并启动接收…"
+                                "iPhone 兼容身份与 USBMUX/Lockdown 已启动；等待接收端 iAP2 StartSession（DiPlay/车机）" +
+                                    "或 MacPlay mDNS…"
                             } else {
                                 "请在 MacPlay 选择“有线CarPlay”并点击“启动接收”…"
                             },
@@ -212,6 +216,7 @@ object UsbNcmAutoConnector {
                             localAddresses = mdnsAddresses,
                             localIpv4 = localAddresses.ipv4,
                             runId = runId,
+                            expectStartSession = identityMode == UsbNcmIdentityMode.IPHONE_COMPAT,
                         )
                     }
                 configurePeerRoutes(peer.addresses)
@@ -348,20 +353,47 @@ object UsbNcmAutoConnector {
         return result.output
     }
 
+    /**
+     * iPhone 兼容身份下，车机/DiPlay 在 iAP2 `0x4301` 中给出 AirPlay 地址，不发布 mDNS；
+     * MacPlay 只发布 mDNS。两者并行等待，先到者胜出；都没有时再回退到 USB 邻居表。
+     */
     private fun awaitPeer(
         iface: String,
         ifindex: Int,
         localAddresses: List<String>,
         localIpv4: String?,
         runId: Int,
+        expectStartSession: Boolean,
     ): PeerResult {
-        val discovered =
-            localAddresses
-                .asSequence()
-                .mapNotNull { localAddress ->
-                    checkActive(runId)
-                    awaitPeerOnAddress(iface, ifindex, localAddress, runId)
-                }.firstOrNull()
+        val mdnsResult = AtomicReference<PeerResult?>()
+        val mdnsDone = CountDownLatch(1)
+        Thread({
+            try {
+                localAddresses
+                    .asSequence()
+                    .mapNotNull { localAddress ->
+                        if (generation.get() != runId) return@mapNotNull null
+                        awaitPeerOnAddress(iface, ifindex, localAddress, runId)
+                    }.firstOrNull()
+                    ?.let(mdnsResult::set)
+            } catch (_: Throwable) {
+                // 取消或 mDNS 初始化失败时由主循环决定下一步。
+            } finally {
+                mdnsDone.countDown()
+            }
+        }, "usb-ncm-mdns").apply {
+            isDaemon = true
+            start()
+        }
+        val startDeadline = SystemClock.uptimeMillis() + if (expectStartSession) START_SESSION_WAIT_MILLIS else 0L
+        while (true) {
+            checkActive(runId)
+            if (expectStartSession) readStartSession()?.let { return it }
+            mdnsResult.get()?.let { return it }
+            if (mdnsDone.count == 0L && SystemClock.uptimeMillis() >= startDeadline) break
+            Thread.sleep(START_SESSION_POLL_MILLIS)
+        }
+        val discovered = mdnsResult.get()
         checkActive(runId)
         val neighbors =
             runRoot(
@@ -378,7 +410,10 @@ object UsbNcmAutoConnector {
             }.getOrDefault(emptyList())
         val addresses = (discovered?.addresses.orEmpty() + neighborHosts).distinct().take(8)
         if (addresses.isEmpty()) {
-            error("USB 已建立，但 $iface 上既没有 MacPlay mDNS，也没有可用邻居地址；可在入口填写直连 IP 后重试")
+            error(
+                "USB 已建立，但 $iface 上既没有接收端 iAP2 StartSession / MacPlay mDNS，也没有可用邻居地址；" +
+                    "可在入口填写直连 IP 后重试",
+            )
         }
         val source =
             when {
@@ -395,6 +430,23 @@ object UsbNcmAutoConnector {
             SessionController.appendLog("USB-BENCH: IPv4 候选将通过 $iface 的 $localIpv4 路由")
         }
         return PeerResult(addresses, discovered?.port ?: 17000, source.trim())
+    }
+
+    /** 读取 root usbmux 进程写下的 `0x4301`；文件不存在（exit 3）表示尚未收到。 */
+    private fun readStartSession(): PeerResult? {
+        val result = runRoot("sh ${UsbNcmDiscovery.shellQuote(REMOTE_SCRIPT)} start-session", 5_000L)
+        if (result.exitCode != 0) return null
+        val start = WiredCarPlayStartFile.decode(result.output) ?: return null
+        val addresses = start.addresses.mapNotNull(UsbNcmDiscovery::normalizePeerAddress).distinct()
+        if (addresses.isEmpty()) {
+            SessionController.appendLog("USB-BENCH: iAP2 StartSession 地址不可用：${start.addresses.joinToString()}")
+            return null
+        }
+        SessionController.appendLog(
+            "USB-BENCH: iAP2 StartSession → ${addresses.joinToString()} port=${start.port} " +
+                "device=${start.deviceIdentifier ?: "无"} publicKey=${start.publicKeyLength}",
+        )
+        return PeerResult(addresses, start.port, "iAP2 StartSession")
     }
 
     private fun awaitPeerOnAddress(

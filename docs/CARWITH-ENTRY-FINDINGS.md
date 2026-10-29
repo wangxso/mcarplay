@@ -482,3 +482,23 @@ KernelSU；MacPlay `1.2.4`（41）有线模式。台架为 NCM + FunctionFS usbm
   240 秒内视频 4,480 包、音频 9,914 包，`invalid=0`、认证错误 0、RTP 抖动丢包 0，触控事件到达手机。
 
 结论只适用于 Mac 台架，不代表真实车机的 USB 角色切换或有线 CarPlay 已支持。详见 `docs/WIRED-CARPLAY.md`。
+
+
+## 小米 17 + DiPlay 平板有线 CarPlay（2026-10-30 01:15、01:21）
+
+手机 `2509FPN0BC / OS4.0.4.0.XPBCNXM`、CarWith `4.0.20-20260923`、小米 CarLife `8.8.5`、KernelSU，
+mcarplay remoteDebug；接收端 vivo Pad Air `PA2353 / Android 14 / DiPlay 0.2.22 (41)`，未使用平板 root。
+手机以 USB 线直接接平板，由平板作 USB 主机；双方无线 adb 仅用于控制和观察，媒体走 USB NCM。
+
+- 修复 usbmux 同步写导致两侧读线程互等后，DiPlay 完成 lockdown/carkit、有线 iAP2 识别和 MFi 认证。
+- DiPlay 的 `0x52 wIndex=4` 请求现触发 soft_connect 断开再接通，实测约 1.7 秒后恢复枚举。
+- DiPlay 不发布 mDNS，手机从 `0x4301 CarPlayStartSession` 接收端口 7000 与链路本地 IPv6，补 USB scope 后直连。
+- 01:15 会话约 3 分钟持续视频（约 20fps、recoveries=0），AAC-LC 48kHz 解码并进入 AudioTrack，
+  触控回帧记录一次 9ms；平板截图可见 CarWith 地图、Dock 和媒体卡片。本轮声音为日志证据，未取得新的用户听感确认。
+- 该轮 DiPlay 的 bplist BigInteger 编码因同步时间值不足 8 字节而越界，`/feedback` 持续 500；
+  手机将单调计时时钟按固定偏移平移至 NTP 纪元后，01:21 复测反馈为 200，音频开始后包含 sampleTime、timestamp、
+  streamConnectionID，未再见对应越界。此前“真 iPhone 必须使用该纪元”的推断未获设备抓包验证，不作为结论。
+- 用户在入口停止后，安装前确认 `sys.usb.config=adb` 且台架状态目录消失；覆盖安装并重新打开有线入口可自动重连。
+  连接成功已自动返回主界面；此前“仍停在查找”的判断来自失败的 UI dump 所留下的旧 XML，不构成状态机异常证据。
+
+本轮为平板台架证据，不能替代真实车机 USB 角色切换和兼容性验收。实现与降级路径见 `docs/WIRED-CARPLAY.md`。

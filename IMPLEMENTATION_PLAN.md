@@ -1,10 +1,12 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-10-29。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-10-30。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
 ## 当前基线与结论
+
+- **DiPlay 有线 CarPlay 台架（10 月 30 日，PR #14）：** 安卓平板（vivo `PA2353`，Android 14）上的 DiPlay 0.2.22 以 USB 主机身份接入 root 手机，完成 usbmux/lockdown/carkit、有线 iAP2 识别与 MFi 认证、CarPlay 模式重枚举（`0x52 wIndex=4`，soft_connect 模拟）和 `CarPlayStartSession`；手机从 StartSession 取得接收端地址（DiPlay 不发 mDNS），CarWith 视频约 20fps、AAC 音频和触控经 USB NCM 上的 AirPlay 到达平板。修复 usbmux 读写互等与 NTP 计时时钟纪元（后者导致 DiPlay `/feedback` 每次 500）。仅为平板台架，约 3 分钟会话，不替代车机验收。详见 `docs/WIRED-CARPLAY.md`。
 
 - **有线 CarPlay 调研与 root 台架工具（10 月 29 日，PR #14）：** 已验证 CarWith 视频可在 USB CDC-NCM 上经 AirPlay 到 MacPlay：`1280x720` 首帧正常显示，稳定 180 秒累计 3183 个视频包，手机端发送至帧 #3241，媒体与时序流量均明确落在 `usb0`。remoteDebug 现已增加主界面「USB 有线连接」入口：自动申请 KernelSU root、配置 NCM、等待 IPv4/IPv6、按 USB 网卡绑定 mDNS 发现 MacPlay、启动媒体并自动返回主界面；mDNS 失败时降级到 USB 邻居和手动地址，IPv4/IPv6 候选逐个连接。连接器默认先声明 `05ac:12a8`、`Apple Inc. / iPhone` 的兼容身份并保留 NCM，若枚举失败自动回退为通用 Linux NCM。22:27 实测 macOS 枚举为 `Apple Inc. / iPhone`，MacPlay 随后仍按原 USB NCM 路径完成首帧解码，证明该身份可以满足其设备列表筛选，同时没有破坏媒体链路。音频默认开启，优先 AAC-LC、再降级到三种 PCM 档；21:46 的约 9 分钟 USB 会话收到并转发 24,219 个已解密音频包，解码 24,207 个缓冲并进入 MacPlay 的 `osxaudiosink` 链路，管线错误、认证错误与 RTP 抖动丢包均为 0，用户随后取消 macOS 静音并确认音乐实际播放且无异常。强制结束 App 和点击入口的停止按钮均恢复 `adb`/`g1`、USB adb，并删除台架状态。10 月 30 日补齐 FunctionFS usbmux、lockdown 与 `com.apple.carkit.service` 后，MacPlay 有线模式完成有线 iAP2 识别、MFi 认证与 `CarPlayStartSession`，CarWith 音视频随后经 USB NCM 持续播放、触控回传；期间定位并修复 HyperOS Greezer 冻结应用进程（台架 root 守护解冻）与台架策略规则重建导致的音频 `ENETUNREACH`。真实车机角色切换与 USB 主机侧 iAP2 仍未验证。该入口不进入 standard。免 root 无法冒充 iPhone；只支持有线的车机可考虑有线转无线盒子，仍需实测。步骤、边界与未核实事项见 `docs/WIRED-CARPLAY.md`。
 

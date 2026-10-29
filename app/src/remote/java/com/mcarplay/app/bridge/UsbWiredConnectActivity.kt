@@ -132,7 +132,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
                         UsbNcmAutoConnector.Phase.IDLE -> "等待连接"
                         UsbNcmAutoConnector.Phase.REQUESTING_ROOT -> "正在请求 root"
                         UsbNcmAutoConnector.Phase.PREPARING_USB -> "正在建立 USB 有线设备"
-                        UsbNcmAutoConnector.Phase.FINDING_PEER -> "正在查找 MacPlay"
+                        UsbNcmAutoConnector.Phase.FINDING_PEER -> "正在查找接收端（DiPlay/MacPlay）"
                         UsbNcmAutoConnector.Phase.STARTING_AIRPLAY -> "正在连接 AirPlay"
                         UsbNcmAutoConnector.Phase.CONNECTED -> "USB 有线 CarPlay 已启动"
                         UsbNcmAutoConnector.Phase.STOPPING -> "正在断开"

@@ -17,9 +17,12 @@ import com.mcarplay.app.usb.UsbMuxTcpConnection
 import com.mcarplay.app.usb.UsbMuxTcpDuplexStream
 import com.mcarplay.app.usb.UsbMuxTcpSegment
 import com.mcarplay.app.usb.UsbSetupPacket
+import com.mcarplay.app.usb.WiredCarPlayStartFile
 import com.mcarplay.app.usb.WiredIap2Session
 import java.io.File
 import java.io.FileDescriptor
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.system.exitProcess
 
 /**
@@ -27,6 +30,10 @@ import kotlin.system.exitProcess
  *
  * 该进程必须先写入描述符，脚本才能把 gadget 绑定到 UDC。进程同时保留 ep0 并处理
  * Apple 厂商控制请求；启用配置后读取 bulk OUT、记录 USBMUX framing，并先完成 v2 版本握手。
+ *
+ * bulk OUT 的读取线程从不写 bulk IN：FunctionFS 写会阻塞到主机取走数据，而 DiPlay 的
+ * usbmux 读线程会同步写 TCP ACK（2 秒超时）。两边的读线程同时卡在写上就会互锁，
+ * 所以所有出站帧都进入队列，由独立写线程发送。
  */
 object WiredUsbMuxMain {
     private const val POLL_MILLIS = 200
@@ -48,6 +55,9 @@ object WiredUsbMuxMain {
                             ep0File = File(ep0),
                             readyFile = File(ready),
                             usbTransportIdentifier = option(args, "--transport-id") ?: DEFAULT_TRANSPORT_ID,
+                            udcName = option(args, "--udc")?.takeIf(UDC_NAME::matches),
+                            udcBindFile = option(args, "--udc-file")?.let(::File),
+                            startFile = option(args, "--start-file")?.let(::File),
                         ).run()
                     }
                 }
@@ -59,7 +69,10 @@ object WiredUsbMuxMain {
     }
 
     private fun usage(): Int {
-        out("用法：serve --ep0 <functionfs-ep0> --ready <ready-file> [--transport-id <id>]")
+        out(
+            "用法：serve --ep0 <functionfs-ep0> --ready <ready-file> [--transport-id <id>] " +
+                "[--udc <name>] [--udc-file <configfs-UDC>] [--start-file <path>]",
+        )
         return 1
     }
 
@@ -67,12 +80,20 @@ object WiredUsbMuxMain {
         private val ep0File: File,
         private val readyFile: File,
         private val usbTransportIdentifier: String,
+        private val udcName: String?,
+        private val udcBindFile: File?,
+        private val startFile: File?,
     ) {
         private val decoder = UsbMuxFrameDecoder()
         private var ep0: FileDescriptor? = null
         private var bulkOut: FileDescriptor? = null
         private var bulkIn: FileDescriptor? = null
         private var reader: Thread? = null
+        private var writer: Thread? = null
+        private val outbound = LinkedBlockingQueue<ByteArray>()
+
+        @Volatile
+        private var lastReenumerationAt = 0L
         private val writeLock = Any()
         private val frameSequence = UsbMuxFrameSequence()
         private val connections = mutableMapOf<Int, UsbMuxTcpConnection>()
@@ -83,9 +104,10 @@ object WiredUsbMuxMain {
             ep0 = fd
             writeFully(fd, FunctionFs.usbMuxDescriptors())
             writeFully(fd, FunctionFs.strings("USB Multiplexor"))
+            startFile?.delete()
             readyFile.parentFile?.mkdirs()
             readyFile.writeText("ready\n")
-            out("USBMUX descriptors ready ep0=${ep0File.path}")
+            out("USBMUX descriptors ready ep0=${ep0File.path} udc=${udcName ?: "未知"}")
             while (true) {
                 pumpEp0(fd)
                 openBulkIfReady()
@@ -120,12 +142,16 @@ object WiredUsbMuxMain {
         private fun replyToControl(setup: UsbSetupPacket) {
             out("SETUP $setup")
             val fd = ep0 ?: return
+            val reenumerate = UsbMuxControlRequests.isCarPlayModeRequest(setup) && canReenumerate()
             try {
-                when (val reply = UsbMuxControlRequests.replyTo(setup)) {
+                when (val reply = UsbMuxControlRequests.replyTo(setup, reenumerateForCarPlay = reenumerate)) {
                     is Ep0Reply.WriteIn -> {
                         writeFully(fd, reply.data)
                         if (setup.request == UsbMuxControlRequests.REQUEST_GET_MODE) {
                             out("USBMUX 当前模式=${UsbMuxProtocol.INITIAL_MODE.joinToString(":")}")
+                        } else if (reenumerate) {
+                            out("USBMUX CarPlay 模式请求已接受，即将模拟重枚举")
+                            scheduleReenumeration()
                         } else if (setup.request == UsbMuxControlRequests.REQUEST_SET_MODE) {
                             out("USBMUX 模式切换返回 0x${reply.data.single().toInt() and 0xFF}，继续当前配置")
                         }
@@ -148,6 +174,62 @@ object WiredUsbMuxMain {
                 out("ep0 应答失败：${error.message}")
             }
         }
+
+        private fun canReenumerate(): Boolean {
+            if (udcName == null && udcBindFile == null) return false
+            val elapsed = System.currentTimeMillis() - lastReenumerationAt
+            return elapsed >= REENUMERATION_COOLDOWN_MILLIS
+        }
+
+        /**
+         * 车机关闭连接后等待新的 ATTACHED 广播。soft_connect 断开/恢复 D+ 上拉即可让主机重新
+         * 枚举，function 与 NCM 网卡保持绑定；内核不支持时退回 configfs UDC 解绑再绑定。
+         */
+        private fun scheduleReenumeration() {
+            lastReenumerationAt = System.currentTimeMillis()
+            Thread(
+                {
+                    try {
+                        Thread.sleep(REENUMERATION_REPLY_GRACE_MILLIS)
+                        val softConnect = udcName?.let { File("/sys/class/udc/$it/soft_connect") }
+                        val softConnected =
+                            if (softConnect != null && softConnect.exists() && writeSysfs(softConnect, "disconnect")) {
+                                Thread.sleep(REENUMERATION_GAP_MILLIS)
+                                writeSysfs(softConnect, "connect")
+                            } else {
+                                false
+                            }
+                        val method =
+                            if (softConnected) {
+                                "soft_connect"
+                            } else {
+                                val bind = checkNotNull(udcBindFile) { "没有可用的 UDC 控制节点" }
+                                val name = udcName ?: bind.readText().trim()
+                                check(name.isNotEmpty()) { "UDC 名称未知" }
+                                check(writeSysfs(bind, "")) { "UDC 解绑失败" }
+                                Thread.sleep(REENUMERATION_GAP_MILLIS)
+                                check(writeSysfs(bind, name)) { "UDC 重新绑定失败" }
+                                "UDC 重新绑定"
+                            }
+                        out("USBMUX 已通过 $method 模拟重枚举")
+                    } catch (error: Throwable) {
+                        out("USBMUX 模拟重枚举失败：${error.javaClass.simpleName}: ${error.message}")
+                    }
+                },
+                "mcarplay-usbmux-reenumerate",
+            ).apply {
+                isDaemon = true
+                start()
+            }
+        }
+
+        private fun writeSysfs(
+            file: File,
+            value: String,
+        ): Boolean =
+            runCatching { file.writeText("$value\n") }
+                .onFailure { out("写入 ${file.path} 失败：${it.message}") }
+                .isSuccess
 
         private fun stall(
             setup: UsbSetupPacket,
@@ -176,6 +258,7 @@ object WiredUsbMuxMain {
                     bulkIn = Os.open(path.path, OsConstants.O_RDWR or OsConstants.O_NONBLOCK, 0)
                     out("USBMUX bulk IN 已打开 ${path.path}")
                 }
+                startWriter()
                 startReader()
             } catch (error: ErrnoException) {
                 out("USBMUX bulk 打开失败 errno=${error.errno}: ${error.message}")
@@ -199,6 +282,34 @@ object WiredUsbMuxMain {
                     isDaemon = true
                     start()
                 }
+        }
+
+        private fun startWriter() {
+            if (writer?.isAlive == true) return
+            writer =
+                Thread(::writeLoop, "mcarplay-usbmux-writer").apply {
+                    isDaemon = true
+                    start()
+                }
+        }
+
+        private fun writeLoop() {
+            while (true) {
+                val bytes = outbound.poll(POLL_MILLIS.toLong(), TimeUnit.MILLISECONDS) ?: continue
+                val fd = bulkIn
+                if (fd == null) {
+                    out("USBMUX bulk IN 未打开，丢弃 ${bytes.size}B")
+                    continue
+                }
+                try {
+                    writeFully(fd, bytes)
+                    out("USBMUX TX ${bytes.size}B ${hexPreview(bytes)}")
+                } catch (error: ErrnoException) {
+                    out("USBMUX bulk IN 写失败 errno=${error.errno}，丢弃 ${bytes.size}B")
+                } catch (error: Throwable) {
+                    out("USBMUX bulk IN 写失败：${error.javaClass.simpleName}: ${error.message}")
+                }
+            }
         }
 
         private fun readLoop() {
@@ -299,7 +410,7 @@ object WiredUsbMuxMain {
                                         usbTransportIdentifier = usbTransportIdentifier,
                                         log = ::out,
                                     )
-                                session.run()
+                                publishStart(session.run())
                                 session.pumpIncoming()
                             }
                         } else {
@@ -321,16 +432,29 @@ object WiredUsbMuxMain {
             }
         }
 
+        /** 应用侧（UsbNcmAutoConnector）轮询该文件，以车机给出的地址直连 AirPlay。 */
+        private fun publishStart(start: WiredIap2Session.CarPlayStart) {
+            val file = startFile ?: return
+            runCatching {
+                val text =
+                    WiredCarPlayStartFile.encode(start)
+                val temp = File(file.path + ".tmp")
+                temp.writeText(text)
+                check(temp.renameTo(file)) { "rename 失败" }
+                out("USBMUX CarPlayStartSession 已写入 ${file.path}")
+            }.onFailure { out("USBMUX 写入 CarPlayStartSession 失败：${it.message}") }
+        }
+
         private fun writeBulk(bytes: ByteArray) {
             synchronized(writeLock) {
-                writeBulkLocked(bytes)
+                enqueueLocked(bytes)
             }
         }
 
         private fun writeTcpFrame(bytes: ByteArray) {
             synchronized(writeLock) {
                 val stamped = frameSequence.stampOutbound(bytes)
-                writeBulkLocked(stamped)
+                enqueueLocked(stamped)
                 out(
                     "USBMUX frame TX mux_tx=${UsbMuxProtocol.readU16(stamped, 12)} " +
                         "mux_rx=${UsbMuxProtocol.readU16(stamped, 14)}",
@@ -338,13 +462,13 @@ object WiredUsbMuxMain {
             }
         }
 
-        private fun writeBulkLocked(bytes: ByteArray) {
-            val fd = bulkIn ?: throw IllegalStateException("USBMUX bulk IN 尚未打开")
-            writeFully(fd, bytes)
-            out("USBMUX TX ${bytes.size}B ${hexPreview(bytes)}")
+        private fun enqueueLocked(bytes: ByteArray) {
+            check(bulkIn != null) { "USBMUX bulk IN 尚未打开" }
+            outbound.put(bytes)
         }
 
         private fun closeBulk() {
+            outbound.clear()
             connections.values.toList().forEach(UsbMuxTcpConnection::close)
             connections.clear()
             bulkOut?.let { runCatching { Os.close(it) } }
@@ -398,4 +522,8 @@ object WiredUsbMuxMain {
 
     private const val LOCKDOWN_PORT = 62_078
     private const val DEFAULT_TRANSPORT_ID = "mcarplay-usb"
+    private const val REENUMERATION_COOLDOWN_MILLIS = 15_000L
+    private const val REENUMERATION_REPLY_GRACE_MILLIS = 300L
+    private const val REENUMERATION_GAP_MILLIS = 800L
+    private val UDC_NAME = Regex("[A-Za-z0-9._:-]+")
 }

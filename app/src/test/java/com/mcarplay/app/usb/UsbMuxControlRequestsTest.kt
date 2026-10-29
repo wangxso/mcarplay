@@ -2,6 +2,8 @@ package com.mcarplay.app.usb
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UsbMuxControlRequestsTest {
@@ -9,7 +11,8 @@ class UsbMuxControlRequestsTest {
         type: Int,
         request: Int,
         length: Int,
-    ) = UsbSetupPacket(type, request, value = 0, index = 0, length = length)
+        index: Int = 0,
+    ) = UsbSetupPacket(type, request, value = 0, index = index, length = length)
 
     @Test
     fun reportsCurrentMode() {
@@ -21,6 +24,26 @@ class UsbMuxControlRequestsTest {
     fun keepsTheCurrentCompositeConfigurationForModeSwitch() {
         val reply = UsbMuxControlRequests.replyTo(setup(0xC0, UsbMuxControlRequests.REQUEST_SET_MODE, 1))
         assertArrayEquals(byteArrayOf(1), (reply as Ep0Reply.WriteIn).data)
+    }
+
+    @Test
+    fun promisesReenumerationOnlyForAnAllowedCarPlayModeRequest() {
+        val usbmuxd = setup(0xC0, UsbMuxControlRequests.REQUEST_SET_MODE, 1, index = 3)
+        val carPlay = setup(0xC0, UsbMuxControlRequests.REQUEST_SET_MODE, 1, index = 4)
+        assertTrue(UsbMuxControlRequests.isCarPlayModeRequest(carPlay))
+        assertFalse(UsbMuxControlRequests.isCarPlayModeRequest(usbmuxd))
+        assertArrayEquals(
+            byteArrayOf(0),
+            (UsbMuxControlRequests.replyTo(carPlay, reenumerateForCarPlay = true) as Ep0Reply.WriteIn).data,
+        )
+        assertArrayEquals(
+            byteArrayOf(1),
+            (UsbMuxControlRequests.replyTo(carPlay, reenumerateForCarPlay = false) as Ep0Reply.WriteIn).data,
+        )
+        assertArrayEquals(
+            byteArrayOf(1),
+            (UsbMuxControlRequests.replyTo(usbmuxd, reenumerateForCarPlay = true) as Ep0Reply.WriteIn).data,
+        )
     }
 
     @Test

@@ -26,6 +26,7 @@ class WiredIap2Session(
         val deviceIdentifier: String?,
         val publicKeyLength: Int,
         val sourceVersion: String?,
+        val publicKey: String? = null,
     )
 
     private val parser = Iap2Csm.Parser()
@@ -226,6 +227,7 @@ class WiredIap2Session(
             deviceIdentifier = top[3]?.asString(),
             publicKeyLength = top[4]?.value?.size ?: 0,
             sourceVersion = top[5]?.asString(),
+            publicKey = top[4]?.asString(),
         )
     }
 

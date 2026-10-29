@@ -4,7 +4,9 @@
 **2026-10-30 已在 Mac 台架上走通完整有线 CarPlay 路径**：MacPlay 经系统 usbmuxd 发现台架、通过 lockdown
 启动 `com.apple.carkit.service`、在有线 iAP2 上完成 MFi 认证并下发 `CarPlayStartSession`，随后 CarWith
 音视频经 USB NCM 上的 AirPlay 持续播放，触控事件回传。真实车机发起 USB 角色切换仍未验证，也没有实体车机
-证据。本功能不代表任何手机或车机已支持，也不进入 `standard` 的连接流程。
+证据。同日 01:15 起，安卓平板上的 DiPlay 0.2.22 以 USB 主机身份走通同一路径：它不发布 mDNS，地址取自其
+iAP2 `CarPlayStartSession`，并要求 CarPlay 模式重枚举（`0x52`，`wIndex=4`）。本功能不代表任何手机或车机已支持，
+也不进入 `standard` 的连接流程。
 
 ## 结论
 
@@ -328,6 +330,32 @@ remote debug 入口新增“优先使用 iPhone 兼容 USB 身份”开关，默
 
 Python 台架等待 macOS 枚举的上限由 15 秒改为 45 秒；新伪序列号首次枚举曾耗时约 25 秒。`up` 中首个 peer 路由
 失败不再触发回滚，交给主循环重试。上述结果只覆盖 Mac 台架；真实车机的角色切换、USB 主机侧 iAP2 与网络仍需实测。
+
+### 2026-10-30 01:03–01:22 DiPlay（安卓平板作 USB 主机）有线会话
+
+手机同上（小米 17，KernelSU），安装 remoteDebug 构建，从「USB 有线连接」入口启动；接收端为 vivo Pad Air
+（`PA2353`，Android 14）上的 DiPlay `0.2.22`（41）有线模式，手机经 USB 直插平板，平板作 USB 主机。无线 adb
+只用于控制与观察。DiPlay 源码公开，以下判断均对照其 `transport/` 与 `airplay/` 实现。
+
+1. 01:03 首轮在 usbmux、lockdown 配对、carkit 与 iAP2 链路 SYN 之后失败，DiPlay 报
+   `USBMUX write transferred -1 of 36 bytes`。DiPlay 读线程同步写 TCP ACK（2 秒超时），我们的读线程又可能卡在
+   FunctionFS bulk IN 写（主机读走前不返回），两侧互等。出站帧改为队列加独立写线程，读线程不再写 bulk IN。
+2. 同轮 DiPlay 随后发 `0x52`（`wIndex=4`，CarPlay 模式）并等待重枚举，我们回 `0x01` 且不重枚举，它停在
+   `WaitingForReenumeration`。现对 `wIndex=4` 回 `0x00`，300ms 后经 `/sys/class/udc/<udc>/soft_connect` 断开、
+   800ms 后重连，失败时解绑再绑定 configfs `UDC`；15 秒内不重复。MacPlay/usbmuxd 的 `wIndex=3` 仍回 `0x01`，行为不变。
+3. DiPlay 不发布 mDNS，地址在 iAP2 `0x4301 CarPlayStartSession` 中给出（无 scope 的链路本地 IPv6、端口 7000、
+   publicKey 与 deviceIdentifier）。usbmux 守护进程把它原子写入台架状态目录的 `carplay-start`，脚本以
+   `start-session` 子命令读出；连接器在 iPhone 兼容身份下最多等 45 秒，StartSession 与 mDNS 谁先到用谁，最后回退
+   USB 邻居表。解码时去掉 scope、按白名单过滤字段值。
+4. 01:15 复测：DiPlay 记录 `wired iap2 identification accepted`、`authentication accepted`、`tx=0x4301`；soft_connect
+   重枚举后约 1.7 秒恢复。AirPlay 经 USB NCM 建立，视频约 20 fps、`recoveries=0`，AAC-LC 48kHz 解码播放，触控回帧
+   一次 9ms；平板截图显示 CarWith 桌面（地图、Dock、媒体卡片与滚动歌词）。会话约 3 分钟未断。
+5. 同轮 DiPlay 每次 `POST /feedback` 均回 500：其 bplist 编码器把同步后的 NTP `timestamp` 作为 BigInteger
+   编码，长度不足 8 字节时越界。根因在我们的计时时钟直接取 `System.nanoTime()`，NTP 秒数只有开机以来的值；
+   现使用 1900 纪元 NTP。`TimingServer` 现以进程内固定偏移把单调时钟平移到 NTP 纪元，音频同步包共用同一时钟。
+   01:21 复测 `/feedback` 全部 200（音频开始前为 87 字节；开始后含 streamConnectionID、sampleTime 与 timestamp），整段 0 个 500、0 个异常。
+
+该结果只覆盖安卓平板模拟的 USB 主机；真实车机的角色切换、USB 主机侧 iAP2 与车机网卡仍需实测。
 
 ## 未核实事项
 

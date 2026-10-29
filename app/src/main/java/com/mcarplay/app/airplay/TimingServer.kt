@@ -12,7 +12,7 @@ import java.net.DatagramSocket
  * 头号嫌疑（catplay 真车实现始终绑定真实端口）。
  *
  * 线格式（大端）：[0x80][pt][length=7][rtp_ts=0][t1(8)][t2(8)][t3(8)]，
- * pt：0xD2 请求 / 0xD3 应答；时间 = NTP 64 位（秒<<32 | 2^32 分数），取自单调时钟。
+ * pt：0xD2 请求 / 0xD3 应答；时间 = NTP 64 位（秒<<32 | 2^32 分数），取自单调时钟并平移到 1900 纪元。
  */
 class TimingServer(
     private val log: (String) -> Unit = {},
@@ -65,7 +65,7 @@ class TimingServer(
                 return // socket closed
             }
             val request = buffer.copyOfRange(0, packet.length)
-            val response = buildResponse(request, System.nanoTime())
+            val response = buildResponse(request, ntpNanosNow())
             if (response == null) {
                 unexpected++
                 if (unexpected <= 5) {
@@ -91,9 +91,29 @@ class TimingServer(
         private const val PT_TIMESYNC_RESPONSE: Byte = 0xD3.toByte()
         private const val PACKET_BYTES = 32
 
+        /** 1900-01-01（NTP 纪元）到 1970-01-01（Unix 纪元）的秒数。 */
+        private const val NTP_UNIX_OFFSET_SECONDS = 2_208_988_800L
+
+        /**
+         * 单调时钟 → NTP 纪元纳秒的固定偏移（进程内只取一次墙钟，之后不随墙钟跳变）。
+         * 使用 1900 纪元 NTP；此前直接用开机以来的纳秒，
+         * NTP 值只有约 40 位：DiPlay 0.2.22 把同步后的时间按 BigInteger 编进 /feedback 应答，
+         * 6 字节的值触发其 bplist 编码越界，每次 /feedback 都回 500（2026-10-30 有线台架）。
+         */
+        private val epochOffsetNanos: Long by lazy {
+            val wallMillis = System.currentTimeMillis()
+            NTP_UNIX_OFFSET_SECONDS * 1_000_000_000L + wallMillis * 1_000_000L - System.nanoTime()
+        }
+
+        /** 当前 NTP 纪元纳秒（单调递增，供 timesync 应答与音频同步包共用同一时钟）。 */
+        fun ntpNanosNow(): Long = System.nanoTime() + epochOffsetNanos
+
+        /** 当前时刻的 NTP 64 位大端时间戳。 */
+        fun ntpNow(): ByteArray = ntpFromNanos(ntpNanosNow())
+
         /**
          * 构造 timesync 应答；非 timesync 请求返回 null。
-         * [nowNanos]：单调时钟当前值（System.nanoTime 语义，可为任意起点——NTP 差值计算只用相对量）。
+         * [nowNanos]：NTP 纪元纳秒（运行时取 [ntpNanosNow]；测试可传任意起点，差值计算只用相对量）。
          */
         fun buildResponse(
             request: ByteArray,

@@ -500,7 +500,7 @@ class AudioSender(
                         while (running.get() && !client.isClosed) {
                             val next = timestamp
                             val current = (next - samplesPerPacket).coerceAtLeast(0L)
-                            val ntp = TimingServer.ntpFromNanos(System.nanoTime())
+                            val ntp = TimingServer.ntpNow()
                             val packet = AudioSyncPacket.build(syncSequence, current, next, ntp, first)
                             try {
                                 client.send(DatagramPacket(packet, packet.size))

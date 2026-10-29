@@ -304,6 +304,12 @@ peer)
     echo "NCM: peer route ready on $(cat "$F/ifname")"
     exit 0
     ;;
+start-session)
+    [ -f "$S/owner" ] && [ "$(cat "$S/owner")" = mcarplay-ncm-bench-v1 ]
+    [ -f "$S/carplay-start" ] || exit 3
+    cat "$S/carplay-start"
+    exit 0
+    ;;
 peers)
     [ -f "$S/owner" ] && [ "$(cat "$S/owner")" = mcarplay-ncm-bench-v1 ]
     iface=$(cat "$F/ifname")
@@ -312,7 +318,7 @@ peers)
     exit 0
     ;;
 up) ;;
-*) echo 'NCM: expected up, wait-iface, wait-address, peer, peers or down'; exit 1;;
+*) echo 'NCM: expected up, wait-iface, wait-address, peer, peers, start-session or down'; exit 1;;
 esac
 
 [ "$(id -u)" = 0 ]
@@ -394,7 +400,8 @@ class_path=$(pm path "$APP" | sed -n 's/^package://p' | head -n 1)
 [ -f "$class_path" ]
 protect_app
 CLASSPATH="$class_path" app_process /system/bin com.mcarplay.app.usb.root.WiredUsbMuxMain \
-    serve --ep0 "$MD/ep0" --ready "$S/usbmux-ready" --transport-id "$3" &
+    serve --ep0 "$MD/ep0" --ready "$S/usbmux-ready" --transport-id "$3" \
+    --udc "$udc" --udc-file "$G/UDC" --start-file "$S/carplay-start" &
 mux_pid=$!
 echo "$mux_pid" > "$S/usbmux_pid"
 i=0
