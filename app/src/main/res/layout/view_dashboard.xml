@@ -49,7 +49,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:letterSpacing="0.1"
-            android:text="媒体"
+            android:text="@string/lay_media"
             android:textColor="#FFE0E0E5"
             android:textSize="13sp" />
 
@@ -61,7 +61,7 @@
             android:ellipsize="end"
             android:gravity="center"
             android:maxLines="1"
-            android:text="未在播放"
+            android:text="@string/lay_not_playing"
             android:textColor="#FFF5F5F7"
             android:textSize="16sp"
             android:textStyle="bold" />
@@ -74,7 +74,7 @@
             android:ellipsize="end"
             android:gravity="center"
             android:maxLines="1"
-            android:text="媒体信息未连接"
+            android:text="@string/lay_media_unavailable"
             android:textColor="#FFE0E0E5"
             android:textSize="12sp" />
 

@@ -49,7 +49,7 @@ class DesktopPanelFragment : SettingsPanelFragment() {
     }
 
     private fun updateCount() {
-        countText?.text = "已选 ${selected.size} 个"
+        countText?.text = getString(R.string.sf_selected, selected.size)
     }
 
     private fun toggle(
@@ -60,7 +60,7 @@ class DesktopPanelFragment : SettingsPanelFragment() {
         if (checked) selected.add(key) else selected.remove(key)
         DesktopApps.save(requireContext(), selected)
         updateCount()
-        hostToast(if (checked) "「${entry.label}」已显示到桌面" else "「${entry.label}」已从桌面移除")
+        hostToast(getString(if (checked) R.string.sf_added_home else R.string.sf_removed_home, entry.label))
         adapter.notifyDataSetChanged()
     }
 
@@ -130,11 +130,11 @@ class SupersamplePanelFragment : SettingsPanelFragment() {
             ) {
                 SupersamplePrefs.setMode(requireContext(), entry.component, mode)
                 refresh(mode)
-                hostToast("「${entry.label}」超采样：$label（下次启动生效）")
+                hostToast(getString(R.string.sf_ss_set, entry.label, label))
             }
-            segAuto.setOnClickListener { pick(SupersamplePrefs.MODE_AUTO, "自动") }
-            segOn.setOnClickListener { pick(SupersamplePrefs.MODE_ON, "开启") }
-            segOff.setOnClickListener { pick(SupersamplePrefs.MODE_OFF, "关闭") }
+            segAuto.setOnClickListener { pick(SupersamplePrefs.MODE_AUTO, getString(R.string.lay_auto)) }
+            segOn.setOnClickListener { pick(SupersamplePrefs.MODE_ON, getString(R.string.ma_audio_on)) }
+            segOff.setOnClickListener { pick(SupersamplePrefs.MODE_OFF, getString(R.string.lay_off)) }
         }
 
         private fun refresh(mode: Int) {
@@ -225,10 +225,7 @@ class OrientationPanelFragment : SettingsPanelFragment() {
         }
         banner.visibility = View.VISIBLE
         banner.text =
-            "本机系统不支持该功能：需要 Android 14 及以上" +
-            "（这两个横屏兼容项自 Android 14 起才进入平台）。\n" +
-            "当前 Android ${android.os.Build.VERSION.RELEASE}" +
-            "（SDK ${android.os.Build.VERSION.SDK_INT}），开关置灰不可用。"
+            getString(R.string.sf_orientation_unsupported, android.os.Build.VERSION.RELEASE, android.os.Build.VERSION.SDK_INT)
         // 整列变暗表达「不可操作」；点击事件在 OriHolder 里按 supported 拦截
         list?.alpha = 0.38f
         index?.alpha = 0.38f
@@ -255,27 +252,23 @@ class OrientationPanelFragment : SettingsPanelFragment() {
         // 组件键（含 /）很长：显示时截到包名部分，完整键留给弹窗
         val summary =
             orphans.take(3).joinToString("、") { it.substringBefore('/') } +
-                if (orphans.size > 3) " 等 ${orphans.size} 个" else ""
-        banner.text = "另有 ${orphans.size} 个列表外的横屏残留：$summary\n点击清除"
+                if (orphans.size > 3) getString(R.string.sf_and_more, orphans.size) else ""
+        banner.text = getString(R.string.sf_orphans_banner, orphans.size, summary)
         banner.setOnClickListener {
             val host = activity ?: return@setOnClickListener
             DarkMessageDialog.show(
                 activity = host,
-                title = "清除横屏残留",
-                message =
-                    "以下条目已不在应用列表，但系统侧横屏覆盖仍开着：\n" +
-                        orphans.joinToString("\n") { "· $it" } +
-                        "\n\n清除会立即重启在运行的这些应用（未保存的界面状态会丢失）；" +
-                        "已卸载的条目不受影响。是否继续？",
+                title = getString(R.string.sf_clear_orphans_title),
+                message = getString(R.string.sf_clear_orphans_body, orphans.joinToString("\n") { "· $it" }),
                 actions =
                     listOf(
-                        DarkMessageDialog.Action("取消") {},
-                        DarkMessageDialog.Action("清除", DarkMessageDialog.Emphasis.DANGER) {
+                        DarkMessageDialog.Action(getString(R.string.action_cancel)) {},
+                        DarkMessageDialog.Action(getString(R.string.sf_clear), DarkMessageDialog.Emphasis.DANGER) {
                             Bg.run("orientation-orphan-clear") {
                                 val cleared = orphans.count { AppOrientationCompat.clearSystemOnly(it) }
                                 activity?.runOnUiThread {
                                     if (!isAdded || isDetached) return@runOnUiThread
-                                    hostToast("已清除 $cleared/${orphans.size} 个横屏残留")
+                                    hostToast(getString(R.string.sf_orphans_cleared, cleared, orphans.size))
                                     systemOn = systemOn - orphans.toSet()
                                     listAdapter.notifyDataSetChanged()
                                     updateOrphanBanner()
@@ -332,7 +325,13 @@ class OrientationPanelFragment : SettingsPanelFragment() {
                             // （2026-10-15 实测：enable/disable 后 pid 立即消失）。旧的「查活 +
                             // 询问是否结束」流程问的是已被系统杀掉的应用，pidof 又与击杀竞态、
                             // 提示时对时错（「未在运行」误导），整体移除、如实告知即可。
-                            hostToast("「${entry.label}」横屏：${if (target) "开" else "关"}——应用将以新设置重启")
+                            hostToast(
+                                getString(
+                                    R.string.sf_orientation_set,
+                                    entry.label,
+                                    getString(if (target) R.string.lay_on else R.string.lay_off_short),
+                                ),
+                            )
                         }
 
                         AppOrientationCompat.WriteResult.UNSUPPORTED -> {
@@ -342,9 +341,9 @@ class OrientationPanelFragment : SettingsPanelFragment() {
                             applyCapabilityState()
                             hostToast(
                                 if (AppOrientationCompat.changeIdsRegistered()) {
-                                    "系统限制：user 版本只能修改可调试(debuggable)应用的兼容设置"
+                                    getString(R.string.sf_user_build_limit)
                                 } else {
-                                    "本机系统不支持该功能（需 Android 14 及以上）"
+                                    getString(R.string.sf_needs_android14)
                                 },
                             )
                         }
@@ -352,7 +351,7 @@ class OrientationPanelFragment : SettingsPanelFragment() {
                         AppOrientationCompat.WriteResult.FAILED -> {
                             shown = !target
                             refresh(shown)
-                            hostToast("写入失败（Shizuku 未就绪或超时）——可稍后重试")
+                            hostToast(getString(R.string.sf_write_failed))
                         }
                     }
                 }
@@ -374,7 +373,7 @@ class OrientationPanelFragment : SettingsPanelFragment() {
             val onSystem = systemStateLoaded && pkg() in systemOn
             when {
                 onSystem && enabled -> {
-                    hint.text = "已开启横屏（会话期间生效）"
+                    hint.text = getString(R.string.sf_orientation_on)
                     hint.setTextColor(0xFF8E8E93.toInt())
                     hint.visibility = View.VISIBLE
                     hint.setOnClickListener(null)
@@ -382,7 +381,7 @@ class OrientationPanelFragment : SettingsPanelFragment() {
                 }
 
                 onSystem -> {
-                    hint.text = "系统残留：横屏仍在生效 · 点击清除"
+                    hint.text = getString(R.string.sf_orientation_leftover)
                     hint.setTextColor(0xFFFF6B6B.toInt())
                     hint.visibility = View.VISIBLE
                     hint.isClickable = true
@@ -391,14 +390,12 @@ class OrientationPanelFragment : SettingsPanelFragment() {
                         val host = activity ?: return@setOnClickListener
                         DarkMessageDialog.show(
                             activity = host,
-                            title = "清除横屏残留",
-                            message =
-                                "「${entry.label}」的系统侧横屏覆盖仍在生效（可能是卸载前的残留）。" +
-                                    "\n\n清除会立即重启该应用（正在运行的应用会丢失未保存的界面状态）。是否继续？",
+                            title = getString(R.string.sf_clear_orphans_title),
+                            message = getString(R.string.sf_clear_one_body, entry.label),
                             actions =
                                 listOf(
-                                    DarkMessageDialog.Action("取消") {},
-                                    DarkMessageDialog.Action("清除", DarkMessageDialog.Emphasis.DANGER) {
+                                    DarkMessageDialog.Action(getString(R.string.action_cancel)) {},
+                                    DarkMessageDialog.Action(getString(R.string.sf_clear), DarkMessageDialog.Emphasis.DANGER) {
                                         Bg.run("orientation-row-clear") {
                                             val ok = AppOrientationCompat.clearSystemOnly(pkg())
                                             activity?.runOnUiThread {
@@ -406,9 +403,9 @@ class OrientationPanelFragment : SettingsPanelFragment() {
                                                 if (ok) {
                                                     systemOn = systemOn - pkg()
                                                     refresh(shown)
-                                                    hostToast("「${entry.label}」横屏残留已清除——应用将重启")
+                                                    hostToast(getString(R.string.sf_one_cleared, entry.label))
                                                 } else {
-                                                    hostToast("清除失败（Shizuku 异常）")
+                                                    hostToast(getString(R.string.sf_clear_failed))
                                                 }
                                             }
                                         }
@@ -463,7 +460,7 @@ class DockPanelFragment : SettingsPanelFragment() {
                     val percent =
                         DockPrefs.WIDTH_MIN + widthSeek.progress * DockPrefs.WIDTH_STEP
                     DockPrefs.setWidthPercent(requireContext(), percent)
-                    hostToast("Dock 栏宽度 $percent% 已保存，下次连接起效")
+                    hostToast(getString(R.string.sf_dock_width_saved, percent))
                 }
             },
         )
@@ -543,7 +540,7 @@ class DefaultMapPanelFragment : SettingsPanelFragment() {
         if (installed.isEmpty()) {
             container.addView(
                 TextView(requireContext()).apply {
-                    text = "未安装任何受支持的地图应用（高德/百度车机版、高德/百度/腾讯手机版）"
+                    text = getString(R.string.sf_no_map_apps)
                     setTextColor(0xFF8E8E93.toInt())
                     textSize = 13f
                 },
@@ -580,7 +577,7 @@ class DefaultMapPanelFragment : SettingsPanelFragment() {
                 for (i in 0 until container.childCount) {
                     (container.getChildAt(i).tag as? (() -> Unit))?.invoke()
                 }
-                hostToast("默认地图：$label")
+                hostToast(getString(R.string.sf_default_map, label))
             }
             row.tag = { refresh() }
             container.addView(row)
@@ -633,7 +630,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             refreshScreenOff(enabled)
             // 车机屏上就能操作：立即收放，不必等下次连接
             SessionController.applyScreenOffPreference(enabled)
-            hostToast(if (enabled) "已开启：连接时物理息屏" else "已关闭：连接时只用暗幕")
+            hostToast(getString(if (enabled) R.string.sf_screen_off_on else R.string.sf_screen_off_off))
         }
         screenOffOn.setOnClickListener { applyScreenOff(true) }
         screenOffOff.setOnClickListener { applyScreenOff(false) }
@@ -661,7 +658,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             autoConnectEnabled = enabled
             AutoConnectPrefs.setEnabled(ctx, enabled)
             refreshAutoConnect(enabled)
-            hostToast(if (enabled) "已开启：上车自动连接" else "已关闭：上车不再自动启动")
+            hostToast(getString(if (enabled) R.string.sf_auto_connect_on else R.string.sf_auto_connect_off))
         }
         autoConnectOn.setOnClickListener { applyAutoConnect(true) }
         autoConnectOff.setOnClickListener { applyAutoConnect(false) }
@@ -689,7 +686,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             hidRawEnabled = enabled
             DisplayPrefs.setHidRawLog(ctx, enabled)
             refreshHidRaw(enabled)
-            hostToast(if (enabled) "已开启 HID 原始日志（校准完请关掉）" else "已关闭 HID 原始日志")
+            hostToast(getString(if (enabled) R.string.sf_hid_on else R.string.sf_hid_off))
         }
         hidRawOn.setOnClickListener { applyHidRaw(true) }
         hidRawOff.setOnClickListener { applyHidRaw(false) }
@@ -701,7 +698,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             CompatibilityPrefs.plainFallback(ctx),
         ) { enabled ->
             CompatibilityPrefs.setPlainFallback(ctx, enabled)
-            hostToast(if (enabled) "已开启：配对失败后尝试明文（下次连接起效）" else "已关闭：配对失败不再尝试明文")
+            hostToast(getString(if (enabled) R.string.sf_plain_on else R.string.sf_plain_off))
         }
         bindToggle(
             view.findViewById(R.id.btnAudioBaselineOn),
@@ -709,7 +706,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             CompatibilityPrefs.audioBaseline(ctx),
         ) { enabled ->
             CompatibilityPrefs.setAudioBaseline(ctx, enabled)
-            hostToast(if (enabled) "已开启：音频格式未声明时仍尝试（下次连接起效）" else "已关闭：未声明音频格式时只推视频")
+            hostToast(getString(if (enabled) R.string.sf_audio_fallback_on else R.string.sf_audio_fallback_off))
         }
 
         // 滑条 progress（0..26）→ 百分比（30..160，步进 5）
@@ -727,10 +724,9 @@ class DisplayPanelFragment : SettingsPanelFragment() {
                     ?.isRunning == true
             scaleNote.text =
                 if (runningNow) {
-                    "保存后下次连接起效；当前连接按 " +
-                        "${SessionController.activeScalePercent}% 运行"
+                    getString(R.string.sf_scale_running, SessionController.activeScalePercent)
                 } else {
-                    "保存后下次连接起效"
+                    getString(R.string.lay_next_connection)
                 }
         }
         refreshScaleNote()
@@ -751,7 +747,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {
                     val percent = percentOf(scaleSeek.progress)
                     DisplayPrefs.setScalePercent(ctx, percent)
-                    hostToast("分辨率 $percent% 已保存，下次连接起效")
+                    hostToast(getString(R.string.sf_scale_saved, percent))
                     refreshScaleNote()
                 }
             },
@@ -784,7 +780,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             val live =
                 SessionController.videoSender
                     ?.isRunning == true
-            hostToast("帧率已切换为 ${fps}fps${if (live) "（实时生效）" else ""}")
+            hostToast(getString(if (live) R.string.sf_fps_live else R.string.sf_fps_set, fps))
             if (live) SessionController.activeTargetFps = fps
         }
         fps30.setOnClickListener { applyFps(30) }
@@ -794,7 +790,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
         val throttleSeek = view.findViewById<SeekBar>(R.id.throttleSeek)
         val throttleValue = view.findViewById<TextView>(R.id.throttleValue)
 
-        fun throttleText(ms: Int) = if (ms <= 0) "关闭" else "${ms}ms"
+        fun throttleText(ms: Int) = if (ms <= 0) getString(R.string.lay_off) else "${ms}ms"
 
         val savedThrottle = DisplayPrefs.moveThrottleMs(ctx)
         throttleSeek.progress = savedThrottle / 8
@@ -819,7 +815,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
 
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {
                     hostToast(
-                        "触摸节流 " + throttleText(DisplayPrefs.moveThrottleMs(ctx)),
+                        getString(R.string.sf_throttle, throttleText(DisplayPrefs.moveThrottleMs(ctx))),
                     )
                 }
             },

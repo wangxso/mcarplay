@@ -49,32 +49,29 @@ class DisclaimerHintTest {
     fun hintsExplainWhyAcceptIsBlocked() {
         // 两者都没满足：提示同时给出倒计时与滑动要求
         assertEquals(
-            "请滑动阅读至底部，并等待 7 秒",
+            DisclaimerBlock.SCROLL_AND_WAIT,
             disclaimerBlockReason(
                 countdownDone = false,
                 contentScrollable = true,
                 scrolledToBottom = false,
-                remainingSeconds = 7,
             ),
         )
         // 只有倒计时
         assertEquals(
-            "请等待 3 秒后接受",
+            DisclaimerBlock.WAIT,
             disclaimerBlockReason(
                 countdownDone = false,
                 contentScrollable = false,
                 scrolledToBottom = false,
-                remainingSeconds = 3,
             ),
         )
         // 只有滚动
         assertEquals(
-            "请滑动阅读至底部",
+            DisclaimerBlock.SCROLL,
             disclaimerBlockReason(
                 countdownDone = true,
                 contentScrollable = true,
                 scrolledToBottom = false,
-                remainingSeconds = 0,
             ),
         )
         // 已可接受：无提示
@@ -83,7 +80,6 @@ class DisclaimerHintTest {
                 countdownDone = true,
                 contentScrollable = true,
                 scrolledToBottom = true,
-                remainingSeconds = 0,
             ),
         )
     }
@@ -102,6 +98,19 @@ class DisclaimerContentTest {
         // 非官方声明（避免被误认为与 Apple 有关联）
         assertTrue(text.contains("非官方"))
         assertTrue(text.contains("商标"))
+    }
+
+    @Test
+    fun englishContentMirrorsChineseSections() {
+        // 两版逐节对应：缺节或多节说明改了一版忘了另一版
+        assertEquals(DisclaimerContent.sections.size, DisclaimerContent.sectionsEn.size)
+        val text = DisclaimerContent.sectionsEn.joinToString("\n") { it.title + "\n" + it.body }
+        assertTrue(text.contains("Xiaomi 17 Pro Max"))
+        assertTrue(text.contains("Driving safety"))
+        assertTrue(text.contains("Shizuku"))
+        assertTrue(text.contains("unofficial"))
+        assertTrue(text.contains("trademarks"))
+        assertFalse(text.contains("**"))
     }
 
     @Test

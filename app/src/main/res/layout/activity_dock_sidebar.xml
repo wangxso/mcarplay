@@ -98,7 +98,7 @@
         android:layout_width="match_parent"
         android:layout_height="41.90dp"
         android:background="?android:attr/selectableItemBackgroundBorderless"
-        android:contentDescription="回到桌面"
+        android:contentDescription="@string/cd_home"
         android:padding="9.90dp"
         android:scaleType="fitCenter"
         android:src="@drawable/ic_dock_home" />

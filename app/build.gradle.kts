@@ -162,12 +162,50 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    // 界面语言在应用内切换（AppLanguage）：若改发 AAB，语言资源不能按设备语言拆分下发
+    bundle {
+        language {
+            enableSplit = false
+        }
+    }
+
     lint {
         // 新代码引入 lint 问题（error 级）直接使构建失败；存量问题在基线文件中豁免。
         //  ./gradlew :app:lintStandardDebug  —— 检查（.githooks/pre-commit 提交前自动执行）
         //  ./gradlew :app:updateLintBaseline —— 修复问题后重建基线（有意豁免时）
         abortOnError = true
         baseline = file("lint-baseline.xml")
+    }
+}
+
+/**
+ * 把仓库根目录的 CHANGELOG.md 打进 assets（`changelog/CHANGELOG.md`），供更新后的
+ * 「更新内容」弹窗按界面语言展示当前版本条目。生成目录不入库，改 CHANGELOG 即随构建更新。
+ */
+abstract class BundleChangelogTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val changelog: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun bundle() {
+        val target = outputDir.get().dir("changelog").asFile
+        target.mkdirs()
+        changelog.get().asFile.copyTo(target.resolve("CHANGELOG.md"), overwrite = true)
+    }
+}
+
+val bundleChangelog =
+    tasks.register<BundleChangelogTask>("bundleChangelog") {
+        changelog.set(rootProject.layout.projectDirectory.file("CHANGELOG.md"))
+    }
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(bundleChangelog, BundleChangelogTask::outputDir)
     }
 }
 

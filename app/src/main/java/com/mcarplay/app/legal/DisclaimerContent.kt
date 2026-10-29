@@ -1,7 +1,10 @@
 package com.mcarplay.app.legal
 
+import com.mcarplay.app.i18n.AppLanguage
+
 /**
- * 免责声明正文（中文字面量集中在代码里，便于与版本号一起审阅改动）。
+ * 免责声明正文（中英两版字面量集中在代码里，便于与版本号一起审阅改动；
+ * 改任一版都要同步另一版并把 [DisclaimerPrefs.CURRENT_VERSION] +1）。
  *
  * 写作要点：
  * - **先讲范围与风险，再讲法律条款**——用户最需要知道的是「这东西测过什么、
@@ -16,6 +19,8 @@ package com.mcarplay.app.legal
  * 那些符号会原样显示。分节标题由 UI 单独加粗。
  */
 internal object DisclaimerContent {
+    fun sectionsFor(language: AppLanguage.Language): List<Section> = if (language == AppLanguage.Language.EN) sectionsEn else sections
+
     /** 分节：标题加粗显示，正文常规。 */
     data class Section(
         val title: String,
@@ -95,6 +100,90 @@ internal object DisclaimerContent {
                         "由于涉及协议实现与第三方 ROM 差异，部分问题可能无法解决。\n\n" +
                         "完整条款（非官方声明、商标归属、安全警告、已测试范围）见仓库根目录的 " +
                         "DISCLAIMER.md，与本页内容同源。",
+            ),
+        )
+
+    /** 英文版：与中文版逐节对应，条款范围相同。 */
+    val sectionsEn: List<Section> =
+        listOf(
+            Section(
+                title = "What this is",
+                body =
+                    "mcarplay is an unofficial, experimental project: it bridges the native video, sound and touch of " +
+                        "Xiaomi CarWith to a wireless CarPlay receiver, and the interface you see is provided by CarWith.\n\n" +
+                        "This project is not affiliated with Apple Inc., Xiaomi or any car maker, has no authorization or " +
+                        "certification from them, and is not an MFi-certified product. \"CarPlay\" and \"AirPlay\" are " +
+                        "trademarks of Apple Inc., used here only to describe the compatibility target; no affiliation or " +
+                        "endorsement is implied.",
+            ),
+            Section(
+                title = "Under development; things may break at any time",
+                body =
+                    "This is a development test build. Features, interface and protocol implementation may change at any " +
+                        "time, and there may be undiscovered defects. No stability, compatibility or availability is promised.\n\n" +
+                        "CarWith bridge combination tested in this round:\n" +
+                        "· Phone: Xiaomi 17 Pro Max / HyperOS OS4.0.4.0.XPBCNXM\n" +
+                        "· Components: CarWith 4.0.20 / Xiaomi CarLife 8.8.4\n" +
+                        "· Receiver: PA2353 Android 14 tablet / DiPlay 0.2.21\n\n" +
+                        "Video, touch and music playback have been verified; navigation prompts, pause and resume, long-run " +
+                        "stability and real head units still need acceptance testing.\n\n" +
+                        "Other phones, other Android versions and other car models are unverified. They may not work at all, " +
+                        "or may show picture problems, misplaced touches or repeated disconnects.\n\n" +
+                        "Landscape apps requires Android 14 or later; on Android 13 and earlier it is unavailable (the settings " +
+                        "panel says it is unsupported).",
+            ),
+            Section(
+                title = "Driving safety (please read)",
+                body =
+                    "This app is not a safety-critical system and cannot replace the factory navigation or vehicle " +
+                        "instruments.\n\n" +
+                        "· Connect, pair and change all settings while parked;\n" +
+                        "· If anything must be done while driving, a passenger must do it; the driver must not hold or " +
+                        "operate the phone;\n" +
+                        "· The wireless link can drop at any time because of interference, system sleep, hotspot switching or " +
+                        "Bluetooth reconnection, showing up as a frozen or black screen, unresponsive touch or interrupted " +
+                        "navigation;\n" +
+                        "· A disconnect while driving can make you miss a turn, lose the route or be distracted. Always keep " +
+                        "the factory navigation as a safety backup, and you are fully responsible for how you drive.",
+            ),
+            Section(
+                title = "System permissions and data",
+                body =
+                    "To work, this app requests and uses the following; make sure you understand them before allowing:\n\n" +
+                        "· Shizuku (shell permission): creates trusted virtual displays, injects touch events, writes system " +
+                        "compatibility settings (such as forcing apps to landscape) and reads window and display state. The " +
+                        "app does not use it to run commands unrelated to its own function, and the CarWith main path does " +
+                        "not need it;\n" +
+                        "· Notification access / media sessions: used only to show the currently playing music on the car " +
+                        "home screen (title, artist, cover, progress);\n" +
+                        "· Bluetooth: for pairing with the receiver and the wireless control link;\n" +
+                        "· Screen recording (screen capture) permission: for playback capture on the non-native audio path. " +
+                        "Native CarWith audio does not need mcarplay to request it.\n\n" +
+                        "Pairing information, target device names, wallpaper and settings are stored only on this phone and " +
+                        "are never uploaded to any server; the app contains no analytics or advertising SDK.",
+            ),
+            Section(
+                title = "Disclaimer of liability",
+                body =
+                    "This app is provided \"as is\", without warranty of any kind, express or implied, including but not " +
+                        "limited to merchantability, fitness for a particular purpose and non-infringement.\n\n" +
+                        "To the maximum extent permitted by applicable law, the authors and contributors are not liable for " +
+                        "any direct or indirect loss arising from the use of or inability to use this app, including but not " +
+                        "limited to: dropped connections, interrupted navigation or calls, data loss, device faults, vehicle " +
+                        "system faults, and accidents or losses caused by operating the phone or being distracted while " +
+                        "driving.\n\n" +
+                        "Whether you use this app, how you configure and operate it, and in which situations, is entirely your " +
+                        "own decision and at your own risk. If you do not agree with any of the above, tap Don't use and " +
+                        "uninstall the app.",
+            ),
+            Section(
+                title = "Open source and feedback",
+                body =
+                    "This is a personal experimental project, open source under the MIT license. Feedback is welcome, but " +
+                        "no fix timeline is promised. Because it involves protocol implementation and differences between " +
+                        "third-party ROMs, some problems may not be solvable.\n\n" +
+                        "The full terms (unofficial status, trademark ownership, safety warnings, tested scope) are in " +
+                        "DISCLAIMER.md at the repository root, from the same source as this page.",
             ),
         )
 }

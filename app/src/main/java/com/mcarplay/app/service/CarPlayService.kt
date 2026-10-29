@@ -10,12 +10,14 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.mcarplay.app.MainActivity
+import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.SilentProjectionActivity
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.i18n.AppLanguage
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 
@@ -277,15 +279,16 @@ class CarPlayService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        val text = AppLanguage.localized(this)
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "mcarplay 连接",
+                    text.getString(R.string.notif_channel_connection),
                     NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "保持与车机的连接"
+                    description = text.getString(R.string.notif_channel_connection_desc)
                     setShowBadge(false)
                 },
             )
@@ -303,8 +306,8 @@ class CarPlayService : Service() {
         return NotificationCompat
             .Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("mcarplay 运行中")
-            .setContentText("正在保持与车机的连接，点开应用可查看日志")
+            .setContentTitle(text.getString(R.string.notif_running_title))
+            .setContentText(text.getString(R.string.notif_running_text))
             .setContentIntent(contentIntent)
             .setAutoCancel(false)
             .setOngoing(true)

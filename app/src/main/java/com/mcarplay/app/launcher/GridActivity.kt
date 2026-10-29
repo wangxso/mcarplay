@@ -221,12 +221,12 @@ class GridActivity : AppCompatActivity() {
         val missingDueToPermission =
             now != null && title == null && !MediaSessionsState.accessGranted
         panel.findViewById<TextView>(R.id.dashMediaTitle).text =
-            title ?: if (missingDueToPermission) "无法读取播放信息" else "未在播放"
+            title ?: getString(if (missingDueToPermission) R.string.grid_media_unreadable else R.string.lay_not_playing)
         panel.findViewById<TextView>(R.id.dashMediaArtist).text =
             artist
                 ?: when {
-                    missingDueToPermission -> "未授予「通知使用权」——请在系统设置中开启"
-                    now?.playing == true -> "正在播放"
+                    missingDueToPermission -> getString(R.string.grid_needs_notification_access)
+                    now?.playing == true -> getString(R.string.grid_playing)
                     else -> ""
                 }
         panel.findViewById<ImageView>(R.id.dashPlayPause).setImageResource(

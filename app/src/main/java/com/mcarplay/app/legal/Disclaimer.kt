@@ -68,20 +68,23 @@ internal fun needsDisclaimerAtLaunch(
     currentVersion: Int,
 ): Boolean = acceptedVersion < currentVersion
 
-/**
- * 底部提示文案（让用户知道「为什么按钮点不动」）。返回 null 表示可以点。
- */
+/** 「接受」暂不可点的原因（界面按语言渲染成提示，让用户知道「为什么按钮点不动」）。 */
+internal enum class DisclaimerBlock {
+    /** 倒计时未完且未滑到底：提示同时给出两项要求。 */
+    SCROLL_AND_WAIT,
+    WAIT,
+    SCROLL,
+}
+
+/** 返回 null 表示可以点。 */
 internal fun disclaimerBlockReason(
     countdownDone: Boolean,
     contentScrollable: Boolean,
     scrolledToBottom: Boolean,
-    remainingSeconds: Int,
-): String? =
+): DisclaimerBlock? =
     when {
-        !countdownDone && contentScrollable && !scrolledToBottom ->
-            "请滑动阅读至底部，并等待 $remainingSeconds 秒"
-
-        !countdownDone -> "请等待 $remainingSeconds 秒后接受"
-        contentScrollable && !scrolledToBottom -> "请滑动阅读至底部"
+        !countdownDone && contentScrollable && !scrolledToBottom -> DisclaimerBlock.SCROLL_AND_WAIT
+        !countdownDone -> DisclaimerBlock.WAIT
+        contentScrollable && !scrolledToBottom -> DisclaimerBlock.SCROLL
         else -> null
     }

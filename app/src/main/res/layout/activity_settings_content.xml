@@ -21,7 +21,7 @@
             android:layout_width="38dp"
             android:layout_height="38dp"
             android:background="@drawable/bg_ripple_circle"
-            android:contentDescription="返回"
+            android:contentDescription="@string/cd_back"
             android:padding="8dp"
             android:src="@drawable/ic_chev_left" />
 

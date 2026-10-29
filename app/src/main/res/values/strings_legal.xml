@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
+    <string name="disclaimer_reread">你可以随时回来查看本声明（当前版本 v%1$d）。</string>
+    <string name="disclaimer_accept">接受</string>
+    <string name="disclaimer_accept_countdown">接受（%1$ds）</string>
+    <string name="disclaimer_scroll_and_wait">请滑动阅读至底部，并等待 %1$d 秒</string>
+    <string name="disclaimer_wait">请等待 %1$d 秒后接受</string>
+    <string name="disclaimer_scroll">请滑动阅读至底部</string>
+</resources>

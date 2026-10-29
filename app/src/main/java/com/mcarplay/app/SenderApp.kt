@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.util.Log
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
+import com.mcarplay.app.i18n.AppLanguage
 import com.mcarplay.app.launcher.VirtualLauncher
 import com.mcarplay.app.util.DebugFileLog
 
@@ -24,6 +25,8 @@ open class SenderApp : Application() {
         // 都会让它被算进「历史」。
         DebugFileLog.markSessionStart(this)
         ConnectionDiagnostics.initialize(this)
+        // 界面语言：未选过时落到默认中文（不跟随系统语言）
+        AppLanguage.applyAtStartup(this)
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching { ConnectionDiagnostics.uncaught(thread, throwable) }
             Log.e(TAG, "未捕获异常（线程 ${thread.name}，已吞掉保进程）", throwable)

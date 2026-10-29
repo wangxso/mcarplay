@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="update_err_local_version">The current version format is not recognized; open the Releases page</string>
+    <string name="update_err_cancelled">The update was cancelled</string>
+    <string name="update_err_missing_checksum">The release has no valid SHA-256 checksum; download refused</string>
+    <string name="update_err_apk_size">The release size is invalid or exceeds the declared size; refused</string>
+    <string name="update_err_apk_truncated">The APK download is incomplete; try again</string>
+    <string name="update_err_checksum_mismatch">The APK checksum did not match; the file was discarded. Download again</string>
+    <string name="update_err_cache_write">Could not save the update file</string>
+    <string name="update_err_package_mismatch">The APK package name does not match; installation refused</string>
+    <string name="update_err_version_mismatch">The APK version does not match the release tag; installation refused</string>
+    <string name="update_err_downgrade">The downloaded version is older; downgrade blocked</string>
+    <string name="update_err_sdk_unsupported">This update does not support this Android version</string>
+    <string name="update_err_signature_mismatch">The APK signature does not match this app, so it cannot be installed over it. Debug and release builds usually use different certificates; nothing is uninstalled or cleared automatically.</string>
+    <string name="update_err_apk_unreadable">Could not read the APK package information or signature</string>
+    <string name="update_err_untrusted_url">The download URL does not belong to this repository; refused</string>
+    <string name="update_err_untrusted_redirect">The update redirected to a non-GitHub HTTPS address; refused</string>
+    <string name="update_err_bad_redirect">GitHub returned an invalid download redirect</string>
+    <string name="update_err_rate_limit">GitHub rate-limited the request; try later or open the Releases page</string>
+    <string name="update_err_redirect_limit">Too many GitHub download redirects; stopped</string>
+    <string name="update_err_response_too_large">The GitHub response was too large; stopped</string>
+    <string name="update_err_http">GitHub request failed (HTTP %1$s); try again later</string>
+</resources>

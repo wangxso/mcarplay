@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
+    <string name="update_err_local_version">当前版本格式无法识别，请打开发行页</string>
+    <string name="update_err_cancelled">更新操作已取消</string>
+    <string name="update_err_missing_checksum">发行包缺少有效的 SHA-256 校验值，已拒绝下载</string>
+    <string name="update_err_apk_size">发行包大小无效或超过声明大小，已拒绝</string>
+    <string name="update_err_apk_truncated">APK 下载不完整，请重试</string>
+    <string name="update_err_checksum_mismatch">APK 校验失败，文件已丢弃，请重新下载</string>
+    <string name="update_err_cache_write">无法保存更新文件</string>
+    <string name="update_err_package_mismatch">APK 包名不匹配，已拒绝安装</string>
+    <string name="update_err_version_mismatch">APK 版本与发行标签不一致，已拒绝安装</string>
+    <string name="update_err_downgrade">下载版本较低，已阻止降级</string>
+    <string name="update_err_sdk_unsupported">此更新不支持当前 Android 版本</string>
+    <string name="update_err_signature_mismatch">APK 签名与当前应用不一致，不能覆盖安装。调试包与正式包通常使用不同证书；不会自动卸载或清除数据。</string>
+    <string name="update_err_apk_unreadable">无法读取 APK 的包信息或签名</string>
+    <string name="update_err_untrusted_url">更新下载地址不属于本仓库，已拒绝</string>
+    <string name="update_err_untrusted_redirect">更新连接跳转到非 GitHub HTTPS 地址，已拒绝</string>
+    <string name="update_err_bad_redirect">GitHub 返回了无效的下载跳转</string>
+    <string name="update_err_rate_limit">GitHub 请求受限，请稍后重试或打开发行页</string>
+    <string name="update_err_redirect_limit">GitHub 下载跳转次数过多，已停止</string>
+    <string name="update_err_response_too_large">GitHub 返回内容过大，已停止</string>
+    <string name="update_err_http">GitHub 请求失败（HTTP %1$s），请稍后重试</string>
+</resources>

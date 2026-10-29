@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
+import android.text.SpannableStringBuilder
 import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
@@ -17,6 +18,8 @@ import com.mcarplay.app.BuildConfig
 import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.carlife.CarLifeDiagnostics
+import com.mcarplay.app.i18n.AppLanguage
+import com.mcarplay.app.ui.WhatsNewDialog
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 import java.io.File
@@ -122,13 +125,13 @@ class UpdateActivity : AppCompatActivity() {
                         UpdateRelation.OLDER -> getString(R.string.update_older, release.version.tag)
                         UpdateRelation.UNKNOWN_SAME_BASE -> getString(R.string.update_same_base, release.version.tag)
                     }
+                // 发行说明是中英双语的 CHANGELOG 条目：只显示当前界面语言那一半
+                val body =
+                    ReleaseNotes.localize(release.notes, AppLanguage.current(this))?.let(WhatsNewDialog::render)
+                        ?: release.notes.ifBlank { getString(R.string.update_no_notes) }
                 notes.text =
-                    getString(
-                        R.string.update_release_notes,
-                        release.title,
-                        release.apk.size / 1024,
-                        release.notes.ifBlank { getString(R.string.update_no_notes) },
-                    )
+                    SpannableStringBuilder(getString(R.string.update_release_notes, release.title, release.apk.size / 1024))
+                        .append(body)
                 if (BuildConfig.DEBUG) notes.append(getString(R.string.update_debug_warning))
                 if (BuildConfig.FLAVOR != "standard") notes.append(getString(R.string.update_remote_warning))
             }
@@ -243,7 +246,7 @@ class UpdateActivity : AppCompatActivity() {
                 outcome.fold(success) { error ->
                     status.text =
                         if (error is UpdateException) {
-                            getString(R.string.update_error, error.message, error.code)
+                            getString(R.string.update_error, UpdateErrorText.message(this, error), error.code)
                         } else {
                             getString(R.string.update_failed)
                         }
