@@ -1,0 +1,151 @@
+name: Vehicle compatibility report / 车机适配报告
+description: Record a head-unit test by vehicle, Tier-1, platform and connection stage, with a redacted support report.
+title: "[Vehicle] "
+labels: ["vehicle-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Test only while parked. Export **导出脱敏诊断报告** right after the run.
+        See `docs/VEHICLE-COVERAGE.md` for the families and how results are promoted.
+        仅在停车状态测试；结束后立即导出脱敏诊断报告。未知信息请填「待查」，不要按品牌推断。
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy / 隐私检查
+      options:
+        - label: Attachments contain no VIN, plate, precise location, credentials or pairing keys / 附件不含车架号、车牌、精确位置、凭据或配对密钥
+          required: true
+  - type: input
+    id: build
+    attributes:
+      label: App build / 应用版本
+      description: Version, report ID, or APK SHA-256 / 版本、报告编号或 APK SHA-256。
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: Phone and components / 手机与组件
+      placeholder: Xiaomi model, HyperOS, Android, CarWith, Xiaomi CarLife versions
+    validations:
+      required: true
+  - type: input
+    id: vehicle
+    attributes:
+      label: Vehicle / 车辆
+      placeholder: OEM, model, model year, market (e.g. Chery Tiggo 8, 2024, China)
+    validations:
+      required: true
+  - type: dropdown
+    id: family
+    attributes:
+      label: Head-unit family / 车机族
+      description: From docs/VEHICLE-COVERAGE.md; choose Unknown unless there is evidence / 无依据时选「未知」。
+      options:
+        - Unknown / 未知
+        - DESAY_SV 德赛西威
+        - ECARX_CLOUDPEAK 亿咖通
+        - NEUSOFT_NAGIVI 东软
+        - ADAYO 华阳通用
+        - HARMAN
+        - VISTEON_ALLGO 伟世通
+        - PANASONIC_SKIPGEN
+        - CONTINENTAL
+        - Other / 其他（在下方说明）
+    validations:
+      required: true
+  - type: textarea
+    id: platform
+    attributes:
+      label: Head unit details / 车机信息
+      description: Tier-1, SoC, OS, head-unit software version, and where each fact came from (settings page, label, public source, firmware) / 每项注明来源。
+      placeholder: |
+        Tier-1: 待查
+        SoC: 待查
+        OS: 待查
+        Software version: 待查
+        CarPlay middleware: 未知
+        Sources:
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection mode / 连接方式
+      options:
+        - Wireless CarPlay / 无线
+        - Wired then wireless / 先有线后无线
+        - Not sure / 不确定
+    validations:
+      required: true
+  - type: dropdown
+    id: stage_bt
+    attributes:
+      label: Bluetooth / 蓝牙
+      options: [Not tested / 未测, Pass / 通过, Fail / 失败]
+    validations:
+      required: true
+  - type: dropdown
+    id: stage_iap2
+    attributes:
+      label: iAP2 identification / iAP2 握手
+      options: [Not tested / 未测, Pass / 通过, Fail / 失败]
+    validations:
+      required: true
+  - type: dropdown
+    id: stage_wifi
+    attributes:
+      label: Wi-Fi join / 加入车机网络
+      options: [Not tested / 未测, Pass / 通过, Fail / 失败]
+    validations:
+      required: true
+  - type: dropdown
+    id: stage_pairing
+    attributes:
+      label: AirPlay pairing and SETUP / 配对与建会话
+      options: [Not tested / 未测, Pass / 通过, Fail / 失败]
+    validations:
+      required: true
+  - type: dropdown
+    id: stage_video
+    attributes:
+      label: Picture on the head unit / 车机画面
+      options: [Not tested / 未测, Pass / 通过, Fail / 失败]
+    validations:
+      required: true
+  - type: dropdown
+    id: stage_audio
+    attributes:
+      label: Sound from car speakers / 车机声音
+      options: [Not tested / 未测, Pass / 通过, Fail / 失败]
+    validations:
+      required: true
+  - type: dropdown
+    id: stage_touch
+    attributes:
+      label: Touch, knob and steering keys / 触控、旋钮与方向盘按键
+      options: [Not tested / 未测, Pass / 通过, Partial / 部分, Fail / 失败]
+    validations:
+      required: true
+  - type: dropdown
+    id: stage_reconnect
+    attributes:
+      label: Reconnect after ignition or disconnect / 熄火或断开后重连
+      options: [Not tested / 未测, Pass / 通过, Fail / 失败]
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Steps, duration and observations / 步骤、持续时间与现象
+      description: Head-unit messages, how long it ran, settings switched on (compatibility fallbacks, auto-connect) / 车机提示、运行时长、开启的兼容开关。
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Redacted support report / 脱敏诊断报告
+      description: Drag the exported TXT here. It records the iAP2, mDNS and /info fingerprint used to group head units / 报告中的协议指纹用于判断车机是否共用中间件。
+    validations:
+      required: true
