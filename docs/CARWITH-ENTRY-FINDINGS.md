@@ -300,3 +300,14 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 - 22:12:06 接收端 `Connection reset`，会话结束。用户确认此时在 Pad 多任务界面手动关闭了 DiPlay，属于预期结束，不是音频引起的拆链。
 
 本节只补充 DiPlay 画面实拍证据；DiPlay 的触控、长时运行与重连仍未验证（19:23 那次 DiPlay 记录只有约 25 秒带声音的观察，19:28 起的长时会话是 WinPlay 1.2.5）。
+
+## 小米 14 + 小米 SU7 Max 首次实车尝试（2026-10-28 19:44–20:03）
+
+手机：Xiaomi `23127PN0CC`，Android 16（SDK 36），HyperOS `OS3.0`（ROM `OS3.0.307.0.WNCCNXM`），CarWith `4.0.4-20260522`（104000004），未安装 Shizuku；mcarplay 为 `v0.1.3-test.2` 同代码的 remote 构建（SHA-256 `5fe698e8…`）。车机：小米 SU7 Max（蓝牙名），车机软件版本、Tier-1 与 CarPlay 实现均未记录。证据为用户导出的两份脱敏诊断报告与调试服务器日志。
+
+1. 19:46–19:52 共 8 次连接/自检均在预检 1–11ms 内以 `CARWITH_FAILED` 结束：手机未安装小米 CarLife 组件（`carlife.version=unavailable:NameNotFoundException`），`CarLifeLauncher.isAvailable()` 要求 CarWith 与 CarLife 两个包同时存在。
+2. 安装小米 CarLife `8.8.5`（274）后，19:59:45 的 CarWith 自检约 3 秒打开入口、七路连接与 AES 握手成功，`VIDEO_INIT_DONE 1280x720@30`，18 秒收到 180 帧：CarWith 4.0.4 + CarLife 8.8.5 + HyperOS OS3.0 可以出流（仅源端，未到接收端）。
+3. 20:00:29 与 20:01:49 两次以 SU7 为目标的 CarPlay 连接：ACL 多次连上/断开，连接前 HFP/A2DP 为「未连接」；出站 iAP2 RFCOMM（`…caff`）13 次失败（「车机未就绪或不在无线配对窗口」），车机也未回连，没有 iAP2 `0x1d01`、mDNS `_airplay`、`/info` 或 `COMPAT:` 记录。用户约 77 秒与 2 分钟后取消。
+4. 同时存在两个与本次失败无关但会影响后续的条件：Shizuku 未安装，ctrl 广播使用占位蓝牙地址；「后台弹出界面」未允许。
+
+结论：本轮不能判定 SU7 是否提供无线 CarPlay 接收端——指定目标时连接跳过 SDP 闸门，日志没有记录车机声明的服务。已在 wangxso/mcarplay#12 为指定目标增加一次 SDP 服务记录；下次实测应同时尝试在车机上进入 CarPlay/手机互联的添加设备界面，并填写本机真实蓝牙地址（`v0.1.3-test.3`）。不据此声明 SU7 不兼容。
