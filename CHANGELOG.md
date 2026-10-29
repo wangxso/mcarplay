@@ -7,11 +7,13 @@ Test releases are experimental and do not establish real-vehicle compatibility.
 
 ### English
 - When a target head unit is selected, log once per connection start which Bluetooth services it advertises over SDP and whether the wireless CarPlay iAP2 service (`…caff`) is among them, so a head unit that lacks wireless CarPlay can be told apart from one that is not in its pairing window. An SDP timeout is reported as undetermined, not as missing.
-- Validation: 548 JVM tests, `spotlessCheck`, `lintStandardDebug` and `assembleRemoteDebug` passed. Not yet verified on device.
+- Add a root-only wired CarPlay bench tool (`WiredGadgetMain`, run through `su` + `app_process`, never from the app): it probes the phone's USB gadget and role-switch support, presents the phone to a head unit as an iPhone over FunctionFS, logs every control request, switches to USB host on the role-switch request and rolls back on timeout or failure. A USB host iAP2 stream is added but not yet wired into connections. Without root, wired-only head units should use a wired-to-wireless adapter. See `docs/WIRED-CARPLAY.md`; nothing here is verified on a phone or head unit.
+- Validation: 580 JVM tests, `spotlessCheck`, `lintStandardDebug`, `assembleStandardDebug` and `assembleRemoteDebug` passed. Not yet verified on device.
 
 ### 简体中文
 - 指定目标车机时，每次启动连接记录一次它通过 SDP 声明的蓝牙服务，以及其中是否有无线 CarPlay 的 iAP2 服务（`…caff`），用于区分「车机不支持无线 CarPlay」与「支持但未进入配对窗口」。SDP 超时记为「未确定」，不记为没有。
-- 验证：548 项 JVM 测试、`spotlessCheck`、`lintStandardDebug` 和 `assembleRemoteDebug` 均通过。尚未实机验证。
+- 新增仅限 root 的有线 CarPlay 台架工具（`WiredGadgetMain`，经 `su` + `app_process` 运行，不由 App 调用）：探测手机 USB gadget 与角色切换能力，通过 FunctionFS 让手机对车机呈现为 iPhone，记录全部控制请求，收到角色切换请求后切为 USB 主机，超时或失败时回滚。另新增 USB 主机 iAP2 流，尚未接入连接流程。免 root 时，只支持有线的车机建议使用有线转无线盒子。详见 `docs/WIRED-CARPLAY.md`；以上均未在手机或车机上验证。
+- 验证：580 项 JVM 测试、`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 和 `assembleRemoteDebug` 均通过。尚未实机验证。
 
 ## [v0.1.3-test.3] - 2026-10-29
 

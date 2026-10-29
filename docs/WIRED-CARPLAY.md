@@ -1,0 +1,78 @@
+# 有线 CarPlay（root 实验）
+
+更新：2026-10-29。本文记录「手机通过 USB 线直连只支持有线 CarPlay 的车机」的调研结论、已实现的台架工具与后续步骤。
+**目前没有任何实机证据**：本功能不代表任何手机或车机已支持，也不进入 `standard` 的连接流程。
+
+## 结论
+
+- **免 root 不可行。** 车机先以 USB 主机身份枚举手机，只有看到 Apple VID（`0x05AC`）才会进入 CarPlay 流程。
+  普通 App 改不了手机的 USB 设备描述符（由厂商 init 脚本写入 configfs），小米手机对车机始终是小米 VID。
+- **只支持有线的车机，推荐方案是有线转无线盒子**（Carlinkit 一类）：盒子对车机冒充 iPhone，对手机是普通无线
+  CarPlay 接收端，mcarplay 现有的蓝牙 iAP2 + Wi-Fi/AirPlay 链路即可使用。实测前同样不声明支持。
+- **root 后原生有线可以尝试**，但关键一步（手机切成 USB 主机）取决于具体机型的 Type-C 控制器与内核。
+
+## 有线 CarPlay 的五个环节
+
+| 环节 | 内容 | 本分支状态 |
+| --- | --- | --- |
+| 1. 冒充 iPhone | configfs gadget 用 Apple VID/PID 枚举；FunctionFS 接收发给设备本身的厂商控制请求（`FUNCTIONFS_ALL_CTRL_RECIP`） | 已实现（`usb/GadgetPlan`、`usb/FunctionFs`），未实机 |
+| 2. 角色切换 | 车机请求 iPhone 改当 USB 主机，自己转为 USB 设备 | 已实现状态机与节点探测（`usb/WiredSwitchMachine`、`usb/UsbRoleNodes`），未实机 |
+| 3. iAP2 走 USB | 车机 iAP2 接口的 bulk IN/OUT 承载与蓝牙相同的链路层字节流 | 已实现 `UsbHostDuplexStream`，尚未接入会话 |
+| 4. 网络 | AirPlay 跑在车机的 CDC-NCM 网卡上（IPv6 链路本地 + mDNS） | 未开始 |
+| 5. 媒体 | 与无线相同的 AirPlay 视频/音频/触控 | 复用现有代码，未开始联调 |
+
+MFi 认证只需车机向手机证明自己，手机侧不需要 Apple 密钥，与现有无线路径一致。
+
+## 台架工具：`WiredGadgetMain`
+
+以 root 经 `app_process` 运行（不在 App 进程里，避免 App 的 SELinux 域访问 functionfs）。需要 Magisk/KernelSU 等 root。
+
+```bash
+adb shell su -c 'CLASSPATH=$(pm path com.mcarplay.app | cut -d: -f2) app_process /system/bin com.mcarplay.app.usb.root.WiredGadgetMain probe'
+```
+
+| 子命令 | 作用 |
+| --- | --- |
+| `probe` | 阶段 0：列出 UDC、configfs gadget、functionfs/`cdc_ncm` 支持、可写的角色切换节点和 Type-C 端口角色 |
+| `plan` | 打印将要执行的 configfs 命令，不做任何改动 |
+| `up [--timeout 秒] [--pid 0x12a8]` | 阶段 1–2：停掉 Android gadget、冒充 iPhone、记录车机所有控制请求；收到角色切换请求后切主机并列出车机暴露的接口 |
+| `down [--usb-config mtp,adb]` | 回滚：角色节点写回设备值、拆除 gadget、恢复 `sys.usb.config` |
+
+`up` 会断开 USB adb，请先 `adb tcpip` 切到无线 adb。超时、出错或进程被终止都会自动回滚；成功时手机保持主机模式，
+用完执行 `down`。输出以 `WIRED:` 开头；USB 序列号每次随机，不输出本机标识。车机返回的设备名称等信息写进
+`CARWITH-ENTRY-FINDINGS.md` 前需按惯例脱敏。
+
+### 各阶段通过标准
+
+1. `probe` 至少列出一个角色切换节点，且 `functionfs 内核支持=true`。没有节点时本机基本不可行。
+2. `up` 日志出现 `kind=ROLE_SWITCH` 的 SETUP：车机已把手机当成 iPhone。若只看到其他厂商请求，记录全部编号。
+3. `up` 以「车机设备 … 接口 …」结束，列出厂商类 iAP 接口与 `class=02 sub=0d` 的 NCM 接口。
+
+### 测试台建议
+
+先用支持有线 CarPlay 的安卓后装车机（ZLINK、AutoKit 等方案）当测试台：便宜、可看日志，USB 口通常支持角色切换。
+描述符参考：在 Linux 上对真 iPhone 或有线转无线盒子执行 `lsusb -v`；只做研究，不在仓库中保存或分发其固件和抓包。
+
+## 安全
+
+- 手机切主机后**供电角色必须保持接收端**：两端同时向 VBUS 供电可能损坏硬件。现有节点只写数据角色，
+  首次台架请串接 USB 电流表观察。
+- 任何失败路径都只回滚一次并恢复 Android 的 USB 配置（`WiredSwitchMachineTest` 覆盖）；`down` 可随时手动恢复。
+
+## 未核实事项
+
+以下来自公开逆向资料或经验值，均需台架或实车核对后再修正代码与本文：
+
+- 角色切换请求编号 `bRequest 0x51`、充电请求 `0x40`（`AppleControlRequests`）。
+- iPhone PID `0x12A8`、`bcdDevice`、iAP 接口类别 `0xFF/0xF0`，以及车机是否要求多配置（PTP、usbmux 等）的完整 iPhone 描述符。
+- FunctionFS 上零长度 `Os.read`/`Os.write` 是否确实完成状态阶段/STALL。
+- 在 A 转 C 线（无 PD）上写数据角色节点能否真正切到主机。
+- 有线模式下 iAP2 会话是否省略 Wi-Fi 凭据交换（`0x5702/0x5703`），以及车机在 NCM 上广播的服务。
+
+## 后续步骤
+
+1. 阶段 3：App 侧用 `UsbManager` 打开车机设备，按 `WiredAccessoryInterfaces.match` 选接口，经 `UsbHostDuplexStream`
+   接入 `Iap2LinkChannel`；`Iap2SenderSession` 增加有线模式，跳过 Wi-Fi 交换。
+2. 阶段 4：root 下拉起 `cdc_ncm` 网卡并配置策略路由，使 App 套接字能连 `fe80::…%usbX`；在该网卡上自行做 mDNS；
+   `NetworkBinding` 增加按网卡绑定的实现。
+3. 阶段 5：与无线共用 AirPlay 媒体链路联调。入口只放在 `remote` 或新的 root flavor，绝不进入 `standard`。
