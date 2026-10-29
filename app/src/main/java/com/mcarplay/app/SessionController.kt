@@ -56,6 +56,7 @@ import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.ui.ScreenDimmer
+import com.mcarplay.app.usb.UsbMediaEndpoint
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 import com.mcarplay.app.video.ExternalVideoSource
@@ -415,6 +416,10 @@ object SessionController {
     @Volatile
     private var pendingEndpointUpdate: Iap2SenderSession.CarPlayEndpoint? = null
 
+    /** 仅 remote debug 台架入口持有；实例身份也隔离已取消轮次的异步回调。 */
+    @Volatile
+    private var usbMediaEndpoint: UsbMediaEndpoint? = null
+
     /** 主界面最近一次被盖住的时刻（uptimeMillis）；null = 主界面在前台或尚未显示。 */
     @Volatile
     private var uiPausedAtMs: Long? = null
@@ -718,6 +723,54 @@ object SessionController {
         return session
     }
 
+    /** 已由 root 工具建立 NCM 和目标地址路由；本方法自身不执行 root 操作。 */
+    @Synchronized
+    internal fun startUsbMediaBench(
+        context: Context,
+        endpoint: UsbMediaEndpoint,
+    ) {
+        check(BuildConfig.DEBUG && BuildConfig.FLAVOR == "remote") { "USB 媒体台架仅限 remote debug" }
+        ensure(context)
+        check(!isSessionRunning() && !sessionStarting.get() && runningDiagnosticCarLifeSession == null) { "请先停止现有连接或自检" }
+        wifiConnector?.release()
+        ctrlAdvertiser?.stop()
+        endpointBrowser?.stop()
+        val attempt = ConnectionDiagnostics.begin("usb_ncm_media_bench")
+        ReceiverDetectionRuntime.connectionStarted(attempt)
+        usbMediaEndpoint = endpoint
+        connectCancelled = false
+        audioEnabledForSession = false
+        appendLog("USB-BENCH: ${endpoint.interfaceName} scope=${endpoint.scopeId ?: "auto"} 媒体台架；不代表车机枚举或角色切换成功")
+        CarPlayService.start(context)
+        sessionStarting.set(true)
+        Bg.run("usb-media-ready") {
+            try {
+                val deadline = SystemClock.uptimeMillis() + 10_000L
+                while (usbMediaEndpoint === endpoint && !connectCancelled) {
+                    if (runCatching { endpoint.requireActiveInterface() }.isSuccess) {
+                        synchronized(this) {
+                            if (usbMediaEndpoint === endpoint && !connectCancelled) {
+                                sessionStarting.set(false)
+                                onCarPlayEndpoint(endpoint.receiver, "USB NCM 台架", endpoint)
+                            }
+                        }
+                        return@run
+                    }
+                    check(SystemClock.uptimeMillis() < deadline) { "USB 网卡未就绪" }
+                    Thread.sleep(200)
+                }
+            } catch (error: Exception) {
+                synchronized(this) {
+                    if (usbMediaEndpoint === endpoint) {
+                        appendLog("USB-BENCH: ${error.message}")
+                        disconnect(context, DiagnosticCode.SETUP_FAILED)
+                        sessionStarting.set(false)
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * 「启动连接」主体（权限检查由 Activity 完成后调用）：前台保活服务 + 双向蓝牙。
      * 幂等：已有会话时 BT 组件的 start() 自行短路，不会双开。
@@ -796,6 +849,7 @@ object SessionController {
         }
         val hadProjection = CarPlayService.mediaProjection != null
         pendingEndpointUpdate = null
+        usbMediaEndpoint = null
         retireSession()
         // BT 控制会话只在这里（用户终态）退役，socket close 让保活读循环立刻退出：
         // 否则它阻塞到对端超时（实测 ~24s）才结束，用户取消后英雄卡持续转圈。
@@ -2474,10 +2528,12 @@ object SessionController {
     private fun onCarPlayEndpoint(
         endpoint: Iap2SenderSession.CarPlayEndpoint,
         source: String,
+        usb: UsbMediaEndpoint? = null,
     ) {
         val context = appContext ?: return
 
-        fun ownsConnection(): Boolean = ReceiverDetectionRuntime.isCurrent(endpoint.observation)
+        fun ownsConnection(): Boolean =
+            if (usb != null) usbMediaEndpoint === usb else ReceiverDetectionRuntime.isCurrent(endpoint.observation)
 
         fun wasCancelled(): Boolean = connectCancelled || !ownsConnection()
         if (!ownsConnection()) return
@@ -2532,7 +2588,7 @@ object SessionController {
         // 凭据缓存对两条路径都要写：0x5703 走 onWifiCredentials，0x4301 只到这里。
         // 漏写会让「车机热点 → 去连接」手动兜底误报「尚未拿到热点密码（需 0x5703）」
         // ——2026-10-22 奥迪日志里就是这么把排查方向带偏的。
-        if (endpoint.ssid.isNotBlank()) {
+        if (usb == null && endpoint.ssid.isNotBlank()) {
             lastCarWifiSsid = endpoint.ssid
             if (endpoint.passphrase.isNotEmpty()) lastWifiPsk = endpoint.passphrase
         }
@@ -2584,9 +2640,11 @@ object SessionController {
             ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.DISCOVERY)
             // 网络绑定完成：ctrl 广播重新注册（落到车机所在网络），同时开始后台 mDNS 发现。
             // 两者都发生在等邀请期间，不额外占用时间。
-            ctrlAdvertiser?.ensureForNetwork(endpoint.ssid, force = true, network = wifiConnector?.currentNetwork)
-            endpointBrowser?.resetCache()
-            endpointBrowser?.start()
+            if (usb == null) {
+                ctrlAdvertiser?.ensureForNetwork(endpoint.ssid, force = true, network = wifiConnector?.currentNetwork)
+                endpointBrowser?.resetCache()
+                endpointBrowser?.start()
+            }
             // 0x4301 自带完整地址+端口 = 接收端已明确告知「连这里」，无需等邀请
             // （DiPlay 测试台路径：本轮直接配对，省掉固定等待）。
             // IPv6 也算地址：奥迪 4xxx 的 0x4301 常只给 fe80::（旧判据只看 IPv4，
@@ -2610,7 +2668,7 @@ object SessionController {
                     }
                     // 端点解析放在邀请之后：车机的 `_airplay._tcp` 常在受邀后才上线，
                     // 且这一步最长 3s——必须在后台线程做，不能占住网络回调线程。
-                    var effectiveEndpoint = resolveEndpointHost(endpoint, source)
+                    var effectiveEndpoint = if (usb == null) resolveEndpointHost(endpoint, source) else endpoint
                     // 交接流程起步期间车机补发的 0x4301（比 mDNS 合成更权威）在此并入。
                     pendingEndpointUpdate?.let { late ->
                         pendingEndpointUpdate = null
@@ -2634,26 +2692,31 @@ object SessionController {
                             // 链路代际：蓝牙侧 0x1D01 画像已判定（CLASSIC_MIB3/EVENT_LINK），
                             // AirPlay 阶段的 MIB3 布防据此分派 marker 策略（2026-10-23 分代重构）
                             linkGeneration = ReceiverProfile.linkGenerationOf(effectiveEndpoint.receiverSignals),
-                            endpointRefresher = { current -> enrichEndpointFromBrowser(current, source) },
+                            endpointRefresher = { current -> if (usb == null) enrichEndpointFromBrowser(current, source) else null },
                             initialInfoRequest = ReceiverDetectionRuntime.infoRequest(effectiveEndpoint.observation),
                             detecting = ReceiverDetectionRuntime.collecting(effectiveEndpoint.observation),
                             retryTick = { attempt ->
-                                // 配对重试期间车机仍可能没探测到 ctrl（Bonjour 漏掉首次公告）：
-                                // 周期性强制重播一次，并把 mDNS 现状写进日志——否则排查时
-                                // 只看得到「端口未开」的重试刷屏，无法判断是车机没邀请还是
-                                // 地址不对（2026-10-19 奥迪 0.1.7 日志就缺这两条信息）。
-                                ctrlAdvertiser?.ensureForNetwork(
-                                    endpoint.ssid,
-                                    force = true,
-                                    network = wifiConnector?.currentNetwork,
-                                )
-                                val invites = ctrlAdvertiser?.inviteCount ?: 0
-                                val found = endpointBrowser?.awaitEndpoint(0)
-                                appendLog(
-                                    "AIRPLAY: 重试 #$attempt —— 已重新公告 ctrl；" +
-                                        "车机邀请=$invites 次，mDNS _airplay._tcp=" +
-                                        (found?.let { "${it.host?.hostAddress}:${it.port}" } ?: "未发现"),
-                                )
+                                if (usb != null) {
+                                    usb.requireActiveInterface()
+                                    appendLog("USB-BENCH: AirPlay 重试 #$attempt，保持显式 USB 端点")
+                                } else {
+                                    // 配对重试期间车机仍可能没探测到 ctrl（Bonjour 漏掉首次公告）：
+                                    // 周期性强制重播一次，并把 mDNS 现状写进日志——否则排查时
+                                    // 只看得到「端口未开」的重试刷屏，无法判断是车机没邀请还是
+                                    // 地址不对（2026-10-19 奥迪 0.1.7 日志就缺这两条信息）。
+                                    ctrlAdvertiser?.ensureForNetwork(
+                                        endpoint.ssid,
+                                        force = true,
+                                        network = wifiConnector?.currentNetwork,
+                                    )
+                                    val invites = ctrlAdvertiser?.inviteCount ?: 0
+                                    val found = endpointBrowser?.awaitEndpoint(0)
+                                    appendLog(
+                                        "AIRPLAY: 重试 #$attempt —— 已重新公告 ctrl；" +
+                                            "车机邀请=$invites 次，mDNS _airplay._tcp=" +
+                                            (found?.let { "${it.host?.hostAddress}:${it.port}" } ?: "未发现"),
+                                    )
+                                }
                             },
                         ).also { created ->
                             // 车机媒体键（iAP2 0x6802 通路）：方向盘/面板的上一曲、下一曲。
@@ -3268,7 +3331,9 @@ object SessionController {
                 endpoint.channel,
                 endpoint.securityType,
             )
-        if (boundCarSsid == endpoint.ssid && wifiConnector?.currentNetwork != null) {
+        if (usb != null) {
+            continueWithNetwork(true)
+        } else if (boundCarSsid == endpoint.ssid && wifiConnector?.currentNetwork != null) {
             appendLog(">>> [$source] 已绑定车机热点 ${endpoint.ssid}，跳过重复绑定")
             continueWithNetwork(true)
         } else {

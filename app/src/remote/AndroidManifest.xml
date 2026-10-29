@@ -10,6 +10,11 @@
         android:name=".bridge.BridgeApp"
         android:usesCleartextTraffic="true"
         tools:replace="android:name,android:usesCleartextTraffic">
+        <activity
+            android:name=".bridge.UsbMediaBenchActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:theme="@style/Theme.CarPlaySender" />
         <!-- usesCleartextTraffic：调试桥按部署可能是纯 HTTP（如 frp+VPS 的
              http://IP:8787），API 28+ 默认禁明文会让 APK 下载直接失败
              （2026-10-21 实测 Cleartext HTTP traffic not permitted）。

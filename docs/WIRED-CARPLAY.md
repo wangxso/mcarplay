@@ -1,7 +1,9 @@
 # 有线 CarPlay（root 实验）
 
 更新：2026-10-29。本文记录「手机通过 USB 线直连只支持有线 CarPlay 的车机」的调研结论、已实现的台架工具与后续步骤。
-**目前没有任何实机证据**：本功能不代表任何手机或车机已支持，也不进入 `standard` 的连接流程。
+**目前已验证 USB NCM 上的 CarWith → AirPlay → MacPlay 视频路径**；真实车机发起 USB 角色切换、
+iPhone usbmux/lockdown/carkit 入口仍不可用，也没有实体车机证据。本功能不代表任何手机或车机已支持，
+也不进入 `standard` 的连接流程。
 
 ## 结论
 
@@ -10,16 +12,18 @@
 - **只支持有线的车机，推荐方案是有线转无线盒子**（Carlinkit 一类）：盒子对车机冒充 iPhone，对手机是普通无线
   CarPlay 接收端，mcarplay 现有的蓝牙 iAP2 + Wi-Fi/AirPlay 链路即可使用。实测前同样不声明支持。
 - **root 后原生有线可以尝试**，但关键一步（手机切成 USB 主机）取决于具体机型的 Type-C 控制器与内核。
+- **USB 媒体链路可以先脱离车机验证。** root 台架把 `g2` 临时改成 CDC-NCM，手机只经 `usb0` 连到 Mac 上的
+  MacPlay AirPlay 接收端口；这证明视频不必占用 Wi-Fi，但没有证明车机的 iPhone 枚举或角色切换流程可用。
 
 ## 有线 CarPlay 的五个环节
 
 | 环节 | 内容 | 本分支状态 |
 | --- | --- | --- |
-| 1. 冒充 iPhone | configfs gadget 用 Apple VID/PID 枚举；FunctionFS 接收发给设备本身的厂商控制请求（`FUNCTIONFS_ALL_CTRL_RECIP`） | 已实现（`usb/GadgetPlan`、`usb/FunctionFs`），未实机 |
+| 1. 冒充 iPhone | configfs gadget 用 Apple VID/PID 枚举；FunctionFS 接收发给设备本身的厂商控制请求（`FUNCTIONFS_ALL_CTRL_RECIP`） | 电脑已枚举并收到充电请求；重复运行发生 gadget 名称冲突，见台架记录；未接车机 |
 | 2. 角色切换 | 车机请求 iPhone 改当 USB 主机，自己转为 USB 设备 | 已实现状态机与节点探测（`usb/WiredSwitchMachine`、`usb/UsbRoleNodes`；不自动写 Type-C 节点），未实机 |
 | 3. iAP2 走 USB | 车机 iAP2 接口的 bulk IN/OUT 承载与蓝牙相同的链路层字节流 | 已实现 `UsbHostDuplexStream`，尚未接入会话 |
-| 4. 网络 | AirPlay 跑在车机的 CDC-NCM 网卡上（IPv6 链路本地 + mDNS） | 未开始 |
-| 5. 媒体 | 与无线相同的 AirPlay 视频/音频/触控 | 复用现有代码，未开始联调 |
+| 4. 网络 | AirPlay 跑在车机的 CDC-NCM 网卡上（IPv6 链路本地 + mDNS） | USB NCM 与显式 IPv6 端点已在 Mac 台架验证；真实车机 NCM 未验证 |
+| 5. 媒体 | 与无线相同的 AirPlay 视频/音频/触控 | 视频已在 USB NCM 上出画 3 分钟；音频与触控未联调 |
 
 MFi 认证只需车机向手机证明自己，手机侧不需要 Apple 密钥，与现有无线路径一致。
 
@@ -148,6 +152,63 @@ MacPlay（`Roylyl/MacPlay` 1.2.4，ad-hoc 签名）选「有线CarPlay」并启�
 - MacPlay 有线模式经 usbmuxd 打开 iPhone 的 CarPlay 服务（源码日志 `usbmuxd carkit up`），本 gadget 没有 usbmux 接口，
   无法被它识别：用户确认 MacPlay 全程停在等待 iPhone 连接。它本身也不发车机的角色切换请求，所以不能替代车机测试第 2 步。
 
+### 2026-10-29 19:50 MacPlay 再测：创建 gadget 失败，未出画
+
+代码基线为 PR [#14](https://github.com/wangxso/mcarplay/pull/14) 的 `1818920`；实际运行手机中已安装的
+`com.mcarplay.app.rd`（`0.1.3-rd-debug`）台架工具，未重新安装 APK，本轮未校验已安装 APK 与该提交逐字节一致。
+手机为小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`（104000020），
+小米 CarLife `8.8.5`（274）；USB 直连 Mac，接收端为 MacPlay `1.2.4`（41），无实体车机或车机固件。
+
+1. 先连通手机现有的无线 adb。`probe` 确认 root、FunctionFS、`cdc_ncm`/`usbnet` 均可用，`g1` 绑定 UDC，
+   `g2` 未绑定；手机数据角色为设备，供电角色为 sink。
+2. 在 MacPlay 选择「有线CarPlay」并点击「启动接收」，通过无线 adb 执行 `up --timeout 30`。
+3. 本轮未进入 30 秒等待阶段：创建 `/config/usb_gadget/mcarplay` 立即返回 `Out of memory`，工具报告建立 gadget
+   失败并回滚，退出码 1。内核同时报告 `cannot create duplicate filename '/devices/virtual/android_usb/android2'`，
+   `kobject_add_internal failed for android2 with -EEXIST`，调用栈含 `gadgets_make`/`configfs_mkdir`。
+   当时 `MemAvailable` 约 6 GB；这些日志指向 Android gadget 节点重名，不能仅按 shell 文案判定物理内存不足。
+   节点重名是否由前几轮创建/删除遗留导致，尚未独立复现。
+4. MacPlay 最后显示「连接启动超时」「未检测到USB连接的iPhone」，无画面；未建立媒体会话，声音、触控未测。
+   本轮连 Apple VID/PID 枚举都未完成，不能与上一轮已枚举、等待角色切换超时混为一谈。
+5. 回滚后 USB adb 重新出现，`sys.usb.config=adb`，`g1/UDC=a600000.dwc3`；手机仍为设备兼 sink。
+   全程未手写 Type-C `power_role`/`data_role`。
+
+按用户要求核对 MacPlay **公开源码**（`fb132c0796f5aa425ca1a453dd9d394a9ecfacbc`）：
+
+- [`watch_usbmuxd`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/bin/livi-helperd/src/wired.rs#L157)
+  枚举系统 usbmuxd 的 USB 设备，打开 carkit 后才启动 iAP2 会话。
+- [`usbmuxd::open_provider`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/crates/iap2-wired/src/usbmuxd.rs#L104)
+  连接 lockdown，要求 `ProductType` 以 `iPhone` 开头，读取已有信任记录并启动会话，再打开
+  `com.apple.carkit.service`。这些是协议与会话要求，不是仅改 USB VID/PID 就能满足。
+
+结论：本轮未出画。即使修复 gadget 重名，现有工具仍缺少 MacPlay 所需的 usbmux/lockdown/carkit 接入；
+PR #14 的 USB 主机 iAP2 尚未接入 App，NCM 与媒体联调也未完成。MacPlay 可以作为后续专门适配的目标，
+但当前不能直接验证真实车机的角色切换路径，也不能据此声明手机不具备有线 CarPlay 的可能性。
+
+### 2026-10-29 20:14 USB NCM 媒体台架出画
+
+本轮复用同一台小米 17 和 MacPlay 1.2.4，但不再尝试冒充 iPhone 或等待角色切换。`tools/wired_ncm_bench.py`
+只借用一个空闲的 `g2` gadget，将其临时配置为 Linux USB CDC-NCM（`1d6b:0104`，不冒充 Apple），
+快照并在退出时恢复原属性。脚本只在 `usb0` 上添加指向 Mac 链路本地地址的独立 IPv6 路由和策略规则，
+不改 Wi-Fi 默认路由，也不写 Type-C `data_role`/`power_role`。
+
+1. MacPlay 继续选择「有线CarPlay」并启动其 AirPlay 接收器。台架通过独立 root 守护进程维持 NCM、目标路由和
+   remote debug 媒体入口，使 CarWith 启动造成无线 adb 短暂掉线时媒体会话仍可继续。
+2. App 以 root 提供的网卡 `ifindex` 和显式 `fe80::…%usb0` 地址连接 MacPlay `:17000`，跳过 Wi-Fi 入网、
+   ctrl 广播、mDNS 与邀请等待。该入口只存在于 `remoteDebug`，并由 `android.permission.DUMP` 限制调用。
+3. MacPlay 日志在约 8 秒后收到视频数据，显示 `first-decoded-frame width=1280 height=720`，窗口打开；
+   用户确认窗口内的 CarWith 界面正常。手机日志同期显示 CarWith `1280x720@30`，并明确记录
+   `TIMING: timesync 应答 → fe80::…%usb0`。
+4. 稳定观察约 180 秒：MacPlay 累计 `videoPackets=3183`，手机累计发送至 CarWith 帧 #3241。
+   macOS `lsof` 显示 `:17000` 的连接来自 USB 网卡 IPv6 地址，`netstat -I` 在同一 USB 网卡上有连续流量；
+   无线 adb 只用于控制，不承载媒体。
+5. 台架到期后自动恢复 `g2`、删除专用路由并复位 Android USB。复核 `sys.usb.config=adb`、
+   `g1/UDC=a600000.dwc3`、`g2/idVendor=0x0000`，且手机端状态目录和 `usb0` 均已消失。
+
+这项成功验证的是「CarWith 视频经 USB NCM 到 AirPlay 接收端」的物理媒体路径。MacPlay 仍把该连接当作显式
+AirPlay 接收器，而不是手机列表中的 iPhone；iOS 的 usbmux/lockdown/carkit 服务、真实车机对 Android 手机发起的
+USB 角色切换、USB 主机侧 iAP2，以及音频/触控均未由此验证。原始日志含有设备标识且位于被忽略的 `captures/`，
+不进入仓库。
+
 ## 未核实事项
 
 以下来自公开逆向资料或经验值，均需台架或实车核对后再修正代码与本文：
@@ -162,6 +223,7 @@ MacPlay（`Roylyl/MacPlay` 1.2.4，ad-hoc 签名）选「有线CarPlay」并启�
 
 1. 阶段 3：App 侧用 `UsbManager` 打开车机设备，按 `WiredAccessoryInterfaces.match` 选接口，经 `UsbHostDuplexStream`
    接入 `Iap2LinkChannel`；`Iap2SenderSession` 增加有线模式，跳过 Wi-Fi 交换。
-2. 阶段 4：root 下拉起 `cdc_ncm` 网卡并配置策略路由，使 App 套接字能连 `fe80::…%usbX`；在该网卡上自行做 mDNS；
-   `NetworkBinding` 增加按网卡绑定的实现。
-3. 阶段 5：与无线共用 AirPlay 媒体链路联调。入口只放在 `remote` 或新的 root flavor，绝不进入 `standard`。
+2. 阶段 4：把现有 NCM 台架接到真实车机的 USB 主机 iAP2 会话之后；验证车机暴露的网卡、IPv6 地址与 mDNS，
+   补上按网卡绑定的 `NetworkBinding`，不再依赖显式地址。
+3. 阶段 5：与无线共用 AirPlay 媒体链路并由车机验证视频、音频和触控。USB 媒体入口只放在 `remote` 或新的
+   root flavor，绝不进入 `standard`。

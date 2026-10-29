@@ -1,12 +1,12 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-10-27。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-10-29。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
 ## 当前基线与结论
 
-- **有线 CarPlay 调研与 root 台架工具（10 月 29 日，`feat/wired-carplay-root`）：** 免 root 无法冒充 iPhone，只支持有线的车机建议用有线转无线盒子走现有无线链路。为 root 手机实现了 `WiredGadgetMain` 台架工具（探测、冒充 iPhone、角色切换、回滚）与 USB 主机 iAP2 流，均未实机验证，也未接入连接流程。结论、通过标准与未核实事项见 `docs/WIRED-CARPLAY.md`。
+- **有线 CarPlay 调研与 root 台架工具（10 月 29 日，PR #14）：** 已验证 CarWith 视频可在 USB CDC-NCM 上经 AirPlay 到 MacPlay：`1280x720` 首帧正常显示，稳定 180 秒累计 3183 个视频包，手机端发送至帧 #3241，媒体与时序流量均明确落在 `usb0`。此前 Apple VID 枚举、gadget 重名失败与回滚证据也保留在台架记录中。该成功只证明 USB 物理媒体路径；MacPlay 并未把手机枚举成 iPhone，真实车机角色切换、usbmux/lockdown/carkit、USB 主机侧 iAP2、音频与触控仍未验证，standard 连接流程也未接入。免 root 无法冒充 iPhone；只支持有线的车机可考虑有线转无线盒子，仍需实测。608 项 JVM、28 项 Python 测试、Spotless、standard/remote lint 与 debug 构建通过。步骤、边界与未核实事项见 `docs/WIRED-CARPLAY.md`。
 
 - **v0.1.3-test.3（10 月 29 日）：** 新增「本机蓝牙地址」：Shizuku 实时读取优先并保存，否则使用手动填写；Shizuku 未就绪且无地址时，启动连接前提示填写。起因是小米 23127PN0CC（HyperOS OS3.0）无 Shizuku 时只能发占位地址。手动地址流程尚未实机验证。
 - **v0.1.3-test.2（10 月 27 日）：** WinPlay 1.2.5 发布门槛已满足（默认设置下画面、触控、声音到达，蓝牙释放后持续约 25 分钟，手动断开与断网后均可重连），准备以 `v0.1.3-test.2` 预发布。检测向导实机交互与 WinPlay 1.2.5 新策略规则仍待实机验证。证据见 `docs/CARWITH-ENTRY-FINDINGS.md`。

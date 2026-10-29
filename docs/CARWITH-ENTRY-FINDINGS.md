@@ -331,3 +331,41 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 结论与处置：在这台手机上写 Type-C 角色节点有风险；`WiredGadgetMain` 的 `up`/`down` 已不再自动写 `data_role`，`probe` 只读显示。普通平板不适合作为有线 CarPlay 测试台。详见 `docs/WIRED-CARPLAY.md`。
 
 同日接 Mac（MacPlay 1.2.4 有线模式等待中）再空跑 `up --timeout 60`：手机为 PD 设备兼接收方；macOS 枚举为 Apple iPhone（`05ac:12a8`，分配 1000 mA），先发设备到主机的厂商请求 `0x45`（`wLength=4`，按现有策略 STALL），再发充电请求 `0x40`（`wValue=1000 wIndex=500`）。无角色切换请求，60 秒后回滚，USB adb 恢复。MacPlay 全程停在等待 iPhone 连接；它的有线模式依赖 usbmuxd，不能代替车机测试角色切换。
+
+## 小米 17 + MacPlay 有线出画再测（2026-10-29 19:50）
+
+本地代码为 PR #14 的 `1818920`；手机实际运行已安装的 remote `0.1.3-rd-debug` 台架工具，未重装或核验 APK 与提交逐字节一致。
+手机为 `2509FPN0BC`，HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`（104000020），小米 CarLife
+`8.8.5`（274）；USB 直连 Mac，接收端 MacPlay `1.2.4`（41），无实体车机或车机固件。
+
+1. 无线 adb 连通后，`probe` 确认 root、FunctionFS、`cdc_ncm`/`usbnet`；手机为设备兼 sink，`g1` 占着 UDC。
+2. MacPlay 点击有线「启动接收」，手机运行 `up --timeout 30`。创建 gadget 立即报 `Out of memory`，在枚举之前失败并回滚，退出码 1。
+   同时内核报告 `/devices/virtual/android_usb/android2` 重名、`-EEXIST`，调用栈含 `gadgets_make`/`configfs_mkdir`；
+   `MemAvailable` 约 6 GB，不能按 shell 文案直接判定物理内存不足。是否与前几轮创建/删除遗留有关尚未复现。
+3. MacPlay 显示「连接启动超时」「未检测到USB连接的iPhone」；无画面，未建立媒体会话，声音、触控未测。
+4. 回滚后 USB adb、`sys.usb.config=adb`、`g1/UDC=a600000.dwc3` 均恢复，手机仍为设备兼 sink；未手写 Type-C 角色节点。
+
+MacPlay 公开源码 `fb132c0796f5aa425ca1a453dd9d394a9ecfacbc` 的 `watch_usbmuxd` → `usbmuxd::open_provider`
+要求 usbmuxd 发现、lockdown 的 iPhone 产品类型、已有信任会话和 `com.apple.carkit.service`，再进入 iAP2；
+本项目未实现这些接口，且 USB 主机 iAP2/NCM/媒体尚未集成。结论只限当前台架未出画，不推断真实车机兼容性。
+完整步骤、内核错误和源码链接见 `docs/WIRED-CARPLAY.md`。
+
+## 小米 17 + MacPlay USB NCM 媒体路径出画（2026-10-29 20:14）
+
+设备与上节相同：小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，
+小米 CarLife `8.8.5`，MacPlay `1.2.4`（41），USB 直连 Mac。本轮没有模拟 iPhone 的 VID/PID，也没有实体车机。
+
+1. root 台架临时把一个空闲 gadget 配成 CDC-NCM，并使用独立策略路由把单一目标 IPv6 地址送到 `usb0`；
+   没有改 Wi-Fi 默认路由或 Type-C 角色节点。remote debug 入口用网卡 `ifindex` 和显式
+   `fe80::…%usb0` 端点连接 MacPlay `:17000`，跳过无线发现。
+2. 从 USB NCM 启动到首帧约 30 秒；MacPlay 日志出现 `first-decoded-frame width=1280 height=720`，
+   CarPlay 画面窗口打开。用户确认窗口内 CarWith 界面正常，这不是静态截图或离线解码。
+3. 随后稳定观察约 180 秒：MacPlay 的 `media-statistics` 从 200 增至 3183 个视频包；手机侧同期从
+   CarWith 帧 #1 连续发送到 #3241，均记录为 `1280x720@30`。手机时序应答地址明确带 `%usb0`。
+4. macOS 的连接来源与接口流量都落在 USB NCM 网卡；无线 adb 主要用于控制，不承载视频。
+5. MacPlay 始终把它作为 AirPlay 接收器使用，界面仍显示“未检测到 USB 连接的 iPhone”。因此本轮证明
+   **USB 物理媒体路径可用**，没有证明 iPhone 的 usbmux/lockdown/carkit 枚举、真实车机角色切换或 USB 主机侧
+   iAP2 可用；声音和触控也未测试。
+6. 台架结束后 `sys.usb.config=adb`，`g1/UDC=a600000.dwc3`，空闲 `g2` 未绑定，手机端台架状态与 `usb0`
+   均已清理。设备型号和版本的完整台架步骤见 `docs/WIRED-CARPLAY.md`；原始日志含标识，留在被忽略的
+   `captures/`，不提交。
