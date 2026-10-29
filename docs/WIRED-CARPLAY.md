@@ -209,6 +209,33 @@ AirPlay 接收器，而不是手机列表中的 iPhone；iOS 的 usbmux/lockdown
 USB 角色切换、USB 主机侧 iAP2，以及音频/触控均未由此验证。原始日志含有设备标识且位于被忽略的 `captures/`，
 不进入仓库。
 
+### 2026-10-29 20:50 remoteDebug 一键连接出画
+
+本轮把台架入口接进 App：主界面的「USB 有线连接」卡片只在存在 `UsbWiredConnectActivity` 的 `remote` 包显示；
+`standard` manifest 没有该 Activity，因此正式连接流程不可见、不可调用。点击后依次自动请求 root、安装固定脚本、
+配置 `g2`/`usb0`、等待链路本地 IPv6、通过绑定到 USB 网卡的 mDNS 解析 MacPlay `_airplay._tcp`（强制选择
+`:17000`），再启动现有 USB AirPlay 媒体链路并返回主界面。失败页和「停止并恢复 USB」都保留在入口内。
+
+设备为小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，小米 CarLife
+`8.8.5`（274），root 管理器为 KernelSU；接收端为 MacPlay `1.2.4`（41）。手机 USB 直连 Mac，无线 adb
+只负责观察，不承载媒体。
+
+1. remote 一键 root 请求成功并返回 `uid=0` 后，KernelSU 的 `su -c` 对多行轮询参数报
+   `no closing quote`，而 Android 17 的 `ping6 -I usb0 ff02::1` 对 NCM 接口返回 `sendmsg: EINVAL`。实现改为：root 调用一律使用
+   `/system/bin/su` 等绝对路径；网卡和 IPv6 等待放进固定脚本；App 用 JmDNS 绑定该地址查询
+   `_airplay._tcp.local.`，不依赖机型的 all-nodes ping 行为。
+2. 点击入口后约 15 秒，mDNS 同时发现 MacPlay `:17000` 和系统 AirPlay 接收器 `:7000`，App 仅选择前者。
+   macOS 上 `:17000` 随即出现来自 USB 网卡的已建立 TCP 连接。
+3. MacPlay 状态变为「CarPlay已连接 首帧已解码，CarPlay画面窗口已打开」；手机日志显示
+   `VIDEO_INIT_DONE 1280x720@30`、首个关键帧及连续 `CarWith 帧` 发送，时序应答明确带 `%usb0`。
+   本轮连续出画约 99 秒，手机累计发送到 CarWith 帧 #1961。
+4. 在主界面确认「断开连接」后，七路 CarLife 通道与外部视频推流停止；`sys.usb.config` 恢复 `adb`，
+   `usb0`、root 台架状态目录和 MacPlay TCP 连接均消失，USB adb 重新出现。
+
+这次成功仍是 USB NCM + AirPlay 媒体台架，不是车机枚举：MacPlay 没有把手机识别为 USB iPhone，也没有证明
+真实车机角色切换、usbmux/lockdown/carkit、USB 主机侧 iAP2、音频或触控可用。原始地址、MAC、SSID 和完整日志
+不进入仓库。
+
 ## 未核实事项
 
 以下来自公开逆向资料或经验值，均需台架或实车核对后再修正代码与本文：
@@ -223,7 +250,7 @@ USB 角色切换、USB 主机侧 iAP2，以及音频/触控均未由此验证。
 
 1. 阶段 3：App 侧用 `UsbManager` 打开车机设备，按 `WiredAccessoryInterfaces.match` 选接口，经 `UsbHostDuplexStream`
    接入 `Iap2LinkChannel`；`Iap2SenderSession` 增加有线模式，跳过 Wi-Fi 交换。
-2. 阶段 4：把现有 NCM 台架接到真实车机的 USB 主机 iAP2 会话之后；验证车机暴露的网卡、IPv6 地址与 mDNS，
-   补上按网卡绑定的 `NetworkBinding`，不再依赖显式地址。
+2. 阶段 4：把现有 NCM 台架接到真实车机的 USB 主机 iAP2 会话之后；验证车机暴露的网卡、IPv6 地址与 mDNS。
+   remoteDebug 已用 JmDNS 按 USB 网卡地址自动发现 MacPlay，但仍需确认真实车机服务名和网络命名空间行为。
 3. 阶段 5：与无线共用 AirPlay 媒体链路并由车机验证视频、音频和触控。USB 媒体入口只放在 `remote` 或新的
    root flavor，绝不进入 `standard`。

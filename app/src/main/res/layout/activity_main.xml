@@ -1760,6 +1760,68 @@
                     android:src="@drawable/ic_chev_right" />
             </LinearLayout>
 
+            <!-- USB 有线连接：仅 remote 调试包里该组件存在（代码探测后显示），正式包恒隐藏 -->
+            <LinearLayout
+                android:id="@+id/btnWiredConnect"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_card"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="60dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="6dp"
+                android:visibility="gone">
+
+                <FrameLayout
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_icon_tile">
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@string/main_wired_title"
+                        android:src="@drawable/ic_usb_wired" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="14dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/main_wired_title"
+                        android:textColor="@color/m3_on_surface"
+                        android:textSize="14.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/main_wired_desc"
+                        android:textColor="@color/m3_on_var"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:contentDescription="@string/cd_enter"
+                    android:src="@drawable/ic_chev_right" />
+            </LinearLayout>
+
             <!-- 远程调试入口：仅 remote 调试包里该组件存在（代码探测后显示），正式包恒隐藏 -->
             <LinearLayout
                 android:id="@+id/btnBridgeSetup"

@@ -420,6 +420,12 @@ object SessionController {
     @Volatile
     private var usbMediaEndpoint: UsbMediaEndpoint? = null
 
+    internal fun isUsbMediaBenchConnected(): Boolean = usbMediaEndpoint != null
+
+    /** USB NCM 一键入口的 root 资源释放器；普通无线路径始终为 null。 */
+    @Volatile
+    private var usbMediaCleanup: (() -> Unit)? = null
+
     /** 主界面最近一次被盖住的时刻（uptimeMillis）；null = 主界面在前台或尚未显示。 */
     @Volatile
     private var uiPausedAtMs: Long? = null
@@ -728,6 +734,7 @@ object SessionController {
     internal fun startUsbMediaBench(
         context: Context,
         endpoint: UsbMediaEndpoint,
+        cleanup: (() -> Unit)? = null,
     ) {
         check(BuildConfig.DEBUG && BuildConfig.FLAVOR == "remote") { "USB 媒体台架仅限 remote debug" }
         ensure(context)
@@ -738,6 +745,7 @@ object SessionController {
         val attempt = ConnectionDiagnostics.begin("usb_ncm_media_bench")
         ReceiverDetectionRuntime.connectionStarted(attempt)
         usbMediaEndpoint = endpoint
+        usbMediaCleanup = cleanup
         connectCancelled = false
         audioEnabledForSession = false
         appendLog("USB-BENCH: ${endpoint.interfaceName} scope=${endpoint.scopeId ?: "auto"} 媒体台架；不代表车机枚举或角色切换成功")
@@ -848,8 +856,10 @@ object SessionController {
             ReceiverDetectionRuntime.stop(reason.name, cancelled = reason == DiagnosticCode.USER_STOP)
         }
         val hadProjection = CarPlayService.mediaProjection != null
+        val usbCleanup = usbMediaCleanup
         pendingEndpointUpdate = null
         usbMediaEndpoint = null
+        usbMediaCleanup = null
         retireSession()
         // BT 控制会话只在这里（用户终态）退役，socket close 让保活读循环立刻退出：
         // 否则它阻塞到对端超时（实测 ~24s）才结束，用户取消后英雄卡持续转圈。
@@ -871,6 +881,13 @@ object SessionController {
         // shell 兜底存下的系统网络（connect-network）自动 forget 还原：无互联网热点
         // 被系统当默认网会挤掉移动数据。失败只记日志（用户可到 WLAN 手动删）。
         cleanupShellFallbackNetwork()
+        if (usbCleanup != null) {
+            Bg.run("usb-media-cleanup") {
+                runCatching { usbCleanup() }.onFailure {
+                    appendLog("USB-BENCH: root 资源释放失败：${it.message}")
+                }
+            }
+        }
         val endAction = if (reason == DiagnosticCode.USER_STOP) "手动断开" else "自动断开（${reason.name}）"
         if (hadProjection) {
             // Android 14+：MediaProjection 与保活服务（mediaProjection FGS 类型）绑定，

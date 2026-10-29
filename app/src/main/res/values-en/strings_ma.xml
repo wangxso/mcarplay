@@ -81,6 +81,7 @@
     <string name="ma_hero_residual">The last session ended abnormally and left %1$d virtual displays to clean up</string>
     <string name="ma_cta_disconnect">Disconnect</string>
     <string name="ma_connected_subline">Connected · %1$s · %2$02d:%3$02d · streaming video</string>
+    <string name="ma_connected_usb_subline">Connected · USB wired · %1$02d:%2$02d · streaming video</string>
     <string name="ma_audio_tag_off">Sound on car · Off</string>
     <string name="ma_bt_target">Target \"%1$s\" · requests go only to this device</string>
     <string name="ma_bt_multi">%1$d paired · without a target each is tried in turn</string>

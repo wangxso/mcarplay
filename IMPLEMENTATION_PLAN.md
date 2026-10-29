@@ -6,7 +6,7 @@
 
 ## 当前基线与结论
 
-- **有线 CarPlay 调研与 root 台架工具（10 月 29 日，PR #14）：** 已验证 CarWith 视频可在 USB CDC-NCM 上经 AirPlay 到 MacPlay：`1280x720` 首帧正常显示，稳定 180 秒累计 3183 个视频包，手机端发送至帧 #3241，媒体与时序流量均明确落在 `usb0`。此前 Apple VID 枚举、gadget 重名失败与回滚证据也保留在台架记录中。该成功只证明 USB 物理媒体路径；MacPlay 并未把手机枚举成 iPhone，真实车机角色切换、usbmux/lockdown/carkit、USB 主机侧 iAP2、音频与触控仍未验证，standard 连接流程也未接入。免 root 无法冒充 iPhone；只支持有线的车机可考虑有线转无线盒子，仍需实测。608 项 JVM、28 项 Python 测试、Spotless、standard/remote lint 与 debug 构建通过。步骤、边界与未核实事项见 `docs/WIRED-CARPLAY.md`。
+- **有线 CarPlay 调研与 root 台架工具（10 月 29 日，PR #14）：** 已验证 CarWith 视频可在 USB CDC-NCM 上经 AirPlay 到 MacPlay：`1280x720` 首帧正常显示，稳定 180 秒累计 3183 个视频包，手机端发送至帧 #3241，媒体与时序流量均明确落在 `usb0`。remoteDebug 现已增加主界面「USB 有线连接」入口：自动申请 KernelSU root、配置 NCM、等待 IPv6、按 USB 网卡绑定 mDNS 发现 MacPlay `:17000`、启动媒体并自动返回主界面；本轮连续出画约 99 秒至帧 #1961，应用内断开后 `adb`/`g1` 与 USB adb 恢复。该入口不进入 standard。此前 Apple VID 枚举、gadget 重名失败与回滚证据也保留在台架记录中。该成功只证明 USB 物理媒体路径；MacPlay 并未把手机枚举成 iPhone，真实车机角色切换、usbmux/lockdown/carkit、USB 主机侧 iAP2、音频与触控仍未验证。免 root 无法冒充 iPhone；只支持有线的车机可考虑有线转无线盒子，仍需实测。步骤、边界与未核实事项见 `docs/WIRED-CARPLAY.md`。
 
 - **v0.1.3-test.3（10 月 29 日）：** 新增「本机蓝牙地址」：Shizuku 实时读取优先并保存，否则使用手动填写；Shizuku 未就绪且无地址时，启动连接前提示填写。起因是小米 23127PN0CC（HyperOS OS3.0）无 Shizuku 时只能发占位地址。手动地址流程尚未实机验证。
 - **v0.1.3-test.2（10 月 27 日）：** WinPlay 1.2.5 发布门槛已满足（默认设置下画面、触控、声音到达，蓝牙释放后持续约 25 分钟，手动断开与断网后均可重连），准备以 `v0.1.3-test.2` 预发布。检测向导实机交互与 WinPlay 1.2.5 新策略规则仍待实机验证。证据见 `docs/CARWITH-ENTRY-FINDINGS.md`。

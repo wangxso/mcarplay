@@ -369,3 +369,27 @@ MacPlay 公开源码 `fb132c0796f5aa425ca1a453dd9d394a9ecfacbc` 的 `watch_usbmu
 6. 台架结束后 `sys.usb.config=adb`，`g1/UDC=a600000.dwc3`，空闲 `g2` 未绑定，手机端台架状态与 `usb0`
    均已清理。设备型号和版本的完整台架步骤见 `docs/WIRED-CARPLAY.md`；原始日志含标识，留在被忽略的
    `captures/`，不提交。
+
+## 小米 17 + MacPlay 的 remoteDebug 一键有线入口（2026-10-29 20:50）
+
+设备与前节相同：小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，
+小米 CarLife `8.8.5`（274），root 管理器为 KernelSU，MacPlay `1.2.4`（41）。本轮安装的是新 remote debug
+构建；`standard` manifest 不包含一键入口。无线 adb 只用于控制和观察，媒体仍走 USB NCM。
+
+1. 主界面的 USB 卡片通过显式 Activity 探测只在 remote 包显示。点击后 App 自动发起 root 请求并取得成功
+   （返回 `uid=0`），固定脚本配置
+   CDC-NCM、等待 `usb0` 的链路本地 IPv6，然后由 JmDNS 在指定接口发现 `_airplay._tcp` 的 `:17000` 服务。
+   MacPlay 的系统 AirPlay 服务 `:7000` 同时可见，但没有被误选。
+2. User 启动 MacPlay 有线接收后，App 自动连接 USB AirPlay 端点并返回主界面。MacPlay 显示
+   「CarPlay已连接 首帧已解码，CarPlay画面窗口已打开」；手机记录 `1280x720@30`、首个关键帧和持续视频发送，
+   本轮连续出画约 99 秒至 CarWith 帧 #1961。
+3. 在 App 主界面确认断开后，CarLife 七路、AirPlay 视频和 root 台架均停止；`sys.usb.config=adb`、
+   `usb0` 消失、状态目录删除，MacPlay TCP 连接关闭，USB adb 随后恢复。
+4. 调试中确认了两个机型相关问题并已规避：无绝对路径的 `ProcessBuilder("su")` 被 Android/KernelSU
+   环境以 `EACCES` 拒绝；多行 `su -c` 轮询报 `no closing quote`；Android 17 对 `usb0` 的
+   all-nodes `ping6` 返回 `sendmsg: EINVAL`。最终 root 调用使用绝对路径，轮询进入固定 root 脚本，发现改用
+   JmDNS。
+
+结论只覆盖 remoteDebug 的 USB NCM 媒体台架。MacPlay 仍作为显式 AirPlay 接收器，手机没有在它的 USB 设备列表
+中显示为 iPhone；真实车机枚举、角色切换、usbmux/lockdown/carkit、USB 主机侧 iAP2、音频和触控仍未验证。
+完整步骤与边界见 `docs/WIRED-CARPLAY.md`。
