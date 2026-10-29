@@ -86,13 +86,27 @@ root（`uid=0`），无线 adb，USB 口未接线。HyperOS、CarWith 版本未�
 
 结论：阶段 0 的软件前提齐备，不能据此推断本机支持有线 CarPlay。
 
+### 2026-10-29 小米 17 `up` 空跑（Windows 电脑作 USB 主机）
+
+同一台手机经无线 adb 运行 `up --timeout 30`，USB 线接 Windows 电脑（装有 Apple 设备驱动），不接车机。
+
+- gadget 建立、ep0 写入描述符、绑定 UDC 均成功：`FFS BIND` → `FFS ENABLE`（主机已选配置）。
+- Windows 枚举为 `VID_05AC&PID_12A8`：「Apple Mobile Device USB Composite Device」，接口 `MI_00` 为
+  「Apple Mobile Device USB Device」，实例 ID 带 `RESTORE_MODE`。这说明 Apple 驱动认了 VID/PID，但接口布局与真 iPhone
+  不同（真机还有 PTP、usbmux 等接口），描述符仍需对照实机修正。
+- 收到 `SETUP bmRequestType=0x40 bRequest=0x40 wValue=0x0064 wIndex=0 wLength=0`：**Apple 充电请求 `0x40` 得到证实**
+  （来自 Windows 的 Apple 驱动，100 mA）。用零长度 `Os.read` 应答，没有报错。
+- 电脑不会发角色切换请求；30 秒后 `GADGET_UP 超时` 并回滚，进程正常退出。
+
+尚未确认：回滚后 USB adb 与 g1 是否恢复（等用户回报）；`0x51` 角色切换仍需车机验证。
+
 ## 未核实事项
 
 以下来自公开逆向资料或经验值，均需台架或实车核对后再修正代码与本文：
 
-- 角色切换请求编号 `bRequest 0x51`、充电请求 `0x40`（`AppleControlRequests`）。
+- 角色切换请求编号 `bRequest 0x51`（`AppleControlRequests`）。充电请求 `0x40` 已在 2026-10-29 Windows 空跑中证实。
 - iPhone PID `0x12A8`、`bcdDevice`、iAP 接口类别 `0xFF/0xF0`，以及车机是否要求多配置（PTP、usbmux 等）的完整 iPhone 描述符。
-- FunctionFS 上零长度 `Os.read`/`Os.write` 是否确实完成状态阶段/STALL。
+- FunctionFS 上零长度 `Os.write` 能否 STALL（零长度 `Os.read` 应答 OUT 请求已在空跑中未报错）。
 - 在 A 转 C 线（无 PD）上写数据角色节点能否真正切到主机。
 - 有线模式下 iAP2 会话是否省略 Wi-Fi 凭据交换（`0x5702/0x5703`），以及车机在 NCM 上广播的服务。
 
