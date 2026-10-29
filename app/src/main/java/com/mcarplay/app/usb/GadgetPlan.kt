@@ -22,10 +22,12 @@ class GadgetPlan(
 
     fun prepare(): List<String> =
         listOf(
-            // 让 init 解绑 Android 自己的 gadget；部分机型还需显式清空 g1/UDC
+            // 旧式机型由 init 按 sys.usb.config 解绑；Gadget HAL 机型（小米 17 实测 sys.usb.config=none，
+            // 有 g1、g2）不认这个属性，所以再把任何占着 UDC 的 gadget 显式解绑
             "setprop sys.usb.config none",
             "sleep 1",
-            "[ -e $CONFIGFS_ROOT/g1/UDC ] && echo '' > $CONFIGFS_ROOT/g1/UDC",
+            "for g in $CONFIGFS_ROOT/*; do [ \"\$g\" = $gadgetDir ] && continue; " +
+                "[ -n \"\$(cat \"\$g/UDC\" 2>/dev/null)\" ] && echo '' > \"\$g/UDC\"; done; true",
             "mkdir -p $gadgetDir",
             "echo ${hex(identity.vendorId)} > $gadgetDir/idVendor",
             "echo ${hex(identity.productId)} > $gadgetDir/idProduct",
@@ -52,7 +54,10 @@ class GadgetPlan(
     /**
      * 拆除本 gadget 并把 USB 交还 Android。每步都容错（`|| true`），以便从任意半成品状态回滚。
      *
-     * @param previousUsbConfig 进入前 `getprop sys.usb.config` 的值；空则让 Android 用默认值。
+     * 交还时先按旧式机型写回 `sys.usb.config`（仅当进入前的值有意义），再让 Gadget HAL 重建自己的 gadget
+     * （`svc usb resetUsbGadget`，Android 12+）。不再猜测默认的 `mtp,adb`：HAL 机型上它会触发 init 的旧路径。
+     *
+     * @param previousUsbConfig 进入前 `getprop sys.usb.config` 的值；空或 `none` 时只重置 HAL。
      * @param restoreAndroid 角色切换成功、手机即将当主机时为 false：此时不能把 Android gadget 绑回去。
      */
     fun teardown(
@@ -68,8 +73,10 @@ class GadgetPlan(
                 "rmdir $configDir/strings/0x409 $configDir $functionDir $gadgetDir/strings/0x409 $gadgetDir 2>/dev/null || true",
             )
         if (restoreAndroid) {
-            val config = previousUsbConfig.trim().takeIf { USB_CONFIG.matches(it) && it != "none" } ?: DEFAULT_USB_CONFIG
-            commands += "setprop sys.usb.config $config"
+            previousUsbConfig.trim().takeIf { USB_CONFIG.matches(it) && it != "none" }?.let {
+                commands += "setprop sys.usb.config $it"
+            }
+            commands += "svc usb resetUsbGadget 2>/dev/null || true"
         }
         return commands
     }
@@ -77,7 +84,6 @@ class GadgetPlan(
     companion object {
         const val CONFIGFS_ROOT = "/config/usb_gadget"
         const val FFS_ROOT = "/dev/usb-ffs"
-        const val DEFAULT_USB_CONFIG = "mtp,adb"
 
         private val UDC_NAME = Regex("[A-Za-z0-9._:-]+")
         private val USB_CONFIG = Regex("[a-z0-9_,]+")

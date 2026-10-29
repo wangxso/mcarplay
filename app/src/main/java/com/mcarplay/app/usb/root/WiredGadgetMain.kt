@@ -28,7 +28,8 @@ import kotlin.system.exitProcess
  * adb shell su -c 'CLASSPATH=$(pm path com.mcarplay.app | cut -d: -f2) \
  *   app_process /system/bin com.mcarplay.app.usb.root.WiredGadgetMain probe'
  * ```
- * 子命令：`probe`、`plan`、`up [--timeout 秒] [--pid 0x12a8]`、`down [--usb-config mtp,adb]`。
+ * 子命令：`probe`、`plan`、`up [--timeout 秒] [--pid 0x12a8]`、`down [--usb-config 进入前的值]`。
+ * remote 包把 `com.mcarplay.app` 换成 `com.mcarplay.app.rd`（类名不变）。
  * `up` 会停掉 Android 的 USB gadget，USB adb 随之断开，请先切到无线 adb。
  * 输出均以 `WIRED:` 开头；不输出本机任何标识（序列号每次随机）。
  */
@@ -48,7 +49,7 @@ object WiredGadgetMain {
                     "probe" -> probe()
                     "plan" -> printPlan(identityFrom(args))
                     "up" -> Session(identityFrom(args), option(args, "--timeout")?.toLong() ?: 60L).run()
-                    "down" -> down(option(args, "--usb-config") ?: GadgetPlan.DEFAULT_USB_CONFIG)
+                    "down" -> down(option(args, "--usb-config").orEmpty())
                     else -> usage()
                 }
             } catch (t: Throwable) {
@@ -59,7 +60,7 @@ object WiredGadgetMain {
     }
 
     private fun usage(): Int {
-        out("用法：probe | plan | up [--timeout 秒] [--pid 0x12a8] | down [--usb-config mtp,adb]")
+        out("用法：probe | plan | up [--timeout 秒] [--pid 0x12a8] | down [--usb-config 进入前的 sys.usb.config]")
         return EXIT_ERROR
     }
 
@@ -67,12 +68,34 @@ object WiredGadgetMain {
         out("uid=${Os.getuid()} sys.usb.config=${getprop("sys.usb.config")} sys.usb.controller=${getprop("sys.usb.controller")}")
         out("UDC=${File("/sys/class/udc").list()?.sorted()}")
         out("configfs gadgets=${File(GadgetPlan.CONFIGFS_ROOT).list()?.sorted()}")
+        // 每个 gadget 占没占 UDC、各配置挂了哪些函数（判断由 init 还是 Gadget HAL 管理）；不输出序列号
+        File(GadgetPlan.CONFIGFS_ROOT).listFiles()?.sortedBy { it.name }?.forEach { gadget ->
+            val functions =
+                File(gadget, "configs").listFiles()?.sortedBy { it.name }?.joinToString(" ") { config ->
+                    config.name + "=" +
+                        config
+                            .listFiles()
+                            ?.filter { it.isDirectory && it.name != "strings" }
+                            ?.map { it.name }
+                            ?.sorted()
+                }
+            out(
+                "gadget ${gadget.name} UDC=${File(gadget, "UDC").readTextOrNull()?.trim()} " +
+                    "idVendor=${File(gadget, "idVendor").readTextOrNull()?.trim()} configs: $functions",
+            )
+        }
+        out("svc usb getFunctions=${sh(listOf("svc usb getFunctions 2>&1")).second.trim()}")
+        sh(
+            listOf("getprop | grep -iE 'usb\\.(config|state|controller|functions)|gadget'"),
+        ).second.lines().filter { it.isNotBlank() }.forEach {
+            out("prop $it")
+        }
         out("functionfs 内核支持=${File("/proc/filesystems").readTextOrNull()?.contains("functionfs") == true}")
         out("cdc_ncm 主机驱动已加载=${File("/sys/module/cdc_ncm").exists()} usbnet=${File("/sys/module/usbnet").exists()}")
         val nodes = discoverRoleNodes()
         if (nodes.isEmpty()) out("没有找到可写的角色切换节点：原生有线 CarPlay 在本机基本不可行")
         nodes.forEach { out("角色节点 ${it.source} ${it.path} 当前=${File(it.path).readTextOrNull()?.trim()}") }
-        File("/sys/class/typec").listFiles()?.filter { it.name.matches(Regex("port\\d+")) }?.forEach { port ->
+        typecPorts().forEach { port ->
             val roles =
                 listOf(
                     "data_role",
@@ -86,7 +109,7 @@ object WiredGadgetMain {
 
     private fun printPlan(identity: AppleUsbIdentity): Int {
         val plan = GadgetPlan(identity)
-        (plan.prepare() + "# 写入 ep0 描述符" + plan.bind("<udc>") + plan.teardown(GadgetPlan.DEFAULT_USB_CONFIG)).forEach(::out)
+        (plan.prepare() + "# 写入 ep0 描述符" + plan.bind("<udc>") + plan.teardown(getprop("sys.usb.config"))).forEach(::out)
         return EXIT_ATTACHED
     }
 
@@ -203,6 +226,13 @@ object WiredGadgetMain {
             // typec 节点读回形如 "[host] device"，其余直接是当前值
             val ok = code == 0 && (now == node.hostValue || now.contains("[${node.hostValue}]"))
             out("切主机 ${node.source} ${node.path} exit=$code 读回=$now ${output.trim()}")
+            val powerRoles = typecPorts().map { File(it, "power_role").readTextOrNull()?.trim() }
+            if (powerRoles.any(UsbRoleNodes::isPowerSource)) {
+                // 手机成了 VBUS 供电方，会与车机对顶：立刻写回设备值，不等状态机回滚
+                sh(listOf(node.deviceCommand() + " 2>/dev/null || true"))
+                out("切主机后 power_role=$powerRoles：手机在向 VBUS 供电，已立即撤回")
+                return false
+            }
             return ok
         }
 
@@ -255,6 +285,8 @@ object WiredGadgetMain {
             )
         }
     }
+
+    private fun typecPorts(): List<File> = File("/sys/class/typec").listFiles()?.filter { it.name.matches(Regex("port\\d+")) }.orEmpty()
 
     private fun usbDevices(): Set<String> =
         File(USB_DEVICES)

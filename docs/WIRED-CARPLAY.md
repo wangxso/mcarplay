@@ -36,7 +36,14 @@ adb shell su -c 'CLASSPATH=$(pm path com.mcarplay.app | cut -d: -f2) app_process
 | `probe` | 阶段 0：列出 UDC、configfs gadget、functionfs/`cdc_ncm` 支持、可写的角色切换节点和 Type-C 端口角色 |
 | `plan` | 打印将要执行的 configfs 命令，不做任何改动 |
 | `up [--timeout 秒] [--pid 0x12a8]` | 阶段 1–2：停掉 Android gadget、冒充 iPhone、记录车机所有控制请求；收到角色切换请求后切主机并列出车机暴露的接口 |
-| `down [--usb-config mtp,adb]` | 回滚：角色节点写回设备值、拆除 gadget、恢复 `sys.usb.config` |
+| `down [--usb-config <进入前的值>]` | 回滚：角色节点写回设备值、拆除 gadget；进入前的 `sys.usb.config` 有意义时写回，再 `svc usb resetUsbGadget` 让 Gadget HAL 重建 |
+
+remote 包的包名是 `com.mcarplay.app.rd`，`pm path` 要用它；类名不变。用了旧包会因找不到类直接 `Aborted`（退出码 134）。
+在 Windows PowerShell 里需要把 `$` 转义，否则 PowerShell 会先展开：
+
+```powershell
+adb shell "su -c 'CLASSPATH=`$(pm path com.mcarplay.app.rd | cut -d: -f2) app_process /system/bin com.mcarplay.app.usb.root.WiredGadgetMain probe'"
+```
 
 `up` 会断开 USB adb，请先 `adb tcpip` 切到无线 adb。超时、出错或进程被终止都会自动回滚；成功时手机保持主机模式，
 用完执行 `down`。输出以 `WIRED:` 开头；USB 序列号每次随机，不输出本机标识。车机返回的设备名称等信息写进
@@ -55,9 +62,27 @@ adb shell su -c 'CLASSPATH=$(pm path com.mcarplay.app | cut -d: -f2) app_process
 
 ## 安全
 
-- 手机切主机后**供电角色必须保持接收端**：两端同时向 VBUS 供电可能损坏硬件。现有节点只写数据角色，
-  首次台架请串接 USB 电流表观察。
+- 手机切主机后**供电角色必须保持接收端**：两端同时向 VBUS 供电可能损坏硬件。现有节点只写数据角色；
+  `up` 切主机后会读回所有 Type-C 端口的 `power_role`，一旦出现 `[source]` 立即写回设备值并回滚。
+  这只是软件读回，首次台架仍请串接 USB 电流表观察。
 - 任何失败路径都只回滚一次并恢复 Android 的 USB 配置（`WiredSwitchMachineTest` 覆盖）；`down` 可随时手动恢复。
+
+## 台架记录
+
+### 2026-10-29 小米 17（2509FPN0BC，`popsicle`）`probe`
+
+root（`uid=0`），无线 adb，USB 口未接线。HyperOS、CarWith 版本未记录；尚未运行 `up`，未接车机。
+
+- `sys.usb.config=none`，`sys.usb.controller=a600000.dwc3`；UDC 只有 `a600000.dwc3`；configfs 有 `g1`、`g2` 两个 gadget。
+  属性为 `none` 且有两个 gadget，推断 USB 由 Gadget HAL 管理（待增强版 `probe` 的 gadget/HAL 输出确认）。
+  据此修正：准备阶段解绑任何占着 UDC 的 gadget，回滚改用 `svc usb resetUsbGadget`，不再写默认 `mtp,adb`。
+- functionfs 内核支持：是；`cdc_ncm` 与 `usbnet` 主机驱动已加载（阶段 4 的内核前提满足）。
+- 角色节点三个：`/sys/class/usb_role/a600000.ssusb-role-switch/role`（当前 `none`）、
+  `/sys/class/typec/port0/data_role`（`[host] device`）、`/sys/devices/platform/soc/a600000.ssusb/mode`（`none`）。
+  这些节点能否写入、写入后能否在 A 转 C 线上真正切到主机，要到 `up` 时才知道。
+- `typec port0`：`power_role=source [sink]`，`power_operation_mode=default`。
+
+结论：阶段 0 的软件前提齐备，不能据此推断本机支持有线 CarPlay。
 
 ## 未核实事项
 

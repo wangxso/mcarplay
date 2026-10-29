@@ -37,6 +37,14 @@ class UsbRoleNodesTest {
     }
 
     @Test
+    fun detectsPhoneSourcingVbus() {
+        // 小米 17 未接线时的实测读回
+        assertEquals(false, UsbRoleNodes.isPowerSource("source [sink]"))
+        assertEquals(true, UsbRoleNodes.isPowerSource("[source] sink"))
+        assertEquals(false, UsbRoleNodes.isPowerSource(null))
+    }
+
+    @Test
     fun emptyWhenNothingMatches() {
         assertTrue(UsbRoleNodes.fromPaths(listOf("/sys/class/typec/port0/power_role")).isEmpty())
     }

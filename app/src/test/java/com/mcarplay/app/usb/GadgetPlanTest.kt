@@ -33,17 +33,38 @@ class GadgetPlanTest {
     }
 
     @Test
-    fun teardownRestoresPreviousAndroidConfig() {
-        assertEquals("setprop sys.usb.config mtp,adb", plan.teardown("mtp,adb").last())
-        assertEquals("setprop sys.usb.config ${GadgetPlan.DEFAULT_USB_CONFIG}", plan.teardown("none").last())
-        assertEquals("setprop sys.usb.config ${GadgetPlan.DEFAULT_USB_CONFIG}", plan.teardown("adb;reboot").last())
+    fun prepareUnbindsWhicheverGadgetHoldsTheUdc() {
+        val unbind = plan.prepare().single { it.startsWith("for g in") }
+        assertTrue(unbind.contains("/config/usb_gadget/*"))
+        assertTrue(unbind.contains("[ \"\$g\" = /config/usb_gadget/mcarplay ] && continue"))
+    }
+
+    @Test
+    fun teardownRestoresLegacyConfigThenResetsGadgetHal() {
+        val script = plan.teardown("mtp,adb")
+        assertEquals("setprop sys.usb.config mtp,adb", script[script.size - 2])
+        assertEquals(RESET_HAL, script.last())
+    }
+
+    @Test
+    fun teardownOnGadgetHalDevicesOnlyResets() {
+        // 小米 17：进入前 sys.usb.config=none
+        for (previous in listOf("none", "", "adb;reboot")) {
+            val script = plan.teardown(previous)
+            assertFalse(script.any { it.startsWith("setprop") })
+            assertEquals(RESET_HAL, script.last())
+        }
     }
 
     @Test
     fun teardownForHostModeLeavesAndroidGadgetUnbound() {
         val script = plan.teardown("mtp,adb", restoreAndroid = false)
-        assertFalse(script.any { it.startsWith("setprop") })
+        assertFalse(script.any { it.startsWith("setprop") || it.startsWith("svc") })
         assertTrue(script.first().contains("mcarplay/UDC"))
+    }
+
+    private companion object {
+        const val RESET_HAL = "svc usb resetUsbGadget 2>/dev/null || true"
     }
 
     @Test

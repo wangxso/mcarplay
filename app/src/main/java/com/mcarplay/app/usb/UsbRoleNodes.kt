@@ -35,6 +35,12 @@ object UsbRoleNodes {
     /** 叶子文件名：与 [searchRoots] 组合出待检查路径。 */
     val leafNames: List<String> = listOf("role", "data_role", "mode")
 
+    /**
+     * Type-C `power_role` 读回值（形如 `source [sink]`）是否表示手机正在向 VBUS 供电。
+     * 切主机后若变成供电方，会与车机的 VBUS 对顶，必须立即回滚。
+     */
+    fun isPowerSource(powerRole: String?): Boolean = powerRole?.contains("[source]") == true
+
     /** 从已存在的路径里挑出候选，按 [patterns] 的优先级排序；同类内按路径排序，结果稳定。 */
     fun fromPaths(existing: Collection<String>): List<UsbRoleNode> =
         patterns.flatMap { (regex, values) ->
