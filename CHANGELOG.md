@@ -3,15 +3,24 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
-## [Unreleased]
+## [v0.1.3-test.3] - 2026-10-29
+
+> Experimental prerelease: lets phones without Shizuku supply their real Bluetooth address; the new address flow has not been verified on device and this does not establish real-car compatibility.
+> 实验性预发布：未使用 Shizuku 的手机也能提供真实蓝牙地址；新的地址流程尚未实机验证，不代表实车兼容。
 
 ### English
 - Add **本机蓝牙地址** to the connection checklist: receivers such as WinPlay check the phone's real Bluetooth address, which Android hides from ordinary apps. A live Shizuku (or system settings) read wins and is now saved for later sessions without Shizuku; otherwise a manually entered address is used. Entries are validated (placeholder, random, multicast and malformed addresses are rejected), and logs and the support report state the source (`bluetooth.identitySource`) without the address.
-- Validation: 546 JVM tests, `spotlessCheck`, `lintStandardDebug` and `assembleRemoteDebug` passed. Not yet verified on device.
+- When Shizuku is not ready and no address has been entered or saved, **启动连接** now asks for the phone's real Bluetooth address first, explains where to find it, and continues the connection after it is saved. **仍然连接** keeps the previous behavior.
+- README: native video at the receiver's aspect ratio, touch on DiPlay and WinPlay 1.2.5, media keys, the 25-minute WinPlay run, and WinPlay as a bench receiver.
+- Validation: 546 JVM tests, 26 Python tests, `spotlessCheck`, `lintStandardDebug`, `lintStandardRelease`, `assembleStandardRelease` and `assembleRemoteDebug` passed. The manual address flow and the new prompt are not yet verified on device.
 
 ### 简体中文
 - 「连接准备」新增 **本机蓝牙地址**：WinPlay 等接收端会核对手机真实蓝牙地址，而 Android 不让普通应用读取。Shizuku（或系统设置）实时读取优先，并会保存下来供之后没有 Shizuku 时使用；否则使用手动填写的地址。填写会校验格式（拒绝占位、随机、组播及格式错误的地址），日志与诊断报告只记录来源（`bluetooth.identitySource`），不记录地址本身。
-- 验证：546 项 JVM 测试、`spotlessCheck`、`lintStandardDebug` 和 `assembleRemoteDebug` 均通过。尚未实机验证。
+- Shizuku 未就绪、且没有手动填写或保存过地址时，点 **启动连接** 会先提示填写本机真实蓝牙地址并说明查找位置，保存后自动继续连接；选 **仍然连接** 则与以前相同。
+- README：更新原生视频按接收端宽高比编码、DiPlay 与 WinPlay 1.2.5 触控、媒体键、WinPlay 约 25 分钟运行，以及 WinPlay 桌面测试说明。
+- 验证：546 项 JVM 测试、26 项 Python 测试、`spotlessCheck`、`lintStandardDebug`、`lintStandardRelease`、`assembleStandardRelease` 和 `assembleRemoteDebug` 均通过。手动地址流程与新提示尚未实机验证。
+
+Full changes / 完整变更: [v0.1.3-test.2...v0.1.3-test.3](https://github.com/wangxso/mcarplay/compare/v0.1.3-test.2...v0.1.3-test.3)
 
 ## [v0.1.3-test.2] - 2026-10-27
 
