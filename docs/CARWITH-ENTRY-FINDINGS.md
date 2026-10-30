@@ -494,7 +494,7 @@ mcarplay remoteDebug；接收端 vivo Pad Air `PA2353 / Android 14 / DiPlay 0.2.
 - DiPlay 的 `0x52 wIndex=4` 请求现触发 soft_connect 断开再接通，实测约 1.7 秒后恢复枚举。
 - DiPlay 不发布 mDNS，手机从 `0x4301 CarPlayStartSession` 接收端口 7000 与链路本地 IPv6，补 USB scope 后直连。
 - 01:15 会话约 3 分钟持续视频（约 20fps、recoveries=0），AAC-LC 48kHz 解码并进入 AudioTrack，
-  触控回帧记录一次 9ms；平板截图可见 CarWith 地图、Dock 和媒体卡片。本轮声音为日志证据，未取得新的用户听感确认。
+  触控回帧记录一次 9ms；平板截图可见 CarWith 地图、Dock 和媒体卡片。除日志证据外，用户随后确认平板实际播放出声音（听感确认，2026-10-30 补记）。
 - 该轮 DiPlay 的 bplist BigInteger 编码因同步时间值不足 8 字节而越界，`/feedback` 持续 500；
   手机将单调计时时钟按固定偏移平移至 NTP 纪元后，01:21 复测反馈为 200，音频开始后包含 sampleTime、timestamp、
   streamConnectionID，未再见对应越界。此前“真 iPhone 必须使用该纪元”的推断未获设备抓包验证，不作为结论。

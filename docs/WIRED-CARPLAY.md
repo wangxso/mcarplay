@@ -353,7 +353,8 @@ Python 台架等待 macOS 枚举的上限由 15 秒改为 45 秒；新伪序列�
    USB 邻居表。解码时去掉 scope、按白名单过滤字段值。
 4. 01:15 复测：DiPlay 记录 `wired iap2 identification accepted`、`authentication accepted`、`tx=0x4301`；soft_connect
    重枚举后约 1.7 秒恢复。AirPlay 经 USB NCM 建立，视频约 20 fps、`recoveries=0`，AAC-LC 48kHz 解码播放，触控回帧
-   一次 9ms；平板截图显示 CarWith 桌面（地图、Dock、媒体卡片与滚动歌词）。会话约 3 分钟未断。
+   一次 9ms；平板截图显示 CarWith 桌面（地图、Dock、媒体卡片与滚动歌词）。会话约 3 分钟未断。用户随后确认平板实际出声
+   （听感确认，2026-10-30 补记）。
 5. 同轮 DiPlay 每次 `POST /feedback` 均回 500：其 bplist 编码器把同步后的 NTP `timestamp` 作为 BigInteger
    编码，长度不足 8 字节时越界。根因在我们的计时时钟直接取 `System.nanoTime()`，NTP 秒数只有开机以来的值；
    现使用 1900 纪元 NTP。`TimingServer` 现以进程内固定偏移把单调时钟平移到 NTP 纪元，音频同步包共用同一时钟。
