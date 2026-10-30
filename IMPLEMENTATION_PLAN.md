@@ -6,6 +6,8 @@
 
 ## 当前基线与结论
 
+- **PR #17 外部音频断流补静音验收通过（10 月 30 日 20:26–20:48）：** `6ab4ec8` 的 remote debug 包已在小米 `2509FPN0BC` + WinPlay 1.2.5 台架复测。用户确认导航、暂停恢复、换曲和重连后声音均正常，无静音或延迟增长，并认可本次 PR 验收。日志记录 12 次 TTS 初始化、累计补静音 2846 帧、跳帧 0，以及两次手动断开后的重连。首轮推流统计跨 810.389 秒，RTP 样本时长为 810.389333 秒，未见时间轴累积落后。总体约 22 分钟分为三次会话；建议清单中的单次连续 15 分钟及第三次重连属于补充检查，不作为本次音频修复的验收阻塞项。接收端丢弃迟到包的根因仍未由接收端日志证实，不新增实车支持结论。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
 - **有线评审修复（10 月 30 日，PR #14）：** 修复 TCP 数据/ACK 顺序、RST/未知端口、连接表并发、等待 USB 时停止遗留启动标志及重新握手半帧；ENABLE 门控与空闲退避避免 bulk 忙循环，StartSession 使用单次 root 等待。USB 不再污染 Wi-Fi 输入，监听注销按页面实例处理；CHANGELOG 补齐完整有线控制链路及共用 NTP/UDP/视频时钟改动。661 项 JVM、33 项 Python 测试及格式、standard/remote debug lint/构建通过；验证以本次自动化回归为限，未新增实车结论。
 
 - **DiPlay 有线 CarPlay 台架（10 月 30 日，PR #14）：** 安卓平板（vivo `PA2353`，Android 14）上的 DiPlay 0.2.22 以 USB 主机身份接入 root 手机，完成 usbmux/lockdown/carkit、有线 iAP2 识别与 MFi 认证、CarPlay 模式重枚举（`0x52 wIndex=4`，soft_connect 模拟）和 `CarPlayStartSession`；手机从 StartSession 取得接收端地址（DiPlay 不发 mDNS），CarWith 视频约 20fps、AAC 音频和触控经 USB NCM 上的 AirPlay 到达平板，用户凭听感确认平板实际出声。修复 usbmux 读写互等与 NTP 计时时钟纪元（后者导致 DiPlay `/feedback` 每次 500）。仅为平板台架，约 3 分钟会话，不替代车机验收。详见 `docs/WIRED-CARPLAY.md`。

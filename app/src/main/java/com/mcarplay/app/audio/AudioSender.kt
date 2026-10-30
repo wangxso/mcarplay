@@ -375,6 +375,9 @@ class AudioSender(
             sequence = 0
             timestamp = 0L
             nonceCounter = 0L
+            externalPending = 0
+            externalCarry = null
+            externalCarryOffset = 0
             startSyncLoop()
             Thread(
                 {
@@ -418,45 +421,110 @@ class AudioSender(
         if (externalRunning.get()) stop()
     }
 
+    /** 外部 PCM 拼帧状态：当前帧已填字节数，以及上一块没用完的 PCM。仅外部发送线程访问。 */
+    private var externalPending = 0
+    private var externalCarry: ByteArray? = null
+    private var externalCarryOffset = 0
+
+    /**
+     * 外部 PCM 发送循环：节拍与断流补静音见 [ExternalAudioPacer]。
+     * 每个帧槽喂一帧 PCM（AAC 通路经编码器，可能吐出 0~N 包），RTP 时间戳仍按实际发出的包累加。
+     */
     private fun runExternalLoop() {
-        val chunk = ByteArray(framePcmBytes)
-        var pending = 0
-        var nextSendAt = System.nanoTime()
-        var lastStatsAt = nextSendAt
-        val packetNanos = samplesPerPacket * 1_000_000_000L / sampleRate
+        val frame = ByteArray(framePcmBytes)
+        val silence = ByteArray(framePcmBytes)
+        val pacer = ExternalAudioPacer(samplesPerPacket.toInt(), sampleRate)
+        var lastStatsAt = System.nanoTime()
+        var gapFrames = 0L
+        var gapCount = 0L
         while (running.get() && externalRunning.get()) {
-            val pcm = externalPcm.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
-            var offset = 0
-            while (offset < pcm.size && running.get()) {
-                val size = minOf(chunk.size - pending, pcm.size - offset)
-                pcm.copyInto(chunk, pending, offset, offset + size)
-                pending += size
-                offset += size
-                if (pending != chunk.size) continue
-                val payloads = if (codec == AudioCodec.AAC_LC) aacEncoder?.encode(chunk, chunk.size).orEmpty() else listOf(chunk)
-                for (payload in payloads) {
-                    val now = System.nanoTime()
-                    if (now - nextSendAt > 250_000_000L) nextSendAt = now
-                    val waitNanos = nextSendAt - now
-                    if (waitNanos > 0) {
+            val ready = assembleExternalFrame(frame)
+            when (val step = pacer.next(System.nanoTime(), ready)) {
+                is ExternalAudioPacer.Step.Wait -> {
+                    if (ready) {
                         java.util.concurrent.TimeUnit.NANOSECONDS
-                            .sleep(waitNanos)
+                            .sleep(step.nanos)
+                    } else {
+                        awaitExternalPcm(step.nanos)
                     }
-                    if (!running.get() || !sendPayload(payload)) return
-                    nextSendAt += packetNanos
-                    if (!selfChecked && codec == AudioCodec.AAC_LC) {
-                        selfChecked = true
-                        verifyEncodedFrame(payload)
-                    }
+                    continue
                 }
-                pending = 0
-                val now = System.nanoTime()
-                if (now - lastStatsAt >= 30_000_000_000L) {
-                    lastStatsAt = now
-                    log("AUDIO: 外部 PCM 推流中（累计 $packetsSent 包，${bytesSent / 1024}KB，seq=$sequence ts=$timestamp）")
+                ExternalAudioPacer.Step.Send -> {
+                    if (gapFrames > 0) {
+                        gapCount++
+                        if (gapCount <= 5 || gapCount % 50 == 0L) {
+                            log(
+                                "AUDIO: 外部 PCM 断流约 ${gapFrames * samplesPerPacket * 1000 / sampleRate}ms，" +
+                                    "已补 $gapFrames 帧静音保持时间轴连续（第 $gapCount 次）",
+                            )
+                        }
+                        gapFrames = 0
+                    }
+                    externalPending = 0
+                    if (!sendExternalFrame(frame, real = true)) return
+                }
+                ExternalAudioPacer.Step.Fill -> {
+                    gapFrames++
+                    if (!sendExternalFrame(silence, real = false)) return
+                }
+                is ExternalAudioPacer.Step.Skip -> {
+                    // 发送线程被拖住：按丢包处理，seq 与时间戳一起前进
+                    sequence = ((sequence + step.frames) and 0xFFFFL).toInt()
+                    timestamp += step.frames * samplesPerPacket
+                    log("AUDIO: 外部 PCM 发送线程落后过多，跳过 ${step.frames} 帧（seq/ts 同步前进）")
                 }
             }
+            val now = System.nanoTime()
+            if (now - lastStatsAt >= 30_000_000_000L) {
+                lastStatsAt = now
+                log(
+                    "AUDIO: 外部 PCM 推流中（累计 $packetsSent 包，${bytesSent / 1024}KB，seq=$sequence ts=$timestamp，" +
+                        "补静音 ${pacer.filledFrames} 帧，跳过 ${pacer.skippedFrames} 帧）",
+                )
+            }
         }
+    }
+
+    /** 不阻塞地从外部队列拼帧；返回 [frame] 是否已满一整帧。 */
+    private fun assembleExternalFrame(frame: ByteArray): Boolean {
+        while (externalPending < frame.size) {
+            val source = externalCarry ?: externalPcm.poll() ?: return false
+            val size = minOf(frame.size - externalPending, source.size - externalCarryOffset)
+            source.copyInto(frame, externalPending, externalCarryOffset, externalCarryOffset + size)
+            externalPending += size
+            externalCarryOffset += size
+            if (externalCarryOffset == source.size) {
+                externalCarry = null
+                externalCarryOffset = 0
+            } else {
+                externalCarry = source
+            }
+        }
+        return true
+    }
+
+    /** 最多等 [nanos]（上限 100ms，好及时响应 stop）等下一块外部 PCM。 */
+    private fun awaitExternalPcm(nanos: Long) {
+        if (externalCarry != null) return
+        val wait = nanos.coerceIn(1L, ExternalAudioPacer.IDLE_WAIT_NANOS)
+        externalCarry = externalPcm.poll(wait, java.util.concurrent.TimeUnit.NANOSECONDS) ?: return
+        externalCarryOffset = 0
+    }
+
+    /** 编码（AAC 通路）并发出一帧；返回 false 表示链路已断。 */
+    private fun sendExternalFrame(
+        pcm: ByteArray,
+        real: Boolean,
+    ): Boolean {
+        val payloads = if (codec == AudioCodec.AAC_LC) aacEncoder?.encode(pcm, pcm.size).orEmpty() else listOf(pcm)
+        for (payload in payloads) {
+            if (!running.get() || !sendPayload(payload)) return false
+            if (real && !selfChecked && codec == AudioCodec.AAC_LC) {
+                selfChecked = true
+                verifyEncodedFrame(payload)
+            }
+        }
+        return true
     }
 
     /** 捕获配置：媒体/游戏/导航等常见播放用途（逐项添加，个别用途被系统拒绝时跳过）。 */

@@ -50,6 +50,41 @@ class AudioSenderTest {
     }
 
     @Test
+    fun externalStallIsFilledWithSilenceOnContinuousTimeline() {
+        DatagramSocket(0).use { receiver ->
+            receiver.soTimeout = 2000
+            val sender = AudioSender("127.0.0.1", receiver.localPort, key, {})
+            val pcm = ByteArray(AudioSender.PACKET_BYTES) { (it * 31 + 5).toByte() }
+            try {
+                org.junit.Assert.assertTrue(sender.startExternalSource())
+                sender.submitExternalPcm(pcm)
+                // 之后上游断流：发送端应自己补静音包，seq/ts 逐包连续
+                repeat(4) { index ->
+                    val packet = DatagramPacket(ByteArray(4096), 4096)
+                    receiver.receive(packet)
+                    val wire = packet.data.copyOf(packet.length)
+                    val sequence = ((wire[2].toInt() and 0xFF) shl 8) or (wire[3].toInt() and 0xFF)
+                    val timestamp =
+                        java.nio.ByteBuffer
+                            .wrap(wire, 4, 4)
+                            .int
+                    assertEquals(index, sequence)
+                    assertEquals(index * AudioSender.SAMPLES_PER_PACKET, timestamp)
+                    val nonce = ByteArray(12).also { wire.copyOfRange(wire.size - 8, wire.size).copyInto(it, 4) }
+                    val plain = AirPlayCrypto.chachaOpen(key, nonce, wire.copyOfRange(12, wire.size - 8), wire.copyOfRange(4, 12))
+                    if (index == 0) {
+                        assertArrayEquals(pcm, AudioSender.bigEndianS16(plain))
+                    } else {
+                        assertArrayEquals(ByteArray(AudioSender.PACKET_BYTES), plain)
+                    }
+                }
+            } finally {
+                sender.stopExternalSource()
+            }
+        }
+    }
+
+    @Test
     fun externalPcmIsReassembledAndEncryptedAcrossProducerChunks() {
         DatagramSocket(0).use { receiver ->
             receiver.soTimeout = 2000

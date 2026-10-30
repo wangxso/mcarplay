@@ -13,6 +13,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -212,6 +213,8 @@ class CarWithDiscoveryResponderTest {
                     probe.connect(InetSocketAddress(loopback, port), 200)
                 } catch (_: ConnectException) {
                     return
+                } catch (_: SocketException) {
+                    // A probe queued in the backlog while the listener closes is reset; retry until it is refused.
                 }
             }
             Thread.sleep(10)
