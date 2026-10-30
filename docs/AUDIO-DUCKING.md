@@ -72,7 +72,7 @@ flowchart LR
 ## 尚未验证
 
 - DiPlay、MacPlay 和真实车机上的听感；WinPlay 1.2.5 只验证了默认 -15dB，设置项的其他取值和会话中调整未实机验证。
-- 短时上游停顿（CarWith 卡顿、Wi-Fi 抖动）仍可能在 RTP 时间线上留下空洞，这与混音无关，需要在发送端让时间戳跟随墙钟，另行处理。
+- 混音与 PR #17 的发送端断流补静音（`ExternalAudioPacer`：CarWith 停顿时补静音，让 RTP 时间线跟随墙钟）合并后的组合尚未一起上台架；两者分别在 WinPlay 1.2.5 上验收过（见 `docs/CARWITH-ENTRY-FINDINGS.md` 2026-10-30 两节）。
 - CarWith 送 MEDIA/TTS 的实际节奏：若 TTS 远快于实时一次性送完，提示会在缓存里等待音乐节拍；若 MEDIA 分块间隔超过 `mediaIdleMs`，提示可能在音乐分块之间单独插出。需要用实机日志确认后再调参数。
 - CarWith 在导航时是否自己暂停音乐（发 MEDIA_PAUSE）：若是，听感会是「音乐暂停→提示→音乐继续」，与本方案无关，需要从日志区分。
 - 9240 是否也带着导航语音：小米的 MEDIA 来自 `RemoteMediaAudioProcessor`，TTS 来自 `NaviAudioManager`（见 `docs/CARWITH-ENTRY-FINDINGS.md` 2026-10-25 一节），没有证据表明二者互斥。若 MEDIA 捕获也包含导航语音，混音后会听到双重或带回声的提示；旧实现在提示期间丢弃音乐，正好掩盖了这种情况。台架上一旦听到，需要改为提示期间把音乐压到更低（如 -40dB）或回到丢弃策略，并记录证据。
