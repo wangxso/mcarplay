@@ -220,6 +220,10 @@ USB 角色切换、USB 主机侧 iAP2，以及音频/触控均未由该次运行
 USB AirPlay 媒体链路并返回主界面。自动发现失败时依次尝试 USB 邻居地址和入口中的手动地址；失败页和
 「停止并恢复 USB」都保留在入口内。
 
+回滚时机：App 进程退出（root 脚本按 PID 监视）、会话结束（推流结束或建立失败时 App 自动断开并回滚）
+或用户停止。root 脚本另有 24 小时兜底期限，只防 App 存活但失控；早期版本的 30 分钟期限会在推流中途
+拆掉 gadget，已取消。命令行工具 `tools/wired_ncm_bench.py` 仍按 `--seconds`（10–1800）限时。
+
 设备为小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，小米 CarLife
 `8.8.5`（274），root 管理器为 KernelSU；接收端为 MacPlay `1.2.4`（41）。手机 USB 直连 Mac，无线 adb
 只负责观察，不承载媒体。

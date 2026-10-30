@@ -86,7 +86,11 @@ object WiredUsbMuxMain {
     ) {
         private val decoder = UsbMuxFrameDecoder()
         private var ep0: FileDescriptor? = null
+
+        @Volatile
         private var bulkOut: FileDescriptor? = null
+
+        @Volatile
         private var bulkIn: FileDescriptor? = null
         private var reader: Thread? = null
         private var writer: Thread? = null
@@ -243,7 +247,13 @@ object WiredUsbMuxMain {
         }
 
         private fun openBulkIfReady() {
-            if (bulkOut != null && bulkIn != null) return
+            if (bulkOut != null && bulkIn != null) {
+                // 端点保持打开时读线程也可能已退出（坏帧、DISABLE→ENABLE 时旧线程尚未结束），
+                // 主循环每轮都检查一次，否则 USBMUX 接收会永久停止。
+                startWriter()
+                startReader()
+                return
+            }
             val base = ep0File.parentFile ?: return
             try {
                 if (bulkOut == null) {
@@ -268,6 +278,9 @@ object WiredUsbMuxMain {
 
         private fun startReader() {
             if (reader?.isAlive == true) return
+            if (bulkOut == null) return
+            // 只有旧读线程已结束才会走到这里，解码器不再被并发访问；新线程从流边界重新开始。
+            decoder.reset()
             reader =
                 Thread(
                     {
@@ -315,7 +328,8 @@ object WiredUsbMuxMain {
         private fun readLoop() {
             val fd = bulkOut ?: return
             val buffer = ByteArray(16 * 1024)
-            while (true) {
+            // 端点被 closeBulk 关闭或换成新的描述符后本线程退出，由主循环为新端点另起读线程。
+            while (bulkOut === fd) {
                 if (!poll(fd, POLL_MILLIS)) continue
                 val count =
                     try {

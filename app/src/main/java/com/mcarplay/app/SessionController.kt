@@ -422,6 +422,9 @@ object SessionController {
 
     internal fun isUsbMediaBenchConnected(): Boolean = usbMediaEndpoint != null
 
+    /** 当前 USB 台架会话是否持有 root 资源释放器（断开时由它回滚并通知入口）。 */
+    internal fun hasUsbMediaCleanup(): Boolean = usbMediaCleanup != null
+
     /** USB NCM 一键入口的 root 资源释放器；普通无线路径始终为 null。 */
     @Volatile
     private var usbMediaCleanup: (() -> Unit)? = null
@@ -779,6 +782,26 @@ object SessionController {
                         sessionStarting.set(false)
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * USB 台架会话的终态（推流结束，或配对没有建立推流）：与用户断开走同一路径，
+     * 清空台架状态并回滚 root 资源。否则 [usbMediaEndpoint] 会残留到下一次无线会话
+     * （强制音频基线、英雄卡显示 USB），root gadget 也不会恢复。
+     * 在后台线程执行：推流结束回调跑在视频线程上，disconnect 会停止该线程。
+     */
+    private fun finishUsbMediaBench(
+        usb: UsbMediaEndpoint,
+        reason: DiagnosticCode,
+    ) {
+        val context = appContext ?: return
+        Bg.run("usb-media-finish") {
+            synchronized(this) {
+                if (usbMediaEndpoint !== usb) return@run
+                appendLog("USB-BENCH: 会话已结束（${reason.name}），释放台架")
+                disconnect(context, reason)
             }
         }
     }
@@ -3238,6 +3261,7 @@ object SessionController {
                                                 // 音频拆链归因：起过音频却很快被拆 → 记下该档位
                                                 // 不兼容，下次连接自动换档（见 attributeAudioTeardown）。
                                                 attributeAudioTeardown()
+                                                if (usb != null) finishUsbMediaBench(usb, DiagnosticCode.VIDEO_CLOSED)
                                             },
                                         )
                                     videoSender = sessionVideoSender
@@ -3327,6 +3351,7 @@ object SessionController {
                     if (ownsConnection() && videoSender?.isRunning != true) {
                         ConnectionDiagnostics.timeline.abandon(diagnosticAttempt, wasCancelled())
                         BtSessionGate.sessionActive = false
+                        if (usb != null && !wasCancelled()) finishUsbMediaBench(usb, DiagnosticCode.CONNECTION_INCOMPLETE)
                         // 收尾竞态：晚到 0x4301 若恰好在「配对已失败、互斥尚未释放」的
                         // 窗口内到达，会被暂存但没人消费。此处补投一次——车机等 15s
                         // 无人连入就拆链，错过这一投就是整轮失败（2026-10-18 分析）。

@@ -72,6 +72,20 @@ class UsbMuxProtocolTest {
     }
 
     @Test
+    fun decoderResetDropsPartialFrameFromPreviousStream() {
+        val decoder = UsbMuxFrameDecoder()
+        val stale = UsbMuxProtocol.frame(UsbMuxProtocol.PROTOCOL_SETUP, byteArrayOf(0x07), sequence = 3)
+        val fresh = UsbMuxProtocol.frame(UsbMuxProtocol.PROTOCOL_SETUP, byteArrayOf(0x07), sequence = 9)
+        decoder.append(stale.copyOfRange(0, 9))
+
+        decoder.reset()
+        decoder.append(fresh)
+
+        assertEquals(9, decoder.nextFrame()!!.sequence)
+        assertEquals(0, decoder.bufferedBytes)
+    }
+
+    @Test
     fun decoderRejectsOversizedFrameBeforeBufferingIt() {
         val decoder = UsbMuxFrameDecoder(maximumFrameBytes = 64)
         decoder.append(ByteArray(16).also { UsbMuxProtocol.putU32(it, 4, 65) })

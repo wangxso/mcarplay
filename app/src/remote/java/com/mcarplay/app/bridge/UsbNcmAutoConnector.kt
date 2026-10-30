@@ -58,7 +58,13 @@ object UsbNcmAutoConnector {
     private const val REMOTE_LOG = "/data/local/tmp/mcarplay-ncm-bench.log"
     private const val IDENTITY_PREFS = "usb_ncm_identity"
     private const val PSEUDO_SERIAL_KEY = "pseudo_serial_v1"
-    private const val LEASE_SECONDS = 1_800
+
+    /**
+     * root 脚本的兜底期限。一键入口的真实回滚条件是 App 进程退出（脚本按 PID 监视）与会话结束
+     * （SessionController 在推流结束或建立失败时调用 cleanup）；期限只防止 App 存活但失控，
+     * 不能短到截断正在进行的会话（此前 30 分钟会在推流中途拆掉 gadget）。
+     */
+    private const val LEASE_SECONDS = 86_400
     private const val START_SESSION_WAIT_MILLIS = 45_000L
     private const val START_SESSION_POLL_MILLIS = 500L
     private val ROOT_SU_CANDIDATES =
@@ -266,7 +272,9 @@ object UsbNcmAutoConnector {
     fun stop(context: Context) {
         generation.incrementAndGet()
         publish(Snapshot(Phase.STOPPING, "正在断开媒体并恢复 Android USB…"))
-        if (SessionController.isSessionRunning() || SessionController.sessionStarting.get()) {
+        // 只结束本入口建立的 USB 会话：其 cleanup 回调负责回滚并发布结果。其它情况（仍在建立、
+        // 会话已结束，或当前是无线会话）不打断现有连接，直接回滚 root 资源，否则 STOPPING 无人收尾。
+        if (SessionController.hasUsbMediaCleanup()) {
             SessionController.disconnect(context)
         } else {
             Bg.run("usb-ncm-stop") {

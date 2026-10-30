@@ -197,6 +197,11 @@ class UsbMuxFrameDecoder(
         if (bytes.isNotEmpty()) pending += bytes
     }
 
+    /** 丢弃未成帧的残留字节：新的 bulk 读取线程从流边界重新开始。 */
+    fun reset() {
+        pending = ByteArray(0)
+    }
+
     fun nextFrame(): UsbMuxFrame? {
         if (pending.size < UsbMuxProtocol.HEADER_BYTES) return null
         val length = UsbMuxProtocol.readU32(pending, 4)
