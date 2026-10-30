@@ -46,6 +46,8 @@
     <string name="sf_audio_fallback_off">Off: video only when no audio format is declared</string>
     <string name="sf_scale_running">Applies on the next connection; the current one runs at %1$d%%</string>
     <string name="sf_scale_saved">Resolution %1$d%% saved; applies on the next connection</string>
+    <string name="sf_duck_saved">Music lowered to %1$d dB during navigation</string>
+    <string name="sf_duck_off">Music not lowered during navigation</string>
     <string name="sf_fps_set">Frame rate set to %1$d fps</string>
     <string name="sf_fps_live">Frame rate set to %1$d fps (applied now)</string>
     <string name="sf_throttle">Touch throttle %1$s</string>
@@ -54,7 +56,7 @@
     <string name="sm_orientation_desc">Show portrait apps full-screen landscape on the car</string>
     <string name="sm_dock_desc">Wallpaper dimming opacity and blur</string>
     <string name="sm_map_desc">Map app for the dashboard map screen</string>
-    <string name="sm_display_desc">Stream resolution scale and target frame rate</string>
+    <string name="sm_display_desc">Stream resolution scale, target frame rate and music volume during navigation</string>
     <string name="sr_on_home">On home (%1$d)</string>
     <string name="sr_off_home">Not on home (%1$d)</string>
 </resources>

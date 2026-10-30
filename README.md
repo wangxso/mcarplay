@@ -34,7 +34,7 @@ October 27, 2026.
 | Native music | 44.1 kHz PCM converted to 48 kHz AAC-LC; audible playback confirmed |
 | Combined playback | About 25 minutes with music on WinPlay 1.2.5; about 6 minutes 36 seconds on DiPlay without audio drops, underruns or write errors |
 | Real vehicle compatibility | Not yet verified for the mcarplay CarWith bridge |
-| Navigation announcements | Prompt audio from CarWith reached WinPlay 1.2.5 in logs; listening quality and interruption of music not separately verified |
+| Navigation announcements | WinPlay 1.2.5 bench (2026-10-30): music is lowered to -15 dB during prompts and comes back afterwards; the level is adjustable under car settings → Display. Other receivers not verified |
 | Pause/resume, runs longer than 25 minutes | Further validation required |
 
 Test phone: Xiaomi 17 Pro Max (`2509FPN0BC`), HyperOS `OS4.0.4.0.XPBCNXM`,

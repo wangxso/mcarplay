@@ -10,6 +10,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
+import com.mcarplay.app.audio.AudioDuckingPrefs
 import com.mcarplay.app.bt.AutoConnectPrefs
 import com.mcarplay.app.compat.CompatibilityPrefs
 import com.mcarplay.app.input.TouchRouter
@@ -708,6 +709,37 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             CompatibilityPrefs.setAudioBaseline(ctx, enabled)
             hostToast(getString(if (enabled) R.string.sf_audio_fallback_on else R.string.sf_audio_fallback_off))
         }
+
+        // 导航时音乐音量（ducking 幅度）：滑条 0..30 → 0..-30dB；会话中调整立即生效
+        val duckSeek = view.findViewById<SeekBar>(R.id.duckLevelSeek)
+        val duckValue = view.findViewById<TextView>(R.id.duckLevelValue)
+
+        fun duckLabel(db: Int) = if (db == 0) getString(R.string.lay_duck_level_off) else getString(R.string.lay_duck_level_value, db)
+
+        val savedDuck = AudioDuckingPrefs.duckDb(ctx)
+        duckSeek.progress = AudioDuckingPrefs.progressOfDb(savedDuck)
+        duckValue.text = duckLabel(savedDuck)
+        duckSeek.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    seekBar: SeekBar?,
+                    progress: Int,
+                    fromUser: Boolean,
+                ) {
+                    if (!fromUser) return
+                    duckValue.text = duckLabel(AudioDuckingPrefs.dbOfProgress(progress))
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    val db = AudioDuckingPrefs.dbOfProgress(duckSeek.progress)
+                    AudioDuckingPrefs.setDuckDb(ctx, db)
+                    SessionController.applyDuckDb(db)
+                    hostToast(if (db == 0) getString(R.string.sf_duck_off) else getString(R.string.sf_duck_saved, db))
+                }
+            },
+        )
 
         // 滑条 progress（0..26）→ 百分比（30..160，步进 5）
         fun progressOf(percent: Int) = (percent - DisplayPrefs.SCALE_MIN) / DisplayPrefs.SCALE_STEP
