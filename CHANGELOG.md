@@ -5,21 +5,32 @@ Test releases are experimental and do not establish real-vehicle compatibility.
 
 ## [Unreleased]
 
+## [v0.1.3-test.4] - 2026-10-30
+
+> Experimental fix prerelease. Audio mixing and gap filling were tested separately on WinPlay 1.2.5; their combined build and live duck-level adjustment still need device validation. This does not establish real-car compatibility.
+> 实验性修复预发布。混音与断流补静音已分别在 WinPlay 1.2.5 验证；组合构建及连接中调整压低音量仍待实机验证，不代表实车兼容。
+
 ### English
+- Keep the external CarWith audio RTP timeline aligned with elapsed time across upstream stalls: after the first real frame, fill gaps with encoded silence after a 120 ms grace period; skip overdue slots if the sender thread falls more than one second behind. This addresses persistent silence after navigation or short interruptions. In the 20:26–20:48 WinPlay 1.2.5 bench window, the user confirmed normal sound after navigation, pause/resume, track changes and reconnection; sender logs recorded 2,846 silence frames, no skipped slots and no accumulated timeline lag. These results cover the gap-fill build, separately from the mixing build below.
 - Add **界面语言 / Language**: the interface can switch between Simplified Chinese (the default, regardless of the system language) and English, covering the main screen, dialogs, car settings, the detection panel, the update page, notifications, the car dashboard and the disclaimer. Android 13 and later also list both languages in the system per-app language settings. Logs, diagnostic reports and protocol fields stay in Chinese.
 - After each update, the first launch shows that version's release notes in the chosen language, from the `CHANGELOG.md` entry bundled into the APK; validation lines are omitted, and a fresh install shows the disclaimer instead. The update page also shows only the chosen language's half of the release notes.
 - When a target head unit is selected, log once per connection start which Bluetooth services it advertises over SDP and whether the wireless CarPlay iAP2 service (`…caff`) is among them, so a head unit that lacks wireless CarPlay can be told apart from one that is not in its pairing window. An SDP timeout is reported as undetermined, not as missing.
 - Navigation prompts over music: CarWith's navigation (9241) and voice (9242) audio is now mixed on the phone with the music (9240) into the one negotiated AirPlay stream. The music fades to -15 dB over 250 ms before a prompt and back over 400 ms after it, instead of being dropped for 500 ms after every prompt packet. Those drops left holes in the RTP timeline; on WinPlay 1.2.5 the music went silent for the rest of the session after the first prompt. Mixing happens before encoding, so the AAC-LC → PCM fallback is unchanged. Bench-tested on WinPlay 1.2.5 with a Xiaomi 17 Pro Max (2026-10-30): music was lowered during prompts and came back afterwards. DiPlay, MacPlay and real cars are not verified. See `docs/AUDIO-DUCKING.md`.
 - Add **Music volume during navigation** under car settings → Display (0 to -30 dB, default -15 dB); changes apply immediately while connected. Values other than -15 dB are not verified on device.
-- Validation: 568 JVM tests, `spotlessCheck`, `lintStandardDebug`, `assembleStandardDebug`, `lintRemoteDebug` and `assembleRemoteDebug` passed. The SDP log, language switching and the release-notes popup are not yet verified on device.
+- Make live duck-level handoff atomic so the audio worker cannot discard a newer setting while consuming an older one. Stabilize the discovery port-release test by retrying connection resets while still requiring connection refusal to pass.
+- Validation: 598 JVM tests and 26 Python tests, `spotlessCheck`, `lintStandardDebug`, `lintStandardRelease`, `assembleStandardDebug`, `lintRemoteDebug` and `assembleRemoteDebug` passed. The signed tag workflow also runs release checks and verifies the APK signature. The combined mixing/gap-fill build, live duck-level adjustment, SDP log, language switching and the release-notes popup are not yet verified on device.
 
 ### 简体中文
+- CarWith 外部音频断流时保持 RTP 时间轴跟随实际经过时间：首个真实帧之后，超过 120ms 宽限仍缺数据就补编码静音；发送线程落后超过 1 秒时跳过过期帧槽，处理导航或短暂中断后持续无声的问题。20:26–20:48 的 WinPlay 1.2.5 台架中，用户确认导航、暂停恢复、换曲和重连后声音正常；日志累计补静音 2846 帧、跳帧 0，未见时间轴累计落后。该结果来自补静音构建，与下述混音构建分别验证。
 - 新增 **界面语言**：界面可在简体中文（默认，不跟随系统语言）和英文之间切换，覆盖首页、各类弹窗、车机设置、检测面板、更新页、通知、车机仪表盘和免责声明；Android 13 及以上也会出现在系统「应用语言」设置中。日志、诊断报告和协议字段保持中文。
 - 每次更新后首次打开，按所选语言弹出该版本的更新内容，来源为打包进 APK 的 `CHANGELOG.md` 条目，不显示验证条目；全新安装则先显示免责声明。更新页的发行说明也只显示所选语言那一半。
 - 指定目标车机时，每次启动连接记录一次它通过 SDP 声明的蓝牙服务，以及其中是否有无线 CarPlay 的 iAP2 服务（`…caff`），用于区分「车机不支持无线 CarPlay」与「支持但未进入配对窗口」。SDP 超时记为「未确定」，不记为没有。
 - 音乐中插入导航提示：CarWith 的导航（9241）与语音（9242）音频现在在手机侧与音乐（9240）混成唯一一条已协商的 AirPlay 音频流，提示前音乐在 250ms 内淡到 -15dB、结束后 400ms 内淡回，不再在每个提示包后丢弃 500ms 音乐。被丢的样本会在 RTP 时间线上留下空洞，WinPlay 1.2.5 上表现为首次导航提示后整个会话无声。混音在编码之前，AAC-LC → PCM 降级不变。已在 WinPlay 1.2.5 + 小米 17 Pro Max 台架验证（2026-10-30）：提示期间音乐压低、结束后恢复；DiPlay、MacPlay 与真实车机未验证。详见 `docs/AUDIO-DUCKING.md`。
 - 新增 **车机设置 → 显示 → 导航时音乐音量**（0 至 -30dB，默认 -15dB），连接中调整立即生效；-15dB 以外的取值未实机验证。
-- 验证：568 项 JVM 测试、`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug`、`lintRemoteDebug` 和 `assembleRemoteDebug` 均通过。SDP 日志、语言切换和更新内容弹窗尚未实机验证。
+- 音量设置改为原子交接，避免音频线程处理旧值时丢掉刚更新的设置。发现服务端口释放测试遇到连接重置时重试，仍要求连接被拒绝才判定通过，减少 CI 偶发失败。
+- 验证：598 项 JVM 测试、26 项 Python 测试、`spotlessCheck`、`lintStandardDebug`、`lintStandardRelease`、`assembleStandardDebug`、`lintRemoteDebug` 和 `assembleRemoteDebug` 均通过。签名标签工作流另执行发布检查及 APK 签名校验。混音与补静音的组合构建、连接中调整压低音量、SDP 日志、语言切换和更新内容弹窗尚未实机验证。
+
+Full changes / 完整变更: [v0.1.3-test.3...v0.1.3-test.4](https://github.com/wangxso/mcarplay/compare/v0.1.3-test.3...v0.1.3-test.4)
 
 ## [v0.1.3-test.3] - 2026-10-29
 
