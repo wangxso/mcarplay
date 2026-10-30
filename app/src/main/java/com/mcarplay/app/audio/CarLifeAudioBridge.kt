@@ -5,6 +5,7 @@ import com.mcarplay.app.carlife.CarLifeChannel
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Bridges CarLife's native PCM into an already-negotiated CarPlay audio
@@ -54,7 +55,7 @@ class CarLifeAudioBridge(
 
     /** 会话中调整提示期间的音乐压低幅度；由工作线程在下一次处理时应用。 */
     fun setDuckDb(duckDb: Float) {
-        pendingDuckDb = duckDb
+        pendingDuckDb.set(duckDb)
     }
 
     fun submit(
@@ -73,7 +74,7 @@ class CarLifeAudioBridge(
     private val mixer = AudioDuckingMixer<CarLifeChannel>(targetSampleRate, ducking)
     private var duckingLogged = false
 
-    @Volatile private var pendingDuckDb: Float? = null
+    private val pendingDuckDb = AtomicReference<Float?>()
 
     /**
      * 9240 音乐直接混音输出；9241 导航 TTS、9242 语音提示进入提示缓存，由 [AudioDuckingMixer]
@@ -123,8 +124,7 @@ class CarLifeAudioBridge(
     }
 
     private fun applyPendingDuckDb() {
-        val duckDb = pendingDuckDb ?: return
-        pendingDuckDb = null
+        val duckDb = pendingDuckDb.getAndSet(null) ?: return
         if (duckDb == mixer.config.duckDb) return
         mixer.setDuckDb(duckDb)
         log("AUDIO: 导航时音乐音量改为 ${duckDb}dB（会话中生效）")

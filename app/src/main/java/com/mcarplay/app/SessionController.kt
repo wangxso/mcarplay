@@ -897,17 +897,16 @@ object SessionController {
         }
     }
 
-    /**
-     * 设置面板切「连接时真息屏」：会话中立即收放（没有会话时什么都不做）。
-     *
-     * 车机屏上就能操作，所以手机面板黑着也不影响切换；关掉会立刻把面板点亮。
-     */
-
     /** 「导航时音乐音量」在会话中调整：交给正在运行的 CarWith 原生音频桥（没有则下次连接生效）。 */
     fun applyDuckDb(duckDb: Int) {
         nativeAudioBridge?.setDuckDb(duckDb.toFloat())
     }
 
+    /**
+     * 设置面板切「连接时真息屏」：会话中立即收放（没有会话时什么都不做）。
+     *
+     * 车机屏上就能操作，所以手机面板黑着也不影响切换；关掉会立刻把面板点亮。
+     */
     fun applyScreenOffPreference(enabled: Boolean) {
         if (enabled) {
             enterPhoneScreenOff()
