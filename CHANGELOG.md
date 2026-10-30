@@ -7,7 +7,7 @@ Test releases are experimental and do not establish real-vehicle compatibility.
 
 ### English
 - Fix wired TCP ordering, peer-reset shutdown and unsupported-port resets; serialize connection-table teardown, reset framing on a fresh handshake, and gate FunctionFS bulk reads on ENABLE with idle backoff. Stopping while waiting for USB now releases the connection-start gate. Wait for StartSession in one bounded root call, keep the USB label out of the Wi-Fi SSID field, and let each wired page dispose only its own listener.
-- Shared wired/wireless media changes: use one monotonic clock translated to the NTP epoch for timing replies and audio sync (avoids DiPlay feedback encoding errors), tolerate transient UDP send failures for up to three seconds, and align video frame age and presentation timestamps to the monotonic clock so capture uptime timestamps do not break scheduling.
+- Shared wired/wireless media changes: use one monotonic clock translated to the NTP epoch for timing replies and audio sync (avoids DiPlay feedback encoding errors), tolerate transient UDP send failures for up to three seconds, and stamp screen video frame headers with the same NTP-epoch clock as the timing replies, so receivers that schedule frames by header time no longer see them as about 126 years old.
 - Add **界面语言 / Language**: the interface can switch between Simplified Chinese (the default, regardless of the system language) and English, covering the main screen, dialogs, car settings, the detection panel, the update page, notifications, the car dashboard and the disclaimer. Android 13 and later also list both languages in the system per-app language settings. Logs, diagnostic reports and protocol fields stay in Chinese.
 - After each update, the first launch shows that version's release notes in the chosen language, from the `CHANGELOG.md` entry bundled into the APK; validation lines are omitted, and a fresh install shows the disclaimer instead. The update page also shows only the chosen language's half of the release notes.
 - When a target head unit is selected, log once per connection start which Bluetooth services it advertises over SDP and whether the wireless CarPlay iAP2 service (`…caff`) is among them, so a head unit that lacks wireless CarPlay can be told apart from one that is not in its pairing window. An SDP timeout is reported as undetermined, not as missing.
@@ -17,7 +17,7 @@ Test releases are experimental and do not establish real-vehicle compatibility.
 
 ### 简体中文
 - 修复有线 TCP 数据与 ACK 顺序、对端 RST 退出和未知端口拒绝；串行化连接表清理，重新握手清空旧 framing，FunctionFS 仅在 ENABLE 后读端点并在空闲时退避。等待 USB 网卡期间停止会释放连接启动标志。StartSession 改为单次、有时限的 root 等待；USB 标签不再回填 Wi-Fi SSID，页面只注销自己注册的监听。
-- 有线/无线共用媒体链路：计时应答与音频同步统一使用平移到 NTP 纪元的单调时钟，避免 DiPlay 反馈编码异常；UDP 发送短暂失败有最多 3 秒宽限；视频帧龄和呈现时间戳统一到单调时钟，避免采集端 uptime 时间戳破坏发送节奏。
+- 有线/无线共用媒体链路：计时应答与音频同步统一使用平移到 NTP 纪元的单调时钟，避免 DiPlay 反馈编码异常；UDP 发送短暂失败有最多 3 秒宽限；屏幕视频帧头时间戳改用与计时应答相同的 NTP 纪元时钟，按帧头时间调度的接收端不再把画面当成约 126 年前的数据。
 - 新增 **界面语言**：界面可在简体中文（默认，不跟随系统语言）和英文之间切换，覆盖首页、各类弹窗、车机设置、检测面板、更新页、通知、车机仪表盘和免责声明；Android 13 及以上也会出现在系统「应用语言」设置中。日志、诊断报告和协议字段保持中文。
 - 每次更新后首次打开，按所选语言弹出该版本的更新内容，来源为打包进 APK 的 `CHANGELOG.md` 条目，不显示验证条目；全新安装则先显示免责声明。更新页的发行说明也只显示所选语言那一半。
 - 指定目标车机时，每次启动连接记录一次它通过 SDP 声明的蓝牙服务，以及其中是否有无线 CarPlay 的 iAP2 服务（`…caff`），用于区分「车机不支持无线 CarPlay」与「支持但未进入配对窗口」。SDP 超时记为「未确定」，不记为没有。
