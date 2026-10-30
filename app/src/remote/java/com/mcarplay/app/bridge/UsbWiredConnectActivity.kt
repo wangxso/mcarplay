@@ -25,6 +25,7 @@ class UsbWiredConnectActivity : AppCompatActivity() {
     private lateinit var iphoneIdentity: CheckBox
     private lateinit var directHost: EditText
     private var returnedToMain = false
+    private var stopObserving: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -124,34 +125,35 @@ class UsbWiredConnectActivity : AppCompatActivity() {
         root.addView(stop, matchWrap(top = 8))
         setContentView(ScrollView(this).apply { addView(root) })
 
-        UsbNcmAutoConnector.observe { snapshot ->
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                status.text =
-                    when (snapshot.phase) {
-                        UsbNcmAutoConnector.Phase.IDLE -> "等待连接"
-                        UsbNcmAutoConnector.Phase.REQUESTING_ROOT -> "正在请求 root"
-                        UsbNcmAutoConnector.Phase.PREPARING_USB -> "正在建立 USB 有线设备"
-                        UsbNcmAutoConnector.Phase.FINDING_PEER -> "正在查找接收端（DiPlay/MacPlay）"
-                        UsbNcmAutoConnector.Phase.STARTING_AIRPLAY -> "正在连接 AirPlay"
-                        UsbNcmAutoConnector.Phase.CONNECTED -> "USB 有线 CarPlay 已启动"
-                        UsbNcmAutoConnector.Phase.STOPPING -> "正在断开"
-                        UsbNcmAutoConnector.Phase.FAILED -> "连接失败"
+        stopObserving =
+            UsbNcmAutoConnector.observe { snapshot ->
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    status.text =
+                        when (snapshot.phase) {
+                            UsbNcmAutoConnector.Phase.IDLE -> "等待连接"
+                            UsbNcmAutoConnector.Phase.REQUESTING_ROOT -> "正在请求 root"
+                            UsbNcmAutoConnector.Phase.PREPARING_USB -> "正在建立 USB 有线设备"
+                            UsbNcmAutoConnector.Phase.FINDING_PEER -> "正在查找接收端（DiPlay/MacPlay）"
+                            UsbNcmAutoConnector.Phase.STARTING_AIRPLAY -> "正在连接 AirPlay"
+                            UsbNcmAutoConnector.Phase.CONNECTED -> "USB 有线 CarPlay 已启动"
+                            UsbNcmAutoConnector.Phase.STOPPING -> "正在断开"
+                            UsbNcmAutoConnector.Phase.FAILED -> "连接失败"
+                        }
+                    detail.text = snapshot.detail
+                    stop.visibility =
+                        if (snapshot.phase == UsbNcmAutoConnector.Phase.IDLE) View.GONE else View.VISIBLE
+                    if (snapshot.phase == UsbNcmAutoConnector.Phase.CONNECTED && !returnedToMain) {
+                        returnedToMain = true
+                        Toast.makeText(this, "USB 有线 CarPlay 已启动，正在返回主界面", Toast.LENGTH_SHORT).show()
+                        startActivity(
+                            Intent(this, MainActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                        )
+                        finish()
                     }
-                detail.text = snapshot.detail
-                stop.visibility =
-                    if (snapshot.phase == UsbNcmAutoConnector.Phase.IDLE) View.GONE else View.VISIBLE
-                if (snapshot.phase == UsbNcmAutoConnector.Phase.CONNECTED && !returnedToMain) {
-                    returnedToMain = true
-                    Toast.makeText(this, "USB 有线 CarPlay 已启动，正在返回主界面", Toast.LENGTH_SHORT).show()
-                    startActivity(
-                        Intent(this, MainActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-                    )
-                    finish()
                 }
             }
-        }
         if (UsbNcmAutoConnector.snapshotPhase() == UsbNcmAutoConnector.Phase.IDLE) {
             UsbNcmAutoConnector.connect(
                 this,
@@ -162,7 +164,8 @@ class UsbWiredConnectActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        UsbNcmAutoConnector.observe(null)
+        stopObserving?.invoke()
+        stopObserving = null
         super.onDestroy()
     }
 

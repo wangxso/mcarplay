@@ -9,6 +9,7 @@ import com.mcarplay.app.usb.Ep0Reply
 import com.mcarplay.app.usb.FfsEventType
 import com.mcarplay.app.usb.FunctionFs
 import com.mcarplay.app.usb.LockdownUsbServer
+import com.mcarplay.app.usb.UsbMuxConnectionTable
 import com.mcarplay.app.usb.UsbMuxControlRequests
 import com.mcarplay.app.usb.UsbMuxFrameDecoder
 import com.mcarplay.app.usb.UsbMuxFrameSequence
@@ -37,6 +38,7 @@ import kotlin.system.exitProcess
  */
 object WiredUsbMuxMain {
     private const val POLL_MILLIS = 200
+    private const val BULK_RETRY_MILLIS = 20L
     private const val MAX_EVENT_BATCH = 8
 
     @JvmStatic
@@ -100,7 +102,15 @@ object WiredUsbMuxMain {
         private var lastReenumerationAt = 0L
         private val writeLock = Any()
         private val frameSequence = UsbMuxFrameSequence()
-        private val connections = mutableMapOf<Int, UsbMuxTcpConnection>()
+
+        @Volatile
+        private var enabled = false
+        private val connections =
+            UsbMuxConnectionTable(
+                acceptsPort = { it == LOCKDOWN_PORT || lockdown.serviceNameForPort(it) != null },
+                writeFrame = ::writeTcpFrame,
+                onConnected = ::startTcpWorker,
+            )
         private val lockdown by lazy { LockdownUsbServer(::out, usbTransportIdentifier) }
 
         fun run(): Int {
@@ -132,10 +142,13 @@ object WiredUsbMuxMain {
                     FfsEventType.SETUP -> replyToControl(event.setup!!)
                     FfsEventType.ENABLE -> {
                         out("FFS ENABLE")
+                        enabled = true
+                        connections.reset(enabled = true)
                         openBulkIfReady()
                     }
                     FfsEventType.DISABLE -> {
                         out("FFS DISABLE")
+                        enabled = false
                         closeBulk()
                     }
                     else -> out("FFS ${event.type}")
@@ -247,6 +260,7 @@ object WiredUsbMuxMain {
         }
 
         private fun openBulkIfReady() {
+            if (!enabled) return
             if (bulkOut != null && bulkIn != null) {
                 // 端点保持打开时读线程也可能已退出（坏帧、DISABLE→ENABLE 时旧线程尚未结束），
                 // 主循环每轮都检查一次，否则 USBMUX 接收会永久停止。
@@ -330,23 +344,22 @@ object WiredUsbMuxMain {
             val buffer = ByteArray(16 * 1024)
             // 端点被 closeBulk 关闭或换成新的描述符后本线程退出，由主循环为新端点另起读线程。
             while (bulkOut === fd) {
-                if (!poll(fd, POLL_MILLIS)) continue
                 val count =
                     try {
                         Os.read(fd, buffer, 0, buffer.size)
                     } catch (error: ErrnoException) {
-                        if (error.errno == OsConstants.EAGAIN || error.errno == OsConstants.EINTR) continue
+                        if (error.errno == OsConstants.EAGAIN || error.errno == OsConstants.EINTR) {
+                            Thread.sleep(BULK_RETRY_MILLIS)
+                            continue
+                        }
                         throw error
                     }
-                if (count <= 0) continue
-                val bytes = buffer.copyOf(count)
-                out("USBMUX RX ${count}B ${hexPreview(bytes)}")
-                if (UsbMuxProtocol.isVersionMessage(bytes)) {
-                    frameSequence.reset()
-                    writeBulk(UsbMuxProtocol.versionReply())
-                    out("USBMUX v2 握手已应答")
+                if (count <= 0) {
+                    Thread.sleep(BULK_RETRY_MILLIS)
                     continue
                 }
+                val bytes = buffer.copyOf(count)
+                out("USBMUX RX ${count}B ${hexPreview(bytes)}")
                 decoder.append(bytes)
                 drainFrames()
             }
@@ -355,6 +368,20 @@ object WiredUsbMuxMain {
         private fun drainFrames() {
             while (true) {
                 val frame = decoder.nextFrame() ?: return
+                if (frame.protocol == UsbMuxProtocol.PROTOCOL_VERSION &&
+                    frame.length == UsbMuxProtocol.VERSION_MESSAGE_BYTES &&
+                    frame.magic == UsbMuxProtocol.VERSION
+                ) {
+                    connections.reset(enabled = enabled)
+                    synchronized(writeLock) {
+                        outbound.clear()
+                        frameSequence.reset()
+                        enqueueLocked(UsbMuxProtocol.versionReply())
+                    }
+                    startFile?.delete()
+                    out("USBMUX v2 握手已应答，旧连接已清理")
+                    continue
+                }
                 frameSequence.acceptInbound(frame.sequence)
                 out("USBMUX frame protocol=${frame.protocol} mux_tx=${frame.sequence} mux_rx=${frame.acknowledgement}")
                 when (frame.protocol) {
@@ -370,28 +397,10 @@ object WiredUsbMuxMain {
                                     tcp.payload.size,
                                 ),
                         )
-                        val connection =
-                            connections[tcp.sourcePort]
-                                ?: if (tcp.flags and UsbMuxProtocol.TCP_SYN != 0) {
-                                    UsbMuxTcpConnection(
-                                        sourcePort = tcp.sourcePort,
-                                        destinationPort = tcp.destinationPort,
-                                        writeFrame = ::writeTcpFrame,
-                                        log = ::out,
-                                    ).also {
-                                        connections[tcp.sourcePort] = it
-                                        startTcpWorker(it)
-                                    }
-                                } else {
-                                    out("USBMUX 忽略无 SYN 的 TCP 连接 ${tcp.sourcePort}->${tcp.destinationPort}")
-                                    null
-                                }
                         try {
-                            connection?.accept(tcp)
+                            connections.accept(tcp)
                         } catch (error: Throwable) {
                             out("USBMUX TCP 处理失败：${error.javaClass.simpleName}: ${error.message}")
-                            connection?.close()
-                            connections.remove(tcp.sourcePort)
                         }
                     }
                     else -> out("USBMUX protocol=${frame.protocol} length=${frame.length}")
@@ -437,6 +446,7 @@ object WiredUsbMuxMain {
                         )
                     } finally {
                         connection.close()
+                        connections.remove(connection)
                     }
                 },
                 "mcarplay-usbmux-tcp-${connection.destinationPort}-${connection.sourcePort}",
@@ -459,12 +469,6 @@ object WiredUsbMuxMain {
             }.onFailure { out("USBMUX 写入 CarPlayStartSession 失败：${it.message}") }
         }
 
-        private fun writeBulk(bytes: ByteArray) {
-            synchronized(writeLock) {
-                enqueueLocked(bytes)
-            }
-        }
-
         private fun writeTcpFrame(bytes: ByteArray) {
             synchronized(writeLock) {
                 val stamped = frameSequence.stampOutbound(bytes)
@@ -482,9 +486,9 @@ object WiredUsbMuxMain {
         }
 
         private fun closeBulk() {
+            connections.reset(enabled = false)
             outbound.clear()
-            connections.values.toList().forEach(UsbMuxTcpConnection::close)
-            connections.clear()
+            startFile?.delete()
             bulkOut?.let { runCatching { Os.close(it) } }
             bulkIn?.let { runCatching { Os.close(it) } }
             bulkOut = null

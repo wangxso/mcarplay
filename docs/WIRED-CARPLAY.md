@@ -361,6 +361,17 @@ Python 台架等待 macOS 枚举的上限由 15 秒改为 45 秒；新伪序列�
 
 该结果只覆盖安卓平板模拟的 USB 主机；真实车机的角色切换、USB 主机侧 iAP2 与车机网卡仍需实测。
 
+### 2026-10-30 代码评审后的生命周期与资源修复
+
+- TCP 序号分配和数据/ACK/FIN 入队使用同一连接锁；RST 立即终止接收、唤醒等待线程，未知端口返回 RST。
+- `UsbMuxConnectionTable` 串行化接收、重置和连接移除，旧 worker 不能删掉相同端口的新连接；USB DISABLE 与新 version 握手清理旧连接。
+- version 握手丢弃旧半帧，保留同次读取中的后续新帧；FunctionFS bulk 端点只在 ENABLE 后打开，非阻塞读取遇到 EAGAIN/空读退避 20ms。
+- 等待网卡时停止会在控制器锁内释放启动标志；USB 标签不再回填无线 SSID，页面监听按注册实例注销。
+- StartSession 改为单个 root shell 最多等待 45 秒，主进程仍并行观察 mDNS；取消或 mDNS 先到时结束 root 等待，不再每 500ms 调一次 su。
+
+661 项 JVM 测试、33 项 Python 测试、格式检查、standard/remote debug lint 与 APK 构建通过。
+这些是代码与自动化回归结果，没有新增车机或设备实测声明。
+
 ## 未核实事项
 
 以下来自公开逆向资料或经验值，均需台架或实车核对后再修正代码与本文：

@@ -194,6 +194,8 @@ class UsbMuxFrameDecoder(
     }
 
     fun append(bytes: ByteArray) {
+        // A new version handshake starts a fresh transport even if the old stream ended mid-frame.
+        if (UsbMuxProtocol.isVersionMessage(bytes)) reset()
         if (bytes.isNotEmpty()) pending += bytes
     }
 

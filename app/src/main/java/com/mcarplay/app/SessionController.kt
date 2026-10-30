@@ -887,6 +887,9 @@ object SessionController {
         pendingEndpointUpdate = null
         usbMediaEndpoint = null
         usbMediaCleanup = null
+        // The USB interface waiter can exit normally after losing its endpoint. Release the
+        // gate here while disconnect still owns the controller lock, never from a stale waiter.
+        sessionStarting.set(false)
         retireSession()
         // BT 控制会话只在这里（用户终态）退役，socket close 让保活读循环立刻退出：
         // 否则它阻塞到对端超时（实测 ~24s）才结束，用户取消后英雄卡持续转圈。
@@ -2628,7 +2631,7 @@ object SessionController {
                 "密码=${if (endpoint.passphrase.isEmpty()) "(空)" else "已获取"}",
         )
         phaseHint = t(R.string.sc_resolving_hotspot)
-        ssidSink?.invoke(endpoint.ssid)
+        if (usb == null) ssidSink?.invoke(endpoint.ssid)
         // 凭据缓存对两条路径都要写：0x5703 走 onWifiCredentials，0x4301 只到这里。
         // 漏写会让「车机热点 → 去连接」手动兜底误报「尚未拿到热点密码（需 0x5703）」
         // ——2026-10-22 奥迪日志里就是这么把排查方向带偏的。

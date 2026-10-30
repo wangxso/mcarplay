@@ -304,6 +304,20 @@ peer)
     echo "NCM: peer route ready on $(cat "$F/ifname")"
     exit 0
     ;;
+wait-start-session)
+    # A single authorized shell waits; no repeated su requests from the app.
+    i=0
+    while [ "$i" -lt 450 ]; do
+        [ -f "$S/owner" ] && [ "$(cat "$S/owner")" = mcarplay-ncm-bench-v1 ] || exit 3
+        if [ -f "$S/carplay-start" ]; then
+            cat "$S/carplay-start"
+            exit 0
+        fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+    exit 3
+    ;;
 start-session)
     [ -f "$S/owner" ] && [ "$(cat "$S/owner")" = mcarplay-ncm-bench-v1 ]
     [ -f "$S/carplay-start" ] || exit 3
@@ -318,7 +332,7 @@ peers)
     exit 0
     ;;
 up) ;;
-*) echo 'NCM: expected up, wait-iface, wait-address, peer, peers, start-session or down'; exit 1;;
+*) echo 'NCM: expected up, wait-iface, wait-address, peer, peers, start-session, wait-start-session or down'; exit 1;;
 esac
 
 [ "$(id -u)" = 0 ]

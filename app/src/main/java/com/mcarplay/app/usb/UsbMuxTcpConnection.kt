@@ -29,6 +29,13 @@ class UsbMuxTcpConnection(
     fun accept(segment: UsbMuxTcpSegment) {
         require(segment.sourcePort == sourcePort)
         require(segment.destinationPort == destinationPort)
+        if (segment.flags and UsbMuxProtocol.TCP_RST != 0) {
+            synchronized(lock) {
+                failure = IOException("USBMUX TCP reset by peer source=$sourcePort")
+                close()
+            }
+            return
+        }
         if (segment.flags and UsbMuxProtocol.TCP_SYN != 0) {
             acceptSyn(segment)
             return
@@ -52,18 +59,18 @@ class UsbMuxTcpConnection(
     }
 
     fun sendControl(flags: Int) {
-        val frame =
-            synchronized(lock) {
-                checkOpenLocked()
+        synchronized(lock) {
+            checkOpenLocked()
+            writeFrame(
                 UsbMuxProtocol.tcpFrame(
                     sourcePort = destinationPort,
                     destinationPort = sourcePort,
                     sequence = nextSequence.toInt(),
                     acknowledgement = expectedReceiveSequence.toInt(),
                     flags = flags,
-                )
-            }
-        writeFrame(frame)
+                ),
+            )
+        }
     }
 
     fun receive(
@@ -156,8 +163,8 @@ class UsbMuxTcpConnection(
                     flags = UsbMuxProtocol.TCP_ACK,
                 )
             try {
-                // Wake protocol workers only after the pure ACK is on the wire. Otherwise a response
-                // can precede the ACK and make the host treat the response as a duplicate packet.
+                // Enqueue under the same lock as data and sequence allocation. The USB writer
+                // drains this queue independently, so the read thread never blocks on bulk IN.
                 writeFrame(frame)
             } catch (error: Throwable) {
                 failure = IOException("USBMUX TCP ACK write failed source=$sourcePort", error)
@@ -170,46 +177,41 @@ class UsbMuxTcpConnection(
 
     private fun acceptFin(segment: UsbMuxTcpSegment) {
         val sequence = segment.sequence.toLong() and UINT32_MASK
-        val ack =
-            synchronized(lock) {
-                checkOpenLocked()
-                if (sequence == expectedReceiveSequence) {
-                    expectedReceiveSequence = add(sequence, 1)
-                }
-                inputClosed = true
-                lock.notifyAll()
-                expectedReceiveSequence
-            }
-        val frame =
-            UsbMuxProtocol.tcpFrame(
-                sourcePort = destinationPort,
-                destinationPort = sourcePort,
-                sequence = synchronized(lock) { nextSequence.toInt() },
-                acknowledgement = ack.toInt(),
-                flags = UsbMuxProtocol.TCP_FIN or UsbMuxProtocol.TCP_ACK,
+        synchronized(lock) {
+            checkOpenLocked()
+            if (sequence == expectedReceiveSequence) expectedReceiveSequence = add(sequence, 1)
+            inputClosed = true
+            writeFrame(
+                UsbMuxProtocol.tcpFrame(
+                    sourcePort = destinationPort,
+                    destinationPort = sourcePort,
+                    sequence = nextSequence.toInt(),
+                    acknowledgement = expectedReceiveSequence.toInt(),
+                    flags = UsbMuxProtocol.TCP_FIN or UsbMuxProtocol.TCP_ACK,
+                ),
             )
-        writeFrame(frame)
+            lock.notifyAll()
+        }
     }
 
     private fun sendChunk(payload: ByteArray) {
         val sequence: Long
         val acknowledgement: Long
-        val frame =
-            synchronized(lock) {
-                checkOpenLocked()
-                sequence = nextSequence
-                acknowledgement = expectedReceiveSequence
-                nextSequence = add(nextSequence, payload.size)
-                UsbMuxProtocol.tcpFrame(
+        synchronized(lock) {
+            checkOpenLocked()
+            sequence = nextSequence
+            acknowledgement = expectedReceiveSequence
+            nextSequence = add(nextSequence, payload.size)
+            UsbMuxProtocol
+                .tcpFrame(
                     sourcePort = destinationPort,
                     destinationPort = sourcePort,
                     sequence = sequence.toInt(),
                     acknowledgement = acknowledgement.toInt(),
                     flags = UsbMuxProtocol.TCP_ACK,
                     payload = payload,
-                )
-            }
-        writeFrame(frame)
+                ).also(writeFrame)
+        }
         log("TCP TX $destinationPort->$sourcePort seq=$sequence ack=$acknowledgement payload=${payload.size}B")
     }
 

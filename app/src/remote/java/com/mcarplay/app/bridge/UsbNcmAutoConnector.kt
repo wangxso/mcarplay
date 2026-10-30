@@ -18,6 +18,7 @@ import java.net.InetAddress
 import java.security.SecureRandom
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import javax.jmdns.JmDNS
@@ -76,12 +77,13 @@ object UsbNcmAutoConnector {
     @Volatile
     private var snapshot = Snapshot(Phase.IDLE, "尚未连接")
 
-    @Volatile
-    private var observer: ((Snapshot) -> Unit)? = null
+    private val observer = AtomicReference<((Snapshot) -> Unit)?>()
 
-    fun observe(callback: ((Snapshot) -> Unit)?) {
-        observer = callback
-        callback?.invoke(snapshot)
+    /** The disposer only removes this subscription, never a newer activity's listener. */
+    fun observe(callback: (Snapshot) -> Unit): () -> Unit {
+        observer.set(callback)
+        callback(snapshot)
+        return { observer.compareAndSet(callback, null) }
     }
 
     fun snapshotPhase(): Phase = snapshot.phase
@@ -393,13 +395,29 @@ object UsbNcmAutoConnector {
             isDaemon = true
             start()
         }
+        val startResult = AtomicReference<PeerResult?>()
+        val seeking = AtomicBoolean(true)
+        if (expectStartSession) {
+            Thread({
+                runCatching {
+                    readStartSession { seeking.get() && generation.get() == runId }
+                }.getOrNull()?.let(startResult::set)
+            }, "usb-ncm-start-session").apply {
+                isDaemon = true
+                start()
+            }
+        }
         val startDeadline = SystemClock.uptimeMillis() + if (expectStartSession) START_SESSION_WAIT_MILLIS else 0L
-        while (true) {
-            checkActive(runId)
-            if (expectStartSession) readStartSession()?.let { return it }
-            mdnsResult.get()?.let { return it }
-            if (mdnsDone.count == 0L && SystemClock.uptimeMillis() >= startDeadline) break
-            Thread.sleep(START_SESSION_POLL_MILLIS)
+        try {
+            while (true) {
+                checkActive(runId)
+                startResult.get()?.let { return it }
+                mdnsResult.get()?.let { return it }
+                if (mdnsDone.count == 0L && SystemClock.uptimeMillis() >= startDeadline) break
+                Thread.sleep(START_SESSION_POLL_MILLIS)
+            }
+        } finally {
+            seeking.set(false)
         }
         val discovered = mdnsResult.get()
         checkActive(runId)
@@ -440,9 +458,14 @@ object UsbNcmAutoConnector {
         return PeerResult(addresses, discovered?.port ?: 17000, source.trim())
     }
 
-    /** 读取 root usbmux 进程写下的 `0x4301`；文件不存在（exit 3）表示尚未收到。 */
-    private fun readStartSession(): PeerResult? {
-        val result = runRoot("sh ${UsbNcmDiscovery.shellQuote(REMOTE_SCRIPT)} start-session", 5_000L)
+    /** One root process waits for `0x4301`; cancellation/mDNS success ends the wait. */
+    private fun readStartSession(isActive: () -> Boolean): PeerResult? {
+        val result =
+            runRoot(
+                "exec sh ${UsbNcmDiscovery.shellQuote(REMOTE_SCRIPT)} wait-start-session",
+                START_SESSION_WAIT_MILLIS + 2_000L,
+                isActive,
+            )
         if (result.exitCode != 0) return null
         val start = WiredCarPlayStartFile.decode(result.output) ?: return null
         val addresses = start.addresses.mapNotNull(UsbNcmDiscovery::normalizePeerAddress).distinct()
@@ -594,7 +617,7 @@ object UsbNcmAutoConnector {
 
     private fun publish(next: Snapshot) {
         snapshot = next
-        observer?.invoke(next)
+        observer.get()?.invoke(next)
     }
 
     private data class RootResult(
@@ -605,6 +628,7 @@ object UsbNcmAutoConnector {
     private fun runRoot(
         command: String,
         timeoutMs: Long,
+        isActive: () -> Boolean = { true },
     ): RootResult {
         val process =
             try {
@@ -618,7 +642,14 @@ object UsbNcmAutoConnector {
             Thread({
                 runCatching { process.inputStream.use { it.copyTo(output) } }
             }, "usb-ncm-root-reader").apply { start() }
-        val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var finished = false
+        while (isActive() && SystemClock.uptimeMillis() < deadline) {
+            if (process.waitFor(minOf(200L, (deadline - SystemClock.uptimeMillis()).coerceAtLeast(1L)), TimeUnit.MILLISECONDS)) {
+                finished = true
+                break
+            }
+        }
         if (!finished) {
             process.destroy()
             if (!process.waitFor(1, TimeUnit.SECONDS)) process.destroyForcibly()

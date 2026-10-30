@@ -9,6 +9,20 @@ import org.junit.Test
 
 class UsbMuxProtocolTest {
     @Test
+    fun versionHandshakeDiscardsPartialOldFrameAndPreservesNewFrames() {
+        val decoder = UsbMuxFrameDecoder()
+        val old = UsbMuxProtocol.frame(UsbMuxProtocol.PROTOCOL_TCP, ByteArray(30))
+        decoder.append(old.copyOf(19))
+        val fresh = UsbMuxProtocol.frame(UsbMuxProtocol.PROTOCOL_SETUP, byteArrayOf(7))
+        decoder.append(UsbMuxProtocol.versionReply() + fresh)
+        val version = decoder.nextFrame()!!
+        assertEquals(UsbMuxProtocol.PROTOCOL_VERSION, version.protocol)
+        assertEquals(UsbMuxProtocol.VERSION, version.magic)
+        assertEquals(UsbMuxProtocol.PROTOCOL_SETUP, decoder.nextFrame()!!.protocol)
+        assertEquals(0, decoder.bufferedBytes)
+    }
+
+    @Test
     fun versionReplyMatchesIphoneHandshake() {
         assertArrayEquals(
             byteArrayOf(
