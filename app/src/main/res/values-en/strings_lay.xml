@@ -33,6 +33,10 @@
     <string name="lay_plain_fallback_desc">Off by default. When pairing fails (except 403) but the receiver is reachable, try one unencrypted session. Turn on only if the receiver always stalls at pairing and you know it supports only unencrypted sessions; applies on the next connection.</string>
     <string name="lay_audio_fallback">Fallback: try audio when no format is declared</string>
     <string name="lay_audio_fallback_desc">Off by default. When the receiver declares no usable media audio format, still try the default PCM 48k. Turn on only if the car can play sound but mcarplay always sends video only; this may cause silence or a disconnect. Applies on the next connection.</string>
+    <string name="lay_duck_level">Music volume during navigation</string>
+    <string name="lay_duck_level_desc">While a navigation or voice prompt plays, music is lowered to this level and fades back afterwards. Drag right to lower it more; far left means no lowering. Default -15 dB. Changes apply immediately while connected.</string>
+    <string name="lay_duck_level_value">%1$d dB</string>
+    <string name="lay_duck_level_off">No ducking</string>
     <string name="lay_stream_resolution">Stream resolution</string>
     <string name="lay_next_connection">Applies on the next connection</string>
     <string name="lay_target_fps">Target frame rate</string>

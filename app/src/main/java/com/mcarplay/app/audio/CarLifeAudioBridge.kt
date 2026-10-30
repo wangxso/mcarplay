@@ -52,6 +52,11 @@ class CarLifeAudioBridge(
         worker.start()
     }
 
+    /** 会话中调整提示期间的音乐压低幅度；由工作线程在下一次处理时应用。 */
+    fun setDuckDb(duckDb: Float) {
+        pendingDuckDb = duckDb
+    }
+
     fun submit(
         channel: CarLifeChannel,
         event: CarLifeAudioEvent,
@@ -68,6 +73,8 @@ class CarLifeAudioBridge(
     private val mixer = AudioDuckingMixer<CarLifeChannel>(targetSampleRate, ducking)
     private var duckingLogged = false
 
+    @Volatile private var pendingDuckDb: Float? = null
+
     /**
      * 9240 音乐直接混音输出；9241 导航 TTS、9242 语音提示进入提示缓存，由 [AudioDuckingMixer]
      * 在音乐淡到目标增益后叠加，或在音乐静止时单独输出。旧实现在提示后 500ms 内整段丢弃
@@ -77,6 +84,7 @@ class CarLifeAudioBridge(
         channel: CarLifeChannel,
         event: CarLifeAudioEvent,
     ) {
+        applyPendingDuckDb()
         if (event !is CarLifeAudioEvent.Pcm) {
             converters.remove(channel)
             if (event is CarLifeAudioEvent.Stop && channel == CarLifeChannel.MEDIA) mixer.mediaStopped()
@@ -109,8 +117,17 @@ class CarLifeAudioBridge(
 
     /** 音乐未在播放时把缓存的提示单独发出；同时记录压低状态的切换。 */
     private fun flushPrompts() {
+        applyPendingDuckDb()
         emit(mixer.drain())
         logDuckingChange()
+    }
+
+    private fun applyPendingDuckDb() {
+        val duckDb = pendingDuckDb ?: return
+        pendingDuckDb = null
+        if (duckDb == mixer.config.duckDb) return
+        mixer.setDuckDb(duckDb)
+        log("AUDIO: 导航时音乐音量改为 ${duckDb}dB（会话中生效）")
     }
 
     private fun logDuckingChange() {
@@ -119,7 +136,7 @@ class CarLifeAudioBridge(
         duckingLogged = active
         log(
             if (active) {
-                "AUDIO: 提示音开始，音乐压低到 ${ducking.duckDb}dB（淡出 ${ducking.attackMs}ms）"
+                "AUDIO: 提示音开始，音乐压低到 ${mixer.config.duckDb}dB（淡出 ${ducking.attackMs}ms）"
             } else {
                 "AUDIO: 提示音结束，音乐淡回原音量（${ducking.releaseMs}ms）"
             },

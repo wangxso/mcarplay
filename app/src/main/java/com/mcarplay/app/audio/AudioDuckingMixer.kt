@@ -57,13 +57,16 @@ data class AudioDuckingConfig(
  * 立体声 s16 LE。
  */
 class AudioDuckingMixer<K : Any>(
-    sampleRate: Int,
-    private val config: AudioDuckingConfig = AudioDuckingConfig(),
+    private val sampleRate: Int,
+    config: AudioDuckingConfig = AudioDuckingConfig(),
     private val clockNanos: () -> Long = System::nanoTime,
 ) {
-    private val duckGain = config.duckGain
-    private val attackStep = rampStep(sampleRate, config.attackMs, 1f - duckGain)
-    private val releaseStep = rampStep(sampleRate, config.releaseMs, 1f - duckGain)
+    /** 当前生效的参数；[setDuckDb] 可在会话中调整压低幅度。 */
+    var config = config
+        private set
+    private var duckGain = config.duckGain
+    private var attackStep = rampStep(sampleRate, config.attackMs, duckGain)
+    private var releaseStep = rampStep(sampleRate, config.releaseMs, duckGain)
     private val holdNanos = config.holdMs * NANOS_PER_MILLI
     private val mediaIdleNanos = config.mediaIdleMs * NANOS_PER_MILLI
     private val promptCapacityFrames = (sampleRate.toLong() * config.maxPromptMs / 1_000L).toInt()
@@ -71,6 +74,9 @@ class AudioDuckingMixer<K : Any>(
     private val prompts = LinkedHashMap<K, StereoFifo>()
     private var lastMediaAt = NEVER
     private var lastPromptAt = NEVER
+
+    /** 提示已开始混入：一直混到缓存清空，中途调整压低幅度也不会把提示截成两段。 */
+    private var promptFlowing = false
 
     /** 当前施加在音乐上的线性增益（1 = 原音量）。 */
     var gain = 1f
@@ -87,6 +93,18 @@ class AudioDuckingMixer<K : Any>(
     /** 是否处于「应当压低」状态：有待播提示，或最近一段提示刚播完仍在保持期。 */
     val ducking: Boolean
         get() = hasPromptBuffered() || withinHold(clockNanos())
+
+    /**
+     * 调整提示期间的音乐增益（来自「车机设置 → 显示」）。若正处于压低状态，增益按
+     * attack/release 斜率平滑移到新目标，不会跳变。
+     */
+    fun setDuckDb(duckDb: Float) {
+        if (duckDb == config.duckDb) return
+        config = config.copy(duckDb = duckDb)
+        duckGain = config.duckGain
+        attackStep = rampStep(sampleRate, config.attackMs, duckGain)
+        releaseStep = rampStep(sampleRate, config.releaseMs, duckGain)
+    }
 
     /** 一段导航/语音提示 PCM（立体声 s16 LE）进入缓存；由 [media] 或 [drain] 输出。 */
     fun prompt(
@@ -123,7 +141,8 @@ class AudioDuckingMixer<K : Any>(
             var left = readSample(pcm, offset) * gain
             var right = readSample(pcm, offset + 2) * gain
             // 等音乐淡到位后才叠加提示，保证提示的首个音节不被音乐盖住。
-            if (gain <= duckGain) {
+            if (promptFlowing || gain <= duckGain) {
+                promptFlowing = true
                 for (fifo in prompts.values) {
                     if (fifo.isEmpty) continue
                     left += fifo.peekLeft()
@@ -136,6 +155,7 @@ class AudioDuckingMixer<K : Any>(
             writeSample(output, offset + 2, right)
         }
         if (mixedPrompt) lastPromptAt = now
+        if (!hasPromptBuffered()) promptFlowing = false
         return output
     }
 
@@ -170,6 +190,7 @@ class AudioDuckingMixer<K : Any>(
         for (index in mix.indices) writeSample(output, index * 2, mix[index])
         gain = duckGain
         lastPromptAt = now
+        promptFlowing = false
         return output
     }
 
@@ -178,6 +199,7 @@ class AudioDuckingMixer<K : Any>(
         prompts.clear()
         lastMediaAt = NEVER
         lastPromptAt = NEVER
+        promptFlowing = false
         gain = 1f
     }
 
@@ -243,15 +265,20 @@ class AudioDuckingMixer<K : Any>(
         const val FRAME_BYTES = AudioSender.CHANNELS * 2
         const val NANOS_PER_MILLI = 1_000_000L
         const val NEVER = Long.MIN_VALUE
+        const val MIN_RAMP_SPAN = 0.01f
         val EMPTY = ByteArray(0)
 
-        /** 每样本帧的增益步长：[millis] 内走完 [span]（0 时长 = 一步到位）。 */
+        /**
+         * 每样本帧的增益步长：[millis] 内走完 `1 → duckGain`（0 时长 = 一步到位）。
+         * duckGain≈1（0dB）时按满量程计步长，保证会话中从压低改成 0dB 也能平滑回升。
+         */
         fun rampStep(
             sampleRate: Int,
             millis: Int,
-            span: Float,
+            duckGain: Float,
         ): Float {
             val frames = sampleRate.toLong() * millis / 1_000L
+            val span = (1f - duckGain).takeIf { it > MIN_RAMP_SPAN } ?: 1f
             return if (frames <= 0L) 1f else span / frames
         }
 

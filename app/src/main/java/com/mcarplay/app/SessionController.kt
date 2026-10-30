@@ -7,6 +7,7 @@ import android.view.KeyEvent
 import androidx.annotation.StringRes
 import com.mcarplay.app.airplay.AirPlayClient
 import com.mcarplay.app.airplay.PairVerifyClient
+import com.mcarplay.app.audio.AudioDuckingPrefs
 import com.mcarplay.app.audio.AudioProfile
 import com.mcarplay.app.audio.AudioProfileMemory
 import com.mcarplay.app.audio.AudioSender
@@ -901,6 +902,12 @@ object SessionController {
      *
      * 车机屏上就能操作，所以手机面板黑着也不影响切换；关掉会立刻把面板点亮。
      */
+
+    /** 「导航时音乐音量」在会话中调整：交给正在运行的 CarWith 原生音频桥（没有则下次连接生效）。 */
+    fun applyDuckDb(duckDb: Int) {
+        nativeAudioBridge?.setDuckDb(duckDb.toFloat())
+    }
+
     fun applyScreenOffPreference(enabled: Boolean) {
         if (enabled) {
             enterPhoneScreenOff()
@@ -2022,7 +2029,12 @@ object SessionController {
             if (useNativeCarLifeAudio) {
                 // CarWith provides PCM on 9240/9241/9242. The bridge starts now
                 // and consumes audio once the native session emits its init frame.
-                val bridge = CarLifeAudioBridge(sender, audio.sampleRate) { line -> appendLog(line) }
+                val bridge =
+                    CarLifeAudioBridge(
+                        sender,
+                        audio.sampleRate,
+                        AudioDuckingPrefs.config(context.applicationContext),
+                    ) { line -> appendLog(line) }
                 nativeAudioBridge = bridge
                 if (!sender.startExternalSource()) {
                     bridge.stop()

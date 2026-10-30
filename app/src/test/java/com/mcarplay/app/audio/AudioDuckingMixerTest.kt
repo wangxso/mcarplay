@@ -210,6 +210,54 @@ class AudioDuckingMixerTest {
         assertEquals(0, mixer.drain().size)
     }
 
+    @Test
+    fun loweringDuckLevelMidPromptRampsDownWithoutCuttingThePrompt() {
+        val mixer = mixer()
+        mixer.media(constant(1, 10_000, 10_000))
+        mixer.prompt(TTS, constant(40, 1_000, 1_000))
+        mixer.media(constant(15, 10_000, 10_000))
+        val before = (10_000 * config.duckGain).toInt()
+        mixer.setDuckDb(-24f)
+        val left = left(mixer.media(constant(15, 10_000, 10_000)))
+        val after = (10_000 * mixer.config.duckGain).toInt()
+        // 提示保持连续叠加，音乐从 -12dB 平滑下降到 -24dB
+        // 测试配置 attack 10ms：-24dB 时满量程一步约 937（10_000 × 0.937 / 10），不超过一步即无跳变
+        for (index in 1 until 15) {
+            assertTrue(left[index] <= left[index - 1])
+            assertTrue(left[index - 1] - left[index] <= 940)
+        }
+        assertTrue(left[0] in before..before + 1_000)
+        assertEquals(after + 1_000, left[14], 1)
+    }
+
+    @Test
+    fun raisingDuckLevelToZeroWhileDuckedRampsBackUp() {
+        val mixer = mixer()
+        mixer.media(constant(1, 10_000, 10_000))
+        mixer.prompt(TTS, constant(2, 0, 0))
+        mixer.media(constant(15, 10_000, 10_000))
+        mixer.setDuckDb(0f)
+        val left = left(mixer.media(constant(40, 10_000, 10_000)))
+        for (index in 1 until 20) assertTrue(left[index] >= left[index - 1])
+        assertTrue(left[0] < 10_000)
+        assertEquals(10_000, left[39])
+        assertEquals(1f, mixer.gain)
+    }
+
+    @Test
+    fun duckPrefsMapSliderProgressToNonPositiveDb() {
+        assertEquals(-15, AudioDuckingPrefs.DUCK_DB_DEFAULT)
+        assertEquals(0, AudioDuckingPrefs.dbOfProgress(0))
+        assertEquals(-15, AudioDuckingPrefs.dbOfProgress(15))
+        assertEquals(-30, AudioDuckingPrefs.dbOfProgress(99))
+        assertEquals(15, AudioDuckingPrefs.progressOfDb(-15))
+        assertEquals(0, AudioDuckingPrefs.progressOfDb(6))
+        assertEquals(-30, AudioDuckingPrefs.clamp(-80))
+        // 设置范围必须落在混音器参数允许的范围内
+        AudioDuckingConfig(duckDb = AudioDuckingPrefs.DUCK_DB_MIN.toFloat())
+        AudioDuckingConfig(duckDb = AudioDuckingPrefs.DUCK_DB_MAX.toFloat())
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun rejectsPartialStereoFrames() {
         mixer().media(ByteArray(3))
