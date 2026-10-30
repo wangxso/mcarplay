@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CarLifeAudioBridge(
     private val sender: AudioSender,
     private val targetSampleRate: Int,
+    private val ducking: AudioDuckingConfig = AudioDuckingConfig(),
     private val log: (String) -> Unit,
 ) {
     private val queue = LinkedBlockingQueue<Pair<CarLifeChannel, CarLifeAudioEvent>>(QUEUE_LIMIT)
@@ -29,12 +30,18 @@ class CarLifeAudioBridge(
                 {
                     try {
                         while (running.get()) {
-                            val (channel, event) = queue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS) ?: continue
-                            route(channel, event)
+                            val next = queue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS)
+                            if (next == null) {
+                                // 音乐停发但没有 STOP 时，靠空闲轮询把等待中的提示放出去。
+                                flushPrompts()
+                                continue
+                            }
+                            route(next.first, next.second)
                         }
                     } catch (_: InterruptedException) {
                         Thread.currentThread().interrupt()
                     } finally {
+                        mixer.reset()
                         sender.stopExternalSource()
                     }
                 },
@@ -58,26 +65,23 @@ class CarLifeAudioBridge(
     }
 
     private val converters = mutableMapOf<CarLifeChannel, PcmResampler>()
-    private var promptChannel: CarLifeChannel? = null
-    private var promptAt = 0L
+    private val mixer = AudioDuckingMixer<CarLifeChannel>(targetSampleRate, ducking)
+    private var duckingLogged = false
 
+    /**
+     * 9240 音乐直接混音输出；9241 导航 TTS、9242 语音提示进入提示缓存，由 [AudioDuckingMixer]
+     * 在音乐淡到目标增益后叠加，或在音乐静止时单独输出。旧实现在提示后 500ms 内整段丢弃
+     * 音乐 PCM，听感是「导航一来音乐就断」，且提示结束后的音乐片段被截掉。
+     */
     private fun route(
         channel: CarLifeChannel,
         event: CarLifeAudioEvent,
     ) {
         if (event !is CarLifeAudioEvent.Pcm) {
             converters.remove(channel)
-            if (event is CarLifeAudioEvent.Stop && promptChannel == channel) promptChannel = null
+            if (event is CarLifeAudioEvent.Stop && channel == CarLifeChannel.MEDIA) mixer.mediaStopped()
+            flushPrompts()
             return
-        }
-        val now = System.nanoTime()
-        if (channel == CarLifeChannel.MEDIA && promptChannel != null && now - promptAt < PROMPT_HOLD_NANOS) {
-            converters.remove(channel)
-            return
-        }
-        if (channel != CarLifeChannel.MEDIA) {
-            promptChannel = channel
-            promptAt = now
         }
         val converter =
             converters[channel]?.takeIf { it.sourceRate == event.sampleRate && it.sourceChannels == event.channels }
@@ -87,11 +91,43 @@ class CarLifeAudioBridge(
                 }
         val pcm = converter.convert(event.littleEndian)
         if (pcm.isEmpty()) return
-        sender.submitExternalPcm(pcm)
+        if (channel == CarLifeChannel.MEDIA) {
+            emit(mixer.media(pcm))
+            logDuckingChange()
+        } else {
+            mixer.prompt(channel, pcm)
+            flushPrompts()
+        }
         accepted++
         if (accepted == 1L || accepted % LOG_EVERY == 0L) {
-            log("AUDIO: CarWith 原生 PCM 接入 #$accepted ${pcm.size}B nonzero=${pcm.any { it != 0.toByte() }} dropped=$dropped")
+            log(
+                "AUDIO: CarWith 原生 PCM 接入 #$accepted ${pcm.size}B nonzero=${pcm.any { it != 0.toByte() }} dropped=$dropped " +
+                    "promptDropped=${mixer.droppedPromptFrames} clipped=${mixer.clippedSamples}",
+            )
         }
+    }
+
+    /** 音乐未在播放时把缓存的提示单独发出；同时记录压低状态的切换。 */
+    private fun flushPrompts() {
+        emit(mixer.drain())
+        logDuckingChange()
+    }
+
+    private fun logDuckingChange() {
+        val active = mixer.ducking
+        if (active == duckingLogged) return
+        duckingLogged = active
+        log(
+            if (active) {
+                "AUDIO: 提示音开始，音乐压低到 ${ducking.duckDb}dB（淡出 ${ducking.attackMs}ms）"
+            } else {
+                "AUDIO: 提示音结束，音乐淡回原音量（${ducking.releaseMs}ms）"
+            },
+        )
+    }
+
+    private fun emit(pcm: ByteArray) {
+        if (pcm.isNotEmpty()) sender.submitExternalPcm(pcm)
     }
 
     fun stop() {
@@ -103,8 +139,7 @@ class CarLifeAudioBridge(
 
     private companion object {
         const val QUEUE_LIMIT = 64
-        const val POLL_MILLIS = 100L
+        const val POLL_MILLIS = 20L
         const val LOG_EVERY = 2_000L
-        const val PROMPT_HOLD_NANOS = 500_000_000L
     }
 }

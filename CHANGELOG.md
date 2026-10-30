@@ -9,12 +9,14 @@ Test releases are experimental and do not establish real-vehicle compatibility.
 - Add **界面语言 / Language**: the interface can switch between Simplified Chinese (the default, regardless of the system language) and English, covering the main screen, dialogs, car settings, the detection panel, the update page, notifications, the car dashboard and the disclaimer. Android 13 and later also list both languages in the system per-app language settings. Logs, diagnostic reports and protocol fields stay in Chinese.
 - After each update, the first launch shows that version's release notes in the chosen language, from the `CHANGELOG.md` entry bundled into the APK; validation lines are omitted, and a fresh install shows the disclaimer instead. The update page also shows only the chosen language's half of the release notes.
 - When a target head unit is selected, log once per connection start which Bluetooth services it advertises over SDP and whether the wireless CarPlay iAP2 service (`…caff`) is among them, so a head unit that lacks wireless CarPlay can be told apart from one that is not in its pairing window. An SDP timeout is reported as undetermined, not as missing.
+- Navigation prompts over music: CarWith's navigation (9241) and voice (9242) audio is now mixed on the phone with the music (9240) into the one negotiated AirPlay stream, and the music fades to -15 dB over 250 ms before a prompt and back over 400 ms after it, instead of being dropped for 500 ms after every prompt packet. Mixing happens before encoding, so the AAC-LC → PCM fallback is unchanged. See `docs/AUDIO-DUCKING.md`; not yet verified on any receiver or car.
 - Validation: 568 JVM tests, `spotlessCheck`, `lintStandardDebug`, `assembleStandardDebug`, `lintRemoteDebug` and `assembleRemoteDebug` passed. The SDP log, language switching and the release-notes popup are not yet verified on device.
 
 ### 简体中文
 - 新增 **界面语言**：界面可在简体中文（默认，不跟随系统语言）和英文之间切换，覆盖首页、各类弹窗、车机设置、检测面板、更新页、通知、车机仪表盘和免责声明；Android 13 及以上也会出现在系统「应用语言」设置中。日志、诊断报告和协议字段保持中文。
 - 每次更新后首次打开，按所选语言弹出该版本的更新内容，来源为打包进 APK 的 `CHANGELOG.md` 条目，不显示验证条目；全新安装则先显示免责声明。更新页的发行说明也只显示所选语言那一半。
 - 指定目标车机时，每次启动连接记录一次它通过 SDP 声明的蓝牙服务，以及其中是否有无线 CarPlay 的 iAP2 服务（`…caff`），用于区分「车机不支持无线 CarPlay」与「支持但未进入配对窗口」。SDP 超时记为「未确定」，不记为没有。
+- 音乐中插入导航提示：CarWith 的导航（9241）与语音（9242）音频现在在手机侧与音乐（9240）混成唯一一条已协商的 AirPlay 音频流，提示前音乐在 250ms 内淡到 -15dB、结束后 400ms 内淡回，不再在每个提示包后丢弃 500ms 音乐。混音在编码之前，AAC-LC → PCM 降级不变。详见 `docs/AUDIO-DUCKING.md`；尚未在任何接收端或车机上验证。
 - 验证：568 项 JVM 测试、`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug`、`lintRemoteDebug` 和 `assembleRemoteDebug` 均通过。SDP 日志、语言切换和更新内容弹窗尚未实机验证。
 
 ## [v0.1.3-test.3] - 2026-10-29
