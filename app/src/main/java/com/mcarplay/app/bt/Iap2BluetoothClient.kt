@@ -84,8 +84,8 @@ class Iap2BluetoothClient(
 
         /**
          * 目标设备 SDP 声明的服务摘要：已知蓝牙标准服务写简称，其余（含厂商私有 UUID）写全称，
-         * 并单列是否声明了无线 CarPlay 的 iAP2 服务。`completed=false` 表示 SDP 未在等待窗内返回，
-         * 此时列表只是系统缓存，不能据此判定车机不支持。
+         * 并单列出站使用的 …caff 服务。即使未声明它，车机仍可能主动连接手机的 …cafe 服务。
+         * `completed=false` 表示 SDP 未在等待窗内返回，此时列表只是系统缓存。
          */
         fun describeServices(
             uuids: List<UUID>,
@@ -111,7 +111,8 @@ class Iap2BluetoothClient(
                     else -> "未确定（SDP 未返回）"
                 }
             return "声明 ${names.size} 个服务${if (completed) "" else "（SDP 未在 ${SDP_PROBE_TIMEOUT_MILLIS}ms 内返回，仅为系统缓存）"}：" +
-                (names.joinToString(" / ").ifEmpty { "无" }) + "；无线 CarPlay iAP2 服务=$iap2"
+                (names.joinToString(" / ").ifEmpty { "无" }) + "；接收端 iAP2(…caff) 服务=$iap2" +
+                if (completed && ACCESSORY_IAP2_UUID !in uuids) "（仍可由车机回连，不代表不支持无线 CarPlay）" else ""
         }
     }
 

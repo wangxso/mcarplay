@@ -15,7 +15,7 @@ class Iap2BluetoothClientServicesTest {
                 listOf(short(0x111F), short(0x110A), Iap2BluetoothClient.ACCESSORY_IAP2_UUID, short(0x1800)),
                 completed = true,
             )
-        assertEquals("声明 4 个服务：HFP网关 / A2DP源 / iAP2(…caff) / 0x1800；无线 CarPlay iAP2 服务=有", text)
+        assertEquals("声明 4 个服务：HFP网关 / A2DP源 / iAP2(…caff) / 0x1800；接收端 iAP2(…caff) 服务=有", text)
     }
 
     @Test
@@ -26,7 +26,7 @@ class Iap2BluetoothClientServicesTest {
                 .describeServices(
                     listOf(short(0x111F), vendor),
                     completed = true,
-                ).endsWith("5a3f0a2c-1b2c-4d5e-8f90-123456789abc；无线 CarPlay iAP2 服务=无"),
+                ).endsWith("5a3f0a2c-1b2c-4d5e-8f90-123456789abc；接收端 iAP2(…caff) 服务=无（仍可由车机回连，不代表不支持无线 CarPlay）"),
         )
         val timedOut = Iap2BluetoothClient.describeServices(emptyList(), completed = false)
         assertTrue(timedOut.contains("SDP 未在"))

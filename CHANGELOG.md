@@ -5,6 +5,16 @@ Test releases are experimental and do not establish real-vehicle compatibility.
 
 ## [Unreleased]
 
+### English
+- Advertise the phone's CarPlay capability alongside its iAP2 Bluetooth service while connecting, and remove both records on stop. Roll back the transport record if capability registration fails. Clarify that a missing receiver-side `…caff` service does not rule out head-unit-initiated CarPlay.
+- A 2022 Chery Arrizo 8 with firmware `M1E_IC2172/82_03_21.387_250619_R` connected wirelessly using the previous release plus a temporary root capability announcement; the user confirmed video, sound and touch. This does not validate the new APK's cold-start/reconnection behavior or long-term stability. A receiver AirPlay crash after manual disconnection remains under investigation.
+- Validation: 601 JVM tests, Spotless, standard debug lint and standard debug build passed.
+
+### 简体中文
+- 连接期间在 iAP2 蓝牙服务之外公告手机的 CarPlay 能力，停止时同时撤销；能力公告注册失败时回收传输记录。澄清接收端未声明 `…caff` 不代表不能由车机主动发起 CarPlay。
+- 2022 款奇瑞艾瑞泽 8（固件 `M1E_IC2172/82_03_21.387_250619_R`）使用前一发布版配合临时 root 能力公告无线连上，用户确认画面、声音和触控正常；新 APK 的冷启动、重连及长时稳定性仍待验证。主动断开后的车机 AirPlay 崩溃另行跟进。
+- 验证：601 项 JVM 测试、Spotless、standard debug lint 与 standard debug 构建通过。
+
 ## [v0.1.3-test.4] - 2026-10-30
 
 > Experimental fix prerelease. Audio mixing and gap filling were tested separately on WinPlay 1.2.5; their combined build and live duck-level adjustment still need device validation. This does not establish real-car compatibility.
