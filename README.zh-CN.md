@@ -22,13 +22,14 @@ CarWith。车机显示的是 CarWith 界面。
 
 项目处于实验阶段，截至 2026 年 10 月 31 日已跑通小米到 DiPlay、小米到 WinPlay 1.2.5
 的测试链路，并验证一条小米到奇瑞车机的手动无线连接路径。
+当前正式版为 `v0.1.3`，发布范围仍是已验收的手动连接路径。
 
 | 能力 | 验证结果 |
 | --- | --- |
 | 原生视频 | CarWith 按接收端宽高比编码（长边最多 1920），实测 1920 × 1080 与 1280 × 720、30fps；早期 DiPlay 测试实测送达约 20fps |
 | WinPlay 1.2.5 | 默认设置下画面、触控和音乐到达接收端；WinPlay 释放蓝牙后会话持续约 25 分钟；手动断开及手动断网后均能重连 |
 | WinPlay 1.2.4 | 短时实测出画面和声音 |
-| 接收端触控 | 已在 DiPlay 和 WinPlay 1.2.5 上验证点击与页面切换 |
+| 接收端触控 | 已在 DiPlay 和 WinPlay 1.2.5 上验证点击与页面切换；用户另行确认奇瑞车机手动连接路径触控正常 |
 | 接收端媒体键 | 上一曲／下一曲转发给 CarWith；尚未实机验证 |
 | 原生音乐 | 44.1kHz PCM 转 48kHz AAC-LC，用户确认声音、音调和速度正常 |
 | 音视频同时运行 | WinPlay 1.2.5 上带音乐运行约 25 分钟；DiPlay 上连续约 6 分 36 秒，无音频丢包、欠载或写入错误 |
@@ -38,24 +39,23 @@ CarWith。车机显示的是 CarWith 界面。
 
 测试手机：小米 17 Pro Max（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，
 Android 17，CarWith `4.0.20-20260923`，小米 CarLife `8.8.5`（早期 DiPlay 测试为 `8.8.4`）。
-测试接收端：PA2353 / Android 14 平板，DiPlay 0.2.21；Windows 上的 WinPlay 1.2.5（x64）。
+下方实测覆盖：2022 款奇瑞艾瑞泽 8 车机、PA2353 / Android 14 平板上的 DiPlay 0.2.21，
+以及 Windows 上的 WinPlay 1.2.4 / 1.2.5（x64）。
 应用最低 SDK 为 Android 12 / API 31，这不代表所有 Android 12 及以上设备均兼容。
 上游 CarDeck 的实车测试不能直接作为 mcarplay CarWith 桥接的车型适配结论。
 
-### WinPlay 1.2.4 视频输出截图
+### 实测画面
 
-![WinPlay 1.2.4 显示 mcarplay 发送的 CarWith 画面](docs/screenshots/winplay-1.2.4-video-output.png)
+每张图只记录所拍会话。两张奇瑞图片是使用 **AI 图像编辑**从用户实拍生成的脱敏裁图：
+移除车窗、周边环境和内饰，并模糊地点文字。它们是 AI 脱敏后的派生图片，不是原始截图；
+原图保留在 Git 之外，涉及像素级或时间信息的结论仍以原图和日志为准。点击图片可查看大图。
 
-实测截图（2026 年 10 月 27 日）：WinPlay 1.2.4 显示了 mcarplay 传来的 CarWith 画面。
-这张图只记录截图所示会话的视频输出，不证明音频、触控、连续运行 10 分钟、断线重连或实车兼容性。
-
-### DiPlay 实拍
-
-![Android 平板上的 DiPlay 显示 mcarplay 发送的 CarWith 网易云音乐界面](docs/screenshots/diplay-carwith-photo.jpg)
-
-实拍照片（2026 年 10 月 27 日 22:08）：Android 平板上的 DiPlay 显示了 mcarplay `v0.1.3-test.2`
-代码传来的 CarWith 网易云音乐界面，CarWith 编码为 1920 × 1080、30fps。拍照时音乐处于暂停，
-开始播放后音频正常到达。照片只记录该会话的画面输出，日志细节见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+| 接收端 / 环境 | 实测画面 | 能确认什么 | 边界 |
+| --- | --- | --- | --- |
+| **2022 款奇瑞艾瑞泽 8**<br>固件 `M1E_IC2172/82_03_21.387_250619_R` | <a href="docs/screenshots/chery-arrizo8-2026-10-31-1237-redacted.png"><img src="docs/screenshots/chery-arrizo8-2026-10-31-1237-redacted.png" width="420" alt="AI 脱敏后的奇瑞艾瑞泽 8 车机在 12:37 显示 CarWith 仪表盘"></a><br>2026-10-31 12:37，手动无线连接 | CarWith 地图、媒体、应用栏和仪表盘到达实体车机；用户另行确认画面、声音和触控正常 | 图片经过 AI 脱敏，单张图不能单独证明声音、触控、时长或地点 |
+| **2022 款奇瑞艾瑞泽 8**<br>同一车机固件 | <a href="docs/screenshots/chery-arrizo8-2026-10-31-1305-redacted.png"><img src="docs/screenshots/chery-arrizo8-2026-10-31-1305-redacted.png" width="420" alt="AI 脱敏后的奇瑞艾瑞泽 8 车机在 13:05 显示 CarWith 长距离导航"></a><br>2026-10-31 13:05，长距离导航和媒体会话 | 导航、媒体、天气和转向卡片到达实体车机；日志记录两轮会话累计约 107 分钟，最长约 99 分钟 | 图片经过 AI 脱敏；手动锁屏仍可能结束会话，不据此承诺自动触发和完整冷启动 |
+| **WinPlay 1.2.4**<br>Windows x64 | <a href="docs/screenshots/winplay-1.2.4-video-output.png"><img src="docs/screenshots/winplay-1.2.4-video-output.png" width="420" alt="WinPlay 1.2.4 显示 mcarplay 发送的 CarWith 画面"></a><br>2026-10-27 台架截图 | WinPlay 1.2.4 显示了 mcarplay 传来的 CarWith 视频 | 截图只证明视频输出，不证明触控、连续运行 10 分钟、断线重连或实车兼容性 |
+| **DiPlay 0.2.21**<br>PA2353 / Android 14 平板 | <a href="docs/screenshots/diplay-carwith-photo.jpg"><img src="docs/screenshots/diplay-carwith-photo.jpg" width="420" alt="PA2353 Android 平板上的 DiPlay 显示 CarWith 网易云音乐界面"></a><br>2026-10-27 22:08，`v0.1.3-test.2` 代码 | DiPlay 显示了 CarWith 网易云音乐界面，CarWith 编码为 1920 × 1080、30fps；拍照时音乐暂停，开始播放后声音正常到达 | 照片只证明该会话的画面输出；当前版本的长时运行与重连仍待验证 |
 
 ## 已知限制与后续计划
 
@@ -101,7 +101,8 @@ WinPlay 1.2.4、1.2.5 等接收端还会校验手机的真实蓝牙身份，而 
 下载后检查 SHA-256、包名/版本、Android 兼容性和当前应用的签名证书。
 Debug 包通常无法覆盖更新为正式签名包；未记录发行标签的旧构建无法判断同一基础版本的预发布先后，
 请从发行页手动更新。`remote` 调试版不支持标准 APK 更新。
-目前已通过离线检查，手机端实际安装仍待验证。详见 [更新机制、限制与验收项](docs/UPDATES.md)。
+正式签名的 `v0.1.3` APK 已覆盖安装到测试手机的上一版签名包；应用内下载和系统安装器流程
+仍需单独做手机端验收。详见 [更新机制、限制与验收项](docs/UPDATES.md)。
 
 ## 界面语言与更新说明
 
