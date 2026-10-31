@@ -82,6 +82,16 @@ class DiagnosticRedactorTest {
     }
 
     @Test
+    fun invitedWifiLogLineHidesLiveSsid() {
+        val safe =
+            DiagnosticRedactor().redact(
+                ">>> [主动连车机] 车机已在 WiFi 上发 ctrl 邀请（无 0x5703/0x4301）——按手机当前 WiFi \"MIB3 Car AP\" 绑定后继续",
+            )
+        assertFalse(safe, safe.contains("MIB3 Car AP"))
+        assertTrue(safe, safe.contains("0x5703/0x4301"))
+    }
+
+    @Test
     fun ssidWithSpacesIsHiddenWithoutRemovingFollowingTechnicalFields() {
         val safe = DiagnosticRedactor().redact("ssid=Private Family WiFi channel=48 security=2\njoining Private Family WiFi")
         assertFalse(safe.contains("Private Family WiFi"))

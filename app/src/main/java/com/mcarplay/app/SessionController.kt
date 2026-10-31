@@ -48,6 +48,7 @@ import com.mcarplay.app.launcher.settings.DisplayPrefs
 import com.mcarplay.app.net.AirPlayFeatures
 import com.mcarplay.app.net.CarPlayCtrlAdvertiser
 import com.mcarplay.app.net.CarPlayServiceBrowser
+import com.mcarplay.app.net.CtrlInviteGate
 import com.mcarplay.app.net.EndpointHosts
 import com.mcarplay.app.net.WifiCarPlayConnector
 import com.mcarplay.app.net.WifiConnectCommand
@@ -111,6 +112,13 @@ object SessionController {
      * 超时拆链让 BT 重连循环接管（与旧「8s 拆链」的区别只在窗口长度）。
      */
     private const val PENDING_START_SESSION_WAIT_MS = 5 * 60_000L
+
+    /** 车机经 ctrl 邀请证明「同网」但 SSID 不可读时的绑定键/日志标签（不是真实 SSID）。 */
+    internal const val INVITED_WIFI_LABEL = "(车机所在 WLAN)"
+
+    /** SETUP 被车机关通道后，按邀请自动重连的次数上限与每次等待上限。 */
+    private const val MAX_INVITE_RETRIES = 2
+    private const val INVITE_RETRY_WAIT_MS = 60_000L
 
     /**
      * 等车机 ctrl 邀请的上限（事件驱动，收到即走）。
@@ -522,6 +530,9 @@ object SessionController {
 
     private fun knownCarHotspotSsid(): String? = boundCarSsid ?: lastCarWifiSsid
 
+    /** 本轮车机是否已在 WiFi 上发过 ctrl 邀请（= 手机已在车机网络上，AirPlay 窗口已开）。 */
+    private fun receiverHasInvited(): Boolean = (ctrlAdvertiser?.inviteCount ?: 0) > 0
+
     /**
      * 最近一次 0x5703 的热点密码（仅内存，不落盘）。
      * 「车机热点 → 去连接」按钮复制到剪贴板用（手动加入兜底场景）。
@@ -593,6 +604,7 @@ object SessionController {
                     onEndpointUpdate = { endpoint -> onLateEndpoint(endpoint, "车机回连") },
                     onLinkClosed = ::onSenderLinkClosed,
                     knownCarSsid = ::knownCarHotspotSsid,
+                    receiverInvited = ::receiverHasInvited,
                     onGeneration = { g ->
                         appendLog("IAPLINK: 本条蓝牙会话链路代际 → $g（随端点传递到 AirPlay）")
                     },
@@ -607,6 +619,7 @@ object SessionController {
                     onEndpointUpdate = { endpoint -> onLateEndpoint(endpoint, "主动连车机") },
                     onLinkClosed = ::onSenderLinkClosed,
                     knownCarSsid = ::knownCarHotspotSsid,
+                    receiverInvited = ::receiverHasInvited,
                     onGeneration = { g ->
                         appendLog("IAPLINK: 本条蓝牙会话链路代际 → $g（随端点传递到 AirPlay）")
                     },
@@ -788,6 +801,8 @@ object SessionController {
         // 我们此前要等 0x5703 才注册，导致「车机发现手机」这一步总落在热点绑定之后，
         // 每轮多花 1~3 秒；现在启动连接即发布，换网时 ensureForNetwork 会自动重注册。
         ctrlAdvertiser?.resetInviteCount()
+        inviteRetryCount = 0
+        forceKeyFrameCount = 0
         // 后台发布：start() 首次要向 Shizuku 解析真实蓝牙 MAC（shell），不能在主线程做
         Bg.run("ctrl-publish") { ctrlAdvertiser?.start() }
         // 真车路径：手机主动连车机（SDP …caff 配件服务）
@@ -1884,20 +1899,30 @@ object SessionController {
         while (android.os.SystemClock.uptimeMillis() < deadline) {
             if (connectCancelled) return false
             val invites = advertiser?.inviteCount ?: 0
-            if (invites > 0) {
-                appendLog(
-                    "CTRL: ✓ 收到车机邀请（${android.os.SystemClock.uptimeMillis() - startedAt}ms，第 $invites 次）" +
-                        "——立即连接 AirPlay",
-                )
-                return true
-            }
-            if (endpointBrowser?.awaitEndpoint(0) != null) {
-                appendLog(
-                    "CTRL: 已发现 _airplay._tcp（未收到邀请，旧机型行为）——直接连接 AirPlay",
-                )
-                return true
-            }
             val now = android.os.SystemClock.uptimeMillis()
+            when (
+                CtrlInviteGate.decide(
+                    nowMillis = now,
+                    waitStartedAtMillis = startedAt,
+                    lastInviteAtMillis = advertiser?.lastInviteAtMillis ?: 0L,
+                    mdnsEndpointFound = endpointBrowser?.awaitEndpoint(0) != null,
+                )
+            ) {
+                CtrlInviteGate.Decision.INVITED -> {
+                    appendLog("CTRL: ✓ 收到车机邀请（${now - startedAt}ms，第 $invites 次）——立即连接 AirPlay")
+                    return true
+                }
+
+                CtrlInviteGate.Decision.MDNS_FALLBACK -> {
+                    appendLog(
+                        "CTRL: 已发现 _airplay._tcp，${CtrlInviteGate.MDNS_GRACE_MS}ms 内无新鲜邀请" +
+                            "（旧邀请 $invites 次不算）——按旧机型直接连接 AirPlay",
+                    )
+                    return true
+                }
+
+                CtrlInviteGate.Decision.WAIT -> Unit
+            }
             // catplay 实测：iPhone 的 Bonjour 公告常被车机丢弃——它在每次邀请前都
             // force_announce。这里在等待中途补发一次，覆盖「绑网瞬间公告丢失」的情况。
             if (!reannounced && now - startedAt >= 2_000) {
@@ -2360,12 +2385,23 @@ object SessionController {
     ) {
         Bg.run("pending-start-session-watch") {
             var promptedSsid: String? = null
+            var triedInvites = 0
+            var tick = 0
             val deadline = android.os.SystemClock.uptimeMillis() + PENDING_START_SESSION_WAIT_MS
             while (!connectCancelled && android.os.SystemClock.uptimeMillis() < deadline) {
-                Thread.sleep(5_000)
-                if (connectCancelled) return@run
                 // 晚到 0x4301 已触发新一轮交接——观察任务让位。
                 if (sessionStarting.get()) return@run
+                // 车机 ctrl 邀请 = 手机已在车机网络上（大众 2026-10-31：不回 0x5703/0x4301，
+                // 只发邀请）。无需 Shizuku 读 SSID、也无需询问用户：绑定当前 WiFi 后直接接邀请。
+                // 每来一次新邀请最多试一次绑定，失败后继续等下一次。
+                val invites = ctrlAdvertiser?.inviteCount ?: 0
+                if (invites > triedInvites) {
+                    triedInvites = invites
+                    if (continueOnInvitedWifi(endpoint, source)) return@run
+                }
+                Thread.sleep(1_000)
+                if (connectCancelled) return@run
+                if (++tick % 5 != 0) continue
                 val ssid = shellWifiStatus().second ?: continue
                 // 同一 SSID 只问一次（用户选「继续等待」后不再打扰）；换网络再问。
                 if (ssid.isEmpty() || promptedSsid == ssid) continue
@@ -2392,6 +2428,69 @@ object SessionController {
                         "车机未下发 0x4301。拆掉保活链路让重连循环接管，请导出日志反馈",
                 )
                 detachActiveBtSessions()
+            }
+        }
+    }
+
+    /**
+     * 空端点 + 车机已发 ctrl 邀请：按手机当前 WiFi 绑定并以合成端点重走连接。
+     *
+     * 邀请只可能经手机与车机共享的网络到达，所以「当前 WiFi」就是车机网络；
+     * SSID 读不到（没有 Shizuku/定位权限）时用 [INVITED_WIFI_LABEL] 占位——
+     * 它只作为绑定键与日志标签，不会写进 [lastCarWifiSsid]，也不会被拿去按 SSID 入网。
+     */
+    private fun continueOnInvitedWifi(
+        endpoint: Iap2SenderSession.CarPlayEndpoint,
+        source: String,
+    ): Boolean {
+        if (connectCancelled || sessionStarting.get()) return false
+        val liveSsid = shellWifiStatus().second?.takeIf { it.isNotEmpty() }
+        val label = liveSsid ?: INVITED_WIFI_LABEL
+        appendLog(
+            // 「WiFi "<ssid>"」的写法与 DiagnosticRedactor.quotedNetwork 对齐，导出报告时会被脱敏
+            ">>> [$source] 车机已在 WiFi 上发 ctrl 邀请（无 0x5703/0x4301）——按手机当前 " +
+                (liveSsid?.let { "WiFi \"$it\"" } ?: "WiFi（SSID 不可读）") + " 绑定后继续",
+        )
+        if (!bindCarWifiAndRegister(label)) {
+            appendLog(">>> [$source] 未能绑定当前 WiFi——继续等待下一次车机邀请或晚到的 0x4301")
+            return false
+        }
+        if (connectCancelled || sessionStarting.get()) return false
+        onCarPlayEndpoint(endpoint.copy(ssid = label), "$source/ctrl邀请")
+        return true
+    }
+
+    /** 本次连接内「SETUP 被车机关通道后等邀请重连」已用次数（startConnection 清零）。 */
+    @Volatile
+    private var inviteRetryCount = 0
+
+    /**
+     * 初始 SETUP 被车机立即关通道后：等车机下一次 ctrl 邀请（比当前更新的那次）再重走连接。
+     * 帕萨特 2025 实测邀请在被拒后 0.3–0.6s 就会再来；不重试的话本轮只能等用户手动重连。
+     */
+    private fun scheduleInviteRetry(
+        endpoint: Iap2SenderSession.CarPlayEndpoint,
+        source: String,
+    ) {
+        if (inviteRetryCount >= MAX_INVITE_RETRIES) {
+            appendLog(">>> [$source] 已按车机邀请重连 $MAX_INVITE_RETRIES 次仍被拒——不再自动重试，请导出日志反馈")
+            return
+        }
+        val attempt = ++inviteRetryCount
+        val baseline = ctrlAdvertiser?.lastInviteAtMillis ?: 0L
+        Bg.run("invite-retry") {
+            val deadline = android.os.SystemClock.uptimeMillis() + INVITE_RETRY_WAIT_MS
+            while (!connectCancelled && android.os.SystemClock.uptimeMillis() < deadline) {
+                val latest = ctrlAdvertiser?.lastInviteAtMillis ?: 0L
+                if (latest > baseline && !sessionStarting.get()) {
+                    appendLog(">>> [$source] 收到车机新邀请——第 $attempt 次重连 AirPlay")
+                    onCarPlayEndpoint(endpoint, "$source/邀请重连")
+                    return@run
+                }
+                Thread.sleep(200)
+            }
+            if (!connectCancelled) {
+                appendLog(">>> [$source] ${INVITE_RETRY_WAIT_MS / 1000}s 内未收到车机新邀请——不再重试")
             }
         }
     }
@@ -2564,11 +2663,12 @@ object SessionController {
                 "密码=${if (endpoint.passphrase.isEmpty()) "(空)" else "已获取"}",
         )
         phaseHint = t(R.string.sc_resolving_hotspot)
-        ssidSink?.invoke(endpoint.ssid)
+        if (endpoint.ssid != INVITED_WIFI_LABEL) ssidSink?.invoke(endpoint.ssid)
         // 凭据缓存对两条路径都要写：0x5703 走 onWifiCredentials，0x4301 只到这里。
         // 漏写会让「车机热点 → 去连接」手动兜底误报「尚未拿到热点密码（需 0x5703）」
         // ——2026-10-22 奥迪日志里就是这么把排查方向带偏的。
-        if (endpoint.ssid.isNotBlank()) {
+        // 占位标签不是真实 SSID：写进缓存会让后续轮次拿它去按 SSID 入网。
+        if (endpoint.ssid.isNotBlank() && endpoint.ssid != INVITED_WIFI_LABEL) {
             lastCarWifiSsid = endpoint.ssid
             if (endpoint.passphrase.isNotEmpty()) lastWifiPsk = endpoint.passphrase
         }
@@ -2850,6 +2950,17 @@ object SessionController {
                             client.close()
                             return@run
                         }
+                        if (setup != null && client.controlChannelClosed) {
+                            // 帕萨特 2025（VW4211）：没等到新鲜 ctrl 邀请就连入时，初始 SETUP 照回 200
+                            // 但随即关控制通道；继续往下走只会得到假会话（/info、事件通道、屏幕流全失败）。
+                            appendLog(
+                                "AIRPLAY: 车机在初始 SETUP 后立即关闭控制通道（多为未等到新鲜 ctrl 邀请就连入）" +
+                                    "——放弃本次会话，等车机下一次邀请后重连",
+                            )
+                            runCatching { client.close() }
+                            scheduleInviteRetry(endpoint, source)
+                            return@run
+                        }
                         if (setup != null) {
                             // 记录会话凭据：投影授权晚于连接时用于动态补启音频。
                             // 用 client.currentEndpoint 而非 effectiveEndpoint：配对期间
@@ -2996,11 +3107,20 @@ object SessionController {
                                     "forceKeyFrame" -> {
                                         // 车机解不出画面时会要 I 帧。必须立即响应：
                                         // 拖到下一个周期 I 帧（1s）车机可能一直卡在等帧状态。
+                                        // 帕萨特 2025 解不了透传流时每 ~300ms 要一次，一轮几百条——限流记录。
                                         val forced = videoSender?.requestKeyFrame() == true
-                                        appendLog(
-                                            "EVENT: 车机请求关键帧（forceKeyFrame）→ " +
-                                                if (forced) "已强制编码 I 帧" else "编码器未就绪，等周期 I 帧",
-                                        )
+                                        forceKeyFrameCount++
+                                        if (forceKeyFrameCount <= 3 || forceKeyFrameCount % 20 == 0) {
+                                            appendLog(
+                                                "EVENT: 车机请求关键帧（forceKeyFrame，第 $forceKeyFrameCount 次）→ " +
+                                                    when {
+                                                        !forced -> "源未就绪，等周期 I 帧"
+                                                        videoSender?.isExternalPassthrough == true ->
+                                                            "已向 CarWith 请求（透传源不保证立即出 I 帧）"
+                                                        else -> "已强制编码 I 帧"
+                                                    },
+                                            )
+                                        }
                                     }
 
                                     "changeModes" -> {
@@ -3008,6 +3128,20 @@ object SessionController {
                                         // 回 modesChanged 声明手机持有主屏/主音频
                                         appendLog("EVENT: 车机请求 changeModes → 回 modesChanged 接管资源")
                                         client.assertModes()
+                                    }
+
+                                    "requestUI" -> {
+                                        // 用户在原生菜单点 CarPlay 图标（帕萨特 2025 / VW4211 实测：每点一次一条，
+                                        // 无 params）。旧实现只记日志不应答，车机始终停在原生界面。
+                                        // 与 changeModes 同样回 modesChanged 接管主屏，并立刻补一个 I 帧，
+                                        // 让车机切屏后马上有可解码的画面。
+                                        val asserted = client.assertModes()
+                                        val keyFrame = videoSender?.requestKeyFrame() == true
+                                        appendLog(
+                                            "EVENT: 车机 requestUI（用户点了 CarPlay 图标）→ modesChanged " +
+                                                (if (asserted) "已应答" else "失败") +
+                                                "，关键帧" + (if (keyFrame) "已请求" else "未就绪"),
+                                        )
                                     }
 
                                     else ->
@@ -3138,6 +3272,7 @@ object SessionController {
                                             log = { line -> appendLog(line) },
                                             keepAliveWithStats = setup.keepAliveSendStatsAsBody,
                                             externalVideoSource = carLifeSource,
+                                            receiverMaxFps = setup.maxFps,
                                             onExternalFrameSent = { bytes ->
                                                 ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
                                             },
@@ -3382,6 +3517,10 @@ object SessionController {
     /** 车机媒体键「释放」报文计数（值为 0 的 1 字节报告，静默丢弃，仅计数备查）。 */
     @Volatile
     private var consumerReleaseCount = 0
+
+    /** 车机 forceKeyFrame 计数（日志限流用）。 */
+    @Volatile
+    private var forceKeyFrameCount = 0
 
     @Volatile
     private var iapEventMessageCount = 0

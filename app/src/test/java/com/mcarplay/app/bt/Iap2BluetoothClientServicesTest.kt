@@ -32,4 +32,62 @@ class Iap2BluetoothClientServicesTest {
         assertTrue(timedOut.contains("SDP 未在"))
         assertTrue(timedOut.endsWith("服务=未确定（SDP 未返回）"))
     }
+
+    /** 大众车机 SDP 不声明 …caff 但 RFCOMM 可连（2026-10-31）：自动模式不能只凭 SDP 跳过。 */
+    @Test
+    fun sdpGateKeepsCarAudioAndRememberedReceivers() {
+        assertEquals(
+            Iap2BluetoothClient.SdpGate.CONNECT,
+            Iap2BluetoothClient.sdpGateDecision(hasIap2Service = true, deviceClass = 0x0404, rememberedReceiver = false),
+        )
+        assertEquals(
+            Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP,
+            Iap2BluetoothClient.sdpGateDecision(hasIap2Service = false, deviceClass = 0x0420, rememberedReceiver = false),
+        )
+        assertEquals(
+            Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP,
+            Iap2BluetoothClient.sdpGateDecision(hasIap2Service = false, deviceClass = null, rememberedReceiver = true),
+        )
+    }
+
+    /** 帕萨特 2025 款 SDP 缓存原样（报告 db17225a…）：类别未知、未记忆，也必须放行。 */
+    @Test
+    fun sdpGateKeepsPassatServiceSignature() {
+        val vendor = UUID.fromString("d31fbf50-5d57-2797-a240-41cd484388ec")
+        val passat = listOf(short(0x110B), short(0x110E), short(0x111E), short(0x1133), short(0x180F), vendor)
+        assertEquals(
+            Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP,
+            Iap2BluetoothClient.sdpGateDecision(
+                hasIap2Service = false,
+                deviceClass = null,
+                rememberedReceiver = false,
+                services = passat,
+            ),
+        )
+        // 普通耳机：HFP + A2DP 接收 + AVRCP，没有 MAP
+        val headset = listOf(short(0x110B), short(0x110E), short(0x111E))
+        assertEquals(
+            Iap2BluetoothClient.SdpGate.SKIP,
+            Iap2BluetoothClient.sdpGateDecision(
+                hasIap2Service = false,
+                deviceClass = 0x0404,
+                rememberedReceiver = false,
+                services = headset,
+            ),
+        )
+    }
+
+    @Test
+    fun sdpGateStillSkipsHeadsetsAndWatches() {
+        // 0x0404 = 可穿戴耳机，0x0704 = 腕表
+        for (deviceClass in listOf(0x0404, 0x0418, 0x0704, null)) {
+            assertEquals(
+                Iap2BluetoothClient.SdpGate.SKIP,
+                Iap2BluetoothClient.sdpGateDecision(hasIap2Service = false, deviceClass = deviceClass, rememberedReceiver = false),
+            )
+        }
+        assertEquals("车载音频", Iap2BluetoothClient.describeDeviceClass(0x0420))
+        assertEquals("0x0404", Iap2BluetoothClient.describeDeviceClass(0x0404))
+        assertEquals("未知", Iap2BluetoothClient.describeDeviceClass(null))
+    }
 }

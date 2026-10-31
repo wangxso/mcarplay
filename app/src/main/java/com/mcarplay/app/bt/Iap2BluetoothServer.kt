@@ -38,6 +38,8 @@ class Iap2BluetoothServer(
     private val onLinkClosed: () -> Unit = {},
     /** 本进程已知的车机热点 SSID（本轮无新凭据时沿用，避免每轮 8 秒拆链）。 */
     private val knownCarSsid: () -> String? = { null },
+    /** 车机是否已在 WiFi 上发过 ctrl 邀请（无凭据时据此不拆链）。 */
+    private val receiverInvited: () -> Boolean = { false },
     /** 0x1D01 画像判定的链路代际（Phase 1 完成后回调，AirPlay 阶段分派用）。 */
     private val onGeneration: (ReceiverProfile.LinkGeneration) -> Unit = {},
     /** 目标车机（动态读取：拒绝非目标设备的连入；null=来者不拒）。 */
@@ -184,6 +186,7 @@ class Iap2BluetoothServer(
                 onEndpointUpdate,
                 onLinkClosed,
                 knownCarSsid,
+                receiverInvited,
                 onGeneration,
                 peerAddress = socket.remoteDevice?.address,
                 observation = observation,

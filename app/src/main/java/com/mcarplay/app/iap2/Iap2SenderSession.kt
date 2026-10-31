@@ -52,6 +52,14 @@ class Iap2SenderSession(
      */
     private val knownCarSsid: (() -> String?)? = null,
     /**
+     * 车机是否已在 WiFi 上发过 ctrl 邀请（`GET /ctrl-int/1/connect`）。
+     *
+     * 邀请能到达 = 车机与手机已在同一网络、AirPlay 窗口已开。大众车机（2026-10-31 诊断报告）
+     * 对已入网的手机不再回 0x5703，也不发 0x4301，却每 20~30 秒发一次邀请；旧实现因为
+     * 「不知道热点」直接拆链，邀请永远没人接。此时必须返回空端点交给主控按当前 WiFi 继续。
+     */
+    private val receiverInvited: (() -> Boolean)? = null,
+    /**
      * 仅用于 MFi 挑战长度的按车机持久化记忆（[MfiLengthMemory]）。null = 只用进程内
      * 内存表（单测/纯 JVM），不影响协议流程。
      */
@@ -161,6 +169,9 @@ class Iap2SenderSession(
     private companion object {
         /** 等 StartHID 的窗口：xcertplay 会发（订阅后立即到），DiPlay 不发。 */
         const val HID_WAIT_NANOS = 2_000_000_000L
+
+        /** 等 0x5703 期间检查车机 ctrl 邀请的间隔。 */
+        const val INVITE_POLL_MILLIS = 500L
 
         /**
          * 等 0x4301 的短窗口（声明会发的测试台毫秒级应答；没声明的车机直接跳过）。
@@ -344,8 +355,21 @@ class Iap2SenderSession(
                 if (wifiConfiguration == null) {
                     send(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
                     log("iap2 0x5702 重发一次（首次仅链路 ACK）")
-                    wifiConfiguration =
-                        expectOrNull(Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION, deadline)
+                    // 分片等待并检查 ctrl 邀请：帕萨特 2025（2026-10-31 23:50）入网后 26 秒即发邀请，
+                    // 却从不回 0x5703；整窗干等到会话期限（约 90 秒）才进兜底，用户早已放弃。
+                    // 邀请已到 = 手机已在车机网络上，不必再等凭据。
+                    while (wifiConfiguration == null && System.nanoTime() < deadline) {
+                        wifiConfiguration =
+                            expectOrNull(
+                                Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
+                                wifiRescueDeadline(deadline, INVITE_POLL_MILLIS),
+                            )
+                        if (wifiConfiguration == null && receiverInvited?.invoke() == true) {
+                            log("iap2 0x5703 未到但车机已在 WiFi 上发 ctrl 邀请——停止等待凭据，转入兜底")
+                            break
+                        }
+                        if (!channel.isAlive) break
+                    }
                 }
                 if (wifiConfiguration == null) {
                     log("iap2 0x5703 三段救援（问候/0x5702 重发）后仍未到达——改走 0x4300/0x4301（新版协议自带 AP 信息）")
@@ -431,45 +455,61 @@ class Iap2SenderSession(
                         ipAddresses = emptyList(),
                     )
                 } else {
-                    // 无 0x5703。三级兜底，前两级都不拆链：
+                    // 无 0x5703。四级兜底，前三级都不拆链：
                     // ① 已知热点（上一轮拿过/已入网过，2026-10-22 奥迪：第 2 轮起手机已在
                     //    车机热点上，空端点会让主控走 mDNS/网关，0x4301 晚到仍热更新）
-                    val fallback = credentiallessEndpoint(knownCarSsid?.invoke())
-                    if (fallback != null) {
-                        log(
-                            "iap2 无新凭据——沿用已知热点 \"${fallback.ssid}\" 继续" +
-                                "（绑定当前网络后走 mDNS/网关，晚到的 0x4301 会热更新端点），不拆链",
-                        )
-                        fallback
-                    } else if (declaresStartSession == true) {
-                        // ② 新协议车机（GM/Cinemo、BMW iD9 同族：无 0x5702/0x5703，AP 信息只在
-                        //    0x4301 里）声明会发但窗口内未到。凯迪拉克 CT5 实测（2026-10-21 日志）：
-                        //    8s 窗口全空、拆链后 6 轮循环车机始终静默；但真 iPhone 忘掉热点仍能
-                        //    无线连上——车机会发 0x4301（凭据经蓝牙推送），只是晚发/等前置条件。
-                        //    奥迪 MMI 9310 先例：Phase 1 结束后 2 分 35 秒才发。**不拆链**：
-                        //    返回空端点，主控进入等待态；晚到 0x4301 由保活泵经
-                        //    handleLateStartSession → onEndpointUpdate 重新触发配对。
-                        log(
-                            "iap2 0x4301 窗口内未到但车机声明会发——不拆链，返回空端点进入保活；" +
-                                "晚到 0x4301 将重新触发配对（Audi MMI 9310 先例：2 分 35 秒）",
-                        )
-                        CarPlayEndpoint(
-                            ssid = "",
-                            passphrase = "",
-                            channel = 0,
-                            securityType = 0,
-                            airPlayPort = 0,
-                            deviceIdentifier = null,
-                            publicKey = null,
-                            sourceVersion = null,
-                            ipAddresses = emptyList(),
-                        )
-                    } else {
-                        // ③ 一点线索都没有（连 SSID 都不知道、车机也没承诺），继续等只会空转。
-                        throw IOException(
-                            "未拿到车机热点凭据：本轮 0x5702/0x4301 都没给出 AP 信息，" +
-                                "且本进程没有已知的车机热点（请先在车机上重新选择本机）",
-                        )
+                    val knownSsid = knownCarSsid?.invoke()
+                    val invited = receiverInvited?.invoke() == true
+                    when (credentiallessFallback(knownSsid, declaresStartSession, invited)) {
+                        CredentiallessFallback.KNOWN_SSID -> {
+                            val fallback = credentiallessEndpoint(knownSsid)!!
+                            log(
+                                "iap2 无新凭据——沿用已知热点 \"${fallback.ssid}\" 继续" +
+                                    "（绑定当前网络后走 mDNS/网关，晚到的 0x4301 会热更新端点），不拆链",
+                            )
+                            fallback
+                        }
+
+                        CredentiallessFallback.AWAIT_LATE_START_SESSION,
+                        CredentiallessFallback.RECEIVER_INVITED,
+                        -> {
+                            // ② 新协议车机（GM/Cinemo、BMW iD9 同族：无 0x5702/0x5703，AP 信息只在
+                            //    0x4301 里）声明会发但窗口内未到。凯迪拉克 CT5 实测（2026-10-21 日志）：
+                            //    8s 窗口全空、拆链后 6 轮循环车机始终静默；但真 iPhone 忘掉热点仍能
+                            //    无线连上——车机会发 0x4301（凭据经蓝牙推送），只是晚发/等前置条件。
+                            //    奥迪 MMI 9310 先例：Phase 1 结束后 2 分 35 秒才发。
+                            // ③ 车机已在 WiFi 上发过 ctrl 邀请（大众 2026-10-31）：手机已在车机网络上，
+                            //    车机不会再推凭据；主控按当前 WiFi 绑定后接邀请。
+                            // 两种都**不拆链**：返回空端点，主控进入等待态；晚到 0x4301 由保活泵经
+                            // handleLateStartSession → onEndpointUpdate 重新触发配对。
+                            log(
+                                if (invited) {
+                                    "iap2 无 0x5703/0x4301，但车机已在 WiFi 上发过 ctrl 邀请——不拆链，" +
+                                        "返回空端点，由主控按手机当前 WiFi 接邀请"
+                                } else {
+                                    "iap2 0x4301 窗口内未到但车机声明会发——不拆链，返回空端点进入保活；" +
+                                        "晚到 0x4301 将重新触发配对（Audi MMI 9310 先例：2 分 35 秒）"
+                                },
+                            )
+                            CarPlayEndpoint(
+                                ssid = "",
+                                passphrase = "",
+                                channel = 0,
+                                securityType = 0,
+                                airPlayPort = 0,
+                                deviceIdentifier = null,
+                                publicKey = null,
+                                sourceVersion = null,
+                                ipAddresses = emptyList(),
+                            )
+                        }
+
+                        CredentiallessFallback.ABORT ->
+                            // ④ 一点线索都没有（连 SSID 都不知道、车机也没承诺、也没邀请），继续等只会空转。
+                            throw IOException(
+                                "未拿到车机热点凭据：本轮 0x5702/0x4301 都没给出 AP 信息，" +
+                                    "车机也未发 ctrl 邀请，且本进程没有已知的车机热点（请先在车机上重新选择本机）",
+                            )
                     }
                 }
             }
@@ -1159,6 +1199,33 @@ class Iap2SenderSession(
         }
     }
 }
+
+/** 本轮既无 0x5703 也无 0x4301 时的兜底分支（按优先级）。 */
+internal enum class CredentiallessFallback {
+    /** 已知热点 SSID：合成带 SSID 的不自足端点。 */
+    KNOWN_SSID,
+
+    /** 车机声明会发 0x4301：空端点保活，等晚到的 0x4301。 */
+    AWAIT_LATE_START_SESSION,
+
+    /** 车机已在 WiFi 上发过 ctrl 邀请：空端点，主控按当前 WiFi 接邀请。 */
+    RECEIVER_INVITED,
+
+    /** 没有任何线索：拆链。 */
+    ABORT,
+}
+
+internal fun credentiallessFallback(
+    knownSsid: String?,
+    declaresStartSession: Boolean?,
+    receiverInvited: Boolean,
+): CredentiallessFallback =
+    when {
+        credentiallessEndpoint(knownSsid) != null -> CredentiallessFallback.KNOWN_SSID
+        declaresStartSession == true -> CredentiallessFallback.AWAIT_LATE_START_SESSION
+        receiverInvited -> CredentiallessFallback.RECEIVER_INVITED
+        else -> CredentiallessFallback.ABORT
+    }
 
 /**
  * 本轮没拿到任何 AP 凭据时的兜底端点；连 SSID 都不知道就返回 null（调用方报错）。

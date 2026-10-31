@@ -81,9 +81,21 @@ class CarPlayCtrlAdvertiser(
     var inviteCount: Int = 0
         private set
 
+    /**
+     * 最近一次邀请的时刻（uptimeMillis；0 = 本轮尚无）。
+     *
+     * 帕萨特 2025（VW4211，2026-10-31 23:51–23:59）只接受「刚发过邀请」后的连入：
+     * 邀请后 7s/13s 连入成功，42s 前的旧邀请或邀请到达前抢先连入，初始 SETUP
+     * 一回就被关控制通道。只看计数无法区分新旧，故另记时刻。
+     */
+    @Volatile
+    var lastInviteAtMillis: Long = 0L
+        private set
+
     /** 新一轮连接开始时清零（避免把上一轮的邀请当成本轮信号）。 */
     fun resetInviteCount() {
         inviteCount = 0
+        lastInviteAtMillis = 0L
     }
 
     /** 注册时的 WiFi SSID：换网（2.4G→5G 或车机热点切换）后旧注册不可见，需重新注册。 */
@@ -289,6 +301,7 @@ class CarPlayCtrlAdvertiser(
                         }?.substringAfter(':')
                         ?.trim()
                 inviteCount++
+                lastInviteAtMillis = android.os.SystemClock.uptimeMillis()
                 log("$TAG: ✓ 车机 ctrl 邀请（第 $inviteCount 次，receiver=${receiverId ?: "?"}）——AirPlay 窗口已开启")
             }
 

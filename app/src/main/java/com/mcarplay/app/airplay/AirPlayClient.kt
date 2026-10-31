@@ -2674,6 +2674,7 @@ class AirPlayClient(
         } finally {
             // 只由「当前」读线程清账：重连会换 socket 与新读线程，旧线程不得误伤新会话
             if (generation == readerGeneration) {
+                controlChannelClosed = true
                 failAllPending("控制通道读线程结束")
             }
         }
@@ -2761,6 +2762,7 @@ class AirPlayClient(
             previous = readerSocket
             readerSocket = client
             val generation = ++readerGeneration
+            controlChannelClosed = false
             readerThread =
                 Thread({ readLoop(client, generation) }, "airplay-rtsp-reader").apply {
                     isDaemon = true
@@ -2786,6 +2788,17 @@ class AirPlayClient(
 
     /** 读线程代次：重连后旧线程不得清理新会话的待响应表。 */
     private var readerGeneration = 0
+
+    /**
+     * 当前控制连接是否已被对端关掉（当前读线程以 EOF/异常退出；新读线程启动时清零）。
+     *
+     * 帕萨特 2025（VW4211）对「没等到 ctrl 邀请就连入」的会话：初始 SETUP 照回 200，
+     * 随即关控制通道——SETUP 看似成功，/info、事件通道与屏幕流全部失败。调用方据此
+     * 区分「被车机拒绝」与真正可用的会话。
+     */
+    @Volatile
+    var controlChannelClosed: Boolean = false
+        private set
 
     /** 最近一次 RTSP 响应头（按 CSeq 存：读线程与请求线程并发，单一字段会错配到别的请求）。 */
     private val responseHeads = java.util.concurrent.ConcurrentHashMap<Int, String>()

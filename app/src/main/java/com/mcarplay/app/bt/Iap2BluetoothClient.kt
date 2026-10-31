@@ -41,11 +41,25 @@ class Iap2BluetoothClient(
     private val onLinkClosed: () -> Unit = {},
     /** 本进程已知的车机热点 SSID（本轮无新凭据时沿用，避免每轮 8 秒拆链）。 */
     private val knownCarSsid: () -> String? = { null },
+    /** 车机是否已在 WiFi 上发过 ctrl 邀请（无凭据时据此不拆链）。 */
+    private val receiverInvited: () -> Boolean = { false },
     /** 0x1D01 画像判定的链路代际（Phase 1 完成后回调，AirPlay 阶段分派用）。 */
     private val onGeneration: (ReceiverProfile.LinkGeneration) -> Unit = {},
     /** 目标车机（动态读取：选择后无需重启链路，下一轮尝试即生效）。 */
     private val targetProvider: () -> TargetDevicePrefs.Target? = { null },
 ) {
+    /** 自动模式 SDP 闸门结论。 */
+    enum class SdpGate {
+        /** SDP 已声明 …caff。 */
+        CONNECT,
+
+        /** SDP 未声明，但有其它证据（车载音频类别 / 曾建立过 iAP2）——仍尝试。 */
+        CONNECT_DESPITE_SDP,
+
+        /** 没有任何 CarPlay 证据（耳机、手表等）——跳过，保持其音频连接。 */
+        SKIP,
+    }
+
     companion object {
         /**
          * 配件端（车机）无线 iAP2 服务 UUID。
@@ -81,6 +95,44 @@ class Iap2BluetoothClient(
                 0x1200 to "DID",
             )
         private const val BASE_UUID_SUFFIX = "-0000-1000-8000-00805f9b34fb"
+
+        /** BluetoothClass.Device.AUDIO_VIDEO_CAR_AUDIO（显式写出，单测里 Android 常量同样可用）。 */
+        private const val DEVICE_CLASS_CAR_AUDIO = 0x0420
+
+        private val HFP_HANDS_FREE_UUID: UUID = UUID.fromString("0000111e$BASE_UUID_SUFFIX")
+        private val A2DP_SINK_UUID: UUID = UUID.fromString("0000110b$BASE_UUID_SUFFIX")
+        private val MAP_NOTIFICATION_UUID: UUID = UUID.fromString("00001133$BASE_UUID_SUFFIX")
+
+        /**
+         * 大众帕萨特 2025 款（2026-10-31 诊断报告）SDP 里没有 …caff，RFCOMM 照样能连上并跑完 iAP2 认证；
+         * 只按 SDP 判定会让自动模式永远跳过它。以下任一证据都不让 SDP 否决：
+         *  - 曾成功建立 …caff RFCOMM；
+         *  - 设备类别为车载音频；
+         *  - 服务组合像车机：HFP 免提 + A2DP 接收 + MAP 通知（帕萨特 SDP 实测即此组合；
+         *    耳机没有 MAP，手表通常没有 A2DP 接收）。误判的代价只是一次失败的 RFCOMM 尝试。
+         */
+        fun sdpGateDecision(
+            hasIap2Service: Boolean,
+            deviceClass: Int?,
+            rememberedReceiver: Boolean,
+            services: List<UUID> = emptyList(),
+        ): SdpGate =
+            when {
+                hasIap2Service -> SdpGate.CONNECT
+                rememberedReceiver || deviceClass == DEVICE_CLASS_CAR_AUDIO || looksLikeHeadUnit(services) ->
+                    SdpGate.CONNECT_DESPITE_SDP
+                else -> SdpGate.SKIP
+            }
+
+        private fun looksLikeHeadUnit(services: List<UUID>): Boolean =
+            HFP_HANDS_FREE_UUID in services && A2DP_SINK_UUID in services && MAP_NOTIFICATION_UUID in services
+
+        fun describeDeviceClass(deviceClass: Int?): String =
+            when (deviceClass) {
+                null -> "未知"
+                DEVICE_CLASS_CAR_AUDIO -> "车载音频"
+                else -> String.format(java.util.Locale.ROOT, "0x%04X", deviceClass)
+            }
 
         /**
          * 目标设备 SDP 声明的服务摘要：已知蓝牙标准服务写简称，其余（含厂商私有 UUID）写全称，
@@ -311,10 +363,40 @@ class Iap2BluetoothClient(
                     reportTargetServices(device, name)
                 }
                 if (targetProvider() == null && !awaitIap2Service(device)) {
-                    if (skippedNoService.add(device.address)) {
-                        log("BT-C: 跳过「$name」（未发现 iAP2 服务——非 CarPlay 设备，保持其音频连接）")
+                    val deviceClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull()
+                    val remembered = Iap2ReceiverMemory.contains(context, device.address)
+                    val services = cachedUuids(device)
+                    when (
+                        sdpGateDecision(
+                            hasIap2Service = false,
+                            deviceClass = deviceClass,
+                            rememberedReceiver = remembered,
+                            services = services,
+                        )
+                    ) {
+                        SdpGate.SKIP -> {
+                            if (skippedNoService.add(device.address)) {
+                                log(
+                                    "BT-C: 跳过「$name」（未发现 iAP2 服务——非 CarPlay 设备，保持其音频连接；" +
+                                        "设备类别=${describeDeviceClass(deviceClass)}）",
+                                )
+                            }
+                            continue
+                        }
+
+                        else ->
+                            if (skippedNoService.add(device.address)) {
+                                log(
+                                    "BT-C: 「$name」SDP 未声明 iAP2，但" +
+                                        when {
+                                            remembered -> "曾建立过 iAP2 链路"
+                                            deviceClass == DEVICE_CLASS_CAR_AUDIO -> "设备类别=车载音频"
+                                            else -> "服务组合像车机（HFP+A2DP接收+MAP通知）"
+                                        } +
+                                        "——仍尝试连接（部分车机不在 SDP 里声明 …caff）",
+                                )
+                            }
                     }
-                    continue
                 }
                 // 未知设备先保留 HFP/A2DP；只有已保存的本地策略或用户发起的一次对照才断开。
                 // 每次 start 对同一目标最多执行一次，失败后恢复保留连接的基线，避免 ACL 反复震荡。
@@ -343,6 +425,7 @@ class Iap2BluetoothClient(
                 val socket = tryConnect(device)
                 if (socket != null) {
                     log("BT-C: ✓ 已连入 $name 的无线 iAP2 服务（RFCOMM 建立）")
+                    Iap2ReceiverMemory.remember(context, device.address)
                     connected = socket
                     break
                 } else {
@@ -444,6 +527,7 @@ class Iap2BluetoothClient(
                 onEndpointUpdate,
                 onLinkClosed,
                 knownCarSsid,
+                receiverInvited,
                 onGeneration,
                 peerAddress = socket.remoteDevice?.address,
             )
