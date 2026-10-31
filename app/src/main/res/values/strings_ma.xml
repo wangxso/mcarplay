@@ -81,6 +81,7 @@
     <string name="ma_hero_residual">上次会话异常退出，遗留 %1$d 个虚拟屏待清理</string>
     <string name="ma_cta_disconnect">断开连接</string>
     <string name="ma_connected_subline">已连接 · %1$s · %2$02d:%3$02d · 视频推流中</string>
+    <string name="ma_connected_usb_subline">已连接 · USB 有线 · %1$02d:%2$02d · 视频推流中</string>
     <string name="ma_audio_tag_off">车机侧声音 · 关闭</string>
     <string name="ma_bt_target">目标「%1$s」· 只向该设备发请求</string>
     <string name="ma_bt_multi">已配对 %1$d 台 · 未指定目标将逐个尝试</string>

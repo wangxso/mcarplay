@@ -12,6 +12,8 @@ derived from CarDeck (MIT); keep upstream notices in `LICENSE`, `NOTICE` and `TH
   video/audio parsers, touch, session registry, plus EasyConn/External-HU discovery, mDNS and Wi-Fi Direct (P2P) helpers.
 - `airplay/`, `iap2/`, `bt/`, `net/`, `transport/`: CarPlay transport — AirPlay pairing and crypto, binary plist, iAP2 link and
   sessions, Bluetooth RFCOMM, receiver discovery and Wi-Fi join.
+- `usb/`: root-only wired CarPlay experiment — FunctionFS/configfs iPhone gadget, USB role switch and the USB host iAP2
+  stream; `usb/root/WiredGadgetMain` is a bench tool run via `su` + `app_process`, never from the app. See `docs/WIRED-CARPLAY.md`.
 - `video/`, `audio/`, `input/`, `capture/`, `render/`: media senders (H.264, AAC-LC with PCM resampling), HID touch/keys and display.
 - `diagnostics/`: connection timeline, error codes, redaction and the support report; `util/` holds `DebugFileLog` and `LogExporter`.
 - `launcher/`, `ui/`, `media/`, `legal/`, `shizuku/`, `service/`: CarDeck-derived launcher/settings UI, disclaimer, notification

@@ -7,6 +7,7 @@ import android.view.Surface
 import com.mcarplay.app.airplay.AirPlayCrypto
 import com.mcarplay.app.airplay.BinaryPlist
 import com.mcarplay.app.airplay.StreamFrameCipher
+import com.mcarplay.app.airplay.TimingServer
 import com.mcarplay.app.net.TcpLiveness
 import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
@@ -567,13 +568,7 @@ class VideoSender(
         header[2] = ((bodyLength ushr 16) and 0xFF).toByte()
         header[3] = ((bodyLength ushr 24) and 0xFF).toByte()
         header[4] = opcode.toByte()
-        val nanos = System.nanoTime()
-        val seconds = nanos / 1_000_000_000L
-        val fraction = ((nanos % 1_000_000_000L) shl 32) / 1_000_000_000L
-        val ntp = (seconds shl 32) or fraction
-        for (index in 0 until 8) {
-            header[8 + index] = ((ntp ushr (8 * index)) and 0xFF).toByte()
-        }
+        writeFrameTimestamp(header, TimingServer.ntpNanosNow())
         return header
     }
 
@@ -642,6 +637,24 @@ class VideoSender(
 
         /** 屏幕流 keepAlive 间隔（catplay `DEFAULT_KEEP_ALIVE` = 1s）。 */
         private const val KEEPALIVE_INTERVAL_MS = 1_000L
+
+        /**
+         * 帧头偏移 8..16 写入 NTP 32.32 LE 时间戳。
+         *
+         * [ntpNanos] 必须与 [TimingServer] 计时应答同一时钟域（[TimingServer.ntpNanosNow]）：
+         * 接收端用计时协议换算出的偏移来解释这个时间戳，时钟域不一致时帧会被当成约 126 年前的数据。
+         */
+        internal fun writeFrameTimestamp(
+            header: ByteArray,
+            ntpNanos: Long,
+        ) {
+            val seconds = ntpNanos / 1_000_000_000L
+            val fraction = ((ntpNanos % 1_000_000_000L) shl 32) / 1_000_000_000L
+            val ntp = (seconds shl 32) or fraction
+            for (index in 0 until 8) {
+                header[8 + index] = ((ntp ushr (8 * index)) and 0xFF).toByte()
+            }
+        }
 
         /**
          * 构造屏幕流 keepAlive 帧（明文头 + 可选 bplist 统计体）。
