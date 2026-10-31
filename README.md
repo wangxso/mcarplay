@@ -31,7 +31,7 @@ The current formal release is `v0.1.3`; its scope remains the validated manual p
 | WinPlay 1.2.5 | Default settings: picture, touch and music reached the receiver; one session ran about 25 minutes after WinPlay released Bluetooth; reconnect worked after a manual disconnect and after manual network loss |
 | WinPlay 1.2.4 | Short runs with picture and sound |
 | Receiver touch | Taps and page changes verified on DiPlay and WinPlay 1.2.5; the user separately confirmed touch on the manual Chery path |
-| Receiver media keys | Next/previous are forwarded to CarWith; not yet verified on device |
+| Receiver media keys | Next/previous are forwarded to CarWith; play/pause/stop go to the phone's active media session. A held key fires once, then repeats every 1.5 seconds; not yet verified on device |
 | Native music | 44.1 kHz PCM converted to 48 kHz AAC-LC; audible playback confirmed |
 | Combined playback | About 25 minutes with music on WinPlay 1.2.5; about 6 minutes 36 seconds on DiPlay without audio drops, underruns or write errors |
 | Real vehicle compatibility | One manual wireless path was validated on a 2022 Chery Arrizo 8 with firmware `M1E_IC2172/82_03_21.387_250619_R`: picture, sound and touch reached the head unit; two media sessions totaled about 107 minutes, with the longest about 99 minutes. This is not broad vehicle support |

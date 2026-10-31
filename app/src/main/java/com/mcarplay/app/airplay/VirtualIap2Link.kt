@@ -8,6 +8,7 @@ import com.mcarplay.app.iap2.MfiLengthMemory
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.input.ConsumerKeys
 import com.mcarplay.app.input.HidNavigation
+import com.mcarplay.app.input.MediaKeyEdge
 import java.security.SecureRandom
 import java.util.TimeZone
 import java.util.UUID
@@ -129,11 +130,8 @@ class VirtualIap2Link(
     private var lastLinkState = Iap2LinkEngine.State.IDLE
 
     // ---- 车机 HID 媒体键（0x6802）状态 ----
-    /** 上一次报文里按下的 Usage 集合（用于判定「新按下」，松开后自动清空）。 */
-    private var lastHidUsages: Set<Int> = emptySet()
-
-    /** 当前这批按键的起始时刻（连续同一按键超过 [HID_HOLD_REPEAT_MILLIS] 才允许连发）。 */
-    private var hidHoldStartedAtMs = 0L
+    /** 按下/长按连发的边沿判定（状态式报告 → 一次按键一次触发）。 */
+    private val hidKeyEdge = MediaKeyEdge(HID_HOLD_REPEAT_MILLIS)
 
     /** 已打印的参数明细帧数（只打前几帧，之后按需打动作）。 */
     private var hidReportFrames = 0
@@ -742,30 +740,10 @@ class VirtualIap2Link(
 
     /**
      * 把一批「本次按下的 Usage」转成 Android 媒体键注入。
-     *
-     * 车机的 HID 报告是**状态式**的：按住会以 ~10Hz 连推同一个位图，松开推 0x00。
-     * 因此只在「新出现」时触发一次（边沿触发），否则一次长按会跳掉几十首歌；
-     * 只有在同一按键持续按住超过 [HID_HOLD_REPEAT_MILLIS] 时才允许再触发，
-     * 保持方向盘长按「连续切歌」的手感。
+     * 边沿/长按连发语义见 [MediaKeyEdge]：按住期间的重复报告不会连跳几十首。
      */
     private fun fireHidKeysLocked(usages: List<Int>) {
-        val now = nowMillis()
-        if (usages.isEmpty()) {
-            lastHidUsages = emptySet()
-            hidHoldStartedAtMs = 0L
-            return
-        }
-        val fresh = usages.filter { it !in lastHidUsages }
-        val repeat =
-            fresh.isEmpty() &&
-                hidHoldStartedAtMs > 0 &&
-                now - hidHoldStartedAtMs >= HID_HOLD_REPEAT_MILLIS
-        lastHidUsages = usages.toSet()
-        if (fresh.isNotEmpty()) hidHoldStartedAtMs = now
-        if (fresh.isEmpty() && !repeat) return
-        if (repeat) hidHoldStartedAtMs = now
-        val firing = if (fresh.isNotEmpty()) fresh else usages
-        for (usage in firing) {
+        for (usage in hidKeyEdge.onReport(usages, nowMillis())) {
             val keyCode = ConsumerKeys.keyCodeFor(usage)
             log(
                 "IAPLINK: 车机媒体键 ${ConsumerKeys.nameOf(usage)}(0x%02x) → keyCode=".format(usage) +
@@ -920,7 +898,7 @@ class VirtualIap2Link(
         const val HID_REPORT_VERBOSE_FRAMES = 8
 
         /** 同一按键持续按住多久才允许再次触发（模拟长按连发，短按绝不重复）。 */
-        const val HID_HOLD_REPEAT_MILLIS = 1_500L
+        const val HID_HOLD_REPEAT_MILLIS = MediaKeyEdge.HOLD_REPEAT_MILLIS
 
         /**
          * 0x6802 的参数表 → HID 报文。

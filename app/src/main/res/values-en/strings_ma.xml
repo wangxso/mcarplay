@@ -39,6 +39,8 @@
     <string name="ma_enter_manually">Enter manually</string>
     <string name="ma_background_title">Allow \"Display pop-up windows while running in the background\"</string>
     <string name="ma_background_body">When the CarPlay session starts, mcarplay is usually behind the system Wi-Fi settings and has to open CarWith from the background. Without this permission Xiaomi silently blocks it and the car shows no picture.\n\nAllow \"Display pop-up windows while running in the background\" on the permissions page, then come back and tap Connect again.</string>
+    <string name="ma_battery_title">Locking will disconnect: turn off battery optimization</string>
+    <string name="ma_battery_body">mcarplay is not exempt from battery optimization. On a tested Xiaomi phone the system froze mcarplay and cut its network about 9 seconds after locking, and the car left CarPlay.\n\nOn the page that opens, set \"Battery saver\" to \"No restrictions\" (on other phones choose \"Allow\"), then come back and tap Connect again.</string>
     <string name="ma_detection_not_started">Detection did not start: check the target device and connection state, then retry</string>
     <string name="ma_stop_first">Stop the current connection or CarWith self-test first</string>
     <string name="ma_retry_not_allowed">Bluetooth cannot be retried at this stage; keep waiting or detect again</string>

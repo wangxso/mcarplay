@@ -39,6 +39,7 @@ import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.input.ConsumerKeys
 import com.mcarplay.app.input.HidNavigation
+import com.mcarplay.app.input.MediaKeyEdge
 import com.mcarplay.app.input.TouchReports
 import com.mcarplay.app.input.TouchRouter
 import com.mcarplay.app.launcher.VirtualLauncher
@@ -52,6 +53,7 @@ import com.mcarplay.app.net.WifiCarPlayConnector
 import com.mcarplay.app.net.WifiConnectCommand
 import com.mcarplay.app.net.WifiSavedNetworks
 import com.mcarplay.app.service.CarPlayService
+import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
@@ -228,6 +230,28 @@ object SessionController {
         val audioManager = ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
         audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
         audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+    }
+
+    /**
+     * 车机/方向盘媒体键的统一出口（AirPlay `hidSendReport` 与 iAP2 0x6802 共用）。
+     *
+     * 上一首/下一首在 CarWith 出画时作为 CarLife 硬按键交给 CarWith，由它决定控制哪个
+     * 播放器（与原厂 CarLife 车机一致）；CarWith 未在出画或其余按键（播放/暂停/停止/快进）
+     * 走系统媒体键，AudioManager 派发给当前活跃的媒体会话——锁屏时同样生效。
+     *
+     * @param source 日志用来源（通路 + 按键名）
+     */
+    private fun routeCarMediaKey(
+        keyCode: Int,
+        source: String,
+    ) {
+        val hardKey = CarLifeProtocol.hardKeyFor(keyCode)
+        if (hardKey != null && currentCarLifeSession?.sendHardKey(hardKey) == true) {
+            appendLog("EVENT: 车机媒体键（$source）→ CarWith 硬按键 $hardKey")
+            return
+        }
+        dispatchMediaKey(keyCode)
+        appendLog("EVENT: 车机媒体键（$source）→ 系统媒体键 keyCode=$keyCode")
     }
 
     /**
@@ -945,6 +969,7 @@ object SessionController {
         videoSender?.stop()
         videoSender = null
         StreamingWifiLock.release()
+        appContext?.let(ScreenLockMonitor::stop)
         // 暗幕/常亮随会话收掉（本方法在每轮配对起步也会执行，新一轮推流起来后会重新置位）
         ScreenDimmer.setSessionActive(false)
         // 物理屏兜底恢复：崩溃/异常路径若把面板留在 OFF，这里不会让它烂在黑屏里
@@ -2669,10 +2694,7 @@ object SessionController {
                         ).also { created ->
                             // 车机媒体键（iAP2 0x6802 通路）：方向盘/面板的上一曲、下一曲。
                             // 放在这里而不是调用点，保证重连重建 client 时也挂得上。
-                            created.onMediaKey = { keyCode ->
-                                dispatchMediaKey(keyCode)
-                                appendLog("EVENT: 车机媒体键（iAP2 0x6802）→ keyCode=$keyCode 已注入")
-                            }
+                            created.onMediaKey = { keyCode -> routeCarMediaKey(keyCode, "iAP2 0x6802") }
                             // 旋钮/四向拨杆（iAP2 0x6802 通路）：注入虚拟屏的 DPAD
                             created.onNavKey = { keyCode -> injectNavigationKey(keyCode) }
                             // MIB3 控制会话完成 → modesChanged 资源重申 burst（082446 定谳：
@@ -2837,6 +2859,8 @@ object SessionController {
                             currentSharedSecret = sessionKey
                             currentAudioHost =
                                 client.activeHost ?: EndpointHosts.candidates(client.currentEndpoint.ipAddresses).firstOrNull()
+                            // 每台媒体键 HID 设备一个边沿判定器；随本条 event 通道重建，旧轮按住状态不残留
+                            val mediaKeyEdges = HashMap<String, MediaKeyEdge>()
                             client.connectEventChannel(sessionKey, setup) { command ->
                                 when (command["type"]) {
                                     "hidSendReport" -> {
@@ -2852,23 +2876,23 @@ object SessionController {
                                         val descriptor = uuid?.let { setup.hidDescriptors[it] }
                                         val keyMap =
                                             descriptor?.let(ConsumerKeys::parseDescriptor)
-                                        val rawValue =
-                                            report
-                                                ?.takeIf { it.isNotEmpty() }
-                                                ?.let { it[0].toInt() and 0xFF }
-                                        val consumerUsage =
+                                        // 本帧处于按下状态的 Consumer Usage；null = 不是媒体键设备。
+                                        // 位图（Variable，`81 02`）与 Array（`81 00`）都按描述符展开——
+                                        // 只读首字节当下标会让位图车机的「下一首 0x04」解码成无键。
+                                        val consumerUsages =
                                             when {
+                                                report == null -> null
                                                 // 有描述符：只有 Consumer 设备才解析（非 Consumer → null）
-                                                descriptor != null -> keyMap?.let { rawValue?.let(it::usageFor) }
+                                                descriptor != null -> keyMap?.usagesFor(report)
                                                 // 描述符缺失（未知车机）：保守回退——仅 1 字节报告，
                                                 // 值当 Usage ID 直读
-                                                report != null && report.size == 1 -> rawValue?.takeIf { it != 0 }
+                                                report.size == 1 -> listOf(report[0].toInt() and 0xFF).filter { it != 0 }
                                                 else -> null
                                             }
                                         // 旋钮/四向拨杆（Generic Desktop 页的 Wheel/Hat）：
                                         // 不是 Consumer 设备才走这里；输出 DPAD_* 注入虚拟屏。
                                         val navKeys =
-                                            if (consumerUsage == null && report != null) {
+                                            if (consumerUsages == null && report != null) {
                                                 if (HidNavigation.rawLogEnabled) {
                                                     appendLog(
                                                         "HID-RAW: uuid=$uuid bytes=" +
@@ -2881,7 +2905,7 @@ object SessionController {
                                                 emptyList()
                                             }
                                         val contacts =
-                                            if (consumerUsage == null && navKeys.isEmpty() && report != null) {
+                                            if (consumerUsages == null && navKeys.isEmpty() && report != null) {
                                                 // 触摸格式按设备描述符判定（Digitizer 页 + 单指/多槽），
                                                 // 描述符不可用时按报文长度回退——不依赖车机型号或 uuid
                                                 val touchFormat =
@@ -2897,31 +2921,20 @@ object SessionController {
                                                     navKeys.joinToString("+") { HidNavigation.nameOf(it) } +
                                                     "（uuid=$uuid）",
                                             )
-                                        } else if (consumerUsage != null) {
-                                            val keyCode = ConsumerKeys.keyCodeFor(consumerUsage)
-                                            val hardKey = CarLifeProtocol.hardKeyFor(keyCode)
-                                            if (hardKey != null && currentCarLifeSession?.sendHardKey(hardKey) == true) {
-                                                appendLog(
-                                                    "EVENT: 车机媒体键 ${ConsumerKeys.nameOf(consumerUsage)} → CarWith 硬按键 $hardKey",
-                                                )
-                                            } else if (keyCode != 0) {
-                                                dispatchMediaKey(keyCode)
-                                                appendLog(
-                                                    "EVENT: 车机媒体键 ${ConsumerKeys.nameOf(consumerUsage)}" +
-                                                        "（uuid=$uuid usage=0x%02x → keyCode=$keyCode）"
-                                                            .format(consumerUsage),
-                                                )
-                                            } else {
-                                                appendLog(
-                                                    "EVENT: 车机媒体键 ${ConsumerKeys.nameOf(consumerUsage)}" +
-                                                        "（uuid=$uuid usage=0x%02x）无对应 Android 键，忽略"
-                                                            .format(consumerUsage),
-                                                )
-                                            }
-                                        } else if (keyMap != null && report != null) {
+                                        } else if (consumerUsages != null) {
                                             // Consumer 设备的「无按键」/释放报文（值为 0 或下标越界）：
                                             // 静默计数，避免释放事件刷屏
-                                            consumerReleaseCount++
+                                            if (consumerUsages.isEmpty()) consumerReleaseCount++
+                                            val edge = mediaKeyEdges.getOrPut(uuid.orEmpty()) { MediaKeyEdge() }
+                                            for (usage in edge.onReport(consumerUsages, android.os.SystemClock.uptimeMillis())) {
+                                                val label = "${ConsumerKeys.nameOf(usage)} uuid=$uuid usage=0x%02x".format(usage)
+                                                val keyCode = ConsumerKeys.keyCodeFor(usage)
+                                                if (keyCode != 0) {
+                                                    routeCarMediaKey(keyCode, label)
+                                                } else {
+                                                    appendLog("EVENT: 车机媒体键 $label 无对应 Android 键，忽略")
+                                                }
+                                            }
                                         } else if (!contacts.isNullOrEmpty()) {
                                             if (touchLogCount <= 30 || touchLogCount % 50 == 0) {
                                                 appendLog(
@@ -3139,6 +3152,8 @@ object SessionController {
                                                 if (carLifeOutput?.sender === sessionVideoSender) carLifeOutput = null
                                                 if (videoSender !== sessionVideoSender) return@onVideoEnded
                                                 StreamingWifiLock.release()
+                                                // 先于其余收尾：「息屏后多久结束」以推流终止时刻为准
+                                                appContext?.let(ScreenLockMonitor::stop)
                                                 nativeAudioBridge?.stop()
                                                 nativeAudioBridge = null
                                                 // 会话真实结束：解除静默降噪（客户端恢复探测/重连）
@@ -3196,6 +3211,14 @@ object SessionController {
                                     val videoStarted = claimed && videoSender?.start {} == true
                                     // 入网已完成，此时才拿低延迟锁（持锁会让入网所需的 Wi‑Fi 扫描失败）
                                     if (videoStarted) StreamingWifiLock.acquire(context)
+                                    // 锁屏/息屏/Doze 迁移写进日志与时间线（锁屏退出的定位依据，只读不改状态）
+                                    if (videoStarted) {
+                                        ScreenLockMonitor.start(
+                                            context,
+                                            log = ::appendLog,
+                                            note = { ConnectionDiagnostics.timeline.note(diagnosticAttempt, it) },
+                                        )
+                                    }
                                     if (videoStarted) carLifeOutput = output
                                     val carLifeStarted = videoStarted && createdCarLife.start()
                                     appendLog(

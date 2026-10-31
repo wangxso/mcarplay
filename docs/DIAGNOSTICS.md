@@ -37,6 +37,11 @@ still-redacted recent runtime history.
   installation secrets and environment/capability digests are excluded. Counts do
   not replace the user's picture, sound or input confirmation. See
   [receiver detection](RECEIVER-AUTODETECT.md).
+- `POWER` notes record screen-off, screen-on, unlock and Doze transitions while
+  streaming: interactive, keyguard locked/secure, Doze and battery-optimization
+  exemption flags only. `STREAM_END_SCREEN_OFF afterScreenOffMs=…` marks a stream
+  that ended while the screen was off. They locate lock-screen exits; they do not
+  change any system state.
 - Uncaught stacks and up to five exit records from this app only; an available
   recent crash/ANR trace is capped at 64KB. Other apps' logcat is not read.
 - Default runtime tail: 512KB; journal: two 128KB segments; runtime storage: two

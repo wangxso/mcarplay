@@ -27,6 +27,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 锁屏不断连：引导用户把本应用加入电池优化豁免（HyperOS 未豁免时锁屏约 9 秒冻结进程） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- 音频通道：AudioPlaybackCapture（捕获本机媒体/导航声音上车）必需 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
