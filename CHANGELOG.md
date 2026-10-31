@@ -7,12 +7,12 @@ Test releases are experimental and do not establish real-vehicle compatibility.
 
 ### English
 - Advertise the phone's CarPlay capability alongside its iAP2 Bluetooth service while connecting, and remove both records on stop. Roll back the transport record if capability registration fails. Clarify that a missing receiver-side `…caff` service does not rule out head-unit-initiated CarPlay.
-- A 2022 Chery Arrizo 8 with firmware `M1E_IC2172/82_03_21.387_250619_R` connected wirelessly using the previous release plus a temporary root capability announcement; the user confirmed video, sound and touch. This does not validate the new APK's cold-start/reconnection behavior or long-term stability. A receiver AirPlay crash after manual disconnection remains under investigation.
+- On a 2022 Chery Arrizo 8 with firmware `M1E_IC2172/82_03_21.387_250619_R`, the remote debug candidate connected wirelessly after the user selected the phone in the head unit's Bluetooth list. The user reported about two hours of normal use, with one phone-lock-triggered exit followed by successful direct reconnection without restarting the head unit. The long-run logs have not yet been retrieved; the observation is not a single uninterrupted two-hour session. Phone-lock behavior, automatic initiation, full cold-start behavior and a previously observed receiver AirPlay crash after disconnection remain unresolved.
 - Validation: 601 JVM tests, Spotless, standard debug lint and standard debug build passed.
 
 ### 简体中文
 - 连接期间在 iAP2 蓝牙服务之外公告手机的 CarPlay 能力，停止时同时撤销；能力公告注册失败时回收传输记录。澄清接收端未声明 `…caff` 不代表不能由车机主动发起 CarPlay。
-- 2022 款奇瑞艾瑞泽 8（固件 `M1E_IC2172/82_03_21.387_250619_R`）使用前一发布版配合临时 root 能力公告无线连上，用户确认画面、声音和触控正常；新 APK 的冷启动、重连及长时稳定性仍待验证。主动断开后的车机 AirPlay 崩溃另行跟进。
+- 2022 款奇瑞艾瑞泽 8（固件 `M1E_IC2172/82_03_21.387_250619_R`）在车机蓝牙列表手动点手机后，remote debug 修复候选无线连上；用户确认约两小时使用无其他异常，一次手动锁屏退出后可直接重新连接，无需重启中控。长时日志尚未取回，含退出的窗口不计为单次不间断两小时。锁屏退出、自动触发、完整冷启动及此前断开后的车机 AirPlay 崩溃仍未解决。
 - 验证：601 项 JVM 测试、Spotless、standard debug lint 与 standard debug 构建通过。
 
 ## [v0.1.3-test.4] - 2026-10-30
