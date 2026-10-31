@@ -66,7 +66,7 @@ Select an image to open the full-size version.
 
 | Area | Known status | Next step | Priority |
 | --- | --- | --- | --- |
-| Real vehicle testing | The manual wireless path is validated on one recorded Chery head-unit firmware. Other vehicles and firmware remain unverified. | Record more vehicle/receiver combinations, including ignition and cold-start behavior. | High |
+| Vehicle coverage | The manual wireless path is validated on one recorded Chery head-unit firmware. Other vehicles and firmware remain unverified. | Record more vehicle/receiver combinations, including ignition and cold-start behavior. | High |
 | Phone brands and system versions | Verified on one Xiaomi 17 Pro Max configuration. The bridge depends on CarWith and Xiaomi CarLife components, so other Android brands are unverified and may not expose compatible services. | Build a phone/OS/CarWith compatibility matrix; explore other brands where a compatible CarWith service is available. | High |
 | Session stability | On the recorded Chery firmware, two sessions totaled about 107 minutes and the longest ran about 99 minutes. Manual locking can still end the session. | Keep the session alive across automatic screen-off and manual locking, then validate recovery across network, Bluetooth and media lifecycle changes. | High |
 | Automatic connection | The validated vehicle path starts in mcarplay and then selects the phone in the head-unit Bluetooth list. | Validate trigger deduplication, cancellation, cold start and failure recovery across more Bluetooth states. | High |
