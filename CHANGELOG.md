@@ -3,7 +3,22 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
-## [Unreleased]
+## [v0.1.3] - 2026-10-31
+
+> First stable release for the manually initiated wireless path validated on the recorded Xiaomi phone and Chery head-unit firmware. Manual phone locking can still end a session; automatic initiation, full cold-start behavior and broader steering-wheel control are not release promises.
+> 首个正式版，验证范围限定于已记录的小米手机与奇瑞车机固件上的手动发起无线连接路径。手动锁屏仍可能结束会话；自动触发、完整冷启动及更完整的方向盘控制不在本版承诺范围内。
+
+### English
+- Advertise the phone's CarPlay capability alongside its iAP2 Bluetooth service while connecting, and remove both records on stop. Roll back the transport record if capability registration fails. Clarify that a missing receiver-side `…caff` service does not rule out head-unit-initiated CarPlay.
+- On a 2022 Chery Arrizo 8 with firmware `M1E_IC2172/82_03_21.387_250619_R`, the remote debug candidate connected wirelessly after the user selected the phone in the head unit's Bluetooth list. The user reported about two hours of normal use, with one phone-lock-triggered exit followed by successful direct reconnection without restarting the head unit. Remote logs now confirm two media sessions totaling about 107 minutes, the longest about 99 minutes, with reconnection to the first video frame in about 26 seconds. The user confirmed the first exit followed phone locking and the final exit ended the test. Sender audio timing showed no accumulated lag; this is not a direct measurement of playback latency. Phone-lock behavior, automatic initiation, full cold-start behavior and a previously observed receiver AirPlay crash after disconnection remain unresolved.
+- Validation: 601 JVM tests, 26 Python tests, Spotless, standard debug lint and build, standard release lint, and remote debug lint and build passed.
+
+### 简体中文
+- 连接期间在 iAP2 蓝牙服务之外公告手机的 CarPlay 能力，停止时同时撤销；能力公告注册失败时回收传输记录。澄清接收端未声明 `…caff` 不代表不能由车机主动发起 CarPlay。
+- 2022 款奇瑞艾瑞泽 8（固件 `M1E_IC2172/82_03_21.387_250619_R`）在车机蓝牙列表手动点手机后，remote debug 修复候选无线连上；用户确认约两小时使用无其他异常，一次手动锁屏退出后可直接重新连接，无需重启中控。remote 日志已确认两轮媒体累计约 107 分钟、最长约 99 分钟，锁屏退出后约 26 秒重新出画；用户确认末次退出为结束测试。发送端音频时间轴未见累计落后，此项不是实际扬声器延迟测量。锁屏退出、自动触发、完整冷启动及此前断开后的车机 AirPlay 崩溃仍未解决。
+- 验证：601 项 JVM 测试、26 项 Python 测试、Spotless、standard debug lint 与构建、standard release lint、remote debug lint 与构建均通过。
+
+Full changes / 完整变更: [v0.1.3-test.4...v0.1.3](https://github.com/wangxso/mcarplay/compare/v0.1.3-test.4...v0.1.3)
 
 ## [v0.1.3-test.4] - 2026-10-30
 

@@ -48,12 +48,11 @@ class Iap2BluetoothServer(
          * iPhone 的 iAP2 服务 UUID（Oligo Security 公布；与 xcertplay
          * CarPlayController.IAP2_IPHONE_UUID 一致）。配件端是 …decacaff。
          */
-        val IPHONE_IAP2_UUID: UUID = UUID.fromString("00000000-deca-fade-deca-deafdecacafe")
-        private const val SDP_NAME = "iAP2"
+        val IPHONE_IAP2_UUID: UUID = PhoneSdpRecords.IPHONE_IAP2_UUID
         private const val SESSION_TIMEOUT_MILLIS = 60_000L
     }
 
-    private var serverSocket: AtomicReference<BluetoothServerSocket?> = AtomicReference(null)
+    private val serviceRecords = AtomicReference<PhoneSdpRecords<BluetoothServerSocket>?>(null)
 
     @Volatile
     private var activeChannel: Iap2LinkChannel? = null
@@ -68,6 +67,7 @@ class Iap2BluetoothServer(
         ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==
             PackageManager.PERMISSION_GRANTED
 
+    @Synchronized
     fun start(): Boolean {
         if (running) return true
         if (!hasPermission()) {
@@ -85,12 +85,15 @@ class Iap2BluetoothServer(
             return false
         }
         return try {
-            serverSocket.set(
-                adapter.listenUsingRfcommWithServiceRecord(SDP_NAME, IPHONE_IAP2_UUID),
-            )
+            val records = PhoneSdpRecords.open(adapter::listenUsingRfcommWithServiceRecord)
+            serviceRecords.set(records)
             running = true
-            log("BT: 监听 $SDP_NAME，等待接收端回连…")
-            Thread(::acceptLoop, "iap2-bt-accept").apply {
+            log("BT: 监听 iAP2 并发布无线 CarPlay 手机能力，等待接收端回连…")
+            Thread({ acceptLoop(records) }, "iap2-bt-accept").apply {
+                isDaemon = true
+                start()
+            }
+            Thread({ acceptCapabilityLoop(records) }, "carplay-sdp-accept").apply {
                 isDaemon = true
                 start()
             }
@@ -102,15 +105,19 @@ class Iap2BluetoothServer(
     }
 
     @SuppressLint("MissingPermission")
-    private fun acceptLoop() {
-        while (running) {
+    private fun acceptLoop(records: PhoneSdpRecords<BluetoothServerSocket>) {
+        while (running && serviceRecords.get() === records) {
             val socket: BluetoothSocket =
                 try {
-                    serverSocket.get()?.accept() ?: break
+                    records.iap2.accept()
                 } catch (error: IOException) {
                     if (running) log("BT: accept 失败 - ${error.message}")
                     break
                 }
+            if (serviceRecords.get() !== records) {
+                runCatching { socket.close() }
+                break
+            }
             val peerName =
                 try {
                     socket.remoteDevice?.name
@@ -139,6 +146,17 @@ class Iap2BluetoothServer(
             Thread({ runSession(socket, observation) }, "iap2-bt-session").apply {
                 isDaemon = true
                 start()
+            }
+        }
+    }
+
+    /** 该 UUID 仅声明 CarPlay 能力；真正的 iAP2 字节流仍由 …cafe 服务承载。 */
+    private fun acceptCapabilityLoop(records: PhoneSdpRecords<BluetoothServerSocket>) {
+        while (running && serviceRecords.get() === records) {
+            try {
+                records.carPlay.accept().use { }
+            } catch (_: IOException) {
+                break
             }
         }
     }
@@ -199,9 +217,10 @@ class Iap2BluetoothServer(
         }
     }
 
+    @Synchronized
     fun stop() {
         running = false
-        serverSocket.getAndSet(null)?.let { runCatching { it.close() } }
+        serviceRecords.getAndSet(null)?.close()
         log("BT: 监听已停止")
     }
 }

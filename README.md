@@ -21,8 +21,8 @@ interface is CarWith, rather than the iOS CarPlay application interface.
 
 ## Status
 
-Experimental, with working Xiaomi-to-DiPlay and Xiaomi-to-WinPlay 1.2.5 test setups as of
-October 27, 2026.
+Experimental, with working Xiaomi-to-DiPlay and Xiaomi-to-WinPlay 1.2.5 test setups and
+one validated manual Xiaomi-to-Chery wireless path as of October 31, 2026.
 
 | Capability | Validation |
 | --- | --- |
@@ -33,9 +33,9 @@ October 27, 2026.
 | Receiver media keys | Next/previous are forwarded to CarWith; not yet verified on device |
 | Native music | 44.1 kHz PCM converted to 48 kHz AAC-LC; audible playback confirmed |
 | Combined playback | About 25 minutes with music on WinPlay 1.2.5; about 6 minutes 36 seconds on DiPlay without audio drops, underruns or write errors |
-| Real vehicle compatibility | Not yet verified for the mcarplay CarWith bridge |
+| Real vehicle compatibility | One manual wireless path was validated on a 2022 Chery Arrizo 8 with firmware `M1E_IC2172/82_03_21.387_250619_R`: picture, sound and touch reached the head unit; two media sessions totaled about 107 minutes, with the longest about 99 minutes. This is not broad vehicle support |
 | Navigation announcements | WinPlay 1.2.5 bench (2026-10-30): music is lowered to -15 dB during prompts and comes back afterwards; the level is adjustable under car settings → Display. Other receivers not verified |
-| Pause/resume, runs longer than 25 minutes | Further validation required |
+| Phone locking | Manual locking can still end the session. Direct reconnection worked after the recorded Chery exit |
 
 Test phone: Xiaomi 17 Pro Max (`2509FPN0BC`), HyperOS `OS4.0.4.0.XPBCNXM`,
 Android 17, CarWith `4.0.20-20260923`, Xiaomi CarLife `8.8.5` (`8.8.4` for the earlier DiPlay runs).
@@ -67,9 +67,11 @@ only; see `docs/CARWITH-ENTRY-FINDINGS.md` for the log details.
 
 | Area | Known status | Next step | Priority |
 | --- | --- | --- | --- |
-| Real vehicle testing | The current validation uses DiPlay and WinPlay bench receivers; mcarplay has not been validated with a car's head unit. | Test pairing, touch controls, audio, ignition cycles and reconnect behavior with real vehicles and record the vehicle/receiver combinations. | High |
+| Real vehicle testing | The manual wireless path is validated on one recorded Chery head-unit firmware. Other vehicles and firmware remain unverified. | Record more vehicle/receiver combinations, including ignition and cold-start behavior. | High |
 | Phone brands and system versions | Verified on one Xiaomi 17 Pro Max configuration. The bridge depends on CarWith and Xiaomi CarLife components, so other Android brands are unverified and may not expose compatible services. | Build a phone/OS/CarWith compatibility matrix; explore other brands where a compatible CarWith service is available. | High |
-| Session stability | On WinPlay 1.2.5 a session with music ran about 25 minutes, and sessions recovered after a manual disconnect and after manual network loss. Longer runs and pause/resume are not covered. | Test runs of an hour or more, pause/resume, navigation prompts over music, and ignition-style power cycles. | High |
+| Session stability | On the recorded Chery firmware, two sessions totaled about 107 minutes and the longest ran about 99 minutes. Manual locking can still end the session. | Keep the session alive across automatic screen-off and manual locking, then validate recovery across network, Bluetooth and media lifecycle changes. | High |
+| Automatic connection | The validated vehicle path starts in mcarplay and then selects the phone in the head-unit Bluetooth list. | Validate trigger deduplication, cancellation, cold start and failure recovery across more Bluetooth states. | High |
+| Steering-wheel controls | Receiver next/previous media keys are forwarded, but the full steering-wheel and focus matrix is not verified. | Complete media-key, pause/resume, navigation, call interruption and focus-state validation. | High |
 | Receiver compatibility | WinPlay 1.2.5 has bench evidence for picture, touch, sound, a 25-minute run and reconnect; DiPlay has evidence for picture, audio and touch, but long runs and reconnect on the current build are unverified. | Verify DiPlay long runs and reconnect on the current build, confirm the WinPlay 1.2.5 network-handoff rule on device, then test additional receivers. | High |
 
 These are planned validation steps, not compatibility guarantees. Results may vary

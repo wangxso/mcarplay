@@ -109,3 +109,8 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 
 手机日志能确定已记录的阶段和事实，但不能保证还原所有车机内部故障，必要时仍需接收端日志。
 “收到源数据”“已发送”“接收端显示/有声”是不同证据层级；分享前仍需检查自由文本中的隐私。
+
+
+目标蓝牙 SDP 摘要中的“接收端 iAP2(…caff) 服务”仅表示该出站 RFCOMM UUID 是否存在，
+不代表无线 CarPlay 的完整能力判定。未声明它的车机仍可能主动回连手机 `…cafe` 服务；
+例如 2026-10-31 奇瑞实测。手机正常连接期间同时公告 CarPlay 能力 UUID，停止监听时一并撤销。
