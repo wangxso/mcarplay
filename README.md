@@ -23,13 +23,14 @@ interface is CarWith, rather than the iOS CarPlay application interface.
 
 Experimental, with working Xiaomi-to-DiPlay and Xiaomi-to-WinPlay 1.2.5 test setups and
 one validated manual Xiaomi-to-Chery wireless path as of October 31, 2026.
+The current formal release is `v0.1.3`; its scope remains the validated manual path.
 
 | Capability | Validation |
 | --- | --- |
 | Native video | CarWith encodes at the receiver's aspect ratio (long side up to 1920); observed 1920 x 1080 and 1280 x 720 at 30 fps. Earlier DiPlay runs measured about 20 fps delivered |
 | WinPlay 1.2.5 | Default settings: picture, touch and music reached the receiver; one session ran about 25 minutes after WinPlay released Bluetooth; reconnect worked after a manual disconnect and after manual network loss |
 | WinPlay 1.2.4 | Short runs with picture and sound |
-| Receiver touch | Taps and page changes verified on DiPlay and WinPlay 1.2.5 |
+| Receiver touch | Taps and page changes verified on DiPlay and WinPlay 1.2.5; the user separately confirmed touch on the manual Chery path |
 | Receiver media keys | Next/previous are forwarded to CarWith; not yet verified on device |
 | Native music | 44.1 kHz PCM converted to 48 kHz AAC-LC; audible playback confirmed |
 | Combined playback | About 25 minutes with music on WinPlay 1.2.5; about 6 minutes 36 seconds on DiPlay without audio drops, underruns or write errors |
@@ -39,29 +40,27 @@ one validated manual Xiaomi-to-Chery wireless path as of October 31, 2026.
 
 Test phone: Xiaomi 17 Pro Max (`2509FPN0BC`), HyperOS `OS4.0.4.0.XPBCNXM`,
 Android 17, CarWith `4.0.20-20260923`, Xiaomi CarLife `8.8.5` (`8.8.4` for the earlier DiPlay runs).
-Test receivers: PA2353 Android 14 tablet running DiPlay 0.2.21; WinPlay 1.2.5 (x64) on Windows.
+Receivers covered below: a 2022 Chery Arrizo 8 head unit, PA2353 Android 14 tablet running
+DiPlay 0.2.21, and WinPlay 1.2.4/1.2.5 (x64) on Windows.
 The minimum SDK is Android 12 / API 31; this does not establish compatibility
 with every Android 12+ device. Upstream CarDeck vehicle results are not mcarplay
 vehicle compatibility claims.
 
-### WinPlay 1.2.4 video-output snapshot
+### Validated output examples
 
-![WinPlay 1.2.4 displaying CarWith video from mcarplay](docs/screenshots/winplay-1.2.4-video-output.png)
+Each image documents the pictured session only. The Chery images are privacy-redacted
+screen crops made from the two user photos with **AI-assisted image editing**: the
+windshield, surroundings and interior were removed, and location text was blurred.
+They are derivative, AI-redacted evidence rather than raw screenshots; the originals
+remain outside Git and the logs take precedence for pixel-level or timing claims.
+Select an image to open the full-size version.
 
-Bench screenshot from October 27, 2026: WinPlay 1.2.4 displays a CarWith screen
-delivered by mcarplay. This documents video output in the shown session only; it
-does not verify audio, touch, a 10-minute run, reconnect behavior or real-vehicle
-compatibility.
-
-### DiPlay photo
-
-![DiPlay on an Android tablet showing the CarWith NetEase Cloud Music screen from mcarplay](docs/screenshots/diplay-carwith-photo.jpg)
-
-Photo from October 27, 2026 (22:08): DiPlay on an Android tablet shows the CarWith
-NetEase Cloud Music screen delivered by mcarplay `v0.1.3-test.2` code, with CarWith
-encoding 1920 x 1080 at 30 fps. Music was paused when the photo was taken; audio
-arrived after playback started. The photo documents picture output in that session
-only; see `docs/CARWITH-ENTRY-FINDINGS.md` for the log details.
+| Receiver / environment | Evidence | What it confirms | Boundary |
+| --- | --- | --- | --- |
+| **2022 Chery Arrizo 8**<br>firmware `M1E_IC2172/82_03_21.387_250619_R` | <a href="docs/screenshots/chery-arrizo8-2026-10-31-1237-redacted.png"><img src="docs/screenshots/chery-arrizo8-2026-10-31-1237-redacted.png" width="420" alt="AI-redacted Chery Arrizo 8 head unit showing the CarWith dashboard at 12:37"></a><br>2026-10-31 12:37, manual wireless connection | CarWith map, media, app rail and dashboard reached the physical head unit. The user separately confirmed picture, sound and touch | The image is AI-redacted and alone does not prove audio, touch, timing or location |
+| **2022 Chery Arrizo 8**<br>same head-unit firmware | <a href="docs/screenshots/chery-arrizo8-2026-10-31-1305-redacted.png"><img src="docs/screenshots/chery-arrizo8-2026-10-31-1305-redacted.png" width="420" alt="AI-redacted Chery Arrizo 8 head unit showing CarWith long-route navigation at 13:05"></a><br>2026-10-31 13:05, long-route navigation and media session | Navigation, media, weather and next-turn UI reached the physical head unit. Logs cover two sessions totaling about 107 minutes, with the longest about 99 minutes | The image is AI-redacted. Manual locking can still end a session; automatic initiation and full cold-start behavior are not claimed |
+| **WinPlay 1.2.4**<br>Windows x64 | <a href="docs/screenshots/winplay-1.2.4-video-output.png"><img src="docs/screenshots/winplay-1.2.4-video-output.png" width="420" alt="WinPlay 1.2.4 displaying CarWith video delivered by mcarplay"></a><br>2026-10-27 bench capture | WinPlay 1.2.4 displayed CarWith video delivered by mcarplay | This capture establishes video output only; it does not prove touch, a 10-minute run, reconnect or vehicle compatibility |
+| **DiPlay 0.2.21**<br>PA2353 Android 14 tablet | <a href="docs/screenshots/diplay-carwith-photo.jpg"><img src="docs/screenshots/diplay-carwith-photo.jpg" width="420" alt="DiPlay on a PA2353 Android tablet showing the CarWith NetEase Cloud Music screen"></a><br>2026-10-27 22:08, `v0.1.3-test.2` code | DiPlay showed the CarWith NetEase Cloud Music UI with CarWith encoding 1920 x 1080 at 30 fps. Music was paused in the photo and became audible after playback started | The photo establishes picture output for this session; current-build long-run and reconnect behavior remain unverified |
 
 ## Known limitations and roadmap
 
@@ -114,7 +113,9 @@ Downloads are checked against SHA-256, package/version, Android compatibility an
 the installed signing certificate. A debug APK generally cannot receive a release-signed
 update. Older builds without a recorded release tag cannot order previews of the
 same base version; use the release page for those. The `remote` flavor is excluded
-from standard APK updates. Offline checks pass; on-device installation is pending.
+from standard APK updates. The signed `v0.1.3` APK has been installed over the prior
+signed build on the test phone; the in-app download and system-installer flow still
+needs dedicated on-device acceptance.
 See [update behavior, limitations and acceptance checks](docs/UPDATES.md).
 
 ## Language and release notes
