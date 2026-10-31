@@ -55,7 +55,7 @@ class Iap2SenderSession(
      * 车机是否已在 WiFi 上发过 ctrl 邀请（`GET /ctrl-int/1/connect`）。
      *
      * 邀请能到达 = 车机与手机已在同一网络、AirPlay 窗口已开。大众车机（2026-10-31 诊断报告）
-     * 对已入网的手机不再回 0x5703，也不发 0x4301，却每 20~30 秒发一次邀请；旧实现因为
+     * 在手机首次完成 AirPlay 配对前不回 0x5703，也不发 0x4301，却每 20~30 秒发一次邀请；旧实现因为
      * 「不知道热点」直接拆链，邀请永远没人接。此时必须返回空端点交给主控按当前 WiFi 继续。
      */
     private val receiverInvited: (() -> Boolean)? = null,
@@ -356,7 +356,7 @@ class Iap2SenderSession(
                     send(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
                     log("iap2 0x5702 重发一次（首次仅链路 ACK）")
                     // 分片等待并检查 ctrl 邀请：帕萨特 2025（2026-10-31 23:50）入网后 26 秒即发邀请，
-                    // 却从不回 0x5703；整窗干等到会话期限（约 90 秒）才进兜底，用户早已放弃。
+                    // 却迟迟不回 0x5703（首次配对前）；整窗干等到会话期限（约 90 秒）才进兜底，用户早已放弃。
                     // 邀请已到 = 手机已在车机网络上，不必再等凭据。
                     while (wifiConfiguration == null && System.nanoTime() < deadline) {
                         wifiConfiguration =

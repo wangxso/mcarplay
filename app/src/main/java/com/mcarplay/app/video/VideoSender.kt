@@ -85,8 +85,8 @@ class VideoSender(
     @Volatile
     private var transcoder: CarWithTranscoder? = null
 
-    @Volatile
-    private var transcodeAttempted = false
+    /** 转码只尝试一次：事件线程与控制动作线程都可能触发，原子认领。 */
+    private val transcodeClaimed = AtomicBoolean(false)
     private val keyFrameStorm = KeyFrameStorm()
 
     /** 透传线程与转码编码线程都会在退出时收尾：onEnded 只通知一次。 */
@@ -206,6 +206,11 @@ class VideoSender(
         encodeWidth: Int,
         encodeHeight: Int,
         fps: Int,
+        /**
+         * true = 用 KEY_MAX_FPS_TO_ENCODER 实际限帧（转码：源帧率不受控，车机声明了 maxFPS）。
+         * KEY_FRAME_RATE 只是码率提示，不会丢帧。
+         */
+        capEncoderFps: Boolean = false,
     ): Pair<MediaCodec, Surface> {
         val bitrate =
             (
@@ -220,6 +225,7 @@ class VideoSender(
                 setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
                 setInteger(MediaFormat.KEY_FRAME_RATE, fps)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                if (capEncoderFps) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
                 // 固定 H.264 level 4.0（SPS level_idc=40，真 iPhone 同款流形态）。
                 // 不固定时编码器按「分辨率+帧率」自动选：默认 30fps 下 1412x654
                 // 合法落入 level 3.2——奥迪 DELPHI 解码器对该 level 静默不渲染
@@ -245,6 +251,7 @@ class VideoSender(
                     setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
                     setInteger(MediaFormat.KEY_FRAME_RATE, fps)
                     setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                    if (capEncoderFps) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
                 }
             codec.configure(fallback, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         }
@@ -279,11 +286,17 @@ class VideoSender(
      */
     fun requestKeyFrame(): Boolean {
         if (externalVideoSource != null && transcoder == null) {
-            if (!transcodeAttempted &&
+            if (!transcodeClaimed.get() &&
                 keyFrameStorm.record(android.os.SystemClock.uptimeMillis()) &&
-                TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)
+                TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight) &&
+                transcodeClaimed.compareAndSet(false, true)
             ) {
-                startTranscoding()
+                // 建编码器 + EGL 最长数秒：不能占用车机事件读取线程（2026-11-01 审查），
+                // 后台只起这一次；准备期间关键帧请求仍转给 CarWith
+                Thread({ startTranscoding() }, "video-transcode-start").apply {
+                    isDaemon = true
+                    start()
+                }
             }
             if (transcoder == null) return externalVideoSource.requestKeyFrame()
         }
@@ -336,8 +349,7 @@ class VideoSender(
      */
     @Synchronized
     private fun startTranscoding() {
-        if (transcodeAttempted || !running.get()) return
-        transcodeAttempted = true
+        if (!running.get()) return
         val fps = TranscodePolicy.cappedFps(targetFps, receiverMaxFps)
         log(
             "VIDEO: CarWith ${sourceWidth}x$sourceHeight 与车机流 ${streamWidth}x$streamHeight 不符，" +
@@ -346,7 +358,7 @@ class VideoSender(
         var codec: MediaCodec? = null
         var surface: Surface? = null
         try {
-            val created = createEncoder(streamWidth, streamHeight, fps)
+            val created = createEncoder(streamWidth, streamHeight, fps, capEncoderFps = true)
             codec = created.first
             surface = created.second
             val pipeline = CarWithTranscoder(surface, streamWidth, streamHeight, sourceWidth, sourceHeight, log)
@@ -454,6 +466,8 @@ class VideoSender(
         output: java.io.OutputStream,
     ): Unit =
         synchronized(writeLock) {
+            // 已切换转码：透传线程在切换前取到的旧配置不得混进新流
+            if (transcoder != null) return@synchronized
             output.write(buildVideoConfigHeader(avcC.size, width, height))
             output.write(avcC)
             output.flush()
@@ -468,6 +482,8 @@ class VideoSender(
         output: java.io.OutputStream,
     ): Unit =
         synchronized(writeLock) {
+            // 已切换转码：透传线程在切换前取到的旧格式帧不得跨配置发出
+            if (transcoder != null) return@synchronized
             val header =
                 buildHeader(
                     OP_FRAME,

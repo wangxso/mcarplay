@@ -61,6 +61,13 @@ internal class CarWithTranscoder(
         private set
     private var inputDropped = 0L
 
+    /**
+     * 单调递增的解码输入 / 编码展示时间。CarLife 时间戳以秒计（同秒几十帧同值），
+     * 直接沿用会让编码器把时间戳不递增的帧丢掉（2026-11-01 审查）。
+     */
+    private var lastInputPtsUs = 0L
+    private var lastPresentationNs = 0L
+
     /** 在 GL 线程上建 EGL（输出到编码器 Surface）与外部纹理；失败抛出，由调用方回退透传。 */
     fun start() {
         val ready = CountDownLatch(1)
@@ -105,7 +112,8 @@ internal class CarWithTranscoder(
                 return
             }
             buffer.put(frame.data)
-            codec.queueInputBuffer(index, 0, frame.data.size, frame.timestampUs, 0)
+            lastInputPtsUs = maxOf(lastInputPtsUs + 1, System.nanoTime() / 1_000L)
+            codec.queueInputBuffer(index, 0, frame.data.size, lastInputPtsUs, 0)
         } catch (error: Exception) {
             if (running.get()) log("VIDEO: 转码解码输入异常 - ${error.message}")
         }
@@ -247,7 +255,8 @@ internal class CarWithTranscoder(
             GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uTexMatrix"), 1, false, texMatrix, 0)
             GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "sTexture"), 0)
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, texture.timestamp)
+            lastPresentationNs = maxOf(lastPresentationNs + 1, System.nanoTime())
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, lastPresentationNs)
             EGL14.eglSwapBuffers(eglDisplay, eglSurface)
             framesRendered++
             if (framesRendered == 1L) log("VIDEO: ✓ 转码首帧已写入编码器（${outWidth}x$outHeight）")

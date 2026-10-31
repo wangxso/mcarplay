@@ -9,7 +9,10 @@ package com.mcarplay.app.net
  * 因此：新鲜邀请优先；mDNS 直连只作为不发邀请的旧机型兜底，且要先给邀请一个宽限期。
  */
 internal object CtrlInviteGate {
-    /** 邀请在多久内算「新鲜」（相对开始等待的时刻往前追溯）。 */
+    /**
+     * 邀请在多久内算「新鲜」（按当前时刻评估，等待期间旧邀请会过期）。
+     * 20s / 3s 是帕萨特单车现场观察得出的兼容阈值，不是 Apple 协议常量。
+     */
     const val FRESH_INVITE_MS = 20_000L
 
     /** 已发现 _airplay._tcp 但无邀请时，先等这么久再走 mDNS 直连。 */
@@ -24,7 +27,7 @@ internal object CtrlInviteGate {
         mdnsEndpointFound: Boolean,
     ): Decision =
         when {
-            isFresh(lastInviteAtMillis, waitStartedAtMillis) -> Decision.INVITED
+            isFresh(lastInviteAtMillis, nowMillis) -> Decision.INVITED
             mdnsEndpointFound && nowMillis - waitStartedAtMillis >= MDNS_GRACE_MS -> Decision.MDNS_FALLBACK
             else -> Decision.WAIT
         }

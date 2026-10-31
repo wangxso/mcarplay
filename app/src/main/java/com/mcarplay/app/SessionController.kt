@@ -2391,7 +2391,7 @@ object SessionController {
             while (!connectCancelled && android.os.SystemClock.uptimeMillis() < deadline) {
                 // 晚到 0x4301 已触发新一轮交接——观察任务让位。
                 if (sessionStarting.get()) return@run
-                // 车机 ctrl 邀请 = 手机已在车机网络上（大众 2026-10-31：不回 0x5703/0x4301，
+                // 车机 ctrl 邀请 = 手机已在车机网络上（大众 2026-10-31：首次配对前不回 0x5703、不发 0x4301，
                 // 只发邀请）。无需 Shizuku 读 SSID、也无需询问用户：绑定当前 WiFi 后直接接邀请。
                 // 每来一次新邀请最多试一次绑定，失败后继续等下一次。
                 val invites = ctrlAdvertiser?.inviteCount ?: 0
@@ -2458,6 +2458,42 @@ object SessionController {
         if (connectCancelled || sessionStarting.get()) return false
         onCarPlayEndpoint(endpoint.copy(ssid = label), "$source/ctrl邀请")
         return true
+    }
+
+    /**
+     * 资源声明（modesChanged）的串行执行器：事件读取线程只负责接收、应答与投递。
+     * assertModes 要等控制通道的 RTSP 回应，放在事件线程上会挡住同一连接后续的
+     * 触摸/iAP 消息（2026-11-01 审查）。密集请求合并：已有一条待执行时不再排队。
+     */
+    private val controlActions =
+        java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "carplay-control-actions").apply { isDaemon = true }
+        }
+    private val modesAssertPending = AtomicBoolean(false)
+
+    private fun enqueueModesAssert(
+        client: AirPlayClient,
+        reason: String,
+        requestKeyFrame: Boolean,
+    ) {
+        if (!modesAssertPending.compareAndSet(false, true)) {
+            appendLog("EVENT: $reason → 与待执行的 modesChanged 合并")
+            return
+        }
+        controlActions.execute {
+            modesAssertPending.set(false)
+            // 执行时会话可能已取消或换了 client：迟到任务不得对新会话发 modesChanged
+            if (connectCancelled || currentClient !== client) {
+                appendLog("EVENT: $reason → 会话已结束或更替，丢弃迟到的 modesChanged")
+                return@execute
+            }
+            val asserted = client.assertModes()
+            val keyFrame = requestKeyFrame && videoSender?.requestKeyFrame() == true
+            appendLog(
+                "EVENT: $reason → modesChanged " + (if (asserted) "已应答" else "失败") +
+                    if (requestKeyFrame) "，关键帧" + (if (keyFrame) "已请求" else "未就绪") else "",
+            )
+        }
     }
 
     /** 本次连接内「SETUP 被车机关通道后等邀请重连」已用次数（startConnection 清零）。 */
@@ -3126,22 +3162,15 @@ object SessionController {
                                     "changeModes" -> {
                                         // 车机请求资源仲裁（如用户在 MMI 上点了手机）：
                                         // 回 modesChanged 声明手机持有主屏/主音频
-                                        appendLog("EVENT: 车机请求 changeModes → 回 modesChanged 接管资源")
-                                        client.assertModes()
+                                        enqueueModesAssert(client, "车机请求 changeModes", requestKeyFrame = false)
                                     }
 
                                     "requestUI" -> {
                                         // 用户在原生菜单点 CarPlay 图标（帕萨特 2025 / VW4211 实测：每点一次一条，
-                                        // 无 params）。旧实现只记日志不应答，车机始终停在原生界面。
-                                        // 与 changeModes 同样回 modesChanged 接管主屏，并立刻补一个 I 帧，
-                                        // 让车机切屏后马上有可解码的画面。
-                                        val asserted = client.assertModes()
-                                        val keyFrame = videoSender?.requestKeyFrame() == true
-                                        appendLog(
-                                            "EVENT: 车机 requestUI（用户点了 CarPlay 图标）→ modesChanged " +
-                                                (if (asserted) "已应答" else "失败") +
-                                                "，关键帧" + (if (keyFrame) "已请求" else "未就绪"),
-                                        )
+                                        // 无 params）。事件层已回 RTSP 200，但旧实现不做业务处理（不回 modesChanged），
+                                        // 车机始终停在原生界面。与 changeModes 同样回 modesChanged 接管主屏，
+                                        // 并补一个 I 帧，让车机切屏后马上有可解码的画面。
+                                        enqueueModesAssert(client, "车机 requestUI（用户点了 CarPlay 图标）", requestKeyFrame = true)
                                     }
 
                                     else ->

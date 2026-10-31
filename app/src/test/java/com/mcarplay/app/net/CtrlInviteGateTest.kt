@@ -39,6 +39,14 @@ class CtrlInviteGateTest {
     }
 
     @Test
+    fun inviteExpiresWhileWaiting() {
+        // 时效按当前时刻评估：开始等待时 19s 前的邀请仍新鲜，再等 2s 就过期了
+        val invite = start - 19_000L
+        assertEquals(CtrlInviteGate.Decision.INVITED, CtrlInviteGate.decide(start, start, invite, mdnsEndpointFound = false))
+        assertEquals(CtrlInviteGate.Decision.WAIT, CtrlInviteGate.decide(start + 2_000, start, invite, mdnsEndpointFound = false))
+    }
+
+    @Test
     fun withoutInviteOrMdnsKeepWaiting() {
         assertEquals(CtrlInviteGate.Decision.WAIT, CtrlInviteGate.decide(start + 10_000, start, 0L, mdnsEndpointFound = false))
     }
