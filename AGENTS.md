@@ -27,7 +27,9 @@ Resources and assets are in `app/src/main/res/` and `app/src/main/assets/`; the 
 
 Python tools in `tools/`: `carlife_probe.py` (CarLife loopback probe, writes raw H.264), `analyze_diagnostics.py` (offline summary
 of a redacted support report), `release_notes.py` (extracts a changelog entry for a tag) and `prepare_upload.py` (source-only
-upload bundle under `dist/`), each with `test_*.py`. Documentation:
+upload bundle under `dist/`), each with `test_*.py`. `logbot/` is a QQ official-bot webhook service that diagnoses uploaded
+reports with rules (mirroring `DiagnosticCode`) plus an optional OpenAI-compatible AI pass; keep `logbot/rules.py` in sync with
+`diagnostics/` and `docs/DIAGNOSTICS.md`. Documentation:
 
 - `IMPLEMENTATION_PLAN.md` (Chinese): milestones, current baseline and acceptance criteria; update it when status changes.
 - `docs/CARWITH-ENTRY-FINDINGS.md`: dated, redacted device evidence and corrections of earlier conclusions.
