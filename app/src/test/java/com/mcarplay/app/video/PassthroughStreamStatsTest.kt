@@ -42,6 +42,44 @@ class PassthroughStreamStatsTest {
     }
 
     @Test
+    fun sendTimingQueueAndFrameSizesAreTracked() {
+        val stats = PassthroughStreamStats()
+        stats.onFrameSent(listOf(idrSlice), keyFrame = true, nowMillis = 0, bytes = 90_000, writeMillis = 5, queueDepth = 1)
+        stats.onFrameSent(listOf(pSlice), keyFrame = false, nowMillis = 50, bytes = 800, writeMillis = 70, queueDepth = 9)
+        stats.onFrameSent(listOf(pSlice), keyFrame = false, nowMillis = 650, bytes = 600, writeMillis = 1, queueDepth = 0)
+        stats.onFrameSent(listOf(idrSlice), keyFrame = true, nowMillis = 700, bytes = 120_000, writeMillis = 2, queueDepth = 0)
+        assertEquals(1L, stats.onQueueDrop())
+        val summary = stats.summary()
+        assertTrue(summary, summary.contains("IDR=2（间隔 3–3 帧）"))
+        assertTrue(summary, summary.contains("单帧最大 120000B IDR 最大 120000B"))
+        assertTrue(summary, summary.contains("最大帧间隔 600ms（≥500ms 停顿 1 次） 最慢写入 70ms（≥50ms 1 次） 队列最深 9 队满丢帧 1"))
+    }
+
+    @Test
+    fun carWithIdrResponseToKeyFrameRequestsIsMeasured() {
+        val stats = PassthroughStreamStats()
+        stats.onFrameSent(listOf(idrSlice), keyFrame = true, nowMillis = 0)
+        // 第 1 次请求 400ms 后 CarWith 出了 IDR
+        stats.onReceiverKeyFrameRequest(1_000, transcoding = false)
+        stats.onFrameSent(listOf(idrSlice), keyFrame = true, nowMillis = 1_400)
+        // 第 2 次请求后一直没有 IDR，第 3 次请求时判为未响应
+        stats.onReceiverKeyFrameRequest(2_000, transcoding = false)
+        stats.onReceiverKeyFrameRequest(4_000, transcoding = false)
+        val summary = stats.summary()
+        assertTrue(summary, summary.contains("要帧后 CarWith 出 IDR 中位 400ms 最小 400ms 最大 400ms（1 次）"))
+        assertTrue(summary, summary.contains("1500ms 内未出 IDR 1 次"))
+    }
+
+    @Test
+    fun transcodedIdrsResetTheRequestGap() {
+        val stats = PassthroughStreamStats()
+        stats.onTranscodedFrameSent(keyFrame = true, nowMillis = 5_000)
+        assertEquals(250L, stats.onReceiverKeyFrameRequest(5_250, transcoding = true))
+        val summary = stats.summary()
+        assertTrue(summary, summary.contains("转码输出 帧=1 IDR=1；转码后距上个 IDR 中位 250ms"))
+    }
+
+    @Test
     fun parameterSetDescriptionNamesProfileAndEntropyMode() {
         val text = PassthroughStreamStats.describeParameterSets(sps, pps)
         assertTrue(text, text.startsWith("profile=66 constraint=0x80 level=31"))

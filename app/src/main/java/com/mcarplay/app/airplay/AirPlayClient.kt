@@ -620,6 +620,13 @@ class AirPlayClient(
      */
     private val badEventSignatures = LinkedHashSet<String>()
 
+    /** 车机经事件通道发来的 /command 按 type 计数（会话结束时汇总；首次出现的 type 记一次参数形状）。 */
+    private val eventCommandCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** 车机对我们事件通道命令的非 200 应答计数（此前静默跳过）。 */
+    @Volatile
+    private var eventNonOkResponses = 0
+
     /** 事件通道建立后由 connectEventChannel 调用。cipher=null 表示明文通道。 */
     private fun registerEventCommandChannel(
         socket: Socket,
@@ -704,14 +711,21 @@ class AirPlayClient(
                 ),
             )
         return try {
-            val (statusLine, _) =
+            val (statusLine, response) =
                 request(
                     "POST",
                     "/command",
                     body,
                     contentType = "application/x-apple-binary-plist",
                 )
-            log("AIRPLAY: modesChanged（声明持有主屏/主音频资源）[$statusLine]")
+            val responseShape =
+                if (response.isEmpty()) {
+                    ""
+                } else {
+                    " 应答体 ${response.size}B " +
+                        (runCatching { PlistShape.describe(BinaryPlist.parseRecovered(response).value) }.getOrNull() ?: "非 plist")
+                }
+            log("AIRPLAY: modesChanged（声明持有主屏/主音频资源）[$statusLine]$responseShape")
             statusLine.contains("200")
         } catch (error: IOException) {
             log("AIRPLAY: modesChanged 失败 - ${error.message}")
@@ -817,6 +831,8 @@ class AirPlayClient(
                     if (key in skipped) "$key=[${(value as? List<*>)?.size ?: "?"}项]" else "$key=${value.toString().take(200)}"
                 }
             log("AIRPLAY: /info 字段: $summary")
+            // modes 决定车机如何仲裁主屏/主音频（requestUI 后能否切到 CarPlay），上一行被截断，单独完整记录
+            root["modes"]?.let { log("AIRPLAY: /info modes=$it") }
             // displays 已在 logInfoSummary 里逐条打印（含键值明细），此处不再重复
             // 音频能力逐条打印（整行 /info 被 take(200) 截断，audioFormats 恰好断在中间）：
             // 决定 audioType 只能靠这里——奥迪 type=100 到底声明了 compatibility 还是 media
@@ -2279,7 +2295,13 @@ class AirPlayClient(
                             val firstLine = message.firstLine
                             // (a) 状态行（"RTSP/1.0 200 OK" 等）= 车机对**我们命令**的应答：
                             //     静默跳过——不回、不记录（回应答会触发乒乓回声，见 respondEventRequest）
-                            if (firstLine.startsWith("RTSP/") || firstLine.startsWith("HTTP/")) continue
+                            if (firstLine.startsWith("RTSP/") || firstLine.startsWith("HTTP/")) {
+                                if (!firstLine.contains(" 200")) {
+                                    eventNonOkResponses++
+                                    if (eventNonOkResponses <= 10) log("EVENT: 车机应答非 200 [$firstLine] body=${message.body.size}B")
+                                }
+                                continue
+                            }
                             // (b) 请求判定：方法 token + "/"-开头路径。畸形行（如 "OK 200 OK"：
                             //     第 2 token 是数字）判为非请求 → 静默丢弃，不回不记
                             val tokens = firstLine.split(" ")
@@ -2332,6 +2354,10 @@ class AirPlayClient(
                                 }
                                 continue
                             }
+                            val type = command["type"]?.toString() ?: "?"
+                            if (eventCommandCounts.merge(type, 1, Int::plus) == 1) {
+                                log("EVENT: 首次收到车机命令 type=$type 形状=${PlistShape.describe(command.filterKeys { it != "type" })}")
+                            }
                             try {
                                 onCommand(command)
                             } catch (error: Exception) {
@@ -2341,6 +2367,15 @@ class AirPlayClient(
                     }
                 } catch (error: IOException) {
                     log("EVENT: 读取结束 - ${error.message}")
+                } finally {
+                    log(
+                        "EVENT: 本轮车机命令统计 " +
+                            eventCommandCounts.entries
+                                .sortedByDescending { it.value }
+                                .joinToString(" ") { "${it.key}=${it.value}" }
+                                .ifEmpty { "无" } +
+                            "；解析失败 $badEventCommands 条、非 /command 请求 $unknownEventRequests 条、车机非 200 应答 $eventNonOkResponses 条",
+                    )
                 }
             }, "event-reader").apply {
                 isDaemon = true

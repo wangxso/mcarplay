@@ -101,6 +101,12 @@ class VideoSender(
     /** 透传码流特征与车机要帧时序（诊断）；会话结束时汇总一行。 */
     private val streamStats = PassthroughStreamStats()
     private val streamStatsLogged = AtomicBoolean(false)
+    private var lastStreamStatsLogAt = 0L
+
+    /** 车机经屏幕数据口回传的字节数（正常为 0；非 0 或被车机关闭都值得记录）。 */
+    private val inboundBytes =
+        java.util.concurrent.atomic
+            .AtomicLong()
 
     /** 最近一次车机 `forceKeyFrame` 距上一个已发 IDR 的毫秒数（null = 尚无 IDR）。 */
     @Volatile
@@ -176,11 +182,53 @@ class VideoSender(
             // 编码器线程随之卡死（表现为「画面停在最后一帧」）。
             TcpLiveness.configure(client, "视频数据口", log)
             socket = client
-            log("VIDEO: 数据端口已连通 $host:$dataPort（等 RECORD 后启动编码器）")
+            log(
+                "VIDEO: 数据端口已连通 $host:$dataPort（等 RECORD 后启动编码器） " +
+                    "sndBuf=${runCatching { client.sendBufferSize }.getOrNull()} " +
+                    "rcvBuf=${runCatching { client.receiveBufferSize }.getOrNull()}",
+            )
+            startInboundMonitor(client)
             true
         } catch (error: Exception) {
             log("VIDEO: 数据端口连接失败 - ${error.message}")
             false
+        }
+    }
+
+    /**
+     * 屏幕数据口是单向的（手机 → 车机），但车机若回传数据或主动关闭，透传线程只能等到写失败才知道。
+     * 单独读一遍：记下回传的字节与车机关闭时刻（帕萨特无画面时，用来区分「车机收了但解不出」与「车机已断」）。
+     */
+    private fun startInboundMonitor(client: Socket) {
+        Thread({
+            val buffer = ByteArray(2048)
+            try {
+                val input = client.getInputStream()
+                while (!client.isClosed) {
+                    val count =
+                        try {
+                            input.read(buffer)
+                        } catch (_: java.net.SocketTimeoutException) {
+                            continue
+                        }
+                    if (count < 0) {
+                        if (socket === client) log("VIDEO: 车机关闭了屏幕数据口（EOF，此前回传 ${inboundBytes.get()}B，已发 $framesSent 帧）")
+                        return@Thread
+                    }
+                    val total = inboundBytes.addAndGet(count.toLong())
+                    if (total == count.toLong() || total / 4096 != (total - count) / 4096) {
+                        log(
+                            "VIDEO: 车机经屏幕数据口回传 ${count}B（累计 ${total}B）前 32 字节=" +
+                                buffer.take(minOf(count, 32)).joinToString(" ") { "%02x".format(it) },
+                        )
+                    }
+                }
+            } catch (error: Exception) {
+                if (socket === client) log("VIDEO: 屏幕数据口读取结束 - ${error.message}（已发 $framesSent 帧）")
+            }
+        }, "video-inbound").apply {
+            isDaemon = true
+            start()
         }
     }
 
@@ -383,7 +431,14 @@ class VideoSender(
         if (externalVideoSource == null || !running.get()) {
             false
         } else {
-            externalQueue.offer(frame)
+            externalQueue.offer(frame).also { accepted ->
+                if (!accepted) {
+                    val drops = streamStats.onQueueDrop()
+                    if (drops <= 3 || drops % 50 == 0L) {
+                        log("VIDEO: 透传队列已满（${externalQueue.size} 帧），丢弃 CarWith 帧，累计 $drops 次（随后等下一个 IDR）")
+                    }
+                }
+            }
         }
 
     /** Align the CarPlay canvas to the SPS dimensions from CarWith. */
@@ -494,9 +549,17 @@ class VideoSender(
                 }
                 if (!configSent) continue
                 val packed = packLengthPrefixed(nalUnits)
+                val writeStart = android.os.SystemClock.uptimeMillis()
                 if (!sendPlainFrame(packed, frame.keyFrame, output)) continue
-                streamStats.onFrameSent(nalUnits, frame.keyFrame, android.os.SystemClock.uptimeMillis())
-                if (framesSent == STREAM_STATS_EARLY_FRAMES) log("VIDEO: 透传码流统计（前 $framesSent 帧）${streamStats.summary()}")
+                val now = android.os.SystemClock.uptimeMillis()
+                streamStats.onFrameSent(nalUnits, frame.keyFrame, now, packed.size, now - writeStart, externalQueue.size)
+                if (framesSent == STREAM_STATS_EARLY_FRAMES) {
+                    lastStreamStatsLogAt = now
+                    log("VIDEO: 透传码流统计（前 $framesSent 帧）${streamStats.summary()}")
+                } else if (framesSent > STREAM_STATS_EARLY_FRAMES && now - lastStreamStatsLogAt >= STREAM_STATS_INTERVAL_MS) {
+                    lastStreamStatsLogAt = now
+                    log("VIDEO: 透传码流统计（第 $framesSent 帧）${streamStats.summary()}")
+                }
                 runCatching { onExternalFrameSent?.invoke(packed.size) }
                 maybeSendKeepAlive(output)
             }
@@ -552,12 +615,17 @@ class VideoSender(
         synchronized(writeLock) {
             // 已切换转码：透传线程在切换前取到的旧配置不得混进新流
             if (transcoder != null) return@synchronized false
-            output.write(buildVideoConfigHeader(avcC.size, width, height))
+            val header = buildVideoConfigHeader(avcC.size, width, height)
+            output.write(header)
             output.write(avcC)
             output.flush()
             cachedVideoConfig = avcC
             configSent = true
-            log("VIDEO: ✓ CarWith VideoConfig 已发送 avcC=${avcC.size}B ${width}x$height")
+            log(
+                "VIDEO: ✓ CarWith VideoConfig 已发送 avcC=${avcC.size}B ${width}x$height" +
+                    "\n  ↳ 头部前 24 字节=" + header.take(24).joinToString(" ") { "%02x".format(it) } +
+                    "\n  ↳ avcC=" + avcC.joinToString(" ") { "%02x".format(it) },
+            )
             true
         }
 
@@ -620,16 +688,33 @@ class VideoSender(
                         continue
                     }
 
+                    index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        log("VIDEO: 编码器输出格式 ${runCatching { codec.outputFormat.toString() }.getOrNull()}（${codec.name}）")
+                        continue
+                    }
+
                     index >= 0 -> {
                         val buffer = codec.getOutputBuffer(index) ?: continue
                         val flags = bufferInfo.flags
                         if (flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
                             sendVideoConfig(buffer, bufferInfo.size, output)
                         } else if (bufferInfo.size > 0) {
-                            val sent = sendVideoFrame(buffer, bufferInfo.size, flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0, output)
+                            val keyFrame = flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+                            val sent = sendVideoFrame(buffer, bufferInfo.size, keyFrame, output)
                             // 转码输出顶替了 CarWith 透传：诊断时间线的帧数 / 字节 / 时间戳照常更新，
                             // 否则 5 s 后会误报视频停滞（2026-11-01 审查）
-                            if (sent > 0 && externalVideoSource != null) runCatching { onExternalFrameSent?.invoke(sent) }
+                            if (sent > 0 && externalVideoSource != null) {
+                                runCatching { onExternalFrameSent?.invoke(sent) }
+                                val now = android.os.SystemClock.uptimeMillis()
+                                streamStats.onTranscodedFrameSent(keyFrame, now)
+                                if (now - lastStreamStatsLogAt >= STREAM_STATS_INTERVAL_MS) {
+                                    lastStreamStatsLogAt = now
+                                    log(
+                                        "VIDEO: 转码统计（已发 $framesSent 帧）${transcoder?.statsLine() ?: ""}" +
+                                            "\n  ↳ ${streamStats.summary()}",
+                                    )
+                                }
+                            }
                         }
                         codec.releaseOutputBuffer(index, false)
                         maybeSendKeepAlive(output)
@@ -832,6 +917,9 @@ class VideoSender(
 
         /** 透传前这么多帧后先记一次码流统计（会话可能在车机无画面时被用户中途停掉）。 */
         private const val STREAM_STATS_EARLY_FRAMES = 300L
+
+        /** 之后每隔这么久再记一次（用户可能随时停止或熄火，结束时的汇总不一定写得出来）。 */
+        private const val STREAM_STATS_INTERVAL_MS = 30_000L
 
         /**
          * 头部位标志（catplay `ScreenFlag`）：写进 `small_param[1]`（头部偏移 6）。

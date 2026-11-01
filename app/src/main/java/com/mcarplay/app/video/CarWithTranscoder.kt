@@ -68,6 +68,15 @@ internal class CarWithTranscoder(
     private val resync = IdrResync()
     private var framesSkippedForIdr = 0L
 
+    @Volatile
+    private var framesSubmitted = 0L
+
+    @Volatile
+    private var framesDecoded = 0L
+
+    @Volatile
+    private var decoderFormat: String? = null
+
     /**
      * 单调递增的解码输入 / 编码展示时间。CarLife 时间戳以秒计（同秒几十帧同值），
      * 直接沿用会让编码器把时间戳不递增的帧丢掉（2026-11-01 审查）。
@@ -99,6 +108,7 @@ internal class CarWithTranscoder(
      */
     fun submit(frame: ExternalVideoFrame) {
         if (!running.get()) return
+        framesSubmitted++
         val codec =
             decoder ?: run {
                 if (!frame.keyFrame) return
@@ -218,6 +228,11 @@ internal class CarWithTranscoder(
         }
     }
 
+    /** 一行转码管线统计（诊断）：CarWith 输入 → 解码 → 渲染进编码器。 */
+    fun statsLine(): String =
+        "输入 $framesSubmitted 帧 → 解码 $framesDecoded → 渲染 $framesRendered；输入丢弃 $inputDropped、" +
+            "等 IDR 跳过 $framesSkippedForIdr；解码器${if (decoder == null) "未启动" else "运行中"}"
+
     private fun releaseCodec(codec: MediaCodec) {
         runCatching { codec.stop() }
         runCatching { codec.release() }
@@ -235,7 +250,11 @@ internal class CarWithTranscoder(
                     return
                 }
             if (index >= 0) {
+                if (info.size > 0) framesDecoded++
                 runCatching { codec.releaseOutputBuffer(index, info.size > 0) }
+            } else if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                decoderFormat = runCatching { codec.outputFormat.toString() }.getOrNull()
+                log("VIDEO: 转码解码器输出格式 $decoderFormat")
             }
         }
     }

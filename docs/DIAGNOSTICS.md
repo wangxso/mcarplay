@@ -42,6 +42,19 @@ still-redacted recent runtime history.
   exemption flags only. `STREAM_END_SCREEN_OFF afterScreenOffMs=…` marks a stream
   that ended while the screen was off. They locate lock-screen exits; they do not
   change any system state.
+- Streaming runtime-log lines (numbers and codec parameters only):
+  - `VIDEO: CarWith 参数集` and the phone encoder's `参数集` lines: SPS/PPS traits (profile, constraint flags, level, POC
+    type, reference frames, VUI timing and reorder depth, CABAC, 8×8 transform) plus the avcC and config-header bytes;
+  - `VIDEO: 透传码流统计` and `VIDEO: 转码统计`, written after 300 frames, then every 30 s, on a switch to transcoding
+    and at stream end: slice/NAL composition, frame sizes, IDR intervals, send gaps, slow socket writes, queue drops,
+    the time from the last sent IDR to each receiver `forceKeyFrame`, and how fast CarWith answers a key-frame request;
+  - `VIDEO: 车机经屏幕数据口回传` / `车机关闭了屏幕数据口` when the receiver writes to or closes the video data port;
+  - `TIMING:` drift of the receiver's clock against the phone's monotonic clock, and the timesync request interval;
+  - `EVENT: 首次收到车机命令` (the structure of each new command type, never its values), `EVENT: 本轮车机命令统计`,
+    non-200 event replies, the `modesChanged` reply shape and the full `/info modes`;
+  - `SESSION: 本轮车机交互统计` (forceKeyFrame / requestUI / touch counts) and `CARLIFE: 入流门控` rejoin lines;
+  - `ENV:` at the first frame and every 60 s: Wi-Fi RSSI, frequency, standard and link speeds, estimated
+    bandwidth, thermal status, interactive, power-save and battery level. SSID and BSSID are not recorded.
 - Uncaught stacks and up to five exit records from this app only; an available
   recent crash/ANR trace is capped at 64KB. Other apps' logcat is not read.
 - Default runtime tail: 512KB; journal: two 128KB segments; runtime storage: two
@@ -111,6 +124,9 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 报告包含最近进程关键事件、阶段错误码、输入/发送计数、内存采样、堆栈和系统退出记录；
 无需电脑、root 或 Shizuku，不会自动上传。“显示日志”只影响界面；长按日志导出按钮可取更大历史。
 维护者可用上述离线脚本生成摘要。
+
+推流时运行日志还会记录 CarWith 与手机编码器的 SPS/PPS 特征、透传/转码码流统计（含车机要关键帧距上个 IDR 的时间）、
+车机时钟漂移、车机命令统计与结构、屏幕数据口回传或关闭，以及每分钟的 Wi-Fi 信号/速率、温控与电量（不含 SSID/BSSID）。
 
 手机日志能确定已记录的阶段和事实，但不能保证还原所有车机内部故障，必要时仍需接收端日志。
 “收到源数据”“已发送”“接收端显示/有声”是不同证据层级；分享前仍需检查自由文本中的隐私。

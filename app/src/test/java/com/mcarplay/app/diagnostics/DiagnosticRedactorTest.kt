@@ -20,6 +20,21 @@ class DiagnosticRedactorTest {
     }
 
     @Test
+    fun videoDiagnosticsSurviveRedaction() {
+        // 帕萨特排查依赖这些行进报告：参数集字节、码流统计、链路环境都不含标识，不得被当成线上报文删掉
+        val lines =
+            listOf(
+                "  ↳ avcC=01 42 80 28 ff e1 00 0c 67 42 80 28 da 01 40 16 e9 a8 28 30 01 00 04 68 ce 06 e2",
+                "VIDEO: CarWith 参数集 profile=66 constraint=0x80 level=31 chroma=1 poc=2 refs=1 | cabac=0 sliceGroups=1",
+                "VIDEO: 车机经屏幕数据口回传 4B（累计 4B）前 32 字节=00 01 02 03",
+                "ENV: Wi-Fi rssi=-48dBm 5745MHz 标准=5 速率=433Mbps tx=433 rx=390；温控=正常 亮屏=true",
+                "EVENT: 本轮车机命令统计 forceKeyFrame=60 requestUI=20 hidSendReport=0",
+            )
+        val safe = DiagnosticRedactor().redact(lines.joinToString("\n"))
+        assertEquals(lines.joinToString("\n"), safe)
+    }
+
+    @Test
     fun hidesCredentialsAndShortSessionKeys() {
         val safe =
             DiagnosticRedactor().redact(

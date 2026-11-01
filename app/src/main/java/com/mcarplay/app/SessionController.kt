@@ -33,6 +33,7 @@ import com.mcarplay.app.compat.ReceiverProbePlan
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionStage
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.diagnostics.StreamEnvironment
 import com.mcarplay.app.i18n.AppLanguage
 import com.mcarplay.app.iap2.Iap2MessageIds
 import com.mcarplay.app.iap2.Iap2SenderSession
@@ -118,6 +119,9 @@ object SessionController {
 
     /** SETUP 被车机关通道后，按邀请自动重连的次数上限与每次等待上限。 */
     private const val MAX_INVITE_RETRIES = 2
+
+    /** 推流期间每隔这么久记一次 Wi-Fi/温控/电量（首帧时先记一次）。 */
+    private const val ENVIRONMENT_SAMPLE_MS = 60_000L
     private const val INVITE_RETRY_WAIT_MS = 60_000L
 
     /**
@@ -706,7 +710,14 @@ object SessionController {
                 onAccessUnit = onAccessUnit@{ unit ->
                     if (currentCarLifeSession !== session) return@onAccessUnit
                     val output = carLifeOutput ?: return@onAccessUnit
+                    val joinsBefore = output.gate.joins
                     val frame = output.gate.admit(unit) ?: return@onAccessUnit
+                    if (output.gate.joins != joinsBefore) {
+                        appendLog(
+                            "CARLIFE: 入流门控第 ${output.gate.joins} 次接入（此前等 IDR 丢弃 ${output.gate.droppedBeforeLastJoin} 帧，" +
+                                "补参数集=${output.gate.filledAtLastJoin.ifEmpty { "无（帧内已带齐）" }}）",
+                        )
+                    }
                     ConnectionDiagnostics.timeline.sourceFrame(output.attempt)
                     val sender = output.sender
                     val dimensions = frame.dimensions()
@@ -804,6 +815,8 @@ object SessionController {
             ctrlAdvertiser?.resetInviteCount()
             inviteRetryCount = 0
             forceKeyFrameCount = 0
+            requestUiCount = 0
+            touchLogCount = 0
         } else {
             appendLog("SESSION: 会话已在运行——沿用当前会话，不清零邀请与要帧计数")
         }
@@ -3179,7 +3192,12 @@ object SessionController {
                                         // 无 params）。事件层已回 RTSP 200，但旧实现不做业务处理（不回 modesChanged），
                                         // 车机始终停在原生界面。与 changeModes 同样回 modesChanged 接管主屏，
                                         // 并补一个 I 帧，让车机切屏后马上有可解码的画面。
-                                        enqueueModesAssert(client, "车机 requestUI（用户点了 CarPlay 图标）", requestKeyFrame = true)
+                                        requestUiCount++
+                                        enqueueModesAssert(
+                                            client,
+                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次）",
+                                            requestKeyFrame = true,
+                                        )
                                     }
 
                                     else ->
@@ -3313,8 +3331,24 @@ object SessionController {
                                             receiverMaxFps = setup.maxFps,
                                             onExternalFrameSent = { bytes ->
                                                 ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
+                                                val now = android.os.SystemClock.uptimeMillis()
+                                                if (lastEnvironmentSampleAt == 0L ||
+                                                    now - lastEnvironmentSampleAt >= ENVIRONMENT_SAMPLE_MS
+                                                ) {
+                                                    lastEnvironmentSampleAt = now
+                                                    appContext?.let { app ->
+                                                        Bg.run("stream-environment") {
+                                                            appendLog("ENV: ${StreamEnvironment.describe(app)}")
+                                                        }
+                                                    }
+                                                }
                                             },
                                             onEnded = onVideoEnded@{
+                                                appendLog(
+                                                    "SESSION: 本轮车机交互统计 forceKeyFrame=$forceKeyFrameCount requestUI=$requestUiCount " +
+                                                        "触摸报文=$touchLogCount 媒体键释放=$consumerReleaseCount",
+                                                )
+                                                lastEnvironmentSampleAt = 0L
                                                 ConnectionDiagnostics.timeline.videoEnded(diagnosticAttempt)
                                                 ReceiverDetectionRuntime.mediaEnded(client.currentEndpoint.observation)
                                                 // Stop this stream's source even if a newer stream already owns the controller.
@@ -3555,6 +3589,14 @@ object SessionController {
     /** 车机媒体键「释放」报文计数（值为 0 的 1 字节报告，静默丢弃，仅计数备查）。 */
     @Volatile
     private var consumerReleaseCount = 0
+
+    /** 车机 requestUI 计数（用户点 CarPlay 图标的次数；反复点通常意味着没切到 CarPlay 画面）。 */
+    @Volatile
+    private var requestUiCount = 0
+
+    /** 上次记录推流环境（Wi-Fi/温控/电量）的时刻；0 = 本轮尚未记录。 */
+    @Volatile
+    private var lastEnvironmentSampleAt = 0L
 
     /** 车机 forceKeyFrame 计数（日志限流用）。 */
     @Volatile
