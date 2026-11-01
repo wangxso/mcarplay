@@ -97,6 +97,7 @@ class VideoSender(
     /** 转码只尝试一次：事件线程与控制动作线程都可能触发，原子认领。 */
     private val transcodeClaimed = AtomicBoolean(false)
     private val keyFrameStorm = KeyFrameStorm()
+    private val sustainedStormNoted = AtomicBoolean(false)
 
     /** 透传码流特征与车机要帧时序（诊断）；会话结束时汇总一行。 */
     private val streamStats = PassthroughStreamStats()
@@ -286,6 +287,11 @@ class VideoSender(
          * KEY_FRAME_RATE 只是码率提示，不会丢帧。
          */
         capEncoderFps: Boolean = false,
+        /**
+         * true = 要求 Baseline profile（转码：与 CarWith 透传流同为 Baseline、无 CABAC）。帕萨特 2026-11-01 22:46：
+         * 手机编码器默认出 High(100)+CABAC，切换后车机仍要关键帧、13 s 后关闭屏幕数据口。
+         */
+        baselineProfile: Boolean = false,
     ): Pair<MediaCodec, Surface> {
         val bitrate =
             (
@@ -301,6 +307,7 @@ class VideoSender(
                 setInteger(MediaFormat.KEY_FRAME_RATE, fps)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 if (capEncoderFps) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
+                if (baselineProfile) setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
                 // 固定 H.264 level 4.0（SPS level_idc=40，真 iPhone 同款流形态）。
                 // 不固定时编码器按「分辨率+帧率」自动选：默认 30fps 下 1412x654
                 // 合法落入 level 3.2——奥迪 DELPHI 解码器对该 level 静默不渲染
@@ -319,7 +326,7 @@ class VideoSender(
         try {
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         } catch (levelRejected: Exception) {
-            log("VIDEO: 指定 level 4.0 被编码器拒绝（${levelRejected.message}）——回退自动选择（部分车机可能黑屏）")
+            log("VIDEO: 指定 level 4.0${if (baselineProfile) " / Baseline" else ""} 被编码器拒绝（${levelRejected.message}）——回退自动选择（部分车机可能黑屏）")
             val fallback =
                 MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encodeWidth, encodeHeight).apply {
                     setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -392,10 +399,14 @@ class VideoSender(
                 } else {
                     KeyFrameStorm.Level.NONE
                 }
-            if (TranscodePolicy.shouldTranscode(
-                    storm,
-                    TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight),
-                ) &&
+            val sizeMismatch = TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)
+            if (storm == KeyFrameStorm.Level.SUSTAINED && !sizeMismatch && sustainedStormNoted.compareAndSet(false, true)) {
+                log(
+                    "VIDEO: 车机持续要关键帧，但 CarWith 与车机流尺寸一致——多为主屏此刻不归手机（见资源仲裁 modesChanged），" +
+                        "不切换转码（帕萨特 2026-11-01：同尺寸透传在主屏归手机时可正常出画）",
+                )
+            }
+            if (TranscodePolicy.shouldTranscode(storm, sizeMismatch) &&
                 transcodeClaimed.compareAndSet(false, true)
             ) {
                 // 建编码器 + EGL 最长数秒：不能占用车机事件读取线程（2026-11-01 审查），
@@ -481,7 +492,7 @@ class VideoSender(
         var pipeline: CarWithTranscoder? = null
         var published = false
         try {
-            val created = createEncoder(streamWidth, streamHeight, fps, capEncoderFps = true)
+            val created = createEncoder(streamWidth, streamHeight, fps, capEncoderFps = true, baselineProfile = true)
             codec = created.first
             surface = created.second
             pipeline =

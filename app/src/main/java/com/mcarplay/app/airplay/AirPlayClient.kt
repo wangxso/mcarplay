@@ -551,6 +551,13 @@ class AirPlayClient(
         failAllPending("控制通道关闭")
         runCatching { iapTunnel?.socket?.close() }
         iapTunnel = null
+        // 事件通道与计时服务也属于这一轮会话：旧实现只关控制通道，用户断开后事件通道仍挂在车机上，
+        // 下一轮连入时车机把两路一起 reset（帕萨特 2026-11-01 22:47:59 断开、22:48:05 新一轮 RECORD 后即被拆）
+        val events = eventCommandSocket
+        eventCommandSocket = null
+        eventCommandCipher = null
+        runCatching { events?.close() }
+        timingServer.stop()
         // 注意：controlIapTx 不在这里 shutdown——close() 会被同实例的重试路径
         // （retryWithPairing 等）复用，杀掉执行器会废掉重连后的 MIB3 出站；
         // 守护线程常驻的代价可忽略（每客户端实例一根）
@@ -689,6 +696,9 @@ class AirPlayClient(
         }
     }
 
+    /** 本会话的资源仲裁状态：/info modes 初始化，事件通道的 changeModes / requestUI 更新。 */
+    internal val modes = ModeArbiter()
+
     fun assertModes(): Boolean {
         val body =
             BinaryPlist.encode(
@@ -702,11 +712,7 @@ class AirPlayClient(
                                     linkedMapOf<String, Any?>("appStateID" to 3L, "entity" to 0L),
                                     linkedMapOf<String, Any?>("appStateID" to 1L, "entity" to 0L, "speechMode" to -1L),
                                 ),
-                            "resources" to
-                                listOf(
-                                    linkedMapOf<String, Any?>("resourceID" to 1L, "entity" to 1L, "permanentEntity" to 1L),
-                                    linkedMapOf<String, Any?>("resourceID" to 2L, "entity" to 1L, "permanentEntity" to 1L),
-                                ),
+                            "resources" to modes.resourcesPayload(),
                         ),
                 ),
             )
@@ -725,7 +731,7 @@ class AirPlayClient(
                     " 应答体 ${response.size}B " +
                         (runCatching { PlistShape.describe(BinaryPlist.parseRecovered(response).value) }.getOrNull() ?: "非 plist")
                 }
-            log("AIRPLAY: modesChanged（声明持有主屏/主音频资源）[$statusLine]$responseShape")
+            log("AIRPLAY: modesChanged（${modes.describe()}）[$statusLine]$responseShape")
             statusLine.contains("200")
         } catch (error: IOException) {
             log("AIRPLAY: modesChanged 失败 - ${error.message}")
@@ -833,6 +839,7 @@ class AirPlayClient(
             log("AIRPLAY: /info 字段: $summary")
             // modes 决定车机如何仲裁主屏/主音频（requestUI 后能否切到 CarPlay），上一行被截断，单独完整记录
             root["modes"]?.let { log("AIRPLAY: /info modes=$it") }
+            log("AIRPLAY: 资源仲裁初始 → ${modes.applyInitial(root["modes"] as? Map<*, *>)}")
             // displays 已在 logInfoSummary 里逐条打印（含键值明细），此处不再重复
             // 音频能力逐条打印（整行 /info 被 take(200) 截断，audioFormats 恰好断在中间）：
             // 决定 audioType 只能靠这里——奥迪 type=100 到底声明了 compatibility 还是 media

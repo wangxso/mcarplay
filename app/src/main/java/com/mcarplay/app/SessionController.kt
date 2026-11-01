@@ -3194,9 +3194,10 @@ object SessionController {
                                     }
 
                                     "changeModes" -> {
-                                        // 车机请求资源仲裁（如用户在 MMI 上点了手机）：
-                                        // 回 modesChanged 声明手机持有主屏/主音频
-                                        enqueueModesAssert(client, "车机请求 changeModes", requestKeyFrame = false)
+                                        // 车机请求资源（如用户回原车主界面时 take 主屏）：按请求更新归属后如实回 modesChanged。
+                                        // 旧实现一律回「手机持有」，帕萨特回主界面后再点图标就切不回 CarPlay（2026-11-01 22:47）
+                                        val note = client.modes.onChangeModes(command["params"] as? Map<*, *>)
+                                        enqueueModesAssert(client, "车机请求 changeModes（→ $note）", requestKeyFrame = false)
                                     }
 
                                     "requestUI" -> {
@@ -3205,9 +3206,10 @@ object SessionController {
                                         // 车机始终停在原生界面。与 changeModes 同样回 modesChanged 接管主屏，
                                         // 并补一个 I 帧，让车机切屏后马上有可解码的画面。
                                         requestUiCount++
+                                        val note = client.modes.onUserRequestedUi()
                                         enqueueModesAssert(
                                             client,
-                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次）",
+                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；$note）",
                                             requestKeyFrame = true,
                                         )
                                     }

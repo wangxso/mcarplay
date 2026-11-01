@@ -43,7 +43,9 @@ class TranscodePolicyTest {
         val levels = (0 until 7).map { storm.record(it * 1_100L) }
         assertTrue(levels.take(5).all { it == KeyFrameStorm.Level.NONE })
         assertEquals(KeyFrameStorm.Level.SUSTAINED, levels[5])
-        assertTrue(TranscodePolicy.shouldTranscode(levels[5], sizeMismatch = false))
+        // 同尺寸的持续要帧是主屏不归手机，不转码（22:46 一轮同样的流在主屏归手机后正常出画）
+        assertFalse(TranscodePolicy.shouldTranscode(levels[5], sizeMismatch = false))
+        assertTrue(TranscodePolicy.shouldTranscode(levels[5], sizeMismatch = true))
     }
 
     @Test
@@ -56,10 +58,10 @@ class TranscodePolicyTest {
     }
 
     @Test
-    fun burstNeedsSizeMismatchButSustainedDoesNot() {
+    fun everyStormNeedsSizeMismatch() {
         assertTrue(TranscodePolicy.shouldTranscode(KeyFrameStorm.Level.BURST, sizeMismatch = true))
         assertFalse(TranscodePolicy.shouldTranscode(KeyFrameStorm.Level.BURST, sizeMismatch = false))
-        assertTrue(TranscodePolicy.shouldTranscode(KeyFrameStorm.Level.SUSTAINED, sizeMismatch = false))
+        assertFalse(TranscodePolicy.shouldTranscode(KeyFrameStorm.Level.SUSTAINED, sizeMismatch = false))
         assertFalse(TranscodePolicy.shouldTranscode(KeyFrameStorm.Level.NONE, sizeMismatch = true))
     }
 

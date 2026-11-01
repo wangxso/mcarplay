@@ -3,13 +3,13 @@ package com.mcarplay.app.video
 /**
  * 何时把 CarWith 透传流改为手机端转码（纯函数，单测钉死）。
  *
- * 两种触发：
- * - 「尺寸与车机流不符」且短时密集要关键帧（[KeyFrameStorm.Level.BURST]）：帕萨特 2025（VW4211）
- *   在 CarWith 输出 1920×1140 时每 ~300ms 要一次。DiPlay、奇瑞等接收端对尺寸不符的透传流照常出画，
- *   不该只因尺寸不符就转码。
- * - 持续要关键帧（[KeyFrameStorm.Level.SUSTAINED]），不论尺寸：同一台帕萨特 2026-11-01 21:45 在
- *   CarWith 输出与车机流同为 1280×720 时仍约每秒要一次、持续整轮，用户反复点 CarPlay 图标、无任何触控，
- *   说明解码失败不只由尺寸引起。宝马 iD9、奇瑞、软件接收端整轮只要 1 次，不会触发。
+ * 只在「尺寸与车机流不符」且车机连续要关键帧（[KeyFrameStorm.Level.BURST] 或 SUSTAINED）时切换：
+ * 帕萨特 2025（VW4211）在 CarWith 输出 1920×1140 时每 ~300ms 要一次。DiPlay、奇瑞等接收端对尺寸
+ * 不符的透传流照常出画，不该只因尺寸不符就转码。
+ *
+ * 尺寸一致时持续要帧**不**触发转码（2026-11-01 修正）：同一台帕萨特 22:45 一轮同尺寸透传持续要帧、
+ * 转码后仍要帧并在 13 s 后关闭数据口；22:46 一轮同样的透传流在主屏归手机时零要帧、正常出画触控。
+ * 要帧风暴在这里反映的是主屏不归手机（资源仲裁），不是码流问题。
  */
 internal object TranscodePolicy {
     fun needsTranscode(
@@ -22,12 +22,7 @@ internal object TranscodePolicy {
     fun shouldTranscode(
         storm: KeyFrameStorm.Level,
         sizeMismatch: Boolean,
-    ): Boolean =
-        when (storm) {
-            KeyFrameStorm.Level.SUSTAINED -> true
-            KeyFrameStorm.Level.BURST -> sizeMismatch
-            KeyFrameStorm.Level.NONE -> false
-        }
+    ): Boolean = sizeMismatch && storm != KeyFrameStorm.Level.NONE
 
     /** 转码编码帧率：不超过车机 /info 的 maxFPS（未声明时为 0，沿用目标帧率）。 */
     fun cappedFps(
@@ -39,7 +34,7 @@ internal object TranscodePolicy {
 /**
  * 「车机连续要关键帧」检测，只记车机的 `forceKeyFrame`（我们自己因 requestUI 补的 I 帧不算）。
  * - [burstThreshold] 次 / [burstWindowMillis]：短时密集（帕萨特 1920×1140 透传时约 3 次/秒）。
- * - [sustainedThreshold] 次 / [sustainedWindowMillis]：持续不停（帕萨特 1280×720 透传时约 0.9 次/秒）。
+ * - [sustainedThreshold] 次 / [sustainedWindowMillis]：持续不停（帕萨特 1280×720 透传、主屏不归手机时约 0.9 次/秒）。
  * 两个阈值都来自单车现场观察，不是协议常量。
  */
 internal class KeyFrameStorm(

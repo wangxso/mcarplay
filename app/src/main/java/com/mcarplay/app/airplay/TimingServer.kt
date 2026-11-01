@@ -27,7 +27,8 @@ class TimingServer(
     private var lastSyncLogAt = 0L
 
     /** 车机时钟与本机单调时钟之差（诊断：漂移或跳变会让车机按错误时刻排帧）。 */
-    private val clockTracker = ClockOffsetTracker()
+    @Volatile
+    private var clockTracker = ClockOffsetTracker()
 
     /** 非 timesync 包计数（诊断：有没有别的 UDP 报文打到这个端口）。 */
     private var unexpected = 0L
@@ -36,6 +37,7 @@ class TimingServer(
 
     fun start(): Boolean {
         if (port != 0 && running) return true
+        clockTracker = ClockOffsetTracker()
         return try {
             val s = DatagramSocket()
             s.reuseAddress = true
@@ -150,6 +152,7 @@ class TimingServer(
  */
 internal class ClockOffsetTracker(
     private val jumpMillis: Long = 50L,
+    private val rebaseMillis: Long = 3_600_000L,
 ) {
     data class Note(
         val text: String,
@@ -177,6 +180,16 @@ internal class ClockOffsetTracker(
         }
         val intervalMillis = (localNanos - lastLocalNanos) / 1_000_000L
         if (intervalMillis > maxIntervalMillis) maxIntervalMillis = intervalMillis
+        // 车机首个请求可能用另一个时间基准（帕萨特 2026-11-01：第 1、2 个请求的时钟差相差约 70 年，接近 NTP 与 Unix 纪元之差），
+        // 超过 [rebaseMillis] 的差值不是漂移，换基准重算
+        val stepFromLast = (offset - lastOffsetNanos) / 1_000_000L
+        if (kotlin.math.abs(stepFromLast) > rebaseMillis) {
+            baseOffsetNanos = offset
+            lastOffsetNanos = offset
+            lastLocalNanos = localNanos
+            firstLocalNanos = localNanos
+            return Note("车机时钟换基准（与上一请求相差 ${stepFromLast / 1000}s，按新基准重算漂移）", jumped = true)
+        }
         val driftMillis = (offset - base) / 1_000_000.0
         val stepMillis = (offset - lastOffsetNanos) / 1_000_000L
         val elapsedMinutes = (localNanos - firstLocalNanos) / 60_000_000_000.0

@@ -1099,7 +1099,10 @@ class MainActivity : AppCompatActivity() {
                 )
             } else {
                 snack(getString(R.string.ma_psk_missing))
-                log("WiFi: 尚未拿到热点密码（需蓝牙会话 0x5703）——打开 WLAN 设置手动选择 \"$ssid\"")
+                log(
+                    "WiFi: 尚未拿到热点密码（需蓝牙会话 0x5703）——打开 WLAN 设置手动选择" +
+                        if (ssid.isEmpty()) "车机热点（名称未知：车机未经蓝牙下发，请在车机的 WLAN/CarPlay 设置里查看热点名与密码）" else " \"$ssid\"",
+                )
             }
             try {
                 startActivity(android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS))
