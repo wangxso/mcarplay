@@ -14,6 +14,8 @@
 
 [更新日志](CHANGELOG.md) · [版本下载](https://github.com/wangxso/mcarplay/releases)
 
+QQ 反馈群：**1128172672**
+
 用一个 Android APK，把小米 CarWith 桥接到无线 CarPlay 接收端。
 mcarplay 在手机本机接收 CarWith 的原生视频和音频，发送到接收端，再把车机触控回传给
 CarWith。车机显示的是 CarWith 界面。

@@ -14,6 +14,8 @@
 
 [Changelog](CHANGELOG.md) · [Releases](https://github.com/wangxso/mcarplay/releases)
 
+QQ feedback group: **1128172672**
+
 Bridge Xiaomi CarWith to a wireless CarPlay receiver using an Android APK.
 mcarplay receives native CarWith video and audio on the phone, sends them to the
 receiver, and routes receiver touch events back to CarWith. The displayed
