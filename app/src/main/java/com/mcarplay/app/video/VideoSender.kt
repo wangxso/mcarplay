@@ -582,7 +582,10 @@ class VideoSender(
                         if (flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
                             sendVideoConfig(buffer, bufferInfo.size, output)
                         } else if (bufferInfo.size > 0) {
-                            sendVideoFrame(buffer, bufferInfo.size, flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0, output)
+                            val sent = sendVideoFrame(buffer, bufferInfo.size, flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0, output)
+                            // 转码输出顶替了 CarWith 透传：诊断时间线的帧数 / 字节 / 时间戳照常更新，
+                            // 否则 5 s 后会误报视频停滞（2026-11-01 审查）
+                            if (sent > 0 && externalVideoSource != null) runCatching { onExternalFrameSent?.invoke(sent) }
                         }
                         codec.releaseOutputBuffer(index, false)
                         maybeSendKeepAlive(output)
@@ -675,21 +678,22 @@ class VideoSender(
             cachedVideoConfig = body
         }
 
+    /** 返回已发出的明文字节数（0 = 丢弃）。 */
     private fun sendVideoFrame(
         buffer: java.nio.ByteBuffer,
         size: Int,
         keyFrame: Boolean,
         output: java.io.OutputStream,
-    ): Unit =
+    ): Int =
         synchronized(writeLock) {
             if (!configSent) {
                 log("VIDEO: 丢弃一帧（config 尚未发送）")
-                return
+                return 0
             }
             val annexB = ByteArray(size)
             buffer.get(annexB)
             val nalUnits = splitAnnexB(annexB)
-            if (nalUnits.isEmpty()) return
+            if (nalUnits.isEmpty()) return 0
 
             // 关键帧内嵌的 SPS 同步打 level 补丁：车机会用帧内 SPS 更新解码器参数，
             // 只改 csd 不改帧内 SPS 的话，收到第一个关键帧就又变回低 level 了
@@ -735,6 +739,7 @@ class VideoSender(
             if (keyFrame || framesSent <= 3 || framesSent % 150 == 0L) {
                 log("VIDEO: 帧 #$framesSent ${plain.size}B${if (keyFrame) " (key)" else ""} 已发送")
             }
+            plain.size
         }
 
     /** 128 字节消息头：u32LE body 长度、opcode、NTP 32.32 LE 时间戳，其余为零。 */
