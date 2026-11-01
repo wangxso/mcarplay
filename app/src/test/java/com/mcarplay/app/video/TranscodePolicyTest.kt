@@ -45,6 +45,35 @@ class TranscodePolicyTest {
     }
 
     @Test
+    fun droppedInputWaitsForNextIdr() {
+        val resync = IdrResync(requestIntervalMillis = 1_000L)
+        assertTrue(resync.admit(keyFrame = false))
+        // 输入缓冲繁忙丢了一帧：之后的 P 帧缺参考，不再送解码器
+        resync.discontinuity()
+        assertTrue(resync.requestDue(0L))
+        assertFalse(resync.admit(keyFrame = false))
+        assertFalse(resync.admit(keyFrame = false))
+        // IDR 到达后恢复，P 帧照常放行
+        assertTrue(resync.admit(keyFrame = true))
+        assertTrue(resync.admit(keyFrame = false))
+        assertFalse(resync.awaitingIdr)
+    }
+
+    @Test
+    fun sourceKeyFrameRequestsAreThrottledWhileWaiting() {
+        val resync = IdrResync(requestIntervalMillis = 1_000L)
+        // 没断流时不打扰 CarWith
+        assertFalse(resync.requestDue(0L))
+        resync.discontinuity()
+        assertTrue(resync.requestDue(100L))
+        assertFalse(resync.requestDue(600L))
+        // 一直等不到 IDR：每秒再要一次
+        assertTrue(resync.requestDue(1_100L))
+        assertTrue(resync.admit(keyFrame = true))
+        assertFalse(resync.requestDue(5_000L))
+    }
+
+    @Test
     fun annexBSplitHandlesBothStartCodes() {
         val bytes = byteArrayOf(0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 4, 5)
         val units = AnnexB.split(bytes)

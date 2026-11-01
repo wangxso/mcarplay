@@ -40,6 +40,41 @@ internal class KeyFrameStorm(
     }
 }
 
+/**
+ * 转码解码输入的断流恢复：丢掉任一访问单元后，后续 P 帧引用的参考帧已缺失，必须等下一个 IDR
+ * 才能继续喂解码器，并向 CarWith 要关键帧（[requestIntervalMillis] 内最多一次）。转码后车机的
+ * forceKeyFrame 只作用于手机端编码器，修不好源解码器（2026-11-01 审查）。只在单一投喂线程上调用。
+ */
+internal class IdrResync(
+    private val requestIntervalMillis: Long = 1_000L,
+) {
+    var awaitingIdr = false
+        private set
+    private var lastRequestAt: Long? = null
+
+    /** 该帧是否送解码器；等 IDR 期间只放行关键帧。 */
+    fun admit(keyFrame: Boolean): Boolean {
+        if (!awaitingIdr) return true
+        if (!keyFrame) return false
+        awaitingIdr = false
+        return true
+    }
+
+    /** 记一次码流不连续（丢帧 / 入队失败），之后等 IDR。 */
+    fun discontinuity() {
+        awaitingIdr = true
+    }
+
+    /** 等 IDR 期间是否该（再）向上游要一次关键帧；限流。 */
+    fun requestDue(nowMillis: Long): Boolean {
+        if (!awaitingIdr) return false
+        val last = lastRequestAt
+        if (last != null && nowMillis - last < requestIntervalMillis) return false
+        lastRequestAt = nowMillis
+        return true
+    }
+}
+
 /** Annex B 码流按 00 00 01 / 00 00 00 01 起始码切分为 NAL（不含起始码）。 */
 internal object AnnexB {
     fun split(bytes: ByteArray): List<ByteArray> {

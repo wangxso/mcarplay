@@ -38,6 +38,8 @@ internal class CarWithTranscoder(
     private val sourceWidth: Int,
     private val sourceHeight: Int,
     private val log: (String) -> Unit,
+    /** 向 CarWith 要关键帧（解码输入断流后用；转码线程上调用，已限流）。 */
+    private val requestSourceKeyFrame: () -> Unit = {},
 ) {
     private val running = AtomicBoolean(true)
     private val glThread = HandlerThread("carwith-transcode-gl").apply { start() }
@@ -63,6 +65,8 @@ internal class CarWithTranscoder(
     var framesRendered = 0L
         private set
     private var inputDropped = 0L
+    private val resync = IdrResync()
+    private var framesSkippedForIdr = 0L
 
     /**
      * 单调递增的解码输入 / 编码展示时间。CarLife 时间戳以秒计（同秒几十帧同值），
@@ -101,20 +105,31 @@ internal class CarWithTranscoder(
                 val sets = decoderParameterSets(frame) ?: return
                 startDecoder(sets.first, sets.second) ?: return
             }
+        if (!resync.admit(frame.keyFrame)) {
+            framesSkippedForIdr++
+            requestSourceKeyFrameIfDue()
+            return
+        }
         try {
             val index = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
             if (index < 0) {
                 inputDropped++
                 if (inputDropped == 1L || inputDropped % 100 == 0L) {
-                    log("VIDEO: 转码解码器输入繁忙，已丢 $inputDropped 帧")
+                    log("VIDEO: 转码解码器输入繁忙，已丢 $inputDropped 帧（等 CarWith 下一个 IDR 再续）")
                 }
+                dropped()
                 return
             }
-            val buffer = codec.getInputBuffer(index) ?: return
+            val buffer =
+                codec.getInputBuffer(index) ?: run {
+                    dropped()
+                    return
+                }
             buffer.clear()
             if (frame.data.size > buffer.capacity()) {
                 codec.queueInputBuffer(index, 0, 0, frame.timestampUs, 0)
                 log("VIDEO: 转码输入帧 ${frame.data.size}B 超出解码缓冲 ${buffer.capacity()}B，丢弃")
+                dropped()
                 return
             }
             buffer.put(frame.data)
@@ -122,7 +137,19 @@ internal class CarWithTranscoder(
             codec.queueInputBuffer(index, 0, frame.data.size, lastInputPtsUs, 0)
         } catch (error: Exception) {
             if (running.get()) log("VIDEO: 转码解码输入异常 - ${error.message}")
+            dropped()
         }
+    }
+
+    /** 丢了一个访问单元：后续 P 帧缺参考，等 IDR 并向 CarWith 要关键帧。 */
+    private fun dropped() {
+        resync.discontinuity()
+        requestSourceKeyFrameIfDue()
+    }
+
+    private fun requestSourceKeyFrameIfDue() {
+        if (!resync.requestDue(android.os.SystemClock.uptimeMillis())) return
+        runCatching { requestSourceKeyFrame() }
     }
 
     fun stop() {
@@ -147,7 +174,7 @@ internal class CarWithTranscoder(
         }
         runCatching { released.await(1, TimeUnit.SECONDS) }
         glThread.quitSafely()
-        log("VIDEO: 转码管线已停止（共渲染 $framesRendered 帧，输入丢弃 $inputDropped 帧）")
+        log("VIDEO: 转码管线已停止（共渲染 $framesRendered 帧，输入丢弃 $inputDropped 帧，等 IDR 跳过 $framesSkippedForIdr 帧）")
     }
 
     private fun startDecoder(

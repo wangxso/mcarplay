@@ -397,7 +397,10 @@ class VideoSender(
             val created = createEncoder(streamWidth, streamHeight, fps, capEncoderFps = true)
             codec = created.first
             surface = created.second
-            pipeline = CarWithTranscoder(surface, streamWidth, streamHeight, sourceWidth, sourceHeight, log)
+            pipeline =
+                CarWithTranscoder(surface, streamWidth, streamHeight, sourceWidth, sourceHeight, log) {
+                    externalVideoSource?.requestKeyFrame()
+                }
             pipeline.start()
             // 初始化可能耗时数秒：期间断开的话 stop() 已收尾，资源不再发布到字段
             published =
