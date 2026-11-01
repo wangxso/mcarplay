@@ -143,6 +143,24 @@ class TranscodePolicyTest {
     }
 
     @Test
+    fun reprimedIdrGetsCachedParameterSetsAfterAud() {
+        // 帕萨特 23:22：CarWith 只有首个 IDR 带 SPS/PPS；拿回主屏后的 IDR 要补上
+        val aud = byteArrayOf(0x09, 0x10)
+        val idr = byteArrayOf(0x65, 7)
+        val sps = byteArrayOf(0x67, 1)
+        val pps = byteArrayOf(0x68, 2)
+        val units = VideoSender.withParameterSets(listOf(aud, idr), sps, pps)
+        assertEquals(listOf(0x09, 0x67, 0x68, 0x65), units.map { it[0].toInt() })
+        // 已内联时不重复
+        val inline = listOf(sps, pps, idr)
+        assertEquals(inline, VideoSender.withParameterSets(inline, byteArrayOf(0x67, 9), byteArrayOf(0x68, 9)))
+        // 只缺 PPS：用缓存成对补齐，不留两份 SPS
+        assertEquals(listOf(0x67, 0x68, 0x65), VideoSender.withParameterSets(listOf(sps, idr), sps, pps).map { it[0].toInt() })
+        // 缓存不全：原样
+        assertEquals(listOf(idr), VideoSender.withParameterSets(listOf(idr), sps, null))
+    }
+
+    @Test
     fun sourceSizeChangeIsTrackedApartFromStreamSize() {
         // 帕萨特：车机流 1280×720，CarWith 1920×1140；转码后画布固定为流尺寸，
         // 格式变化必须按源尺寸判断，否则每帧都被当成新格式写日志

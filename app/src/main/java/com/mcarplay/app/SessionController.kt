@@ -136,6 +136,9 @@ object SessionController {
     /** 让出与拿回两条 modesChanged 的间隔：给车机 HMI 处理一次归属切换的时间。 */
     private const val SCREEN_RETAKE_GAP_MS = 200L
 
+    /** 拿回主屏后多久检查车机是否有触控/要帧。 */
+    private const val TAKE_BACK_CHECK_MS = 3_000L
+
     /** 端点不完整时等 mDNS 缓存命中：绑网时已开始发现，通常几百毫秒内命中。 */
     private const val ENDPOINT_RESOLVE_WAIT_MS = 3_000L
 
@@ -2505,6 +2508,30 @@ object SessionController {
         }
     private val modesAssertPending = AtomicBoolean(false)
 
+    /**
+     * 拿回主屏 3 s 后记一笔车机反应：有触控 = 已切到 CarPlay；无触控也无要帧 = 车机没理这次归属变化。
+     * 帕萨特回原车主界面后再点图标属于后者（2026-11-01 23:22），需要据此区分是仲裁还是解码问题。
+     */
+    private fun scheduleTakeBackCheck(
+        client: AirPlayClient,
+        reason: String,
+    ) {
+        val touchesBefore = touchLogCount
+        val keyFramesBefore = forceKeyFrameCount
+        Bg.run("takeback-check") {
+            try {
+                Thread.sleep(TAKE_BACK_CHECK_MS)
+            } catch (_: InterruptedException) {
+                return@run
+            }
+            if (currentClient !== client) return@run
+            appendLog(
+                "SESSION: 拿回主屏 ${TAKE_BACK_CHECK_MS}ms 后：车机触控 +${touchLogCount - touchesBefore} 条、" +
+                    "要关键帧 +${forceKeyFrameCount - keyFramesBefore} 次（${client.modes.describe()}；起因 $reason）",
+            )
+        }
+    }
+
     /** 下一次 modesChanged 前先报一次让出主屏（见 [ModeArbiter.UiRequest.retake]）。 */
     @Volatile
     private var pendingScreenRetake = false
@@ -2538,6 +2565,10 @@ object SessionController {
                 }
             }
             val asserted = client.assertModes()
+            if (requestKeyFrame && asserted) {
+                videoSender?.reprimeOnNextKeyFrame()
+                scheduleTakeBackCheck(client, reason)
+            }
             // 自己补的 I 帧不计入车机要帧风暴（用户连点图标不能被当成解码失败）
             val keyFrame = requestKeyFrame && videoSender?.requestKeyFrame(fromReceiver = false) == true
             appendLog(

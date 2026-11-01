@@ -153,6 +153,9 @@ class VideoSender(
     private var bytesSinceKeepAlive = 0L
     private var keepAliveCount = 0L
     private var cachedVideoConfig: ByteArray? = null
+
+    /** 主屏拿回后，下一个 CarWith IDR 前重发 VideoConfig 并内联 SPS/PPS（见 [reprimeOnNextKeyFrame]）。 */
+    private val reprimePending = AtomicBoolean(false)
     private val externalQueue = java.util.concurrent.LinkedBlockingQueue<ExternalVideoFrame>(64)
 
     @Volatile
@@ -430,6 +433,18 @@ class VideoSender(
         }
     }
 
+    /**
+     * 车机把主屏还给手机（用户点 CarPlay 图标）后调用：下一个 CarWith IDR 前重发 VideoConfig，
+     * 并在该 IDR 里内联 SPS/PPS。
+     *
+     * 帕萨特 2025 2026-11-01 23:22：开场拿回主屏能出画；用户回原车主界面（changeModes take）后再点图标，
+     * 手机报回「主屏=手机」，车机既不出画也不再要关键帧。CarWith 只有首个 IDR 带 SPS/PPS，
+     * 参数集只在开流时随 VideoConfig 发过一次——车机回原车界面若拆掉了解码器，之后的 IDR 无从解码。
+     */
+    fun reprimeOnNextKeyFrame() {
+        if (externalVideoSource != null && transcoder == null) reprimePending.set(true)
+    }
+
     // ---- 编码输出 → 协议封装发送 ----
 
     /**
@@ -545,8 +560,17 @@ class VideoSender(
                     maybeSendKeepAlive(output)
                     continue
                 }
-                val nalUnits = splitAnnexB(frame.data)
+                var nalUnits = splitAnnexB(frame.data)
                 if (nalUnits.isEmpty()) continue
+                if (frame.keyFrame && reprimePending.compareAndSet(true, false)) {
+                    val inlined = withParameterSets(nalUnits, frame.sps, frame.pps)
+                    log(
+                        "VIDEO: 主屏拿回后重发 VideoConfig" +
+                            if (inlined.size > nalUnits.size) "，本 IDR 补内联 SPS/PPS（来自解析器缓存）" else "（本 IDR 已带 SPS/PPS）",
+                    )
+                    nalUnits = inlined
+                    cachedVideoConfig = null
+                }
                 val sps = nalUnits.firstOrNull { it.isNotEmpty() && (it[0].toInt() and 0x1F) == 7 }
                 val pps = nalUnits.firstOrNull { it.isNotEmpty() && (it[0].toInt() and 0x1F) == 8 }
                 if (sps != null && pps != null) {
@@ -919,6 +943,21 @@ class VideoSender(
     private fun splitAnnexB(bytes: ByteArray): List<ByteArray> = AnnexB.split(bytes)
 
     companion object {
+        /** IDR 缺 SPS 或 PPS 时用缓存补在最前（AUD 之后）；缓存缺一个就原样返回。 */
+        internal fun withParameterSets(
+            nalUnits: List<ByteArray>,
+            sps: ByteArray?,
+            pps: ByteArray?,
+        ): List<ByteArray> {
+            fun has(type: Int) = nalUnits.any { it.isNotEmpty() && (it[0].toInt() and 0x1F) == type }
+            if (has(7) && has(8)) return nalUnits
+            if (sps == null || pps == null) return nalUnits
+            val lead = nalUnits.takeWhile { it.isNotEmpty() && (it[0].toInt() and 0x1F) == 9 }
+            val rest =
+                nalUnits.drop(lead.size).filterNot { it.isNotEmpty() && (it[0].toInt() and 0x1F).let { t -> t == 7 || t == 8 } }
+            return lead + listOf(sps, pps) + rest
+        }
+
         private const val HEADER_LEN = 128
         private const val OP_FRAME = 0
         private const val OP_CONFIG = 1
