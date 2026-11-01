@@ -1912,7 +1912,7 @@ object SessionController {
         val deadline = android.os.SystemClock.uptimeMillis() + timeoutMillis
         val startedAt = android.os.SystemClock.uptimeMillis()
         var lastLogAt = startedAt
-        var reannounced = false
+        var reannouncedAt = 0L
         while (android.os.SystemClock.uptimeMillis() < deadline) {
             if (connectCancelled) return false
             val invites = advertiser?.inviteCount ?: 0
@@ -1923,6 +1923,8 @@ object SessionController {
                     waitStartedAtMillis = startedAt,
                     lastInviteAtMillis = advertiser?.lastInviteAtMillis ?: 0L,
                     mdnsEndpointFound = endpointBrowser?.awaitEndpoint(0) != null,
+                    advertisedAtMillis = advertiser?.advertisedAtMillis ?: 0L,
+                    reannouncedAtMillis = reannouncedAt,
                 )
             ) {
                 CtrlInviteGate.Decision.INVITED -> {
@@ -1932,23 +1934,33 @@ object SessionController {
 
                 CtrlInviteGate.Decision.MDNS_FALLBACK -> {
                     appendLog(
-                        "CTRL: 已发现 _airplay._tcp，${CtrlInviteGate.MDNS_GRACE_MS}ms 内无新鲜邀请" +
-                            "（旧邀请 $invites 次不算）——按旧机型直接连接 AirPlay",
+                        "CTRL: 已发现 _airplay._tcp，广播可见/重公告后 ${CtrlInviteGate.MDNS_GRACE_MS}ms 内无新鲜邀请" +
+                            "（旧邀请 $invites 次不算，共等 ${now - startedAt}ms）——按旧机型直接连接 AirPlay",
                     )
                     return true
                 }
 
+                // catplay 实测：iPhone 的 Bonjour 公告常被车机丢弃——它在每次邀请前都
+                // force_announce。这里补发一次；广播已可见时要等满宽限期，否则会把车机正要响应的那次公告注销掉。
+                CtrlInviteGate.Decision.REANNOUNCE -> {
+                    reannouncedAt = now
+                    val advertisedAt = advertiser?.advertisedAtMillis ?: 0L
+                    appendLog(
+                        "CTRL: " +
+                            (if (advertisedAt > 0L) "广播可见 ${now - advertisedAt}ms 仍无邀请" else "${now - startedAt}ms 未确认广播可见") +
+                            "——强制重新公告一次（catplay 同款 force_announce）",
+                    )
+                    ctrlAdvertiser?.ensureForNetwork(ssid, force = true, network = wifiConnector?.currentNetwork)
+                }
+
                 CtrlInviteGate.Decision.WAIT -> Unit
             }
-            // catplay 实测：iPhone 的 Bonjour 公告常被车机丢弃——它在每次邀请前都
-            // force_announce。这里在等待中途补发一次，覆盖「绑网瞬间公告丢失」的情况。
-            if (!reannounced && now - startedAt >= 2_000) {
-                reannounced = true
-                appendLog("CTRL: 2s 未收到邀请——强制重新公告一次（catplay 同款 force_announce）")
-                ctrlAdvertiser?.ensureForNetwork(ssid, force = true, network = wifiConnector?.currentNetwork)
-            }
             if (now - lastLogAt > 1_200) {
-                appendLog("CTRL: 等待车机 ctrl 邀请…（已等 ${now - startedAt}ms）")
+                val advertisedAt = advertiser?.advertisedAtMillis ?: 0L
+                appendLog(
+                    "CTRL: 等待车机 ctrl 邀请…（已等 ${now - startedAt}ms，" +
+                        (if (advertisedAt > 0L) "广播已可见 ${now - advertisedAt}ms" else "广播尚未确认可见") + "）",
+                )
                 lastLogAt = now
             }
             try {

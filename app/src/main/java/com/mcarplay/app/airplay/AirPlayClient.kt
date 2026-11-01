@@ -2794,6 +2794,10 @@ class AirPlayClient(
         val previous: Socket?
         synchronized(rtspWriteLock) {
             if (readerSocket === client && readerThread?.isAlive == true) return
+            // 读线程已在这条连接上以 EOF/异常退出：连接已被对端关掉，不能在死连接上另起读线程并清掉
+            // controlChannelClosed——那样后续请求会写进死连接、白等满超时（帕萨特 2026-11-01 22:08：
+            // SETUP 后通道被关，/info 仍等了 10 s 才失败，推迟了按邀请重连）。
+            if (readerSocket === client && controlChannelClosed) throw IOException("控制通道已被接收端关闭")
             previous = readerSocket
             readerSocket = client
             val generation = ++readerGeneration

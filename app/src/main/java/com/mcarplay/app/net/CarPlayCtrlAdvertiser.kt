@@ -108,6 +108,15 @@ class CarPlayCtrlAdvertiser(
     @Volatile
     private var registeredAtMillis: Long = 0L
 
+    /**
+     * 当前广播在网络上确认可见（onServiceRegistered）的时刻；0 = 未注册或注销后尚未重新确认。
+     * 车机通常在广播可见后 0.1–0.3 s 发邀请（帕萨特 2026-11-01 21:45 / 10-31 23:50 实测），
+     * 邀请宽限期应从这里算，而不是从开始等待算。
+     */
+    @Volatile
+    var advertisedAtMillis: Long = 0L
+        private set
+
     /** 本次注册写入 TXT 的 MAC（占位值 = 车机不会邀请，需尽快重注册）。 */
     @Volatile
     private var registeredWithMac: String? = null
@@ -373,6 +382,7 @@ class CarPlayCtrlAdvertiser(
     @Synchronized
     private fun unregisterServiceOnly() {
         registered = false
+        advertisedAtMillis = 0L
         registeredWithMac = null
         activeListener?.let { runCatching { nsdManager.unregisterService(it) } }
         activeListener = null
@@ -393,6 +403,8 @@ class CarPlayCtrlAdvertiser(
     private fun createListener(): NsdManager.RegistrationListener =
         object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
+                // 只认当前这次注册：已被注销的旧注册迟到的回调不能把广播标成可见
+                if (activeListener === this) advertisedAtMillis = SystemClock.uptimeMillis()
                 log("$TAG: mDNS 注册成功 ${serviceInfo.serviceName}")
             }
 
