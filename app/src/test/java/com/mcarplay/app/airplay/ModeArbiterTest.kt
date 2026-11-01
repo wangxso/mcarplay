@@ -38,9 +38,26 @@ class ModeArbiterTest {
         arbiter.applyInitial(mapOf("resources" to listOf(resource(1, 1, 500, 500), resource(2, 1, 100, 100))))
         assertFalse(arbiter.phoneOwnsScreen)
         assertEquals(mapOf(1L to 2L, 2L to 1L), entities(arbiter))
-        arbiter.onUserRequestedUi()
+        assertFalse(arbiter.onUserRequestedUi().retake)
         assertTrue(arbiter.phoneOwnsScreen)
         assertEquals(1L, arbiter.resourcesPayload().first()["permanentEntity"])
+    }
+
+    @Test
+    fun requestUiWhileAlreadyOwnedReleasesThenRetakes() {
+        // 23:02:42 一轮：主屏 100/100 归手机，车机却停在原车界面持续要帧；点图标后重发同样的状态被无视
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(mapOf("resources" to listOf(resource(1, 1, 100, 100), resource(2, 1, 100, 100))))
+        val request = arbiter.onUserRequestedUi()
+        assertTrue(request.retake)
+        // 让出那一条只改报文，主音频不动，记录的归属仍是手机
+        assertEquals(
+            mapOf(1L to 2L, 2L to 1L),
+            arbiter.resourcesPayload(releaseScreen = true).associate { it["resourceID"] to it["entity"] },
+        )
+        assertEquals(2L, arbiter.resourcesPayload(releaseScreen = true).first()["permanentEntity"])
+        assertTrue(arbiter.phoneOwnsScreen)
+        assertEquals(mapOf(1L to 1L, 2L to 1L), entities(arbiter))
     }
 
     @Test
@@ -60,7 +77,7 @@ class ModeArbiterTest {
     fun neverConstraintIsNotOverriddenAndBorrowReturns() {
         val arbiter = ModeArbiter()
         arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 1000))))
-        arbiter.onUserRequestedUi()
+        assertFalse(arbiter.onUserRequestedUi().retake)
         assertFalse(arbiter.phoneOwnsScreen)
         // 借用（如倒车影像）结束后归还给原持有方
         val borrowed = ModeArbiter()

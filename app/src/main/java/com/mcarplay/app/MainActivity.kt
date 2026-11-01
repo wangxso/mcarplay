@@ -1118,7 +1118,8 @@ class MainActivity : AppCompatActivity() {
         btnAudio.setOnClickListener {
             if (CarLifeLauncher.isAvailable(this)) {
                 SessionController.audioEnabledForSession = true
-                SessionController.maybeStartAudioNow(applicationContext)
+                // 音频 SETUP 是控制通道上的网络请求，不能在主线程发
+                Bg.run("audio-native-start") { SessionController.maybeStartAudioNow(applicationContext) }
                 snack(getString(R.string.ma_native_audio_requested))
                 return@setOnClickListener
             }

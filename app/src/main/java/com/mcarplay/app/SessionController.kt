@@ -128,8 +128,13 @@ object SessionController {
      * 等车机 ctrl 邀请的上限（事件驱动，收到即走）。
      * catplay 以邀请为连接触发点；实测邀请在 ctrl 重注册后 ~1.0-1.3s 到达。
      * 车机不发邀请时（旧机型）由「已发现 _airplay._tcp」提前放行，最坏也只等这么久。
+     * 必须盖住 [CtrlInviteGate] 的整条路径：广播可见 3 s → 重公告 → 重新可见（约 1 s）→ 再宽限 3 s。
+     * 原来的 4 s 在广播可见 2.6 s 时就超时（帕萨特 2026-11-01 23:02:38），邀请在开始等待 6 s 后才到。
      */
-    private const val CTRL_INVITE_WAIT_MS = 4_000L
+    private const val CTRL_INVITE_WAIT_MS = 9_000L
+
+    /** 让出与拿回两条 modesChanged 的间隔：给车机 HMI 处理一次归属切换的时间。 */
+    private const val SCREEN_RETAKE_GAP_MS = 200L
 
     /** 端点不完整时等 mDNS 缓存命中：绑网时已开始发现，通常几百毫秒内命中。 */
     private const val ENDPOINT_RESOLVE_WAIT_MS = 3_000L
@@ -2134,7 +2139,7 @@ object SessionController {
                 true
             }
         } catch (error: Exception) {
-            appendLog("AUDIO: 通道启动异常 - ${error.message}")
+            appendLog("AUDIO: 通道启动异常 - ${error.javaClass.simpleName}: ${error.message}")
             audioSender = null
             activeAudioProfile = null
             activeAudioStartedAt = 0L
@@ -2500,6 +2505,10 @@ object SessionController {
         }
     private val modesAssertPending = AtomicBoolean(false)
 
+    /** 下一次 modesChanged 前先报一次让出主屏（见 [ModeArbiter.UiRequest.retake]）。 */
+    @Volatile
+    private var pendingScreenRetake = false
+
     private fun enqueueModesAssert(
         client: AirPlayClient,
         reason: String,
@@ -2513,8 +2522,20 @@ object SessionController {
             modesAssertPending.set(false)
             // 执行时会话可能已取消或换了 client：迟到任务不得对新会话发 modesChanged
             if (connectCancelled || currentClient !== client) {
+                pendingScreenRetake = false
                 appendLog("EVENT: $reason → 会话已结束或更替，丢弃迟到的 modesChanged")
                 return@execute
+            }
+            // 用户点图标时主屏本就归手机：车机停在原车界面却不认这个归属，先报让出、再报拿回
+            if (pendingScreenRetake) {
+                pendingScreenRetake = false
+                if (client.assertModes(releaseScreen = true)) {
+                    try {
+                        Thread.sleep(SCREEN_RETAKE_GAP_MS)
+                    } catch (_: InterruptedException) {
+                        return@execute
+                    }
+                }
             }
             val asserted = client.assertModes()
             // 自己补的 I 帧不计入车机要帧风暴（用户连点图标不能被当成解码失败）
@@ -2787,8 +2808,7 @@ object SessionController {
             // 网络绑定完成：ctrl 广播重新注册（落到车机所在网络），同时开始后台 mDNS 发现。
             // 两者都发生在等邀请期间，不额外占用时间。
             ctrlAdvertiser?.ensureForNetwork(endpoint.ssid, force = true, network = wifiConnector?.currentNetwork)
-            endpointBrowser?.resetCache()
-            endpointBrowser?.start()
+            endpointBrowser?.restart()
             // 0x4301 自带完整地址+端口 = 接收端已明确告知「连这里」，无需等邀请
             // （DiPlay 测试台路径：本轮直接配对，省掉固定等待）。
             // IPv6 也算地址：奥迪 4xxx 的 0x4301 常只给 fe80::（旧判据只看 IPv4，
@@ -3206,10 +3226,11 @@ object SessionController {
                                         // 车机始终停在原生界面。与 changeModes 同样回 modesChanged 接管主屏，
                                         // 并补一个 I 帧，让车机切屏后马上有可解码的画面。
                                         requestUiCount++
-                                        val note = client.modes.onUserRequestedUi()
+                                        val request = client.modes.onUserRequestedUi()
+                                        if (request.retake) pendingScreenRetake = true
                                         enqueueModesAssert(
                                             client,
-                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；$note）",
+                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；${request.note}）",
                                             requestKeyFrame = true,
                                         )
                                     }

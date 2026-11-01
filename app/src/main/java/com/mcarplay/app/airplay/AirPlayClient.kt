@@ -699,7 +699,7 @@ class AirPlayClient(
     /** 本会话的资源仲裁状态：/info modes 初始化，事件通道的 changeModes / requestUI 更新。 */
     internal val modes = ModeArbiter()
 
-    fun assertModes(): Boolean {
+    fun assertModes(releaseScreen: Boolean = false): Boolean {
         val body =
             BinaryPlist.encode(
                 linkedMapOf(
@@ -712,7 +712,7 @@ class AirPlayClient(
                                     linkedMapOf<String, Any?>("appStateID" to 3L, "entity" to 0L),
                                     linkedMapOf<String, Any?>("appStateID" to 1L, "entity" to 0L, "speechMode" to -1L),
                                 ),
-                            "resources" to modes.resourcesPayload(),
+                            "resources" to modes.resourcesPayload(releaseScreen),
                         ),
                 ),
             )
@@ -731,7 +731,8 @@ class AirPlayClient(
                     " 应答体 ${response.size}B " +
                         (runCatching { PlistShape.describe(BinaryPlist.parseRecovered(response).value) }.getOrNull() ?: "非 plist")
                 }
-            log("AIRPLAY: modesChanged（${modes.describe()}）[$statusLine]$responseShape")
+            val state = if (releaseScreen) "让出主屏，随后拿回" else modes.describe()
+            log("AIRPLAY: modesChanged（$state）[$statusLine]$responseShape")
             statusLine.contains("200")
         } catch (error: IOException) {
             log("AIRPLAY: modesChanged 失败 - ${error.message}")
@@ -2600,6 +2601,15 @@ class AirPlayClient(
         extraHeaders: List<Pair<String, String>> = emptyList(),
     ): Pair<String, ByteArray> {
         val client = socket ?: throw IOException("未连接")
+        // 主线程上 socket 写会抛 NetworkOnMainThreadException，而那时报文已加密、计数已前移：
+        // 下一条请求车机解不开，整轮会话被 reset（帕萨特 2026-11-01 23:02:31，点「开启声音」后 0.6 s 断开）。
+        // 必须在加密前拒绝。
+        if (android.os.Looper
+                .getMainLooper()
+                ?.isCurrentThread == true
+        ) {
+            throw IOException("主线程禁止发 RTSP 请求（$method $path）")
+        }
         val startedAt = SystemClock.uptimeMillis()
         startReader(client)
         val queue = java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>(1)

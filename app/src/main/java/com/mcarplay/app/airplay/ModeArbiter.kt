@@ -13,6 +13,10 @@ package com.mcarplay.app.airplay
  *   之后点图标 6 次都回不到 CarPlay。
  * 这里按报告归属：车机以 userInitiated 拿走时如实回 entity=2，用户点图标（用户发起，满足 500 约束）时
  * 再拿回 entity=1。约束 never(1000) 时不抢。
+ *
+ * 23:02:42 一轮（上一轮异常断开后车机停在原车界面）：`/info` 主屏 100/100，手机开场宣称持有，
+ * 车机仍持续要关键帧；用户点图标时手机状态没变、重发同样的 modesChanged 被车机无视。用户点图标本身
+ * 说明车机此刻在原车界面，所以「本就归手机」时要先报一次让出、再报拿回，让车机看到一次真实的归属切换。
  */
 internal class ModeArbiter {
     enum class Entity(
@@ -43,25 +47,32 @@ internal class ModeArbiter {
     @Synchronized
     fun onChangeModes(params: Map<*, *>?): String = applyRequests(params, initial = false)
 
-    /** 用户在车机上点了 CarPlay 图标：用户发起的拿回主屏。返回一行说明。 */
+    /** [onUserRequestedUi] 的结果：[retake] = 主屏本就归手机，需先报让出再报拿回。 */
+    class UiRequest(
+        val note: String,
+        val retake: Boolean,
+    )
+
+    /** 用户在车机上点了 CarPlay 图标：用户发起的拿回主屏。 */
     @Synchronized
-    fun onUserRequestedUi(): String {
+    fun onUserRequestedUi(): UiRequest {
         val screen = resources.getValue(SCREEN)
-        if (screen.owner == Entity.CONTROLLER) return "主屏本就归手机"
-        if (screen.takeConstraint >= CONSTRAINT_NEVER) return "车机以 never 约束持有主屏，不抢"
+        if (screen.owner == Entity.CONTROLLER) return UiRequest("主屏本就归手机，先报让出再拿回", retake = true)
+        if (screen.takeConstraint >= CONSTRAINT_NEVER) return UiRequest("车机以 never 约束持有主屏，不抢", retake = false)
         screen.owner = Entity.CONTROLLER
         screen.permanent = Entity.CONTROLLER
-        return "用户点图标，拿回主屏（车机约束 ${screen.takeConstraint} ≤ userInitiated）"
+        return UiRequest("用户点图标，拿回主屏（车机约束 ${screen.takeConstraint} ≤ userInitiated）", retake = false)
     }
 
-    /** modesChanged 的 resources 段。 */
+    /** modesChanged 的 resources 段；[releaseScreen] = 本条报主屏归车机（拿回前的让出），不改记录的归属。 */
     @Synchronized
-    fun resourcesPayload(): List<Map<String, Any?>> =
+    fun resourcesPayload(releaseScreen: Boolean = false): List<Map<String, Any?>> =
         resources.map { (id, resource) ->
+            val released = releaseScreen && id == SCREEN
             linkedMapOf<String, Any?>(
                 "resourceID" to id,
-                "entity" to resource.owner.code,
-                "permanentEntity" to resource.permanent.code,
+                "entity" to (if (released) Entity.ACCESSORY else resource.owner).code,
+                "permanentEntity" to (if (released) Entity.ACCESSORY else resource.permanent).code,
             )
         }
 
