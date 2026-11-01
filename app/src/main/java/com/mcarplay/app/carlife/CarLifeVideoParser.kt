@@ -19,6 +19,8 @@ data class CarLifeVideoAccessUnit(
             data = data,
             keyFrame = keyFrame,
             timestampUs = timestamp * 1_000_000L,
+            sps = sps,
+            pps = pps,
         )
 
     fun dimensions(): Pair<Int, Int>? = sps?.let(::spsDimensions)

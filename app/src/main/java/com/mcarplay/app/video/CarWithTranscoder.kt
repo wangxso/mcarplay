@@ -86,13 +86,16 @@ internal class CarWithTranscoder(
         log("VIDEO: 转码管线就绪 ${sourceWidth}x$sourceHeight → ${outWidth}x$outHeight（等 CarWith 关键帧起解码）")
     }
 
-    /** 喂一个 CarWith 访问单元（Annex B）。解码器在首个带 SPS/PPS 的关键帧到来时创建。 */
+    /**
+     * 喂一个 CarWith 访问单元（Annex B）。解码器在首个关键帧到来时创建，参数集优先取帧内联的，
+     * 缺的从解析器缓存补：CarLifeJoinGate 只在首次接入时补齐，中途切换后的 IDR 可能不带 PPS。
+     */
     fun submit(frame: ExternalVideoFrame) {
         if (!running.get()) return
         val codec =
             decoder ?: run {
                 if (!frame.keyFrame) return
-                val sets = parameterSets(frame.data) ?: return
+                val sets = decoderParameterSets(frame) ?: return
                 startDecoder(sets.first, sets.second) ?: return
             }
         try {
@@ -348,6 +351,19 @@ internal class CarWithTranscoder(
 
         /** 从 Annex B 访问单元里取 SPS/PPS（不含起始码）；缺任一返回 null。 */
         internal fun parameterSets(annexB: ByteArray): Pair<ByteArray, ByteArray>? {
+            val (sps, pps) = inlineParameterSets(annexB)
+            return if (sps != null && pps != null) sps to pps else null
+        }
+
+        /** 解码器起步用的参数集：内联优先，缺的取帧携带的解析器缓存；仍缺任一返回 null。 */
+        internal fun decoderParameterSets(frame: ExternalVideoFrame): Pair<ByteArray, ByteArray>? {
+            val (inlineSps, inlinePps) = inlineParameterSets(frame.data)
+            val sps = inlineSps ?: frame.sps?.takeIf { it.isNotEmpty() }
+            val pps = inlinePps ?: frame.pps?.takeIf { it.isNotEmpty() }
+            return if (sps != null && pps != null) sps to pps else null
+        }
+
+        private fun inlineParameterSets(annexB: ByteArray): Pair<ByteArray?, ByteArray?> {
             var sps: ByteArray? = null
             var pps: ByteArray? = null
             for (nal in AnnexB.split(annexB)) {
@@ -357,7 +373,7 @@ internal class CarWithTranscoder(
                     8 -> if (pps == null) pps = nal
                 }
             }
-            return if (sps != null && pps != null) sps to pps else null
+            return sps to pps
         }
     }
 }

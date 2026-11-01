@@ -130,6 +130,16 @@ class CarLifeVideoParserTest {
     }
 
     @Test
+    fun externalFrameCarriesCachedParameterSets() {
+        // 转码器中途起步时，IDR 不内联 PPS 也能从帧携带的解析器缓存补齐
+        val pps = byteArrayOf(0x68, 0xCE.toByte(), 0x06, 0xE2.toByte())
+        val unit = CarLifeVideoAccessUnit(1, byteArrayOf(0, 0, 0, 1, 0x65, 0x80.toByte()), true, sps, pps)
+        val frame = unit.toExternalVideoFrame()
+        assertTrue(frame.sps!!.contentEquals(sps))
+        assertTrue(frame.pps!!.contentEquals(pps))
+    }
+
+    @Test
     fun firstMbInSliceParsesExpGolomb() {
         assertEquals(0, firstMbInSlice(byteArrayOf(0x65, 0x80.toByte(), 1)))
         assertEquals(1, firstMbInSlice(byteArrayOf(0x41, 0x40, 0)))

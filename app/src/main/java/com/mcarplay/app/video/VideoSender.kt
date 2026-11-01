@@ -70,6 +70,15 @@ class VideoSender(
     val videoWidth: Int get() = width
     val videoHeight: Int get() = height
 
+    /**
+     * CarWith 源尺寸是否与上次 [setVideoDimensions] 记录的不同。转码后 [videoWidth]/[videoHeight]
+     * 固定为车机流尺寸，拿源尺寸比它会每帧都误判为格式变化（2026-11-01 审查）。
+     */
+    fun isNewSourceSize(
+        sourceWidth: Int,
+        sourceHeight: Int,
+    ): Boolean = (sourceWidth / 2) * 2 != this.sourceWidth || (sourceHeight / 2) * 2 != this.sourceHeight
+
     /** 与车机协商的流尺寸（屏幕 SETUP 时定型）；转码时的输出尺寸。 */
     private val streamWidth: Int = (width / 2) * 2
     private val streamHeight: Int = (height / 2) * 2
@@ -94,6 +103,12 @@ class VideoSender(
 
     /** 透传线程与转码编码线程可能同时写数据口：所有网络写入串行。 */
     private val writeLock = Any()
+
+    /**
+     * 转码资源发布与 [stop] 互斥：stop 之后才初始化完的编码器 / EGL 由初始化方自己释放。
+     * 不复用 [writeLock]——stop 要能在写入阻塞时关 socket 解锁写线程。
+     */
+    private val lifecycleLock = Any()
 
     /** 正在把 CarWith 画面缩放转码（而非原样透传）。 */
     val isTranscoding: Boolean get() = transcoder != null
@@ -263,18 +278,32 @@ class VideoSender(
     fun stop() {
         running.set(false)
         externalQueue.clear()
-        // 先停转码（停止往编码器 Surface 渲染），再释放编码器
-        transcoder?.let { active ->
+        val active: CarWithTranscoder?
+        val codec: MediaCodec?
+        val surface: Surface?
+        synchronized(lifecycleLock) {
+            active = transcoder
+            codec = encoder
+            surface = inputSurface
             transcoder = null
-            runCatching { active.stop() }
+            encoder = null
+            inputSurface = null
         }
-        runCatching { encoder?.stop() }
-        runCatching { encoder?.release() }
-        encoder = null
-        runCatching { inputSurface?.release() }
-        inputSurface = null
+        releaseVideoResources(active, codec, surface)
         runCatching { socket?.close() }
         socket = null
+    }
+
+    /** 先停转码（停止往编码器 Surface 渲染），再释放编码器与其输入 Surface。 */
+    private fun releaseVideoResources(
+        pipeline: CarWithTranscoder?,
+        codec: MediaCodec?,
+        surface: Surface?,
+    ) {
+        pipeline?.let { runCatching { it.stop() } }
+        runCatching { codec?.stop() }
+        runCatching { codec?.release() }
+        runCatching { surface?.release() }
     }
 
     /**
@@ -357,20 +386,32 @@ class VideoSender(
         )
         var codec: MediaCodec? = null
         var surface: Surface? = null
+        var pipeline: CarWithTranscoder? = null
+        var published = false
         try {
             val created = createEncoder(streamWidth, streamHeight, fps, capEncoderFps = true)
             codec = created.first
             surface = created.second
-            val pipeline = CarWithTranscoder(surface, streamWidth, streamHeight, sourceWidth, sourceHeight, log)
+            pipeline = CarWithTranscoder(surface, streamWidth, streamHeight, sourceWidth, sourceHeight, log)
             pipeline.start()
-            synchronized(writeLock) {
-                width = streamWidth
-                height = streamHeight
-                configSent = false
-                cachedVideoConfig = null
-                encoder = codec
-                inputSurface = surface
-                transcoder = pipeline
+            // 初始化可能耗时数秒：期间断开的话 stop() 已收尾，资源不再发布到字段
+            published =
+                synchronized(lifecycleLock) {
+                    if (!running.get()) return@synchronized false
+                    synchronized(writeLock) {
+                        width = streamWidth
+                        height = streamHeight
+                        configSent = false
+                        cachedVideoConfig = null
+                        encoder = codec
+                        inputSurface = surface
+                        transcoder = pipeline
+                    }
+                    true
+                }
+            if (!published) {
+                log("VIDEO: 转码初始化期间会话已停止，释放转码资源")
+                return
             }
             Thread({ drainEncoder() }, "video-transcode-drain").apply {
                 isDaemon = true
@@ -378,11 +419,8 @@ class VideoSender(
             }
         } catch (error: Exception) {
             log("VIDEO: 转码启动失败，保持透传 - ${error.message}")
-            if (encoder !== codec) {
-                runCatching { codec?.stop() }
-                runCatching { codec?.release() }
-                runCatching { surface?.release() }
-            }
+        } finally {
+            if (!published) releaseVideoResources(pipeline, codec, surface)
         }
     }
 

@@ -710,9 +710,7 @@ object SessionController {
                     ConnectionDiagnostics.timeline.sourceFrame(output.attempt)
                     val sender = output.sender
                     val dimensions = frame.dimensions()
-                    if (dimensions != null &&
-                        (dimensions.first != sender.videoWidth || dimensions.second != sender.videoHeight)
-                    ) {
+                    if (dimensions != null && sender.isNewSourceSize(dimensions.first, dimensions.second)) {
                         ConnectionDiagnostics.timeline.note(
                             output.attempt,
                             "CARWITH_VIDEO_FORMAT ${dimensions.first}x${dimensions.second}",
