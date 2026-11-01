@@ -56,6 +56,9 @@ internal class CarWithTranscoder(
     private var decoder: MediaCodec? = null
     private var outputThread: Thread? = null
 
+    /** 解码器发布与 [stop] 互斥：stop 之后才启动完的解码器由创建方自己释放，不再发布。 */
+    private val decoderLock = Any()
+
     @Volatile
     var framesRendered = 0L
         private set
@@ -124,15 +127,19 @@ internal class CarWithTranscoder(
 
     fun stop() {
         if (!running.getAndSet(false)) return
-        outputThread?.let { thread ->
-            thread.interrupt()
-            runCatching { thread.join(500) }
+        val codec: MediaCodec?
+        val thread: Thread?
+        synchronized(decoderLock) {
+            codec = decoder
+            thread = outputThread
+            decoder = null
+            outputThread = null
         }
-        decoder?.let { codec ->
-            runCatching { codec.stop() }
-            runCatching { codec.release() }
+        thread?.let {
+            it.interrupt()
+            runCatching { it.join(500) }
         }
-        decoder = null
+        codec?.let(::releaseCodec)
         val released = CountDownLatch(1)
         glHandler.post {
             releaseGl()
@@ -148,6 +155,7 @@ internal class CarWithTranscoder(
         pps: ByteArray,
     ): MediaCodec? {
         val surface = decoderSurface ?: return null
+        var created: MediaCodec? = null
         return try {
             val format =
                 MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, sourceWidth, sourceHeight).apply {
@@ -156,20 +164,36 @@ internal class CarWithTranscoder(
                     setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_INPUT_SIZE)
                 }
             val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            created = codec
             codec.configure(format, surface, null, 0)
             codec.start()
-            decoder = codec
-            outputThread =
-                Thread({ drainDecoder(codec) }, "carwith-transcode-decode").apply {
-                    isDaemon = true
-                    start()
+            val published =
+                synchronized(decoderLock) {
+                    if (!running.get()) return@synchronized false
+                    decoder = codec
+                    outputThread =
+                        Thread({ drainDecoder(codec) }, "carwith-transcode-decode").apply {
+                            isDaemon = true
+                            start()
+                        }
+                    true
                 }
+            if (!published) {
+                releaseCodec(codec)
+                return null
+            }
             log("VIDEO: 转码解码器已启动 ${sourceWidth}x$sourceHeight（${codec.name}）")
             codec
         } catch (error: Exception) {
-            log("VIDEO: 转码解码器启动失败 - ${error.message}")
+            if (running.get()) log("VIDEO: 转码解码器启动失败 - ${error.message}")
+            created?.takeIf { it !== decoder }?.let(::releaseCodec)
             null
         }
+    }
+
+    private fun releaseCodec(codec: MediaCodec) {
+        runCatching { codec.stop() }
+        runCatching { codec.release() }
     }
 
     /** 解码输出直接渲染到 SurfaceTexture；GL 线程在 onFrameAvailable 里缩放写进编码器。 */

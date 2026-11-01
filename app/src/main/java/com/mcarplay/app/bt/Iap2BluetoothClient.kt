@@ -124,6 +124,21 @@ class Iap2BluetoothClient(
                 else -> SdpGate.SKIP
             }
 
+        /**
+         * 自动模式候选：SDP 缓存带 …caff 的排前，再接 [sdpGateDecision] 放行的例外（帕萨特这类不声明
+         * …caff 的车机）；两者都没有时退化为全部已配对设备，由连接循环里的 SDP 闸门逐台判断。
+         * 只留带 …caff 的设备会让离线的旧接收端挡住眼前的车机（2026-11-01 审查）。
+         */
+        fun <T> autoCandidates(
+            bonded: List<T>,
+            gate: (T) -> SdpGate,
+        ): List<T> {
+            val decisions = bonded.map { it to gate(it) }
+            val withService = decisions.filter { it.second == SdpGate.CONNECT }.map { it.first }
+            if (withService.isEmpty()) return bonded
+            return withService + decisions.filter { it.second == SdpGate.CONNECT_DESPITE_SDP }.map { it.first }
+        }
+
         private fun looksLikeHeadUnit(services: List<UUID>): Boolean =
             HFP_HANDS_FREE_UUID in services && A2DP_SINK_UUID in services && MAP_NOTIFICATION_UUID in services
 
@@ -453,7 +468,7 @@ class Iap2BluetoothClient(
     }
 
     /**
-     * 候选设备：优先 SDP 缓存里带配件端 UUID 的已配对设备；
+     * 候选设备：优先 SDP 缓存里带配件端 UUID 的已配对设备，加上 SDP 闸门放行的例外（见 [autoCandidates]）；
      * 缓存缺失时退化为全部已配对设备（connect 时的 SDP 查询会自行过滤）。
      * 指定了目标车机时**只返回该设备**（用户配对了多台车机时避免误连）。
      */
@@ -482,11 +497,15 @@ class Iap2BluetoothClient(
             }
             return hit
         }
-        val withService =
-            bonded.filter { device ->
-                device.uuids?.any { it.uuid == ACCESSORY_IAP2_UUID } == true
-            }
-        return if (withService.isNotEmpty()) withService else bonded
+        return autoCandidates(bonded) { device ->
+            val services = cachedUuids(device)
+            sdpGateDecision(
+                hasIap2Service = ACCESSORY_IAP2_UUID in services,
+                deviceClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull(),
+                rememberedReceiver = Iap2ReceiverMemory.contains(context, device.address),
+                services = services,
+            )
+        }
     }
 
     @SuppressLint("MissingPermission")

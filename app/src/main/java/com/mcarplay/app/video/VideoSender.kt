@@ -106,7 +106,8 @@ class VideoSender(
 
     /**
      * 转码资源发布与 [stop] 互斥：stop 之后才初始化完的编码器 / EGL 由初始化方自己释放。
-     * 不复用 [writeLock]——stop 要能在写入阻塞时关 socket 解锁写线程。
+     * 发布时会在持有本锁的情况下等 [writeLock]，而写线程可能阻塞在 socket 上，
+     * 所以 stop 必须先关 socket、再取本锁（否则断开按钮会卡住主线程）。
      */
     private val lifecycleLock = Any()
 
@@ -115,6 +116,8 @@ class VideoSender(
 
     /** 正在原样透传外部 H.264（关键帧请求只能转给 CarWith，无法保证立即生效）。 */
     val isExternalPassthrough: Boolean get() = externalVideoSource != null && transcoder == null
+
+    @Volatile
     private var socket: Socket? = null
     private var encoder: MediaCodec? = null
     private var inputSurface: Surface? = null
@@ -278,6 +281,10 @@ class VideoSender(
     fun stop() {
         running.set(false)
         externalQueue.clear()
+        // 先关 socket：解开阻塞在写入上的线程（它持有 writeLock，转码发布方持有 lifecycleLock 等它）
+        val closing = socket
+        socket = null
+        runCatching { closing?.close() }
         val active: CarWithTranscoder?
         val codec: MediaCodec?
         val surface: Surface?
@@ -290,8 +297,6 @@ class VideoSender(
             inputSurface = null
         }
         releaseVideoResources(active, codec, surface)
-        runCatching { socket?.close() }
-        socket = null
     }
 
     /** 先停转码（停止往编码器 Surface 渲染），再释放编码器与其输入 Surface。 */

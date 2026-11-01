@@ -90,4 +90,27 @@ class Iap2BluetoothClientServicesTest {
         assertEquals("0x0404", Iap2BluetoothClient.describeDeviceClass(0x0404))
         assertEquals("未知", Iap2BluetoothClient.describeDeviceClass(null))
     }
+
+    @Test
+    fun offlineIap2ReceiverDoesNotHideExemptedHeadUnit() {
+        // 旧接收端 SDP 缓存带 …caff 但已离线；帕萨特不声明 …caff，靠服务组合 / 记忆放行
+        val gates =
+            mapOf(
+                "old-receiver" to Iap2BluetoothClient.SdpGate.CONNECT,
+                "headset" to Iap2BluetoothClient.SdpGate.SKIP,
+                "passat" to Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP,
+            )
+        assertEquals(
+            listOf("old-receiver", "passat"),
+            Iap2BluetoothClient.autoCandidates(listOf("headset", "passat", "old-receiver")) { gates.getValue(it) },
+        )
+    }
+
+    @Test
+    fun withoutCachedIap2EveryBondedDeviceStaysCandidate() {
+        // 没有任何设备缓存了 …caff：沿用全部已配对设备，由连接循环里的 SDP 闸门逐台判断
+        val bonded = listOf("headset", "passat")
+        val gates = mapOf("headset" to Iap2BluetoothClient.SdpGate.SKIP, "passat" to Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP)
+        assertEquals(bonded, Iap2BluetoothClient.autoCandidates(bonded) { gates.getValue(it) })
+    }
 }
