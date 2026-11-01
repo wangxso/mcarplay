@@ -27,21 +27,40 @@ class TranscodePolicyTest {
 
     @Test
     fun passatKeyFrameCadenceIsAStorm() {
-        // 帕萨特：约每 300ms 一次
+        // 帕萨特 CarWith 1920×1140 透传：约每 300ms 一次
         val storm = KeyFrameStorm()
         val results = (0 until 4).map { storm.record(1_000L + it * 300L) }
-        assertEquals(listOf(false, false, false, true), results)
+        assertEquals(
+            listOf(KeyFrameStorm.Level.NONE, KeyFrameStorm.Level.NONE, KeyFrameStorm.Level.NONE, KeyFrameStorm.Level.BURST),
+            results,
+        )
+    }
+
+    @Test
+    fun steadyOncePerSecondBecomesSustained() {
+        // 帕萨特 2026-11-01 21:45：CarWith 与车机流同为 1280×720，约 0.9 次/秒、整轮不停
+        val storm = KeyFrameStorm()
+        val levels = (0 until 7).map { storm.record(it * 1_100L) }
+        assertTrue(levels.take(5).all { it == KeyFrameStorm.Level.NONE })
+        assertEquals(KeyFrameStorm.Level.SUSTAINED, levels[5])
+        assertTrue(TranscodePolicy.shouldTranscode(levels[5], sizeMismatch = false))
     }
 
     @Test
     fun occasionalKeyFrameRequestsAreNotAStorm() {
-        // 宝马 iD9 起步一次；或每秒一次的零星请求
+        // 宝马 iD9 / 奇瑞 / 软件接收端：起步一两次，此后偶发
         val storm = KeyFrameStorm()
-        assertFalse(storm.record(0L))
-        assertFalse(storm.record(1_000L))
-        assertFalse(storm.record(2_000L))
-        assertFalse(storm.record(3_000L))
-        assertFalse(storm.record(4_000L))
+        for (at in listOf(0L, 1_000L, 2_000L, 15_000L, 30_000L, 45_000L, 60_000L)) {
+            assertEquals(KeyFrameStorm.Level.NONE, storm.record(at))
+        }
+    }
+
+    @Test
+    fun burstNeedsSizeMismatchButSustainedDoesNot() {
+        assertTrue(TranscodePolicy.shouldTranscode(KeyFrameStorm.Level.BURST, sizeMismatch = true))
+        assertFalse(TranscodePolicy.shouldTranscode(KeyFrameStorm.Level.BURST, sizeMismatch = false))
+        assertTrue(TranscodePolicy.shouldTranscode(KeyFrameStorm.Level.SUSTAINED, sizeMismatch = false))
+        assertFalse(TranscodePolicy.shouldTranscode(KeyFrameStorm.Level.NONE, sizeMismatch = true))
     }
 
     @Test

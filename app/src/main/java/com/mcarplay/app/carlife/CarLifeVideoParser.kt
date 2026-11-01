@@ -245,13 +245,33 @@ internal fun annexBStartCodes(data: ByteArray): List<Pair<Int, Int>> {
  * Reads the unsigned Exp-Golomb value immediately after the one-byte NAL
  * header. Emulation-prevention bytes are removed from the small prefix only.
  */
-internal fun firstMbInSlice(nal: ByteArray): Int? {
+internal fun firstMbInSlice(nal: ByteArray): Int? = sliceHeaderUe(nal, index = 0)
+
+/** slice_type（0–9；%5：0=P 1=B 2=I 3=SP 4=SI），只解析切片头前缀。 */
+internal fun sliceType(nal: ByteArray): Int? = sliceHeaderUe(nal, index = 1)
+
+private fun sliceHeaderUe(
+    nal: ByteArray,
+    index: Int,
+): Int? {
     if (nal.size < 2) return null
     val type = nal[0].toInt() and 0x1F
     if (type != 1 && type != 5) return null
-    val rbsp = ByteArrayOutputStream()
+    val bits = BitReader(unescapeRbsp(nal, limit = 32))
+    return runCatching {
+        repeat(index) { bits.readUe() }
+        bits.readUe()
+    }.getOrNull()
+}
+
+/** 去掉 NAL 头与 emulation prevention 字节（[limit] 为最多读取的原始字节数）。 */
+private fun unescapeRbsp(
+    nal: ByteArray,
+    limit: Int = nal.size,
+): ByteArray {
+    val rbsp = ByteArrayOutputStream(nal.size)
     var zeros = 0
-    for (index in 1 until minOf(nal.size, 32)) {
+    for (index in 1 until minOf(nal.size, limit)) {
         val value = nal[index].toInt() and 0xFF
         if (zeros >= 2 && value == 3) {
             zeros = 0
@@ -260,55 +280,77 @@ internal fun firstMbInSlice(nal: ByteArray): Int? {
         rbsp.write(value)
         zeros = if (value == 0) zeros + 1 else 0
     }
-    val bytes = rbsp.toByteArray()
-    var bit = 0
+    return rbsp.toByteArray()
+}
 
-    fun readBit(): Int? {
-        if (bit >= bytes.size * 8) return null
-        val value = (bytes[bit / 8].toInt() ushr (7 - bit % 8)) and 1
-        bit++
-        return value
-    }
-    var leadingZeros = 0
-    while (true) {
-        when (readBit()) {
-            null -> return null
-            1 -> break
-            else -> {
-                leadingZeros++
-                if (leadingZeros >= 32) return null
-            }
+/**
+ * SPS 中与车机解码兼容性相关的字段（诊断用）。VUI 解析失败时 [vuiParsed] 为 false，
+ * VUI 字段保持 null，尺寸等前段字段仍有效。
+ */
+internal data class SpsInfo(
+    val profileIdc: Int,
+    val constraintFlags: Int,
+    val levelIdc: Int,
+    val chromaFormatIdc: Int,
+    val picOrderCntType: Int,
+    val maxNumRefFrames: Int,
+    val frameMbsOnly: Boolean,
+    val width: Int,
+    val height: Int,
+    val vuiPresent: Boolean,
+    val vuiParsed: Boolean = false,
+    val fullRange: Boolean? = null,
+    val timingFps: Double? = null,
+    val fixedFrameRate: Boolean? = null,
+    val hrdPresent: Boolean? = null,
+    val bitstreamRestriction: Boolean? = null,
+    val maxNumReorderFrames: Int? = null,
+    val maxDecFrameBuffering: Int? = null,
+) {
+    fun describe(): String =
+        buildString {
+            append("profile=$profileIdc constraint=0x%02x level=$levelIdc".format(constraintFlags))
+            append(" chroma=$chromaFormatIdc poc=$picOrderCntType refs=$maxNumRefFrames")
+            append(" frameMbsOnly=${if (frameMbsOnly) 1 else 0} ${width}x$height vui=${if (vuiPresent) 1 else 0}")
+            if (vuiPresent && !vuiParsed) append("(解析失败)")
+            fullRange?.let { append(" fullRange=${if (it) 1 else 0}") }
+            timingFps?.let { append(" timingFps=%.2f".format(it)) }
+            fixedFrameRate?.let { append(" fixedRate=${if (it) 1 else 0}") }
+            hrdPresent?.let { append(" hrd=${if (it) 1 else 0}") }
+            if (bitstreamRestriction == true) append(" reorder=$maxNumReorderFrames dpb=$maxDecFrameBuffering")
+            if (bitstreamRestriction == false) append(" reorder=未声明")
         }
-    }
-    var value = 1
-    repeat(leadingZeros) {
-        val next = readBit() ?: return null
-        value = (value shl 1) or next
-    }
-    return value - 1
+}
+
+/** PPS 中与解码兼容性相关的字段（诊断用）；[transform8x8] 为 null 表示 PPS 无扩展段。 */
+internal data class PpsInfo(
+    val cabac: Boolean,
+    val sliceGroups: Int,
+    val numRefIdxL0: Int,
+    val numRefIdxL1: Int,
+    val weightedPred: Boolean,
+    val weightedBipredIdc: Int,
+    val transform8x8: Boolean?,
+) {
+    fun describe(): String =
+        "cabac=${if (cabac) 1 else 0} sliceGroups=$sliceGroups refIdx=$numRefIdxL0/$numRefIdxL1 " +
+            "weighted=${if (weightedPred) 1 else 0}/$weightedBipredIdc " +
+            "8x8=${transform8x8?.let { if (it) 1 else 0 } ?: "无"}"
 }
 
 /** Parse pic_width_in_mbs/pic_height_in_map_units from a baseline/high SPS. */
-internal fun spsDimensions(sps: ByteArray): Pair<Int, Int>? {
+internal fun spsDimensions(sps: ByteArray): Pair<Int, Int>? = parseSps(sps)?.let { it.width to it.height }
+
+internal fun parseSps(sps: ByteArray): SpsInfo? {
     if (sps.size < 4) return null
-    val rbsp = ArrayList<Byte>(sps.size)
-    var zeros = 0
-    for (index in 1 until sps.size) {
-        val value = sps[index].toInt() and 0xFF
-        if (zeros >= 2 && value == 3) {
-            zeros = 0
-            continue
-        }
-        rbsp += value.toByte()
-        zeros = if (value == 0) zeros + 1 else 0
-    }
     return runCatching {
-        val bits = BitReader(rbsp.toByteArray())
-        bits.skip(24) // profile_idc, constraint flags, level_idc
+        val bits = BitReader(unescapeRbsp(sps))
+        val profile = bits.readBits(8)
+        val constraints = bits.readBits(8)
+        val level = bits.readBits(8)
         bits.readUe() // seq_parameter_set_id
         var chromaFormatIdc = 1
         var separateColourPlane = 0
-        val profile = sps[1].toInt() and 0xFF
         if (profile in HIGH_PROFILES) {
             chromaFormatIdc = bits.readUe()
             if (chromaFormatIdc == 3) separateColourPlane = bits.readBit()
@@ -340,7 +382,7 @@ internal fun spsDimensions(sps: ByteArray): Pair<Int, Int>? {
             bits.readSe()
             repeat(bits.readUe()) { bits.readSe() }
         }
-        bits.readUe() // max_num_ref_frames
+        val maxNumRefFrames = bits.readUe()
         bits.skip(1) // gaps_in_frame_num_value_allowed_flag
         val widthMbs = bits.readUe() + 1
         val heightMapUnits = bits.readUe() + 1
@@ -364,7 +406,108 @@ internal fun spsDimensions(sps: ByteArray): Pair<Int, Int>? {
         val cropUnitY = if (chromaArrayType == 0) (2 - frameMbsOnly) else subHeightC * (2 - frameMbsOnly)
         val width = widthMbs * 16 - (cropLeft + cropRight) * cropUnitX
         val height = (2 - frameMbsOnly) * heightMapUnits * 16 - (cropTop + cropBottom) * cropUnitY
-        width to height
+        val base =
+            SpsInfo(
+                profileIdc = profile,
+                constraintFlags = constraints,
+                levelIdc = level,
+                chromaFormatIdc = chromaFormatIdc,
+                picOrderCntType = picOrderCntType,
+                maxNumRefFrames = maxNumRefFrames,
+                frameMbsOnly = frameMbsOnly == 1,
+                width = width,
+                height = height,
+                vuiPresent = bits.hasMore() && bits.readBit() == 1,
+            )
+        if (base.vuiPresent) runCatching { parseVui(bits, base) }.getOrDefault(base) else base
+    }.getOrNull()
+}
+
+private fun parseVui(
+    bits: BitReader,
+    base: SpsInfo,
+): SpsInfo {
+    if (bits.readBit() == 1) { // aspect_ratio_info_present_flag
+        if (bits.readBits(8) == 255) bits.skip(32) // Extended_SAR: sar_width, sar_height
+    }
+    if (bits.readBit() == 1) bits.skip(1) // overscan_info_present → overscan_appropriate
+    var fullRange: Boolean? = null
+    if (bits.readBit() == 1) { // video_signal_type_present_flag
+        bits.skip(3) // video_format
+        fullRange = bits.readBit() == 1
+        if (bits.readBit() == 1) bits.skip(24) // colour primaries / transfer / matrix
+    }
+    if (bits.readBit() == 1) { // chroma_loc_info_present_flag
+        bits.readUe()
+        bits.readUe()
+    }
+    var timingFps: Double? = null
+    var fixedFrameRate: Boolean? = null
+    if (bits.readBit() == 1) { // timing_info_present_flag
+        val unitsInTick = bits.readBits(32).toLong() and 0xFFFFFFFFL
+        val timeScale = bits.readBits(32).toLong() and 0xFFFFFFFFL
+        fixedFrameRate = bits.readBit() == 1
+        if (unitsInTick > 0) timingFps = timeScale.toDouble() / (2.0 * unitsInTick)
+    }
+    val nalHrd = bits.readBit() == 1
+    if (nalHrd) skipHrd(bits)
+    val vclHrd = bits.readBit() == 1
+    if (vclHrd) skipHrd(bits)
+    if (nalHrd || vclHrd) bits.skip(1) // low_delay_hrd_flag
+    bits.skip(1) // pic_struct_present_flag
+    val restriction = bits.readBit() == 1
+    var reorder: Int? = null
+    var dpb: Int? = null
+    if (restriction) {
+        bits.skip(1) // motion_vectors_over_pic_boundaries_flag
+        repeat(4) { bits.readUe() } // max_bytes_per_pic / max_bits_per_mb / log2_max_mv_length h/v
+        reorder = bits.readUe()
+        dpb = bits.readUe()
+    }
+    return base.copy(
+        vuiParsed = true,
+        fullRange = fullRange,
+        timingFps = timingFps,
+        fixedFrameRate = fixedFrameRate,
+        hrdPresent = nalHrd || vclHrd,
+        bitstreamRestriction = restriction,
+        maxNumReorderFrames = reorder,
+        maxDecFrameBuffering = dpb,
+    )
+}
+
+private fun skipHrd(bits: BitReader) {
+    val cpbCount = bits.readUe() + 1
+    bits.skip(8) // bit_rate_scale, cpb_size_scale
+    repeat(cpbCount) {
+        bits.readUe()
+        bits.readUe()
+        bits.skip(1)
+    }
+    bits.skip(20) // four 5-bit delay/offset lengths
+}
+
+internal fun parsePps(pps: ByteArray): PpsInfo? {
+    if (pps.size < 2 || (pps[0].toInt() and 0x1F) != 8) return null
+    return runCatching {
+        val bits = BitReader(unescapeRbsp(pps))
+        bits.readUe() // pic_parameter_set_id
+        bits.readUe() // seq_parameter_set_id
+        val cabac = bits.readBit() == 1
+        bits.skip(1) // bottom_field_pic_order_in_frame_present_flag
+        val sliceGroups = bits.readUe() + 1
+        // 多 slice group（FMO）只出现在 Baseline 扩展场景，后续字段布局复杂：只报组数
+        if (sliceGroups > 1) return@runCatching PpsInfo(cabac, sliceGroups, 0, 0, false, 0, null)
+        val refL0 = bits.readUe() + 1
+        val refL1 = bits.readUe() + 1
+        val weighted = bits.readBit() == 1
+        val bipred = bits.readBits(2)
+        bits.readSe() // pic_init_qp_minus26
+        bits.readSe() // pic_init_qs_minus26
+        bits.readSe() // chroma_qp_index_offset
+        bits.skip(3) // deblocking_filter_control / constrained_intra_pred / redundant_pic_cnt
+        val transform8x8 = if (bits.hasMoreRbspData()) bits.readBit() == 1 else null
+        PpsInfo(cabac, sliceGroups, refL0, refL1, weighted, bipred, transform8x8)
     }.getOrNull()
 }
 
@@ -383,6 +526,21 @@ private class BitReader(
     fun skip(count: Int) {
         require(bit + count <= data.size * 8) { "SPS bitstream ended" }
         bit += count
+    }
+
+    fun readBits(count: Int): Int {
+        var value = 0
+        repeat(count) { value = (value shl 1) or readBit() }
+        return value
+    }
+
+    fun hasMore(): Boolean = bit < data.size * 8
+
+    /** H.264 more_rbsp_data()：当前位置之后除 rbsp_stop_one_bit 与补零外是否还有数据。 */
+    fun hasMoreRbspData(): Boolean {
+        var last = data.size * 8 - 1
+        while (last >= bit && (data[last / 8].toInt() ushr (7 - last % 8)) and 1 == 0) last--
+        return last > bit
     }
 
     fun readUe(): Int {

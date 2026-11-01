@@ -798,9 +798,15 @@ object SessionController {
         // `_carplay-ctrl._tcp`，之后每 1s force_announce，收到车机邀请才建 AirPlay）。
         // 我们此前要等 0x5703 才注册，导致「车机发现手机」这一步总落在热点绑定之后，
         // 每轮多花 1~3 秒；现在启动连接即发布，换网时 ensureForNetwork 会自动重注册。
-        ctrlAdvertiser?.resetInviteCount()
-        inviteRetryCount = 0
-        forceKeyFrameCount = 0
+        // 会话进行中再次调用（如上车自动连接在车机蓝牙重连时触发）不得清零：邀请时刻与重试次数
+        // 还在被当前会话使用（帕萨特 2026-11-01 21:45：RECORD 后蓝牙断开 4.5 s 又连上，计数被中途清零）
+        if (!alreadyRunning) {
+            ctrlAdvertiser?.resetInviteCount()
+            inviteRetryCount = 0
+            forceKeyFrameCount = 0
+        } else {
+            appendLog("SESSION: 会话已在运行——沿用当前会话，不清零邀请与要帧计数")
+        }
         // 后台发布：start() 首次要向 Shizuku 解析真实蓝牙 MAC（shell），不能在主线程做
         Bg.run("ctrl-publish") { ctrlAdvertiser?.start() }
         // 真车路径：手机主动连车机（SDP …caff 配件服务）
@@ -2486,7 +2492,8 @@ object SessionController {
                 return@execute
             }
             val asserted = client.assertModes()
-            val keyFrame = requestKeyFrame && videoSender?.requestKeyFrame() == true
+            // 自己补的 I 帧不计入车机要帧风暴（用户连点图标不能被当成解码失败）
+            val keyFrame = requestKeyFrame && videoSender?.requestKeyFrame(fromReceiver = false) == true
             appendLog(
                 "EVENT: $reason → modesChanged " + (if (asserted) "已应答" else "失败") +
                     if (requestKeyFrame) "，关键帧" + (if (keyFrame) "已请求" else "未就绪") else "",
@@ -3142,15 +3149,19 @@ object SessionController {
                                         // 车机解不出画面时会要 I 帧。必须立即响应：
                                         // 拖到下一个周期 I 帧（1s）车机可能一直卡在等帧状态。
                                         // 帕萨特 2025 解不了透传流时每 ~300ms 要一次，一轮几百条——限流记录。
-                                        val forced = videoSender?.requestKeyFrame() == true
+                                        val sender = videoSender
+                                        val forced = sender?.requestKeyFrame() == true
                                         forceKeyFrameCount++
                                         if (forceKeyFrameCount <= 3 || forceKeyFrameCount % 20 == 0) {
+                                            val gap = sender?.lastReceiverRequestIdrGapMs
                                             appendLog(
-                                                "EVENT: 车机请求关键帧（forceKeyFrame，第 $forceKeyFrameCount 次）→ " +
+                                                "EVENT: 车机请求关键帧（forceKeyFrame，第 $forceKeyFrameCount 次" +
+                                                    (if (gap != null) "，距上个已发 IDR ${gap}ms" else "") + "）→ " +
                                                     when {
                                                         !forced -> "源未就绪，等周期 I 帧"
-                                                        videoSender?.isExternalPassthrough == true ->
+                                                        sender?.isExternalPassthrough == true ->
                                                             "已向 CarWith 请求（透传源不保证立即出 I 帧）"
+                                                        sender?.isTranscoding == true -> "已强制编码 I 帧（转码输出）"
                                                         else -> "已强制编码 I 帧"
                                                     },
                                             )

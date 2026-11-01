@@ -3,9 +3,13 @@ package com.mcarplay.app.video
 /**
  * 何时把 CarWith 透传流改为手机端转码（纯函数，单测钉死）。
  *
- * 只在「尺寸与车机流不符」且「车机连续要关键帧」同时成立时切换：DiPlay、奇瑞等
- * 接收端对尺寸不符的透传流照常出画，不该为它们引入转码的延迟与画质损失；
- * 帕萨特 2025（VW4211）则每 ~300ms 要一次关键帧，这是解码持续失败的信号。
+ * 两种触发：
+ * - 「尺寸与车机流不符」且短时密集要关键帧（[KeyFrameStorm.Level.BURST]）：帕萨特 2025（VW4211）
+ *   在 CarWith 输出 1920×1140 时每 ~300ms 要一次。DiPlay、奇瑞等接收端对尺寸不符的透传流照常出画，
+ *   不该只因尺寸不符就转码。
+ * - 持续要关键帧（[KeyFrameStorm.Level.SUSTAINED]），不论尺寸：同一台帕萨特 2026-11-01 21:45 在
+ *   CarWith 输出与车机流同为 1280×720 时仍约每秒要一次、持续整轮，用户反复点 CarPlay 图标、无任何触控，
+ *   说明解码失败不只由尺寸引起。宝马 iD9、奇瑞、软件接收端整轮只要 1 次，不会触发。
  */
 internal object TranscodePolicy {
     fun needsTranscode(
@@ -15,6 +19,16 @@ internal object TranscodePolicy {
         streamHeight: Int,
     ): Boolean = sourceWidth > 0 && sourceHeight > 0 && (sourceWidth != streamWidth || sourceHeight != streamHeight)
 
+    fun shouldTranscode(
+        storm: KeyFrameStorm.Level,
+        sizeMismatch: Boolean,
+    ): Boolean =
+        when (storm) {
+            KeyFrameStorm.Level.SUSTAINED -> true
+            KeyFrameStorm.Level.BURST -> sizeMismatch
+            KeyFrameStorm.Level.NONE -> false
+        }
+
     /** 转码编码帧率：不超过车机 /info 的 maxFPS（未声明时为 0，沿用目标帧率）。 */
     fun cappedFps(
         targetFps: Int,
@@ -23,20 +37,29 @@ internal object TranscodePolicy {
 }
 
 /**
- * 「车机连续要关键帧」检测：[windowMillis] 内达到 [threshold] 次即判为解码失败风暴。
- * 宝马 iD9 会话起步时只要 1 次（正常现象）；帕萨特 2025 约 3 次/秒、持续不停。
+ * 「车机连续要关键帧」检测，只记车机的 `forceKeyFrame`（我们自己因 requestUI 补的 I 帧不算）。
+ * - [burstThreshold] 次 / [burstWindowMillis]：短时密集（帕萨特 1920×1140 透传时约 3 次/秒）。
+ * - [sustainedThreshold] 次 / [sustainedWindowMillis]：持续不停（帕萨特 1280×720 透传时约 0.9 次/秒）。
+ * 两个阈值都来自单车现场观察，不是协议常量。
  */
 internal class KeyFrameStorm(
-    private val threshold: Int = 4,
-    private val windowMillis: Long = 2_000L,
+    private val burstThreshold: Int = 4,
+    private val burstWindowMillis: Long = 2_000L,
+    private val sustainedThreshold: Int = 6,
+    private val sustainedWindowMillis: Long = 10_000L,
 ) {
+    enum class Level { NONE, BURST, SUSTAINED }
+
     private val recent = ArrayDeque<Long>()
 
     @Synchronized
-    fun record(nowMillis: Long): Boolean {
+    fun record(nowMillis: Long): Level {
         recent.addLast(nowMillis)
-        while (recent.isNotEmpty() && nowMillis - recent.first() > windowMillis) recent.removeFirst()
-        return recent.size >= threshold
+        val horizon = maxOf(burstWindowMillis, sustainedWindowMillis)
+        while (recent.isNotEmpty() && nowMillis - recent.first() > horizon) recent.removeFirst()
+        if (recent.count { nowMillis - it <= sustainedWindowMillis } >= sustainedThreshold) return Level.SUSTAINED
+        if (recent.count { nowMillis - it <= burstWindowMillis } >= burstThreshold) return Level.BURST
+        return Level.NONE
     }
 }
 

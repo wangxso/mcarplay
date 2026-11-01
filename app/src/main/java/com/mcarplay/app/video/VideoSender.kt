@@ -98,6 +98,15 @@ class VideoSender(
     private val transcodeClaimed = AtomicBoolean(false)
     private val keyFrameStorm = KeyFrameStorm()
 
+    /** 透传码流特征与车机要帧时序（诊断）；会话结束时汇总一行。 */
+    private val streamStats = PassthroughStreamStats()
+    private val streamStatsLogged = AtomicBoolean(false)
+
+    /** 最近一次车机 `forceKeyFrame` 距上一个已发 IDR 的毫秒数（null = 尚无 IDR）。 */
+    @Volatile
+    var lastReceiverRequestIdrGapMs: Long? = null
+        private set
+
     /** 透传线程与转码编码线程都会在退出时收尾：onEnded 只通知一次。 */
     private val endedNotified = AtomicBoolean(false)
 
@@ -297,6 +306,9 @@ class VideoSender(
             inputSurface = null
         }
         releaseVideoResources(active, codec, surface)
+        if (externalVideoSource != null && streamStatsLogged.compareAndSet(false, true)) {
+            log("VIDEO: 透传码流统计（会话结束）${streamStats.summary()}")
+        }
     }
 
     /** 先停转码（停止往编码器 Surface 渲染），再释放编码器与其输入 Surface。 */
@@ -317,17 +329,30 @@ class VideoSender(
      * 车机解不出画面时会反复要 I 帧；我们本身每秒一个，但**要帧请求必须立即响应**——
      * 否则车机可能一直卡在「等下一个 I 帧」的状态，表现就是「连上了但没画面」
      * （宝马 iD9 2026-10-20 实测：会话刚起时收到一次 forceKeyFrame）。
+     *
+     * [fromReceiver] = false 表示我们自己补的 I 帧（如 requestUI 后），不计入要帧风暴与诊断统计。
      */
-    fun requestKeyFrame(): Boolean {
+    fun requestKeyFrame(fromReceiver: Boolean = true): Boolean {
+        if (fromReceiver && externalVideoSource != null) {
+            lastReceiverRequestIdrGapMs =
+                streamStats.onReceiverKeyFrameRequest(android.os.SystemClock.uptimeMillis(), transcoding = transcoder != null)
+        }
         if (externalVideoSource != null && transcoder == null) {
-            if (!transcodeClaimed.get() &&
-                keyFrameStorm.record(android.os.SystemClock.uptimeMillis()) &&
-                TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight) &&
+            val storm =
+                if (fromReceiver && !transcodeClaimed.get()) {
+                    keyFrameStorm.record(android.os.SystemClock.uptimeMillis())
+                } else {
+                    KeyFrameStorm.Level.NONE
+                }
+            if (TranscodePolicy.shouldTranscode(
+                    storm,
+                    TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight),
+                ) &&
                 transcodeClaimed.compareAndSet(false, true)
             ) {
                 // 建编码器 + EGL 最长数秒：不能占用车机事件读取线程（2026-11-01 审查），
                 // 后台只起这一次；准备期间关键帧请求仍转给 CarWith
-                Thread({ startTranscoding() }, "video-transcode-start").apply {
+                Thread({ startTranscoding(storm) }, "video-transcode-start").apply {
                     isDaemon = true
                     start()
                 }
@@ -382,12 +407,19 @@ class VideoSender(
      * 失败则保持透传。
      */
     @Synchronized
-    private fun startTranscoding() {
+    private fun startTranscoding(storm: KeyFrameStorm.Level) {
         if (!running.get()) return
         val fps = TranscodePolicy.cappedFps(targetFps, receiverMaxFps)
+        val reason =
+            if (TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)) {
+                "CarWith ${sourceWidth}x$sourceHeight 与车机流 ${streamWidth}x$streamHeight 不符，"
+            } else {
+                "CarWith ${sourceWidth}x$sourceHeight 与车机流尺寸一致，"
+            }
+        val cadence = if (storm == KeyFrameStorm.Level.SUSTAINED) "持续" else "密集"
         log(
-            "VIDEO: CarWith ${sourceWidth}x$sourceHeight 与车机流 ${streamWidth}x$streamHeight 不符，" +
-                "且车机连续要关键帧（透传解不出画）——切换为手机端转码 ${streamWidth}x$streamHeight@$fps",
+            "VIDEO: $reason" + "且车机${cadence}要关键帧（透传解不出画）——切换为手机端转码 ${streamWidth}x$streamHeight@$fps" +
+                "\n  ↳ 切换前透传统计：${streamStats.summary()}",
         )
         var codec: MediaCodec? = null
         var surface: Surface? = null
@@ -453,13 +485,18 @@ class VideoSender(
                 val pps = nalUnits.firstOrNull { it.isNotEmpty() && (it[0].toInt() and 0x1F) == 8 }
                 if (sps != null && pps != null) {
                     val config = buildAvcC(sps, pps)
-                    if (!config.contentEquals(cachedVideoConfig)) {
-                        sendVideoConfigBytes(config, output)
+                    if (!config.contentEquals(cachedVideoConfig) && sendVideoConfigBytes(config, output)) {
+                        log(
+                            "VIDEO: CarWith 参数集 ${PassthroughStreamStats.describeParameterSets(sps, pps)}" +
+                                "（发出时 level 补丁为 ${config[3].toInt() and 0xFF}）",
+                        )
                     }
                 }
                 if (!configSent) continue
                 val packed = packLengthPrefixed(nalUnits)
-                sendPlainFrame(packed, frame.keyFrame, output)
+                if (!sendPlainFrame(packed, frame.keyFrame, output)) continue
+                streamStats.onFrameSent(nalUnits, frame.keyFrame, android.os.SystemClock.uptimeMillis())
+                if (framesSent == STREAM_STATS_EARLY_FRAMES) log("VIDEO: 透传码流统计（前 $framesSent 帧）${streamStats.summary()}")
                 runCatching { onExternalFrameSent?.invoke(packed.size) }
                 maybeSendKeepAlive(output)
             }
@@ -507,29 +544,32 @@ class VideoSender(
             }.toByteArray()
     }
 
+    /** 返回是否已发出（已切换转码时丢弃）。 */
     private fun sendVideoConfigBytes(
         avcC: ByteArray,
         output: java.io.OutputStream,
-    ): Unit =
+    ): Boolean =
         synchronized(writeLock) {
             // 已切换转码：透传线程在切换前取到的旧配置不得混进新流
-            if (transcoder != null) return@synchronized
+            if (transcoder != null) return@synchronized false
             output.write(buildVideoConfigHeader(avcC.size, width, height))
             output.write(avcC)
             output.flush()
             cachedVideoConfig = avcC
             configSent = true
             log("VIDEO: ✓ CarWith VideoConfig 已发送 avcC=${avcC.size}B ${width}x$height")
+            true
         }
 
+    /** 返回是否已发出（已切换转码时丢弃）。 */
     private fun sendPlainFrame(
         plain: ByteArray,
         keyFrame: Boolean,
         output: java.io.OutputStream,
-    ): Unit =
+    ): Boolean =
         synchronized(writeLock) {
             // 已切换转码：透传线程在切换前取到的旧格式帧不得跨配置发出
-            if (transcoder != null) return@synchronized
+            if (transcoder != null) return@synchronized false
             val header =
                 buildHeader(
                     OP_FRAME,
@@ -556,6 +596,7 @@ class VideoSender(
             if (keyFrame || framesSent <= 3 || framesSent % 150 == 0L) {
                 log("VIDEO: CarWith 帧 #$framesSent ${plain.size}B${if (keyFrame) " (key)" else ""} 已发送")
             }
+            true
         }
 
     private fun drainEncoder() {
@@ -676,7 +717,8 @@ class VideoSender(
                 "VIDEO: ✓ VideoConfig 已发送 avcC=${body.size}B（SPS ${rawSps.size}B/PPS ${pps.size}B，" +
                     "profile=${rawSps[1].toInt() and 0xFF} level=${rawSps[3].toInt() and 0xFF} " +
                     "flags=0x%02x ${width}x$height）".format(header[6].toInt() and 0xFF) +
-                    "\n  ↳ 头部前 24 字节=" + header.take(24).joinToString(" ") { "%02x".format(it) },
+                    "\n  ↳ 头部前 24 字节=" + header.take(24).joinToString(" ") { "%02x".format(it) } +
+                    "\n  ↳ 参数集 ${PassthroughStreamStats.describeParameterSets(rawSps, pps)}",
             )
             cachedVideoConfig = body
         }
@@ -787,6 +829,9 @@ class VideoSender(
         private const val OP_KEEP_ALIVE = 2
         private const val OP_KEEP_ALIVE_WITH_BODY = 5
         private const val TAG_SIZE = 16
+
+        /** 透传前这么多帧后先记一次码流统计（会话可能在车机无画面时被用户中途停掉）。 */
+        private const val STREAM_STATS_EARLY_FRAMES = 300L
 
         /**
          * 头部位标志（catplay `ScreenFlag`）：写进 `small_param[1]`（头部偏移 6）。
