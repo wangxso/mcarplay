@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="raw_diagnostics_title">完整诊断导出（未脱敏）</string>
+    <string name="raw_diagnostics_notice">此 remote debug 版用于深入排障。运行日志和导出报告不做脱敏，包含手机/车机名称、蓝牙/MAC/IP 地址、热点与网络详情、组件权限、线程和原始系统异常，也可能包含日志中已有的热点密码及配对/会话信息。\n\n连接调试桥后，运行日志会持续发送至您配置的调试服务器。导出文件由您自行分享，请仅提供给已确认的排障人员。</string>
+    <string name="raw_diagnostics_export_confirm">知晓并导出完整报告</string>
+</resources>

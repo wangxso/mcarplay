@@ -17,6 +17,7 @@ import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.net.EndpointHosts
 import com.mcarplay.app.net.TcpLiveness
+import com.mcarplay.app.net.WifiMacResolver
 import com.mcarplay.app.util.DeviceIdentity
 import java.io.IOException
 import java.net.Inet6Address
@@ -226,6 +227,14 @@ class AirPlayClient(
     /** RECORD 和网络 iAP 认证均完成，软件接收端才可在首帧前释放蓝牙。 */
     val networkHandoffReady: Boolean get() = recordAccepted && networkIapAuthenticated
 
+    /** 本连接已请求车机关蓝牙（[releaseReceiverBluetooth]），随后的蓝牙断开属预期。 */
+    @Volatile
+    var bluetoothReleaseRequested = false
+        private set
+
+    /** 会话已激活且控制通道仍在：只有这时 [stopLikeIphone] 的 TEARDOWN 才有对象。 */
+    val sessionActive: Boolean get() = recordAccepted && socket?.isClosed == false
+
     fun receiverCompatibility(): ReceiverCompatibility.Policy {
         val current = endpoint
         val info = negotiatedInfo
@@ -382,6 +391,10 @@ class AirPlayClient(
                 // 见 pairingForbidden 注释：标记后主控不再断 BT / 不降级明文
                 if (message.contains("403")) pairingForbidden = true
                 log("AIRPLAY: 配对第 $attempt 次尝试失败 - $message")
+                if (!iphonePairingTypeFailed && receiverCompatibility().iphoneAuthSequence) {
+                    iphonePairingTypeFailed = true
+                    log("AIRPLAY: X-Apple-HKP: 0 下配对失败——后续尝试回退为 2")
+                }
                 if (PAIRING_UNSUPPORTED_STATUS.any { message.contains(it) }) {
                     pairingUnsupported = true
                     log("AIRPLAY: 接收端不提供 HomeKit 配对通道——停止重试，转明文会话（et=NONE）")
@@ -397,6 +410,42 @@ class AirPlayClient(
         log("AIRPLAY: 配对最终失败（接收端 RTSP 无应答）")
         return null
     }
+
+    /** iPhone 序列下 HKP 0 配对失败过：本客户端后续配对回退为 2（Apple 客户端/catplay 的常用值）。 */
+    @Volatile
+    private var iphonePairingTypeFailed = false
+
+    private fun pairingTypeHeader(): String = if (!iphonePairingTypeFailed && receiverCompatibility().iphoneAuthSequence) "0" else "2"
+
+    /**
+     * iPhone 同款会话内 MFi 认证（`POST /auth-setup`，MFi-SAP）：请求体为版本 0x01 + 本端 X25519 公钥，
+     * 应答为车机 X25519 公钥 + 证书长度/证书 + 签名长度/签名。只记录应答结构、不校验证书，失败或超时不影响会话。
+     * 车机签名要读 MFi 芯片（iPhone 实测约 0.4 s；芯片偶发挂起时更久），故单独给 [AUTH_SETUP_TIMEOUT_MILLIS]。
+     */
+    private fun runAuthSetup() {
+        if (cipher == null) {
+            log("AIRPLAY: 未加密会话——跳过 auth-setup")
+            return
+        }
+        val startedAt = SystemClock.uptimeMillis()
+        try {
+            val body = byteArrayOf(0x01) + AirPlayCrypto.x25519Generate().publicKey
+            val (statusLine, response) =
+                request("POST", "/auth-setup", body, timeoutMillis = AUTH_SETUP_TIMEOUT_MILLIS)
+            val elapsed = SystemClock.uptimeMillis() - startedAt
+            log("AIRPLAY: auth-setup [$statusLine] ${response.size}B ${elapsed}ms ${describeAuthSetupResponse(response)}")
+        } catch (error: IOException) {
+            log("AIRPLAY: auth-setup 失败（${SystemClock.uptimeMillis() - startedAt}ms）- ${error.message}——继续 SETUP")
+        }
+    }
+
+    /** iPhone 同款客户端头（策略 [ReceiverCompatibility.Policy.sendAppleClientHeaders]）；不需要时为空串。 */
+    private fun appleClientHeaders(): String =
+        if (receiverCompatibility().sendAppleClientHeaders) {
+            "X-Apple-Client-Name: $SENDER_CLIENT_NAME\r\nX-Apple-ProtocolVersion: 1\r\n"
+        } else {
+            ""
+        }
 
     /** 拉取并解析 /info（注意：接收端在活跃会话期间可能不应答）。 */
     fun fetchInfo(timeoutMillis: Int = 5_000): Map<*, *>? {
@@ -536,6 +585,7 @@ class AirPlayClient(
             mib3ControlSessionDone = false
             mib3LinkArmed = false
         }
+        bluetoothReleaseRequested = false
         runCatching { socket?.close() }
         socket = null
         activeHost = null
@@ -741,6 +791,95 @@ class AirPlayClient(
     }
 
     /**
+     * 请车机关闭自身蓝牙（控制通道 POST /command `disableBluetooth`，参数 `deviceID`=本机蓝牙地址）。
+     *
+     * 2026-11-02 艾瑞泽 8 车机日志：真 iPhone 每次会话开始约 0.1–0.6 s 发出，车机
+     * `_AirPlayHandleSessionControl` → `CarplayService_DisableBluetooth` 后关掉整个蓝牙适配器，断开后再恢复。
+     * 类型串与参数键取自车机 libcarplayserver 静态字符串；请求体按 modesChanged 同款信封，未抓到 iPhone 原文。
+     * 先置位再发：车机约 70 ms 内就关蓝牙，晚于应答置位会让蓝牙断开先被当成下车。
+     */
+    fun releaseReceiverBluetooth(): Boolean {
+        val deviceId = setupDeviceId()
+        if (deviceId == DeviceIdentity.PLACEHOLDER_MAC) {
+            log("AIRPLAY: 未取得本机蓝牙地址——不发 disableBluetooth（车机蓝牙保持）")
+            return false
+        }
+        bluetoothReleaseRequested = true
+        val body = disableBluetoothBody(deviceId)
+        return try {
+            val (statusLine, _) =
+                request("POST", "/command", body, timeoutMillis = 3_000, contentType = "application/x-apple-binary-plist")
+            val ok = statusLine.contains("200")
+            if (!ok) bluetoothReleaseRequested = false
+            log("AIRPLAY: disableBluetooth（请车机关蓝牙，iPhone 同款）[$statusLine]")
+            ok
+        } catch (error: IOException) {
+            bluetoothReleaseRequested = false
+            log("AIRPLAY: disableBluetooth 失败 - ${error.message}")
+            false
+        }
+    }
+
+    /** `disableBluetooth` 请求体；deviceID 按车机日志所见的小写冒号格式。 */
+    internal fun disableBluetoothBody(deviceId: String): ByteArray =
+        BinaryPlist.encode(
+            linkedMapOf(
+                "type" to "disableBluetooth",
+                "params" to linkedMapOf<String, Any?>("deviceID" to deviceId.lowercase(java.util.Locale.ROOT)),
+            ),
+        )
+
+    /**
+     * iPhone 同款有序断开（2026-11-02 艾瑞泽 8 车机日志，真 iPhone 关无线局域网时）：
+     *  1. iAP2 `0x4E0D WirelessCarPlayUpdate`=0（不可用），走网络 iAP2 链路；
+     *  2. 约 130 ms 后 TEARDOWN 屏幕流；3. 约 220 ms 后 TEARDOWN 整个会话。
+     * 车机随后记 `Normal_Disconnected` 并自行停 AirPlay 服务。mcarplay 旧做法是直接关全部连接，
+     * 车机走异常路径，20 s 后原厂 `_PerformPeriodTasks` 崩溃（同日复现）。
+     * 必须在后台线程调用（[request] 拒绝主线程）。返回整会话 TEARDOWN 是否得到 200。
+     */
+    fun stopLikeIphone(): Boolean {
+        if (!sessionActive) return false
+        val announced = iapLink?.announceWirelessUnavailable() == true
+        log("AIRPLAY: 有序断开——0x4E0D 无线不可用${if (announced) "已发" else "未发（网络 iAP2 控制会话未建立）"}")
+        if (announced) pauseQuietly(ORDERLY_STOP_STEP_MILLIS)
+        val screenBody =
+            BinaryPlist.encode(
+                linkedMapOf("streams" to listOf(linkedMapOf<String, Any?>("type" to SCREEN_STREAM_TYPE))),
+            )
+        teardown(screenBody, "屏幕流")
+        pauseQuietly(ORDERLY_STOP_STEP_MILLIS)
+        return teardown(ByteArray(0), "会话")
+    }
+
+    private fun teardown(
+        body: ByteArray,
+        label: String,
+    ): Boolean =
+        try {
+            val (statusLine, _) =
+                request(
+                    "TEARDOWN",
+                    "/",
+                    body,
+                    timeoutMillis = TEARDOWN_TIMEOUT_MILLIS,
+                    contentType = "application/x-apple-binary-plist",
+                )
+            log("AIRPLAY: TEARDOWN（$label）[$statusLine]")
+            statusLine.contains("200")
+        } catch (error: IOException) {
+            log("AIRPLAY: TEARDOWN（$label）失败 - ${error.message}")
+            false
+        }
+
+    private fun pauseQuietly(millis: Long) {
+        try {
+            Thread.sleep(millis)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    /**
      * SETUP #1：发送会话信息，接收 eventPort/timingPort/enabledFeatures。
      *
      * features 必须发「完整 iPhone 能力清单」：接收端计算
@@ -762,7 +901,25 @@ class AirPlayClient(
         if (!timingServer.start()) {
             log("AIRPLAY: 计时服务未启动（继续，但媒体时钟无法同步）")
         }
-        val body = buildSessionSetupBody(deviceId, timingServer.port, encrypted = cipher != null)
+        if (policy.iphoneAuthSequence) runAuthSetup()
+        val wifiMac =
+            if (policy.reportWifiMacInSetup) {
+                WifiMacResolver.resolve(socket?.localAddress).also { resolved ->
+                    log(
+                        resolved?.let { "AIRPLAY: SETUP macAddress=本机 Wi-Fi 地址（来源：${it.source}）" }
+                            ?: "AIRPLAY: 未取得本机 Wi-Fi 地址——SETUP macAddress 仍用占位值",
+                    )
+                }
+            } else {
+                null
+            }
+        val body =
+            buildSessionSetupBody(
+                deviceId,
+                timingServer.port,
+                encrypted = cipher != null,
+                macAddress = wifiMac?.mac ?: PLACEHOLDER_WIFI_MAC,
+            )
         log(
             "AIRPLAY: 初始 SETUP body=${body.size}B timingPort=${timingServer.port} " +
                 "deviceID=$deviceId 加密=${if (cipher != null) "是" else "否（et=NONE）"}",
@@ -1310,6 +1467,10 @@ class AirPlayClient(
             log("TUNNEL: 未配对会话没有共享密钥——跳过 iAP 隧道（触摸不可用）")
             return null
         }
+        if (receiverCompatibility().skipIapTunnel) {
+            log("TUNNEL: 该车机不支持 type-130（规则 chery.no-iap-tunnel）——不 SETUP iAP 隧道")
+            return null
+        }
         val host = receiverHost() ?: return null
         val seed = (System.currentTimeMillis() % 0x7FFF_FFFFL) + 1L
         val connectionId = java.security.SecureRandom().nextLong() and Long.MAX_VALUE or 1L
@@ -1464,6 +1625,7 @@ class AirPlayClient(
                         tunnelWriter = { iapTunnel },
                         alive = { socket?.isClosed == false },
                     ).also { created ->
+                        created.pinnedMfiLength = receiverCompatibility().pinnedMfiChallengeLength
                         created.onMediaKey = { keyCode -> onMediaKey?.invoke(keyCode) }
                         created.onNavKey = { keyCode -> onNavKey?.invoke(keyCode) }
                         created.onAuthenticationComplete = {
@@ -1610,6 +1772,15 @@ class AirPlayClient(
         /** 主音频流类型（DiPlay STREAM_TYPE_MAIN_AUDIO；PCM 通路）。 */
         const val AUDIO_STREAM_TYPE = 100L
 
+        /** SETUP `macAddress` 占位（catplay 同款）；只有已登记的车机才换成真实 Wi-Fi 地址。 */
+        const val PLACEHOLDER_WIFI_MAC = "aa:bb:cc:dd:ee:ff"
+
+        /** 有序断开各步间隔：真 iPhone 0x4E0D→屏幕流 TEARDOWN 约 130 ms、→会话 TEARDOWN 约 220 ms。 */
+        const val ORDERLY_STOP_STEP_MILLIS = 150L
+
+        /** 单个 TEARDOWN 等应答上限：车机不回也不能把用户的断开拖住。 */
+        const val TEARDOWN_TIMEOUT_MILLIS = 1_500
+
         /**
          * 高质量主音频流类型（catplay `StreamType::MainHighAudio`）。
          *
@@ -1691,6 +1862,12 @@ class AirPlayClient(
 
         /** 发送端自报的 AirPlay 版本（catplay 真车验证值，iOS 15.0.2 时代；勿用车机的版本）。 */
         private const val SENDER_SOURCE_VERSION = "566.25.21"
+
+        /** auth-setup 应答上限：iPhone 实测车机签名约 0.4 s；不能拖到车机 30 s 连接看门狗。 */
+        private const val AUTH_SETUP_TIMEOUT_MILLIS = 10_000
+
+        /** 会话 SETUP `name` 与 `X-Apple-Client-Name` 共用的客户端名。 */
+        private const val SENDER_CLIENT_NAME = "iPhone"
 
         /**
          * UDP keepAlive 间隔。catplay 用 10s，但那是它自家接收端的口径；真车（奥迪
@@ -2569,7 +2746,7 @@ class AirPlayClient(
     ): ByteArray {
         val extra =
             buildList {
-                add("X-Apple-HKP" to "2")
+                add("X-Apple-HKP" to pairingTypeHeader())
                 if (path.endsWith("pair-verify")) add("X-Apple-PD" to "1")
             }
         val (statusLine, responseBody) =
@@ -2624,6 +2801,7 @@ class AirPlayClient(
                         "CSeq: $cseq\r\n" +
                         "User-Agent: AirPlay/$SENDER_SOURCE_VERSION\r\n" +
                         "Content-Type: $contentType\r\n" +
+                        appleClientHeaders() +
                         extraHeaders.joinToString("") { "${it.first}: ${it.second}\r\n" } +
                         "Content-Length: ${body.size}\r\n" +
                         "\r\n"
@@ -2954,12 +3132,14 @@ class AirPlayClient(
         timingPort: Int,
         /** false = 未配对/未加密会话：必须显式带 `et=NONE`（catplay do_initial_setup 同款）。 */
         encrypted: Boolean = true,
+        /** 本机 Wi-Fi 地址；取不到时沿用 catplay 的占位值。 */
+        macAddress: String = PLACEHOLDER_WIFI_MAC,
     ): ByteArray {
         val fields =
             linkedMapOf<String, Any?>(
                 "deviceID" to deviceId,
-                "macAddress" to "aa:bb:cc:dd:ee:ff",
-                "name" to "iPhone",
+                "macAddress" to macAddress,
+                "name" to SENDER_CLIENT_NAME,
                 "model" to "iPhone14,2",
                 "osName" to "iPhone OS",
                 "osBuildVersion" to "19A404",
@@ -3092,3 +3272,18 @@ class AirPlayClient(
  * 其余失败（端口未开等）保持快速轮询等邀请。
  */
 internal fun pairingRetryBackoffMs(failureMessage: String): Long = if (failureMessage.contains("403")) 5_000L else 500L
+
+/** auth-setup 应答结构：32 字节对端公钥 + 4 字节大端证书长度 + 证书 + 4 字节大端签名长度 + 签名。 */
+internal fun describeAuthSetupResponse(response: ByteArray): String {
+    if (response.size < 36) return "（应答过短）"
+
+    fun lengthAt(offset: Int): Int? =
+        if (offset + 4 > response.size) {
+            null
+        } else {
+            (0 until 4).fold(0) { value, index -> (value shl 8) or (response[offset + index].toInt() and 0xFF) }
+        }
+    val certLength = lengthAt(32)?.takeIf { it in 0..(response.size - 36) } ?: return "（证书长度非法）"
+    val signatureLength = lengthAt(36 + certLength)?.takeIf { 40 + certLength + it == response.size }
+    return "公钥=32B 证书=${certLength}B 签名=${signatureLength?.let { "${it}B" } ?: "长度不符"}"
+}

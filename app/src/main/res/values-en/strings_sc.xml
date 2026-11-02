@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="sc_cancelled">Connection cancelled</string>
+    <string name="sc_disconnecting">Disconnecting (telling the head unit to end the session)…</string>
     <string name="sc_hotspot_lost">Car hotspot disconnected (%1$s)</string>
     <string name="sc_hotspot_lost_hint">Car hotspot \"%1$s\" disconnected; start the connection again</string>
     <string name="sc_bt_ready">Bluetooth ready, waiting for the head unit to connect back…</string>
+    <string name="sc_tap_phone_on_receiver">Waiting for \"%1$s\" to connect back; select this phone on the head unit…</string>
+    <string name="sc_tap_phone_on_receiver_hint">\"%1$s\" does not accept connections from the phone; select this phone in the head unit\'s Bluetooth or CarPlay device list</string>
     <string name="sc_got_credentials">Got the car hotspot credentials, binding Wi-Fi…</string>
     <string name="sc_bind_failed">Joined the car hotspot but could not bind the network; reconnect</string>
     <string name="sc_silent_join">Joining car hotspot %1$s in the background…</string>

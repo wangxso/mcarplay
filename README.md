@@ -138,6 +138,10 @@ processes are included automatically; reopen and export after an unexpected exit
 before reinstalling or clearing app data. No computer or Shizuku is needed, and
 there is no automatic upload. See [diagnostic contents and error codes](docs/DIAGNOSTICS.md).
 
+The `remote/debug` diagnostic build exports **full, unredacted reports** after an on-device notice.
+These can contain real device/network identities, original exceptions and retained session information;
+its configured debug bridge can also stream runtime logs. Standard builds and all release exports stay redacted.
+
 ## Detect and remember a receiver
 
 Select a paired target in **选择设备**, then open **检测当前车机 → 开始检测（含声音）**.

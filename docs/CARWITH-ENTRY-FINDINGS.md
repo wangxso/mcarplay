@@ -740,3 +740,197 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
   - 新包上 4 s 等邀请、音频补启主线程两处问题未再出现：23:22 一轮收到邀请 0 ms 即连入，音频随连接启动。
 - **对应修改（未上车验证）：** 每次 `requestUI` 拿回主屏后，在下一个 CarWith IDR 前重发 VideoConfig，并用解析器缓存给该 IDR 内联 SPS/PPS
   （假设：车机回原车界面时拆掉了解码器，再进入时只等参数集）。拿回 3 s 后记一行「车机触控 +N、要关键帧 +M」，用于区分仲裁未生效与解码失败。
+
+## 奇瑞艾瑞泽 8 雅（2022 款）：手机主动连入全部快速失败、车机未回连（2026-11-02 18:32–18:36，UTC+8，remote 实时日志）
+
+手机小米 `M2102J2SC`，Android 13（SDK 33），HyperOS `OS1.0`，ROM `V816.0.4.0.TGACNXM`；CarWith `4.0.4-20260522`（104000004），
+小米 CarLife `8.6.8`（260）；应用 remote/debug `0.1.3-rd-diag3-debug`。车型由用户确认为 2022 款艾瑞泽 8 雅，用户报车机版本
+「2.0.4」，与 10-31 那台的固件 `M1E_IC2172/82_03_21.387_250619_R` 是否同一版本无法对应。证据为调试桥实时日志，经只读 API 脱敏
+（设备名/地址为占位符），原文不入库。
+
+- **三轮均停在蓝牙阶段**（各约 57 s、39 s、98 s 后由用户取消），没有 iAP2、热点凭据或媒体。每轮都先在本机注册 `…cafe` iAP2 监听与
+  CarPlay 能力 UUID 并开始监听；第三轮注册（18:35:15）早于配对完成（18:35:21），顺序与 10-31 成功路径一致。
+- **车机不提供 `…caff`：** 18:34:37 SDP 实时查询完成（295 ms），8 项服务为 SPP、A2DP 接收、AVRCP、HFP、0x1133（MAP 通知）、
+  `4de17a00-52cb-11e6-bdf4-0800200c9a66`、`ec884348-cd41-40a2-9727-575d50bf1fd3` 及一项 0x0000，与 10-31 那台同样有 `ec884348…` 而无 `…caff`。
+- **手机主动连入 34 次全部失败**（第二轮 6 次、第三轮 28 次），都在 43–127 ms 内 `IOException reason=READ_FAILED readRet=-1`；
+  如此之快与 SDP 找不到服务一致，重试不会改变结果。
+- **车机始终没有回连：** 三轮 `incomingAccepted=0`。日志无法反映用户是否在车机上点选了手机；10-31 的成功均为车机回连，且需用户在车机
+  蓝牙列表手动点手机。
+- **配对不稳定：** 第一轮 `BONDING→NONE`；第二轮 18:34:37 配对完成，18:34:59 断开后到 18:35:15 第三轮开始时目标已不在已配对列表，
+  随后重新配对。应用代码无 `removeBond`，由用户还是车机删除未定。
+- 当时目标未配对，日志在「目标不在已配对列表」后又写「没有已配对的蓝牙设备」，而手机上另有 7 台已配对设备，属误导。
+
+**对应修改（未上车验证）：** 对未声明 `…caff` 的车机，出站在 1 s 内 `READ_FAILED` 后改为等车机回连：带 `ec884348…` 时首次即转，
+否则连续 3 次；之后每 60 s 才试一次出站，不再每 3 s 一次，也不做配置文件断开对照。声明 `…caff` 的车机、较慢或其它原因的失败不受影响；
+帕萨特这类首连成功的车机不会进入此路径。转入时日志与界面提示「请在车机的蓝牙或 CarPlay 设备列表中点选本机」；指定目标未配对时不再
+误报「没有已配对的蓝牙设备」。是否因此连上，需同一车机在完整重启中控、两侧删除配对、先启动 mcarplay、再由车机点选手机后复测。
+
+- **修改包复测（18:53–18:56，remote 日志；测试包 SHA-256 `249f5b4e…`，日志版本串仍为 `0.1.3-rd-diag3-debug`）：** 新逻辑按预期生效——
+  第二、三轮各只在配对后连一次，75 ms / 174 ms `READ_FAILED` 即转入等待并给出提示，第三轮此后只在 60 s 后探测一次（18:56:53，75 ms 失败），
+  不再每 3 s 重试。**车机仍未回连**（`incomingAccepted=0`），能力记录均在配对前注册。配对依旧不稳：第一轮 `BONDING` 持续约 35 s 后随 ACL
+  断开回到 `NONE`；第二轮配对成功，用户取消、车机蓝牙断开后，第三轮开始时目标又不在已配对列表。日志不能说明用户是否在车机上点选了手机、
+  车机是否显示支持无线 CarPlay，也不能说明配对由谁删除。
+
+## 奇瑞艾瑞泽 8（2022 款，10-31 同一辆）：删除配对后首轮出画，用户断开后车机认证与链路无应答（2026-11-02 19:18–19:22，UTC+8，remote 实时日志）
+
+手机小米 `2509FPN0BC`，Android 17（SDK 37），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.23-20261016`（104000023），小米 CarLife `8.8.5`（274）；
+应用 remote/debug `0.1.3-rd-diag3-debug`（`fix/chery-inbound-wait` 测试包）。用户反馈此前删除了车机蓝牙配对，「只在开始连上一次」。
+
+- **第一轮成功：** 19:18:53 车机回连 `…cafe`，MFi 32B 应答、`0x5703`、加入热点、AirPlay 配对/SETUP/RECORD 均完成，19:19:11 发出 CarWith 首帧，
+  约 9 s 内发送 170 帧。19:19:20 以 `USER_STOP` 结束（手机断开按钮或调试桥 `stop_connection`，二者在设备日志中无法区分）。
+- **第二轮（19:21:23 车机回连）：** 链路同步与 `0x1d01` 正常，32/20/16B 三次 MFi 挑战车机都只回链路 ACK、不回 `0xaa03`，之后 `0x5702` 无 `0x5703`，
+  19:21:53 车机关闭 RFCOMM。与 10-31 12:50 原厂崩溃后「认证共享锁」的现象一致。
+- **第三轮（19:22:15 车机回连）：** 手机每 500 ms 发 iAP2 链路 SYN，车机 28 s 内无任何应答，「链路协商超时」。
+- 本轮没有任何车机 ADB 操作；10-31 起对车机的操作仅为重启 CarPlay 服务与经用户授权的中控重启，没有持久改动。
+- 另见：车机回连会话进行中，出站客户端仍按本轮候选列表走到该车机并尝试一次 `…caff`（19:19:12、19:21:39），因为
+  `BtSessionGate` 只在每轮列表开始时检查。该尝试 100 ms 内失败，是否影响车机未知。
+
+## 奇瑞艾瑞泽 8（2022 款，10-31 同一辆）：真 iPhone 无线 CarPlay 的断开时序（2026-11-02 19:49–19:52，UTC+8，车机 ADB logcat）
+
+车机 `G6SH_r8a7795`，Android 9，固件 `M1E_IC2172/82_03_21.387_250619_R`，19:44 刚重启；车机无 root，只取 logcat（main/system/crash），
+原文含定位与设备序列号，仅存本机临时目录，不入库。手机为用户提供的真 iPhone（型号与 iOS 版本未记录）。用户操作：未在 iPhone 上忽略此车时
+连不上，忽略后重新配对；连上后先关 iPhone 蓝牙（会话不受影响），再关无线局域网（会话断开）；之后重新打开两者即自动重连。
+
+- **连接（19:49:4x–19:49:55）：** 车机经蓝牙完成 iAP2 后，iPhone 加入车机热点，车机以 `hostName=iPhone.local.` 连 iPhone 的 ctrl，随后
+  pair-setup/pair-verify、AirPlay MFiSAP，19:49:53.910 `AirPlay session started: From=iPhone … T=WiFi`，19:49:55 屏幕接收启动。
+- **会话中按流拆音频：** 音频结束时 iPhone 单独拆流——19:50:13 `[duer]Teardown` → `Alt audio torn down`，19:50:30 `[duer]Teardown` →
+  `Main audio torn down`，会话与屏幕流保持。
+- **断开时序（19:51:40）：**
+  1. **.141** iAP2 先到（车机蓝牙此时已关，见下，应经 AirPlay 内的 iAP2 隧道）：`SVP_iAP_WirelessCarPlayUpdateCB wirelessCarPlayStatus = 0` → `WirelessCarPlayUpdateStatusCallBack Available=0`，
+     即 `0x4E0D WirelessCarPlayUpdate` 置为不可用。
+  2. **.270–.475** 第一条 `[duer]Teardown`：只拆屏幕流（`ScreenStreamStop` → `_ScreenTearDown` → `Screen thread exit`）。
+  3. **.494** 第二条 `[duer]Teardown`（距上一条约 220 ms）：`HID stopping`、`Main audio torn down`，即整会话拆除。
+  4. **.510–.958** 车机自行收尾：连接状态 `Normal_Disconnected(5)` → `StopWirelessCarPlay` → 注销 `_airplay._tcp`、`AirPlay servers stopped`
+     → `SVP_iAP_DeactivateDevice`。
+  5. **41.345** iPhone 离开车机热点（`AP-STA-DISCONNECTED`）；41.113 车机设置记 `CarPlayDisconnected and setBtEnable`，19:51:44 车机蓝牙适配器
+     状态变化。
+- **会话期间车机关闭自身蓝牙：** 19:49:54.574（会话开始约 0.7 s 后）iPhone ACL 以 `Adapter State: BLE_TURNING_OFF` 断开；会话结束后
+  `CarPlayDisconnected and setBtEnable`，19:51:44 适配器重新开启，蓝牙服务进程号随之变化（19:57 再次变化）。因此关 iPhone 蓝牙不影响会话。
+- **配对身份：** 19:49:45 车机记 `Created AirPlay Pairing Identity`（重启后新建；同日 19:19 mcarplay 读到的 `/info pi` 与之不同），首连走
+  pair-setup；19:55、19:57 重连只走 pair-verify。用户需先在 iPhone 上忽略此车才能连上，与车机身份更换一致（推断）。
+- **只开蓝牙、未开 Wi-Fi（19:54:13–19:54:52）：** iAP2 报 `wirelessCarPlayStatus = 0`，车机状态 6 后停服务，约 39 s 后 ACL 断开。
+- **两者都开即自动重连（19:55:14–19:55:28）：** iAP2 报可用（状态 1）→ iPhone 入热点 → 车机连 `iPhone.local` → 会话开始。
+- **无拆除请求的断开（19:56:59）：** iPhone 直接离开热点（`AP-STA-DISCONNECTED`），此前无 `0x4E0D` 与 `TEARDOWN`；车机 0.5 s 后由
+  `WIFI_AP_STA_LEAVE` 触发 `StopWirelessCarPlay`，先停 AirPlay 服务再拆会话（伴随一条 `kTimeoutErr`），状态 5。19:57:17 起自动重连，19:57:29 会话开始。
+  用户此次的具体操作未记录。
+- **没有崩溃：** 19:44–19:57 全程 crash 缓冲无记录，匹配 `tombstone` 的只有 SELinux 审计噪声，CarPlay 进程 PID 3652 不变。
+- **两种 iPhone 断开对车机都是「先停服务/有序拆除」：** 要么 iPhone 主动 `0x4E0D` + 两次 `TEARDOWN`，要么 iPhone 离开热点由车机自己收尾。
+  mcarplay 现在是关闭全部 TCP 后才释放热点，车机先看到连接被断而手机仍在热点上，这条路径 iPhone 两次都没有走过。
+- **与 mcarplay 的差异：** mcarplay 断开时不发 `0x4E0D` 不可用、不发 `TEARDOWN`，同时关闭全部 TCP 与蓝牙 RFCOMM；10-31 与今日的崩溃/认证无应答
+  均发生在这种断开之后。车机日志只显示 `Teardown` 及所拆部分，不含请求体；按流拆除的请求体格式（`streams` 列表）为按 AirPlay 惯例的推断。
+- **认证卡住的直接原因是车机 MFi 芯片 I2C 读不返回（20:00–20:05，同一抓包，另含车机 `dmesg`）：** 车机 iAP2 应答挑战时先取共享信号量，
+  再经 `/dev/i2c-4` 写挑战并轮询读取芯片（日志 `i2c_read 133` → 正常约 0.4 s 后到 `143/149/158` 并 `sem_post`）。
+  - 19:55:29 **真 iPhone** 的 Wi-Fi 隧道 iAP2 认证（线程 7209）同样停在 `i2c_read 133` 无后续；iPhone 会话不受影响，19:57 重连 BT 认证正常。
+  - 20:00:47 iPhone 直接离开热点（无 `TEARDOWN`），车机自行收尾，会话结束原因 `kConnectionErr`。
+  - 20:02:23 用户在车机上点选 mcarplay 手机（蓝牙地址与随后 AirPlay 会话 `D=` 相同），车机主动连其 `…cafe`；20:02:26 认证线程 8488 取锁、写挑战后停在
+    `i2c_read 133` 不再返回且未释放；车机对后续挑战无处理，20:02:38 手机端关闭 RFCOMM。**此前本次开机内 mcarplay 没有任何连接或断开，车机也没有崩溃。**
+  - 20:03:27 再次点选：BT 认证 0.6 s 通过，20:03:38 AirPlay 会话开始，20:03:38.95 车机收到视频；隧道认证（线程 8821）先后两次各等 35 s 超时，
+    20:04:48 第三次通过（`Option_WifiCarplay_Wifi AUTHENTICATION_PASS`）。
+  - 车机 `dmesg`（20:02:26 之前的条目已被审计日志挤出）记 `i2c-rcar e66d8000.i2c: error -110`（即 `i2c-4`，20:04:00.9）及 `i2c-6` 多次 -110。
+  - 结论：「认证锁」是车机读 MFi 芯片挂起、持锁线程不返回所致，真 iPhone 也会碰到；10-31「崩溃后遗留锁」只是其中一种情形的推断，需修正为此。
+    车机内部等待约 35 s 超时；手机端在此期间重发的挑战会排队，各再耗 35 s。触发条件未知。
+- **mcarplay 断开后复现原厂崩溃（20:11，同一抓包）：** 20:03 的 mcarplay 会话运行约 461 s 后，用户在 mcarplay 点断开：
+  20:11:18.558 车机屏幕流先停、18.589 车机读到 mcarplay 关闭蓝牙 RFCOMM（`bt socket closed`）、18.614 会话以 `kConnectionErr` 结束、
+  18.643 手机离开热点、18.732 车机才停 AirPlay 服务；19.263 手机以另一 MAC（系统 Wi-Fi 已保存的热点）0.6 s 后重新入网。
+  **20:11:39.040（断开后 20.4 s）`SIGSEGV`，`libAirPlay_R14_vehicle.so (_PerformPeriodTasks+640)`，空指针 0xac**——与 10-31 完全相同，
+  库 SHA-256 仍为 `9e24ea45…`。CarPlay 进程由 3652 重启为 9935。真 iPhone 当日四次断开（两次有序、两次直接离开热点）均未触发。
+- **重启后的进程再次崩溃：** 20:11:51 用户在车机上点选 mcarplay 手机，BT 认证通过，20:11:58 会话开始、20:11:59.95 收到视频；
+  **20:12:02.2 `SIGILL`（ILL_ILLOPC）于 Binder 线程的 JIT 代码（`dalvik-jit-code-cache` ← `Binder.execTransact`）**，20:12:03.6 进程退出，
+  之后未再拉起（20:13 `pidof` 为空）。这就是用户看到的「出画几秒退出」；20:12:06 手机从系统 Wi-Fi 身份（`.168`）切回 mcarplay 专属网络（`.25`）
+  发生在崩溃之后。SIGILL 的原因无直接证据，与 10-31「崩溃后原厂模块不稳定、需重启中控」一致。
+- **iPhone 会话开始即发 `disableBluetooth`：** 三次 iPhone 会话分别在 19:49:54.041、19:55:28.893、19:57:29.584（会话开始后约 0.1–0.6 s）
+  触发车机 `_AirPlayHandleSessionControl` → `CarplayService_DisableBluetooth Dev_BtAddr=<iPhone 蓝牙地址>`，车机随即
+  `CarPlayConnected and setBtDisable` 关闭整个蓝牙适配器，断开后 `setBtEnable` 恢复。车机 `libcarplayserver_R14_vehicle.so` 中该会话控制的类型串为
+  `disableBluetooth`、参数键 `deviceID`（静态字符串）。mcarplay 不发此命令，故其会话期间车机蓝牙与 iAP2 RFCOMM 保持，断开时车机多出一路
+  蓝牙链路关闭；这是否为崩溃诱因未证实。iPhone 在哪条通道、以何种请求体发送，日志未记录，需按 AirPlay 会话命令惯例实现后上车验证。
+- **对应修改（`fix/chery-inbound-wait`，未上车验证）：**
+  1. 车机 iAP2/`/info` 自报厂商 CHERY 时（策略规则 `chery.disable-bluetooth`），初始 SETUP 与事件通道建立后、`modesChanged` 前经控制通道
+     `POST /command` 发 `{type: disableBluetooth, params: {deviceID: <本机蓝牙地址小写>}}`；发出前即置位，本连接内蓝牙断开（RFCOMM 关闭或 ACL 断开）
+     按预期处理、不收会话。其它接收端不发。
+  2. 用户断开且会话已激活时，后台按 iPhone 顺序：网络 iAP2 控制会话已建立则先发 `0x4E0D`=0；停本地推流；约 150 ms 后 `TEARDOWN` 屏幕流
+     （`{streams: [{type: 110}]}`）；约 150 ms 后 `TEARDOWN` 会话（空体），各等应答最多 1.5 s；之后执行原收尾。会话 `TEARDOWN` 未得 200 时先释放车机热点
+     再收尾（模仿 iPhone 直接离网）。期间再点断开或发起新连接立即收尾。车机掉线等非用户断开不变。
+  3. MFi 挑战（蓝牙与网络隧道两路）：该车机记忆中成功过的长度等待窗口延长到 40 s（车机内部约 35 s 超时），静默过的仍缩短，未知长度照旧。
+  需同一车机验证：会话开始后车机是否关蓝牙且会话保持；断开后 30 s 内车机是否不再崩溃、能否直接重连。
+- **修改包实车复测（2026-11-02 20:43–20:46，UTC+8，车机 ADB logcat；remote/debug APK `b42cbef3…`，手机小米 `2509FPN0BC`）：** 中控 20:39 重启后车机
+  CarPlay 正常。20:44:18 车机点选 mcarplay 手机，BT 认证通过，20:44:31.773 会话开始，**20:44:31.929 车机执行 `CarplayService_DisableBluetooth`
+  并 `setBtDisable`**，蓝牙适配器关闭，会话保持（用户确认车机蓝牙已关）。20:45:09.927 屏幕流 `[duer]Teardown`、20:45:10.221 会话 `[duer]Teardown`，
+  **会话结束原因 `noErr`**（此前为 `kConnectionErr`），随后车机停 AirPlay 服务、手机离开热点、车机 `setBtEnable`，与真 iPhone 有序断开的车机侧序列一致。
+  **但 20:45:30.293（断开后约 20 s）仍 `SIGSEGV`，`_PerformPeriodTasks+640`、空指针 0xac**，CarPlay 进程重启。可排除蓝牙 iAP2 链路与断开顺序为唯一诱因。
+  仍存差异：① 车机记 `mAutoReConnectMacAddress = AA:BB:CC:DD:EE…`，即 mcarplay SETUP `macAddress` 的占位值，真 iPhone 为其真实 Wi-Fi 地址；
+  ② 网络 iAP2 认证再次停在车机 MFi 芯片读取（`sem_wait` 无后续），`0x4E0D` 不可用未送达车机；③ 手机系统 Wi-Fi 仍保存车机热点，离开 0.7 s 后以另一 MAC 重新入网。
+- **对应修改（未上车验证）：** CHERY 车机（规则 `chery.real-wifi-mac`）的会话 SETUP `macAddress` 改填本机在车机热点上的 Wi-Fi 地址：取控制连接本地地址所在接口，
+  依次用接口硬件地址、sysfs 直读、Shizuku 读 sysfs、EUI-64 链路本地 IPv6 反推；都失败时保留占位并记日志。其它接收端不变。
+- **SETUP `macAddress` 修改包行车实测（2026-11-02 20:57–22:01，UTC+8，车机 ADB logcat；remote/debug APK `0e8378f5…`，手机小米 `2509FPN0BC`；
+  中控 20:51 重启，固件不变）：** 只有车机侧日志，手机端日志未取得。
+  - 20:58:15 手机以系统 Wi-Fi 已保存热点的身份（`1e:9a:…`）入网，随后会话开始；车机 `mAutoReConnectMacAddress = 1E:9A:…`，与热点终端 MAC 一致，
+    **占位值问题已消除**。会话在行车中持续 **1661 s**（约 28 min），视频 `Glitches 7%, 3 total`。
+  - 21:26:05 用户断开：屏幕流 `[duer]Teardown` → 会话 `[duer]Teardown`，**`AirPlay session ended … Reason=0 noErr`**，车机报 `Normal_Disconnected`、停
+    AirPlay 服务；21:26:16 手机离开热点。**21:26:25.79（断开后约 20 s）仍 `SIGSEGV`，`_PerformPeriodTasks+640`、空指针 0xac**，进程 5892 → 10255。
+    因此 SETUP `macAddress` 不是崩溃诱因；蓝牙释放、有序断开、真实 MAC 三项均已与 iPhone 一致仍崩溃。
+  - 21:26:32 手机重新入网，21:26:41 新进程上 pair-setup/pair-verify 通过、会话开始并再次 `DisableBluetooth`（`Dev_BtAddr` 为 mcarplay 手机）；
+    21:26:54 会话以 **`kConnectionErr`（Dur=13 s）** 结束，结束前车机认证线程在连续 `i2c_read`，`[duer]Teardown` 未出现（非有序断开，发起方未知）。
+    **21:27:14（结束后约 20 s）重启后的进程 10255 同样 `_PerformPeriodTasks+640` 崩溃。** 即该崩溃在 noErr 与 kConnectionErr 两种结束后都会出现，固定约 20 s。
+  - 22:00:53 一个新 MAC（`a6:5e:…`）入网，抓包至 22:01:52 未见 AirPlay 会话；ADB 随即断开。
+- **中控重启后需在车机上点手机、偶发 pair-setup `bad setup code`（2026-11-02 22:02–22:17，UTC+8，车机 ADB logcat；APK `0e8378f5…`）：**
+  - 22:02 中控重启后手机蓝牙（通话/音乐）自动连上，但车机没有发起 CarPlay（无 `connectWirelessCarplay`、手机未入热点）；此前崩溃时车机已清空
+    `mAutoReConnectMacAddress`。22:15:28 用户在车机蓝牙设置点手机后车机才连 `…cafe`。
+  - 22:15:30 iAP2 认证通过、22:15:32 入网，22:15:40 pair-setup 只走到 M3：**`### Pair-setup server bad setup code`**，随后 pair-verify 报
+    `unknown peer`；车机此后未再收到配对请求，22:16:00 `WIRELESS_CONNECT_TIMEOUT` 收尾。此前所有抓包里同一固定码 `3939` 的 pair-setup 均成功，
+    22:16:49 第三次点选又一次通过（M1/M3/M5 + verify），会话开始并 `DisableBluetooth`。
+  - 判断：SRP 证明对 A、B、S 的补零/去零编码与车机约定不一致时，只在其中某值首字节为 0（各约 1/256）时暴露，与「偶发一次、重试即好」吻合；
+    车机具体用哪种编码无直接证据。
+- **对应修改（离线通过，未上车验证）：** SRP 客户端重选私钥，直到 A 与 S 均为满 384 字节（补零与否编码相同）；接收端 B 首字节为 0 时
+  在提交证明前重发 M1 换 B（最多 3 轮）。模拟接收端新增逐项反向的编码约定，40 轮全部通过；关闭重选时用例失败。
+- **用户反馈（22:19）：** 连上后手机走车机热点 Wi-Fi、无互联网。抓包中会话入网 MAC 一直是系统已保存热点的身份（`1e:9a:…`），即手机系统 Wi-Fi
+  连着该热点，而不是 mcarplay 的应用专属网络。
+- **崩溃前的「Idle」与 type-130（2026-11-02，同一车机，对照当日真 iPhone 抓包）：** mcarplay 每次会话结束（20:11、20:45、21:26、22:27、22:28，
+  `noErr` 与 `kConnectionErr` 都有）后，车机在会话线程上 +10 s 记 `### Idle for 10 seconds`，+20 s 同线程 `_PerformPeriodTasks+640` SIGSEGV
+  （22:28:51 一次直接记 `Idle for 20 seconds` 后同毫秒崩溃）。当日真 iPhone 三次会话结束（19:51 `noErr`；19:57、20:00 iPhone 先离热点、`kConnectionErr`）
+  都没有 `Idle` 也没有崩溃。会话开始时只有 mcarplay 触发车机 `### Unsupported stream type: 130`（20:03、20:11、22:16），iPhone 从不请求该流类型。
+  推断（未证实）：车机对不支持的 type-130 SETUP 留下了未清理的状态，会话结束后其空闲检查在 20 s 时访问已释放对象。
+- **对应修改（离线通过，未上车验证）：** CHERY 车机（规则 `chery.no-iap-tunnel`）不再 SETUP type-130 iAP 隧道；其它接收端不变。需验证会话开始不再出现
+  `Unsupported stream type`，结束后无 `Idle for` 与崩溃，触摸照常。
+- **不建 type-130 的修改包实车复测（2026-11-02 22:40–22:46，UTC+8；APK `ce466185…`，车机 ADB logcat + 调试桥手机日志）：** 中控 22:39 重启。
+  22:44:08 会话开始，手机记「不 SETUP iAP 隧道」，车机**未再报** `Unsupported stream type`，`DisableBluetooth` 生效，视频与音频启动。
+  22:45:03 用户断开：手机按 iPhone 顺序发 `0x4E0D`（本次经隧道送达）→ 屏幕流 `TEARDOWN` 200 → 会话 `TEARDOWN` 200，随后关闭控制连接；车机记 `noErr`。
+  **22:45:24（+21 s）仍 `_PerformPeriodTasks+640` SIGSEGV**（只在 crash 缓冲区，本次 main 缓冲区无 `Idle for` 行）。**type-130 假设被否定。**
+- **同一车机 iPhone 与 mcarplay 会话的车机 AirPlay 日志差异（行模板去数字后比对）：** 只有 iPhone 有：`session started: From=iPhone`（mcarplay 为
+  `From=`，空）、`MFi _requestProcessAuthSetup` / `MFiSAP_Exchange`（会话内 auth-setup）、`Alt audio setting up AAC-ELD`（辅音频流）、
+  modes 中 `speech n/a (none)`（mcarplay 为 `(?)`）。这些是剩余的可见差异，与崩溃的关系未知。
+- **其它观察：** 中控重启后车机立即回连手机 `…cafe`（22:40:20），手机 22:40:23 才开始监听，车机等满 60 s 超时；车机 CarPlay 进程崩溃后曾卡在
+  `mConnectStatus = 1`（22:29:38 起），之后点选一律 `return!`，需重启中控。
+- **来源名与 speechMode 修改包实车复测（2026-11-02 22:57–22:58，UTC+8；APK `5909a4db…`）：** 发现 mcarplay 的 bplist 把负整数写成 1 字节（`speechMode=-1` → 0xFF），
+  车机按无符号读成 255；改为负数一律 8 字节。CHERY 车机控制通道请求加 `X-Apple-Client-Name: iPhone`、`X-Apple-ProtocolVersion: 1`（车机 AirPlay 库含这两个头名）。
+  复测中车机记 **`session started: From=iPhone`** 与 **`speech n/a (none)`**，两项与真 iPhone 一致。22:58:15 有序断开、`noErr`；
+  **22:58:35（+20 s）仍 `_PerformPeriodTasks+640` SIGSEGV**。来源名与 speechMode 均非崩溃诱因。
+  会话结束统计中 `Time Sync` 的 max/avg offset 为 INT_MAX 在 iPhone 会话里同样出现，不是差异。
+  剩余可见差异只有：会话内 MFi `auth-setup`（`MFiSAP_Exchange`）与辅音频流（`Alt audio setting up AAC-ELD`）。
+- **配对类型与会话内 auth-setup 修改包实车复测（2026-11-02 23:04–23:12，UTC+8；APK `b18cc3db…`）：** CHERY 车机 pair-setup/pair-verify 改发 `X-Apple-HKP: 0`
+  （车机对 iPhone 记 `pair-setup HK, type 0`，对 mcarplay 原 `2` 记 `type 2`），pair-verify 后、SETUP 前发 `POST /auth-setup`（0x01 + X25519 公钥）。
+  23:04:58 第一次点选时车机 iAP2 认证停在 `Accessory_AuthenticationResponseMessage sem_wait` 两分钟以上，需重启中控。重启后 23:11:22 车机记
+  **`pair-setup HK, type 0`** 与 **`MFiSAP_Exchange start/end`（0.47 s，iPhone 为 0.44 s）**，会话正常。23:12:08 有序断开、`noErr`；
+  **23:12:29（+20 s）车机记 `### Idle for 20 seconds` 后同毫秒 `_PerformPeriodTasks+640` SIGSEGV**。配对类型与 auth-setup 均非诱因。
+  真 iPhone 会话结束后约 0.8 s 即离开热点、无崩溃；mcarplay 离开热点与否（20:11 立即离开、21:26 11 s 后离开）都崩溃，故「断开后手机需继续应答计时」不成立。
+  车机日志中与 iPhone 的可见差异只剩辅音频流（`Alt audio setting up AAC-ELD`）。
+- **MFi 挑战长度与车机芯片挂起（2026-11-02 全天车机日志 + 调试桥手机日志）：** 车机为 MFi Auth 3.0 芯片（iPhone auth-setup 时车机记
+  `Using MFi Auth v.3 chip`、`inDigestLen = 32`）。真 iPhone 每路认证一次、约 0.45 s 通过。mcarplay 的网络隧道按基线先发 20B
+  （`TUNNEL_MFI_BASELINE = 20/32/16`），车机认证线程 `Accessory_AuthenticationResponseMessage sem_wait` 约 35–37 s 才返回，其后 32B/16B 排队
+  （20:03、20:44、20:59、22:44、22:57、23:11）；蓝牙路径的长度记忆一度把 32B 记为「被拒」，23:20:50 蓝牙首发 20B 后车机认证线程挂死、dmesg 记
+  `i2c-rcar e66d8000.i2c: error -110`，车机 30 s 后超时。22:42、23:04 等「点了没反应 / 需重启中控」均在非 32B 挑战之后。
+- **对应修改（离线通过，隧道部分上车中）：** CHERY 车机（规则 `chery.mfi-32-only`）蓝牙与隧道两路 MFi 挑战都只发一次 32B、等 40 s、不读写长度记忆。
+- **崩溃与挂起认证无关（更正）：** 曾观察到 22:45、22:58、23:12 三次会话结束时都有未完成的隧道认证，但 20:11 与 21:26 两次崩溃前隧道认证早已通过
+  （20:04:48、20:59:37 `AUTHENTICATION_PASS`），会话结束时无挂起，仍在 +20 s 崩溃；故「挂起认证导致崩溃」不成立。
+- **断开后车机侧 TCP 与停止序列（2026-11-02 23:27–23:30，车机 `/proc/net/tcp*` 每秒采样）：** 会话中车机持有手机 3 条 TCP（`7000` 控制、事件、屏幕数据）。
+  23:29:23 会话 `noErr` 结束，两条流连接即刻关闭，控制连接 23:29:24 进入车机侧 `TIME_WAIT`；**会话结束 1 s 内已无任何到手机的 TCP 连接**，
+  但 23:29:33 仍记 `Idle for 10 seconds`、23:29:43 `Idle for 20 seconds` 并 SIGSEGV。车机停止序列（`StopWirelessCarPlay` → `DeactiveCarPlay` →
+  `carplayserver_stop` → `AirPlay servers stopped` → `CFRunLoopRun end` → `DeactiveWirelessCarPlay end`）与真 iPhone 19:51:40 逐行一致，
+  仅 `DeactiveWirelessCarPlay linkid` 为 1（iPhone 为 2）。同一会话车机记两次 `session started`（第二次 `C=AAC-LC`，对应补发 RECORD），
+  但 20:03、20:44、22:44、22:57 只记一次的会话同样崩溃，故非诱因。
+- **当晚结论：** 日志层面可见的与 iPhone 的差异已全部对齐（蓝牙释放、有序断开、真实 MAC、type-130、来源名、speechMode、HKP、auth-setup、MFi 32B），
+  断开后 +20 s 的 `_PerformPeriodTasks` 崩溃仍在。车机 CarPlay 进程崩溃后约 5 s 自动重启并能回连；继续定位需要车机 AirPlay 库内部的证据。
+- **MFi 32B 固定修改包实车复测（2026-11-02 23:36–23:40，UTC+8；APK `a029717a…`，车机 ADB logcat + 调试桥手机日志）：** 23:36:25 车机点选，
+  蓝牙 0xAA02 32B（一次、窗口 40 s）0.55 s 收到 0xAA03，车机芯片读取约 0.43 s；auth-setup 511 ms；23:36:38 会话开始，隧道 0xAA02 32B 一次、0.48 s 收到签名，
+  车机记 `Option_WifiCarplay_Wifi AUTHENTICATION_PASS`。点选到出画约 12 s，全程无芯片挂起。会话 204 s（触摸 40 次），23:40:02 有序断开 `noErr`；
+  **23:40:22（+20 s）仍 `Idle for 20 seconds` 后 SIGSEGV**。本会话网络 iAP2 控制会话未建立（车机 SYN marker 达 #200、链路 DEAD），0x4E0D 未发；
+  而 22:45 等会话链路为 NORMAL、0x4E0D 已送达同样崩溃，二者无关。

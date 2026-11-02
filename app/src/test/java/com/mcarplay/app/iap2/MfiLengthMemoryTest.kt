@@ -92,4 +92,21 @@ class MfiLengthMemoryTest {
         assertTrue(text.contains("静默=20B"))
         assertTrue(text.contains("被拒=16B"))
     }
+
+    /** 艾瑞泽 8 车机读 MFi 芯片偶发卡住约 35 s（2026-11-02）：成功过的长度等足，不急着换档排队。 */
+    @Test
+    fun knownGoodLengthWaitsOutSlowReceiverChip() {
+        val entry = MfiLengthMemory.Entry(succeeded = 32, silent = setOf(20))
+        assertEquals(MfiLengthMemory.KNOWN_GOOD_WINDOW_MS, MfiLengthMemory.challengeWindow(32, entry, 3_000L, 1_500L))
+        assertEquals(1_500L, MfiLengthMemory.challengeWindow(20, entry, 6_000L, 1_500L))
+        assertEquals(3_000L, MfiLengthMemory.challengeWindow(16, entry, 3_000L, 1_500L))
+        assertEquals(6_000L, MfiLengthMemory.challengeWindow(20, MfiLengthMemory.Entry(), 6_000L, 1_500L))
+    }
+
+    /** 成功又被硬拒（迟到应答误记）时不享受长窗口，以免每轮白等 40 s。 */
+    @Test
+    fun contradictedSuccessGetsNoLongWindow() {
+        val entry = MfiLengthMemory.Entry(succeeded = 20, rejected = setOf(20))
+        assertEquals(6_000L, MfiLengthMemory.challengeWindow(20, entry, 6_000L, 1_500L))
+    }
 }

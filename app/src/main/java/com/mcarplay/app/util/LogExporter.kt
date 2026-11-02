@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
+import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
 import com.mcarplay.app.diagnostics.PendingReportTransaction
 import com.mcarplay.app.diagnostics.SupportReport
 import java.text.SimpleDateFormat
@@ -27,12 +28,25 @@ import java.util.UUID
 object LogExporter {
     /** Default support scope includes bounded previous-process evidence, even after an app restart. */
     enum class Scope(
-        val label: String,
+        private val redactedLabel: String,
         val fileNameTag: String,
     ) {
         SUPPORT("脱敏诊断报告（含最近历史）", "-diagnostics"),
         CURRENT_SESSION("仅本次启动", ""),
         ALL("最近两段历史日志", "-all"),
+        ;
+
+        val label: String
+            get() =
+                if (!DiagnosticExportPolicy.unredacted) {
+                    redactedLabel
+                } else {
+                    when (this) {
+                        SUPPORT -> "完整诊断报告（未脱敏，含最近历史）"
+                        CURRENT_SESSION -> "本次启动诊断（未脱敏）"
+                        ALL -> "最近两段历史日志（未脱敏）"
+                    }
+                }
     }
 
     data class Result(
@@ -67,11 +81,12 @@ object LogExporter {
                     scope.label,
                     scope == Scope.CURRENT_SESSION,
                     fallbackText,
-                    maxLogBytes = if (scope == Scope.ALL) 4_000_000 else 512_000,
+                    maxLogBytes = if (scope == Scope.ALL || DiagnosticExportPolicy.unredacted) 4_000_000 else 512_000,
                     knownNames = knownNames,
                 )
             val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-            val fileName = "mcarplay-log-$stamp-${reportId.take(8)}${scope.fileNameTag}.txt"
+            val rawTag = if (DiagnosticExportPolicy.unredacted) "-raw" else ""
+            val fileName = "mcarplay-log-$stamp-${reportId.take(8)}${scope.fileNameTag}$rawTag.txt"
             val resolver = context.contentResolver
             val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
             val values =

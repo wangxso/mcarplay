@@ -23,6 +23,39 @@ object ReceiverCompatibility {
         /** 无稳定身份时为 null，禁止把所有未知接收端共用一份持久化兼容记忆。 */
         val memoryKey: String?,
         val rules: List<String>,
+        /**
+         * 会话 SETUP 后像 iPhone 一样发 `disableBluetooth`：车机关闭自身蓝牙，会话只走 Wi-Fi。
+         * 2026-11-02 艾瑞泽 8 车机日志：真 iPhone 每次会话开始约 0.1–0.6 s 都发；不发时车机全程保留
+         * 蓝牙 iAP2，mcarplay 断开后 20 s 原厂 `_PerformPeriodTasks` 崩溃。只登记核对过的车机。
+         */
+        val releaseBluetoothAfterSetup: Boolean = false,
+        /**
+         * SETUP `macAddress` 填本机在车机热点上的真实 Wi-Fi 地址（iPhone 同款）。艾瑞泽 8 把它记为
+         * `mAutoReConnectMacAddress`；mcarplay 原先填占位 `aa:bb:cc:dd:ee:ff`（2026-11-02 车机日志）。
+         */
+        val reportWifiMacInSetup: Boolean = false,
+        /**
+         * 不 SETUP type-130 iAP 隧道。艾瑞泽 8 对它报 `Unsupported stream type: 130`，真 iPhone 从不请求，
+         * 隧道在该车机上本就不可用（2026-11-02 车机日志）。去掉后断开后约 20 s 的原厂崩溃仍在，二者无关。
+         */
+        val skipIapTunnel: Boolean = false,
+        /**
+         * 控制通道请求带 `X-Apple-Client-Name` / `X-Apple-ProtocolVersion`（车机 AirPlay 库含这两个头名）。
+         * 艾瑞泽 8 对 iPhone 记 `session started: From=iPhone`，对 mcarplay 为空 `From=`（2026-11-02）。
+         */
+        val sendAppleClientHeaders: Boolean = false,
+        /**
+         * 按 iPhone 的配对与认证顺序：pair-setup/pair-verify 带 `X-Apple-HKP: 0`（车机对 iPhone 记 `pair-setup HK, type 0`，
+         * 对 mcarplay 的 `2` 记 `type 2`），pair-verify 后、SETUP 前发 `POST /auth-setup`（车机对 iPhone 记 `MFiSAP_Exchange`，
+         * 对 mcarplay 从未出现）。2026-11-02 艾瑞泽 8 车机日志。
+         */
+        val iphoneAuthSequence: Boolean = false,
+        /**
+         * 蓝牙与网络隧道 iAP2 的 MFi 挑战都固定为该长度、只发一次、不学习（null = 按记忆轮换）。艾瑞泽 8 为 MFi Auth 3.0 芯片
+         * （32 字节摘要），真 iPhone 每路认证一次 0.45 s 通过；mcarplay 发 20/16B 时车机芯片挂起（I2C `error -110`、认证线程
+         * `sem_wait` 无返回），后续挑战排队，会话结束仍有认证挂起；长度记忆还曾把 32B 误记为被拒（2026-11-02 车机日志）。
+         */
+        val pinnedMfiChallengeLength: Int? = null,
     )
 
     data class PairingFallback(
@@ -63,6 +96,8 @@ object ReceiverCompatibility {
         // DiPlay v0.2.21 自报 firmware=0.1.0（并非应用版本）。同时核对 EA 与名称，
         // 避免把 CARLINKIT 认证证书或单个显示名当成 DiPlay 软件身份。
         val diPlayWire010 = diPlay && normalize(signals.firmwareVersion) == "0.1.0"
+        // 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 会话期间车机蓝牙关闭（2026-11-02 车机日志）
+        val cheryReleasesBluetooth = normalize(signals.manufacturer) == "chery"
         val rules =
             buildList {
                 add("protocol.${pairing.name.lowercase()}")
@@ -71,6 +106,12 @@ object ReceiverCompatibility {
                 if (family == Family.CLASSIC_MIB3) add("iap2.classic-mib3")
                 if (winPlay && !winPlayHandoff) add("winplay.unverified-firmware")
                 if (diPlay && !diPlayWire010) add("diplay.unverified-firmware")
+                if (cheryReleasesBluetooth) add("chery.disable-bluetooth")
+                if (cheryReleasesBluetooth) add("chery.real-wifi-mac")
+                if (cheryReleasesBluetooth) add("chery.no-iap-tunnel")
+                if (cheryReleasesBluetooth) add("chery.apple-client-headers")
+                if (cheryReleasesBluetooth) add("chery.iphone-auth-sequence")
+                if (cheryReleasesBluetooth) add("chery.mfi-32-only")
             }
         return Policy(
             family = family,
@@ -81,6 +122,12 @@ object ReceiverCompatibility {
             requiresRealBluetoothIdentity = winPlayHandoff,
             memoryKey = memoryKey(signals, mediaCapabilities, receiverInstance),
             rules = rules,
+            releaseBluetoothAfterSetup = cheryReleasesBluetooth,
+            reportWifiMacInSetup = cheryReleasesBluetooth,
+            skipIapTunnel = cheryReleasesBluetooth,
+            sendAppleClientHeaders = cheryReleasesBluetooth,
+            iphoneAuthSequence = cheryReleasesBluetooth,
+            pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
         )
     }
 
@@ -88,8 +135,10 @@ object ReceiverCompatibility {
         policy: Policy,
         videoRunning: Boolean,
         networkHandoffReady: Boolean,
+        /** 本会话已请求车机关蓝牙（disableBluetooth）：随后的蓝牙断开是预期结果，不收会话。 */
+        bluetoothReleased: Boolean = false,
     ): BluetoothLossAction =
-        if (videoRunning || (policy.bluetoothRole == BluetoothRole.NETWORK_HANDOFF && networkHandoffReady)) {
+        if (bluetoothReleased || videoRunning || (policy.bluetoothRole == BluetoothRole.NETWORK_HANDOFF && networkHandoffReady)) {
             BluetoothLossAction.KEEP_NETWORK_SESSION
         } else {
             BluetoothLossAction.END_SESSION

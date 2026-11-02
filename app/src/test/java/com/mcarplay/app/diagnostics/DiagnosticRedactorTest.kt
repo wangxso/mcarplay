@@ -7,6 +7,34 @@ import org.junit.Test
 
 class DiagnosticRedactorTest {
     @Test
+    fun sourceStartupDiagnosticsRetainFixedPortAndPermissionEvidence() {
+        val text =
+            "CARLIFE-DIAG event=ENTRY result=REQUESTED background=false\n" +
+                "CARLIFE_SELF_TEST_DIAGNOSTICS schema=1 state=CONNECTED entry=REQUESTED " +
+                "lastFailedPort=7240 lastFailure=REFUSED openedThisAttempt=none allConnectedOnce=false timedOut=true\n" +
+                "carwith.application=enabled=true systemApp=false updatedSystemApp=false targetSdk=33\n" +
+                "carwith.permission.CAPTURE_VIDEO_OUTPUT=declared=true granted=false"
+        assertEquals(text, DiagnosticRedactor().redact(text))
+    }
+
+    @Test
+    fun bluetoothDiagnosticsRetainFixedEvidenceWithoutRevealingPeer() {
+        val safe =
+            DiagnosticRedactor().redact(
+                "BT-DIAG schema=1 run=2 event=CONNECT_END number=3 peer=1 phase=CONNECT outcome=FAILED " +
+                    "elapsedMs=120 error=IOException reason=READ_FAILED readRet=-1\n" +
+                    "BT-DIAG event=SDP_REGISTER service=CARPLAY uuid=2d8d2466-e14d-451c-88bc-7301abea291a " +
+                    "outcome=OK evidence=LOCAL_REGISTRATION_ONLY\n" +
+                    "目标「Family Car」 address=AA:BB:CC:DD:EE:FF",
+            )
+        assertTrue(safe.contains("error=IOException reason=READ_FAILED readRet=-1"))
+        assertTrue(safe.contains("uuid=2d8d2466-e14d-451c-88bc-7301abea291a"))
+        assertTrue(safe.contains("evidence=LOCAL_REGISTRATION_ONLY"))
+        assertFalse(safe.contains("Family Car"))
+        assertFalse(safe.contains("AA:BB:CC:DD:EE:FF"))
+    }
+
+    @Test
     fun detectionPrivateIndexesAreOmittedWhileProgressCountersRemainUseful() {
         val safe =
             DiagnosticRedactor().redact(

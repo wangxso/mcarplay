@@ -13,6 +13,7 @@ import com.mcarplay.app.audio.AudioProfileMemory
 import com.mcarplay.app.audio.AudioSender
 import com.mcarplay.app.audio.AudioTuning
 import com.mcarplay.app.audio.CarLifeAudioBridge
+import com.mcarplay.app.bt.BluetoothDiagnostics
 import com.mcarplay.app.bt.BtProfiles
 import com.mcarplay.app.bt.BtSessionGate
 import com.mcarplay.app.bt.Iap2BluetoothClient
@@ -324,6 +325,10 @@ object SessionController {
     /** WiFi 绑定互斥：auto-join 与端点交接两条路径可能同时绑定同一热点。 */
     private val wifiBindLock = Any()
 
+    private val bluetoothDiagnostics = BluetoothDiagnostics(ConnectionDiagnostics::runtimeLog)
+
+    fun bluetoothDiagnosticSummary(): String = bluetoothDiagnostics.summary()
+
     /** DCL 双检锁的可发布字段（无 volatile 的双检锁是坏发布——虽然当前仅主线程调用，别留隐患）。 */
     @Volatile
     private var bluetoothServer: Iap2BluetoothServer? = null
@@ -621,6 +626,7 @@ object SessionController {
                         appendLog("IAPLINK: 本条蓝牙会话链路代际 → $g（随端点传递到 AirPlay）")
                     },
                     targetProvider = targetProvider,
+                    diagnostics = bluetoothDiagnostics,
                 )
             bluetoothClient =
                 Iap2BluetoothClient(
@@ -636,6 +642,12 @@ object SessionController {
                         appendLog("IAPLINK: 本条蓝牙会话链路代际 → $g（随端点传递到 AirPlay）")
                     },
                     targetProvider = targetProvider,
+                    diagnostics = bluetoothDiagnostics,
+                    onAwaitingReceiverTap = { name ->
+                        // 艾瑞泽 8 这类车机只能由车机端发起，需要用户在车机上操作（2026-11-02）
+                        phaseHint = t(R.string.sc_tap_phone_on_receiver, name)
+                        uiHintSink?.invoke(t(R.string.sc_tap_phone_on_receiver_hint, name))
+                    },
                 )
             ctrlAdvertiser = CarPlayCtrlAdvertiser(context) { line -> appendLog(line) }
             endpointBrowser =
@@ -692,7 +704,12 @@ object SessionController {
         if (ReceiverDetectionRuntime.awaitingProfileTrial) return ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION
         val client = currentClient
         val policy = client?.receiverCompatibility() ?: ReceiverCompatibility.resolve(ReceiverProfile.Signals())
-        return ReceiverCompatibility.bluetoothLossAction(policy, videoSender?.isRunning == true, client?.networkHandoffReady == true)
+        return ReceiverCompatibility.bluetoothLossAction(
+            policy,
+            videoSender?.isRunning == true,
+            client?.networkHandoffReady == true,
+            client?.bluetoothReleaseRequested == true,
+        )
     }
 
     private fun stopFormalCarLife() {
@@ -779,6 +796,8 @@ object SessionController {
      */
     @Synchronized
     fun startConnection(context: Context) {
+        // 上一轮有序断开还在等 TEARDOWN：立即收尾，别让它稍后拆掉这一轮
+        if (orderlyStopPending.compareAndSet(true, false)) finishTeardown(context, DiagnosticCode.USER_STOP)
         val alreadyRunning = isSessionRunning()
         val diagnosticAttempt =
             if (isSessionRunning()) {
@@ -789,7 +808,10 @@ object SessionController {
         if (ConnectionDiagnostics.timeline.snapshot()?.stage == ConnectionStage.PRECHECK) {
             ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.BLUETOOTH)
         }
-        if (!alreadyRunning) ReceiverDetectionRuntime.connectionStarted(diagnosticAttempt)
+        if (!alreadyRunning) {
+            bluetoothDiagnostics.begin(diagnosticAttempt)
+            ReceiverDetectionRuntime.connectionStarted(diagnosticAttempt)
+        }
         connectCancelled = false
         phaseHint = t(R.string.sc_bt_ready)
         when (
@@ -846,12 +868,63 @@ object SessionController {
         }
     }
 
-    /** 结束连接；自动蓝牙断开必须保留实际原因，不能记成用户手动停止。 */
+    /** 有序断开进行中（后台在发 TEARDOWN）；先到者执行收尾，另一方跳过。 */
+    private val orderlyStopPending = AtomicBoolean(false)
+
+    /**
+     * 结束连接；自动蓝牙断开必须保留实际原因，不能记成用户手动停止。
+     *
+     * 用户断开且会话已激活时，先在后台按 iPhone 顺序拆会话（[AirPlayClient.stopLikeIphone]），
+     * 再执行原有收尾；车机不回 TEARDOWN 时先离开车机热点，模仿 iPhone 直接离网（车机自行收尾）。
+     * 期间再点断开或发起新连接会立即收尾。
+     */
     @Synchronized
     fun disconnect(
         context: Context,
         reason: DiagnosticCode = DiagnosticCode.USER_STOP,
         preserveDetection: Boolean = false,
+    ) {
+        val client = currentClient
+        if (reason == DiagnosticCode.USER_STOP && client != null && client.sessionActive && orderlyStopPending.compareAndSet(false, true)) {
+            finishDiagnostics(reason, preserveDetection)
+            phaseHint = t(R.string.sc_disconnecting)
+            appendLog("SESSION: 按 iPhone 顺序断开（0x4E0D 不可用 → TEARDOWN 屏幕流 → TEARDOWN 会话）")
+            // 先停本地推流（同 retireSession 先置空：推流 onEnded 见到旧实例即跳过「车机侧断开」收尾，
+            // 否则会按人在车外让手机休眠）；TEARDOWN 后车机关屏幕流，也免得写失败刷屏
+            videoSender?.stop()
+            videoSender = null
+            audioSender?.stop()
+            audioSender = null
+            Bg.run("airplay-orderly-stop") {
+                val tornDown = runCatching { client.stopLikeIphone() }.getOrDefault(false)
+                synchronized(this) {
+                    if (!orderlyStopPending.compareAndSet(true, false)) return@run
+                    if (!tornDown) {
+                        appendLog("SESSION: 车机未确认 TEARDOWN——先离开车机热点，由车机自行收尾")
+                        wifiConnector?.release()
+                    }
+                    finishDisconnect(context, reason, preserveDetection, diagnosticsFinished = true)
+                }
+            }
+            return
+        }
+        orderlyStopPending.set(false)
+        finishDisconnect(context, reason, preserveDetection, diagnosticsFinished = false)
+    }
+
+    private fun finishDisconnect(
+        context: Context,
+        reason: DiagnosticCode,
+        preserveDetection: Boolean,
+        diagnosticsFinished: Boolean,
+    ) {
+        if (!diagnosticsFinished) finishDiagnostics(reason, preserveDetection)
+        finishTeardown(context, reason)
+    }
+
+    private fun finishDiagnostics(
+        reason: DiagnosticCode,
+        preserveDetection: Boolean,
     ) {
         ConnectionDiagnostics.finishCurrent(reason, false)
         if (preserveDetection) {
@@ -859,6 +932,12 @@ object SessionController {
         } else {
             ReceiverDetectionRuntime.stop(reason.name, cancelled = reason == DiagnosticCode.USER_STOP)
         }
+    }
+
+    private fun finishTeardown(
+        context: Context,
+        reason: DiagnosticCode,
+    ) {
         val hadProjection = CarPlayService.mediaProjection != null
         pendingEndpointUpdate = null
         retireSession()
@@ -872,6 +951,7 @@ object SessionController {
             .stop(context)
         bluetoothServer?.stop()
         bluetoothClient?.stop()
+        bluetoothDiagnostics.finish()
         ctrlAdvertiser?.stop()
         endpointBrowser?.stop()
         wifiConnector?.release()
@@ -3283,6 +3363,8 @@ object SessionController {
                                         )
                                 }
                             }
+                            // 像 iPhone 一样请车机关蓝牙（真 iPhone 会话开始约 0.1 s 即发，早于屏幕流）
+                            if (client.receiverCompatibility().releaseBluetoothAfterSetup) client.releaseReceiverBluetooth()
                             // 资源声明（must）：真车对未声明资源的屏幕流 SETUP 直接 400
                             client.assertModes()
                             // HID 输入模式武装：/info hidDevices（奥迪字符串 "0"/"1"，触摸="1"）。

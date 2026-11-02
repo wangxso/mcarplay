@@ -1,9 +1,13 @@
 package com.mcarplay.app.carlife
 
 import android.app.Application
+import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
+import com.mcarplay.app.util.Bg
 import java.io.EOFException
 import java.net.Socket
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -34,6 +38,7 @@ class CarLifeSession(
     private val appContext: Application = application
     internal val lease = CarLifeSessionLease()
     private val running = AtomicBoolean(false)
+    private val sourceRun = UUID.randomUUID().toString().take(8)
     private val stateMachine =
         CarLifeStateMachine(
             CarLifeAuthVerifier.xiaomi(),
@@ -49,7 +54,21 @@ class CarLifeSession(
     private val seenAudioKinds = java.util.Collections.synchronizedSet(mutableSetOf<Pair<CarLifeChannel, Int>>())
     private val unparsedAudio = java.util.concurrent.ConcurrentHashMap<CarLifeChannel, Long>()
     private val touchState = CarLifeTouchState()
+
+    @Volatile
     private var endReported = false
+
+    @Volatile
+    private var entryResult = CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED
+
+    @Volatile
+    private var lastChannelSummary = "not_started"
+
+    @Volatile
+    private var startedAtMs: Long? = null
+
+    @Volatile
+    private var endedAtMs: Long? = null
     private var sourceThread: Thread? = null
     private var heartbeatThread: Thread? = null
 
@@ -91,15 +110,33 @@ class CarLifeSession(
 
     val videoStats: String get() = stats.snapshot().summary()
 
+    /** 固定状态和计数；可在阻塞 connectAll() 时由报告/remote 只读观察。 */
+    fun diagnosticSummary(): String {
+        val elapsed = startedAtMs?.let { ((endedAtMs ?: monotonicMs()) - it).coerceAtLeast(0) } ?: 0
+        return "schema=1 run=$sourceRun running=${running.get() && !endReported} failed=$endReported " +
+            "elapsedMs=$elapsed state=${state.name} " +
+            "entry=$entryResult background=$entryLaunchedInBackground entryBlockedSuspected=$entryBlockedSuspected " +
+            "listeners=[${connector?.diagnosticSummary() ?: lastChannelSummary}] video=${videoInfo()} ${stats.snapshot().summary()}"
+    }
+
     fun start(): Boolean {
         if (!running.compareAndSet(false, true)) return true
+        startedAtMs = monotonicMs()
+        Bg.run("carlife-source-environment") {
+            val fields = CarLifeSourceEnvironment.snapshot(appContext).entries.joinToString(" ") { "${it.key}=${it.value}" }
+            ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG run=$sourceRun event=ENV $fields")
+        }
         if (!CarLifeLauncher.isAvailable(appContext)) {
             fail("未找到 CarWith（${CarLifeLauncher.CARWITH_PACKAGE}）或 CarLife 组件")
             return false
         }
         if (launchStrategy == CarLifeLaunchStrategy.EXPORTED_ENTRY) {
             entryLaunchedInBackground = !isAppInForeground()
-            if (!CarLifeLauncher.launchPublicEntry(appContext)) {
+            entryResult = CarLifeLauncher.requestPublicEntry(appContext)
+            ConnectionDiagnostics.runtimeLog(
+                "CARLIFE-DIAG run=$sourceRun event=ENTRY result=$entryResult background=$entryLaunchedInBackground",
+            )
+            if (entryResult != CarLifeLauncher.EntryLaunchResult.REQUESTED) {
                 fail("当前 CarWith 版本不允许打开兼容入口，请检查 CarWith 设置")
                 return false
             }
@@ -145,14 +182,19 @@ class CarLifeSession(
 
     fun stop() {
         if (!running.compareAndSet(true, false)) return
+        if (endedAtMs == null) endedAtMs = monotonicMs()
         releaseActiveTouch()
-        connector?.close()
+        connector?.let {
+            it.close()
+            lastChannelSummary = it.diagnosticSummary()
+        }
         connector = null
         sourceThread?.interrupt()
         sourceThread = null
         heartbeatThread?.interrupt()
         heartbeatThread = null
         stateMachine.close()
+        ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG event=STOP ${diagnosticSummary()}")
         log("CARLIFE: 七路连接已关闭")
     }
 
@@ -166,6 +208,7 @@ class CarLifeSession(
         try {
             activeConnector.connectAll(LISTENER_WAIT_MS)
             if (!running.get()) return
+            ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG run=$sourceRun event=LISTENERS_CONNECTED ${activeConnector.diagnosticSummary()}")
             log("CARLIFE: 七路连接完成，开始协议握手")
             stateMachine.onConnected().forEach(::sendAction)
             startChannelReader(CarLifeChannel.VIDEO)
@@ -176,6 +219,7 @@ class CarLifeSession(
             readCommandLoop(activeConnector)
         } catch (error: Exception) {
             if (running.get()) {
+                DiagnosticExportPolicy.exception("CARLIFE_CONNECT_AND_READ", error)
                 entryBlockedSuspected = isEntryBlockedSuspected(error, entryLaunchedInBackground)
                 fail(clientFailureMessage(error, entryBlockedSuspected))
             }
@@ -246,6 +290,7 @@ class CarLifeSession(
                 connectionClosed(channel)
             } catch (error: Exception) {
                 if (running.get()) {
+                    DiagnosticExportPolicy.exception("CARLIFE_READ_${channel.name}", error)
                     log("CARLIFE: ${channel.name} 读取失败：${error.message}")
                 }
                 connectionClosed(channel)
@@ -342,6 +387,7 @@ class CarLifeSession(
             }
             log("CARLIFE: TX 0x${action.kind.toString(16)} ${action.payload.size}B")
         } catch (error: Exception) {
+            DiagnosticExportPolicy.exception("CARLIFE_SEND_COMMAND", error)
             fail("CarLife 命令发送失败：${error.message}")
         }
     }
@@ -481,6 +527,8 @@ class CarLifeSession(
     private fun fail(message: String) {
         if (!endReported) {
             endReported = true
+            if (endedAtMs == null) endedAtMs = monotonicMs()
+            ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG event=FAILED ${diagnosticSummary()}")
             log("CARLIFE: $message")
             onEnded(message)
         }
@@ -488,6 +536,8 @@ class CarLifeSession(
     }
 
     internal companion object {
+        private fun monotonicMs(): Long = System.nanoTime() / 1_000_000
+
         const val ENTRY_BLOCKED_HINT = "CarWith 入口在后台发起，可能被系统拦截"
         const val UNPARSED_AUDIO_LOG_EVERY = 2_000L
 

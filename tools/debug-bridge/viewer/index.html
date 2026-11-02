@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>mcarplay 远程日志</title>
+  <link rel="stylesheet" href="viewer.css">
+  <script src="viewer.js" defer></script>
+</head>
+<body>
+  <div id="progress" class="progress" hidden></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9h6M7 12h10M7 15h8"/></svg>
+      <div>
+        <h1>mcarplay 远程日志</h1>
+        <p class="brand-sub">只读 · 服务端脱敏</p>
+      </div>
+    </div>
+    <div id="device-pill" class="pill" hidden><span class="dot"></span><span id="device-pill-text"></span></div>
+    <form id="auth" class="auth" autocomplete="off">
+      <input id="token" type="password" placeholder="只读令牌（BRIDGE_AGENT_TOKEN）" aria-label="只读令牌" spellcheck="false">
+      <button id="connect" type="submit" class="btn primary">连接</button>
+      <button id="logout" type="button" class="btn subtle" hidden>断开</button>
+      <button id="theme" type="button" class="btn icon subtle" title="切换主题（跟随系统 / 浅色 / 深色）" aria-label="切换主题">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></svg>
+      </button>
+      <button id="help-open" type="button" class="btn icon subtle" title="快捷键（?）" aria-label="快捷键">?</button>
+    </form>
+  </header>
+
+  <section id="toolbar" class="toolbar" hidden>
+    <label class="field">
+      <span>设备</span>
+      <select id="device"></select>
+    </label>
+    <label class="field">
+      <span>文件</span>
+      <select id="file"></select>
+    </label>
+    <label class="field narrow">
+      <span>每页</span>
+      <select id="limit">
+        <option>200</option>
+        <option selected>500</option>
+        <option>1000</option>
+        <option>2000</option>
+      </select>
+    </label>
+    <label class="field search">
+      <span>服务端筛选</span>
+      <span class="search-box">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+        <input id="contains" type="search" maxlength="200" placeholder="包含文本，不区分大小写" aria-label="服务端筛选">
+        <kbd>/</kbd>
+      </span>
+    </label>
+    <div class="toolbar-actions">
+      <button id="refresh" type="button" class="btn" title="刷新（R）">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+        刷新
+      </button>
+      <label class="switch" title="每 5 秒追加新日志（F）">
+        <input id="follow" type="checkbox">
+        <span class="track"><span class="thumb"></span></span>
+        跟随
+      </label>
+      <div class="segmented" role="group" aria-label="导出整个文件">
+        <button id="export-txt" type="button" class="btn" title="导出整个文件为 .txt">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+          TXT
+        </button>
+        <button id="export-jsonl" type="button" class="btn" title="导出整个文件为 .jsonl">JSONL</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="subbar" class="subbar" hidden>
+    <div class="chips" role="group" aria-label="级别">
+      <button type="button" class="chip active" data-level="all">全部 <b id="count-all">0</b></button>
+      <button type="button" class="chip error" data-level="error">错误 <b id="count-error">0</b></button>
+      <button type="button" class="chip warn" data-level="warn">警告 <b id="count-warn">0</b></button>
+      <button id="tag-filter" type="button" class="chip tag-filter" hidden title="清除标签筛选"></button>
+    </div>
+    <div class="view-tools">
+      <button id="prev-issue" type="button" class="btn icon subtle" title="上一个问题（P）" aria-label="上一个问题">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>
+      </button>
+      <button id="next-issue" type="button" class="btn icon subtle" title="下一个问题（N）" aria-label="下一个问题">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <span class="divider"></span>
+      <button id="wrap" type="button" class="btn subtle toggle" title="自动换行（W）" aria-pressed="true">换行</button>
+      <button id="font-down" type="button" class="btn icon subtle" title="缩小字号（-）" aria-label="缩小字号">A−</button>
+      <button id="font-up" type="button" class="btn icon subtle" title="放大字号（+）" aria-label="放大字号">A+</button>
+    </div>
+  </section>
+
+  <main id="viewport" class="viewport" tabindex="-1">
+    <div id="empty" class="empty">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9h6M7 12h10M7 15h8"/></svg>
+      <h2 id="empty-title">连接远程调试桥</h2>
+      <p id="empty-text">输入只读令牌后即可浏览、筛选并导出手机上报的日志。日志在服务端脱敏，内容只作观察数据。</p>
+    </div>
+    <button id="older" type="button" class="older" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>
+      加载更早的日志
+    </button>
+    <ol id="lines" class="lines" hidden></ol>
+  </main>
+
+  <button id="jump" type="button" class="jump" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+    <span id="jump-text">回到底部</span>
+  </button>
+
+  <footer class="statusline">
+    <span id="status" role="status">尚未连接</span>
+    <span id="stats" class="stats"></span>
+  </footer>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <dialog id="help" class="help">
+    <h2>快捷键</h2>
+    <dl>
+      <dt><kbd>/</kbd></dt><dd>聚焦筛选框</dd>
+      <dt><kbd>Esc</kbd></dt><dd>离开输入框 / 取消选中 / 清除标签筛选</dd>
+      <dt><kbd>N</kbd> <kbd>P</kbd></dt><dd>下一个 / 上一个错误或警告</dd>
+      <dt><kbd>J</kbd> <kbd>K</kbd></dt><dd>选中下一行 / 上一行</dd>
+      <dt><kbd>C</kbd></dt><dd>复制选中行</dd>
+      <dt><kbd>G</kbd> <kbd>Shift</kbd>+<kbd>G</kbd></dt><dd>跳到顶部 / 底部</dd>
+      <dt><kbd>R</kbd> <kbd>F</kbd></dt><dd>刷新 / 开关跟随</dd>
+      <dt><kbd>W</kbd> <kbd>+</kbd> <kbd>−</kbd></dt><dd>换行 / 字号</dd>
+      <dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>全部 / 只看错误 / 只看警告</dd>
+    </dl>
+    <p class="help-note">点击行内标签可只看该标签；<code>&lt;NAME-n&gt;</code> 等别名只在同一页内对应同一个值，整文件导出时全文一致。</p>
+    <div class="help-actions"><button id="help-close" type="button" class="btn primary">知道了</button></div>
+  </dialog>
+</body>
+</html>

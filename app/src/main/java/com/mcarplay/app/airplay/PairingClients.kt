@@ -29,22 +29,32 @@ class PairSetupClient(
 ) {
     /** 完成后接收端已保存我们的长期公钥；返回接收端静态身份（来自 M6，可选用）。 */
     fun run(): ReceiverIdentity? {
-        // M1: 请求 SRP 参数（Method=None + State=1，对照 catplay PairSetup::start）
-        val m2 =
-            Tlv8.decode(
-                transport.exchange(
-                    "/pair-setup",
-                    Tlv8.encode(
-                        listOf(
-                            Tlv8.Item(Tlv8.TYPE_METHOD, byteArrayOf(0)),
-                            Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(1)),
+        // M1: 请求 SRP 参数（Method=None + State=1，对照 catplay PairSetup::start）。
+        // B 首字节为 0 时补零/去零两种编码不同，接收端用哪种无从得知（见 Srp6aClient）：
+        // 尚未提交证明，重发 M1 换一个 B 不消耗接收端的失败计数。
+        var salt: ByteArray
+        var serverPublic: ByteArray
+        var round = 0
+        while (true) {
+            round++
+            val m2 =
+                Tlv8.decode(
+                    transport.exchange(
+                        "/pair-setup",
+                        Tlv8.encode(
+                            listOf(
+                                Tlv8.Item(Tlv8.TYPE_METHOD, byteArrayOf(0)),
+                                Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(1)),
+                            ),
                         ),
                     ),
-                ),
-            )
-        val salt = m2[Tlv8.TYPE_SALT] ?: throw IOException("pair-setup M2 缺少 salt")
-        val serverPublic = m2[Tlv8.TYPE_PUBLIC_KEY] ?: throw IOException("pair-setup M2 缺少 publicKey")
-        log("pair-setup: M2 收到 SRP 参数 salt=${salt.size}B B=${serverPublic.size}B")
+                )
+            salt = m2[Tlv8.TYPE_SALT] ?: throw IOException("pair-setup M2 缺少 salt")
+            serverPublic = m2[Tlv8.TYPE_PUBLIC_KEY] ?: throw IOException("pair-setup M2 缺少 publicKey")
+            log("pair-setup: M2 收到 SRP 参数 salt=${salt.size}B B=${serverPublic.size}B")
+            if (Srp6aClient.isFullLength(serverPublic) || round >= MAX_M1_ROUNDS) break
+            log("pair-setup: B 首字节为 0（填充约定可能与接收端不一致）→ 重发 M1 换 B（第 $round 次）")
+        }
 
         // M3: 客户端公钥 A + 证明 M1
         val srp = Srp6aClient.start(salt, serverPublic)
@@ -146,6 +156,11 @@ class PairSetupClient(
         val pairingId: String,
         val publicKey: ByteArray,
     )
+
+    private companion object {
+        /** M1 最多发几轮：每轮 B 不满长概率 1/256，3 轮后仍不满长时照常提交。 */
+        const val MAX_M1_ROUNDS = 3
+    }
 }
 
 /**

@@ -123,6 +123,28 @@ object MfiLengthMemory {
         }
     }
 
+    /**
+     * 已成功过的长度的等待窗口。2026-11-02 艾瑞泽 8：车机读自身 MFi 芯片偶发卡住，内部约 35 s 才超时
+     * （真 iPhone 也碰到过）；3–6 s 就换档重发的挑战只会在车机里排队，每个再耗 35 s。
+     */
+    const val KNOWN_GOOD_WINDOW_MS = 40_000L
+
+    /**
+     * 本次挑战的等待窗口（纯函数）：记忆里的成功长度等足 [KNOWN_GOOD_WINDOW_MS]；
+     * 静默过的长度缩到 [silentRetryWindow]；其余用调用方给的基础窗口。
+     */
+    fun challengeWindow(
+        length: Int,
+        entry: Entry,
+        baseWindow: Long,
+        silentRetryWindow: Long,
+    ): Long =
+        when {
+            length == entry.succeeded && length !in entry.rejected -> maxOf(baseWindow, KNOWN_GOOD_WINDOW_MS)
+            length in entry.silent -> minOf(baseWindow, silentRetryWindow)
+            else -> baseWindow
+        }
+
     /** 打印用：把记忆压成一行日志（便于对照实测）。 */
     fun describe(entry: Entry): String =
         if (entry.isEmpty) {

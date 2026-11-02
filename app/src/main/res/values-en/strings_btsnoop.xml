@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="btsnoop_title">Bluetooth capture analysis</string>
+    <string name="btsnoop_entry_desc">Analyze the Bluetooth HCI log in a bug report to see what the car received</string>
+    <string name="btsnoop_steps">1. Developer options → set \"Enable Bluetooth HCI snoop log\" to \"Enabled\". On Android 13, \"Filtered\" is the same as off.\n2. Turn Bluetooth off and on so the log starts fresh.\n3. Return to mcarplay, tap Connect, let the car search and pair as usual, and stay connected for at least 3–5 minutes. Avoid playing music: a full log overwrites earlier packets.\n4. Developer options → \"Take bug report\", then share it to mcarplay from the notification, or come back here and pick the file.\n5. Afterwards set the HCI log back to \"Disabled\".</string>
+    <string name="btsnoop_privacy">The file is read and analyzed only on this phone; it is not copied, stored or uploaded. The result contains only times, counts, class of device and service UUIDs, no addresses or device names, and is written to the diagnostic log. The bug report itself holds a lot of personal data: do not post it in group chats.</string>
+    <string name="btsnoop_open_developer">Open developer options</string>
+    <string name="btsnoop_pick">Pick a bug report or btsnoop file</string>
+    <string name="btsnoop_copy">Copy result</string>
+    <string name="btsnoop_idle">Not analyzed yet</string>
+    <string name="btsnoop_running">Analyzing; a large bug report can take a minute or two…</string>
+    <string name="btsnoop_done">Done: %1$d capture file(s)</string>
+    <string name="btsnoop_no_capture">No btsnoop_hci.log in this file. Make sure the HCI log is set to \"Enabled\" and that Bluetooth was restarted after turning it on.</string>
+    <string name="btsnoop_unsupported">Not a bug report zip or btsnoop file</string>
+    <string name="btsnoop_failed">Could not read the file (%1$s)</string>
+    <string name="btsnoop_developer_disabled">Developer options are off: in Settings → About phone, tap the OS version 7 times</string>
+    <string name="btsnoop_copied">Result copied</string>
+    <string name="btsnoop_busy">Analysis in progress, please wait</string>
+    <string name="btsnoop_clip_label">mcarplay Bluetooth capture analysis</string>
+</resources>

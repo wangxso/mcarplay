@@ -1,10 +1,38 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-10-31。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-11-02。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
 ## 当前基线与结论
+
+- **11 月 2 日艾瑞泽 8 断开崩溃排查小结：** 车机侧 TCP 采样显示会话结束 1 s 内已无到手机的连接，停止序列与 iPhone 一致，+20 s 崩溃依旧；日志可见差异已全部对齐。崩溃后车机 CarPlay 约 5 s 自动重启并可回连。继续定位需车机 AirPlay 库内部证据。
+
+- **11 月 2 日艾瑞泽 8 MFi 挑战固定 32B（23:36 实车通过：蓝牙/隧道各一次 0.5 s 内通过，点选到出画约 12 s）：** 车机为 MFi Auth 3.0 芯片，非 32B 挑战会让芯片挂起约 35 s（I2C `error -110`），是当晚连接慢、点了没反应、需重启中控的主因；长度记忆还曾把 32B 误记为被拒。CHERY 车机蓝牙与隧道两路改为只发一次 32B、不学习。断开后 20 s 的原厂崩溃与此无关，仍未定位。
+
+- **11 月 2 日艾瑞泽 8 配对类型与 auth-setup（实车 23:11 复测）：** CHERY 车机改发 `X-Apple-HKP: 0` 并在 SETUP 前做会话内 MFi auth-setup，车机日志与 iPhone 一致（`type 0`、`MFiSAP_Exchange` 0.47 s），断开后 20 s 仍崩溃。可见差异仅剩辅音频流。
+
+- **11 月 2 日艾瑞泽 8 来源名与 speechMode（实车 22:57 复测）：** 修正 bplist 负整数编码（`speechMode=-1` 曾被读成 255），CHERY 车机加 `X-Apple-Client-Name`/`X-Apple-ProtocolVersion`；车机已记 `From=iPhone`、`speech (none)`，但断开后 20 s 仍崩溃。剩余差异：会话内 MFi auth-setup、辅音频流。
+
+- **11 月 2 日艾瑞泽 8 崩溃线索：type-130（离线通过，未上车验证）：** 每次 mcarplay 会话结束后车机 +10 s 记 `Idle for 10 seconds`、+20 s 崩溃；真 iPhone 会话结束后两者皆无。只有 mcarplay 在会话开始时请求车机不支持的 type-130 流。CHERY 车机改为不 SETUP iAP 隧道；22:44 实车复测后仍崩溃，假设被否定（修改保留，与 iPhone 一致）。剩余差异：会话来源名为空、无会话内 MFi auth-setup、无辅音频流、speech 模式为 `?`。
+
+- **11 月 2 日艾瑞泽 8 偶发配对失败与修改（离线通过，未上车验证）：** 中控重启后需在车机蓝牙设置点手机才会发起 CarPlay；一次 pair-setup 被车机判 `bad setup code`，重点后通过。SRP 客户端改为 A、S 恒满长，B 不满长时提交证明前重取，消除补零约定差异。另：系统 WLAN 保存车机热点时手机走无互联网的热点。
+
+- **11 月 2 日艾瑞泽 8 行车实测（20:58–21:27，SETUP macAddress 修改包）：** 车机记下的自动重连地址已是手机在热点上的真实 MAC；会话行车中持续约 28 min，用户断开后车机记 `noErr`，但断开后约 20 s 原厂 `_PerformPeriodTasks` 仍崩溃；重启后的进程上 13 s 的 `kConnectionErr` 会话结束后约 20 s 再次崩溃。蓝牙释放、有序断开、真实 MAC 三项均已与 iPhone 一致，崩溃诱因仍未定位；手机端日志未取得。
+
+- **11 月 2 日艾瑞泽 8 修改包实车复测（20:44）与 SETUP macAddress 修改（未上车验证）：** `disableBluetooth` 生效（车机关蓝牙、会话保持），有序断开后车机记 `noErr` 并按正常路径收尾，但断开后约 20 s 原厂 `_PerformPeriodTasks` 仍崩溃。车机把 SETUP 的占位 `macAddress` 记为自动重连地址，真 iPhone 填真实 Wi-Fi 地址；现对 CHERY 车机改填本机在车机热点上的 Wi-Fi 地址（接口硬件地址 / sysfs / Shizuku / EUI-64 依次尝试，失败保留占位）。需上车验证断开后是否仍崩溃。
+
+- **11 月 2 日艾瑞泽 8 真 iPhone 对照与「照 iPhone 做」三项修改（未上车验证）：** 同一辆艾瑞泽 8（固件 `…387_250619_R`）接车机 ADB 抓 logcat。真 iPhone 四次断开（关无线局域网的有序断开、直接离开热点）车机均未崩溃；有序断开为 `0x4E0D` 不可用 → `TEARDOWN` 屏幕流 → `TEARDOWN` 会话，车机记正常断开。iPhone 每次会话开始约 0.1–0.6 s 发 `disableBluetooth`，车机随即关闭自身蓝牙。小米 `2509FPN0BC` 用 mcarplay 连接正常出画，用户断开后 20.4 s 车机原厂 `_PerformPeriodTasks+640` 空指针崩溃（与 10-31 相同），重启后的进程在下一次会话中 `SIGILL` 再崩，CarPlay 停摆至重启中控。另见车机读 MFi 芯片 I2C 挂起导致的认证卡住，真 iPhone 也遇到过。分支 `fix/chery-inbound-wait`：CHERY 车机在 SETUP 后发 `disableBluetooth` 且其后蓝牙断开不收会话；用户断开时按 iPhone 顺序后台拆会话，车机不确认则先离开热点；已知成功的 MFi 挑战长度等待 40 s。需上车验证会话保持、断开后不崩溃与直接重连。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+- **11 月 2 日艾瑞泽 8 雅蓝牙复测与「等车机回连」修改（未上车验证）：** 同一用户 `M2102J2SC` / HyperOS OS1.0 用 remote `0.1.3-rd-diag3-debug` 复测三轮，均停在蓝牙阶段。车机 SDP 实时查询无 `…caff`、有 `ec884348…`（与 10-31 那台相同），手机主动连入 34 次全部在 43–127 ms 内 `READ_FAILED`，车机始终未回连，配对还被删除过一次。新分支 `fix/chery-inbound-wait`：这类快速失败后改为只等车机回连（带 `ec884348…` 首次即转，否则连续 3 次；每 60 s 仍试一次出站），并在界面提示用户在车机上点选本机；修正指定目标未配对时的「没有已配对设备」误报。需完整重启中控、两侧删除配对后由车机点选手机复测。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+- **11 月 2 日明文诊断第三版（按用户要求，仅 remote/debug；离线通过）：** 导出摘要、时间线、运行日志和本应用退出记录保留原文，文件带 `-raw` 后缀与明文标记；默认运行日志尾部增至约 4MB。追加存储的蓝牙身份/目标与配对服务缓存、Wi-Fi/网络地址和路由、指定组件的 UID/路径/签名/权限/服务、本进程线程栈及原始系统异常。编译变体策略同时核对 flavor、build type 和 debug 标志，standard 及所有 release 保持脱敏；远程扩展采集器不进入 standard，服务器只读日志 API 的脱敏保持原样。调试页、已有重装续接和导出前告知范围，数据只由既有调试桥与手动分享路径传递。诊断版本为 `0.1.3-rd-diag3-debug`；standard debug、remote debug、remote release 各 695 项 JVM 测试，Spotless、两 debug 变体 lint/构建及 12 项只读日志 API 测试通过。APK 已核对 standard 不含扩展采集器且导出文案仍脱敏，remote/debug 文案为完整未脱敏，签名与用户现有 remote 相同。remote lint 的两项 HardwareIds warning 对应本轮明确要求采集的原始地址，未修改 lint baseline。尚未在该用户手机复测，不声称修复出流故障。
+
+- **11 月 2 日源端诊断第二版（离线通过，待用户复测）：** 用户进一步确认 CarWith 独立出流自检也失败，截图停在“等待 CarWith 七口监听”、源帧为零。已在同一个 remote 诊断包加入原有七路连接的等待时间/失败端口/部分连入进度、入口请求结果、CarWith/CarLife 启用与权限状态、最近一次自检摘要及只读 `get_carlife_diagnostics`；不额外探测端口，不修改原厂授权或媒体协议。新构建参数 `-Pmcarplay.diagnosticsBuild=true` 生成 `0.1.3-rd-diag2-debug`，旧 `btDiagnosticsBuild` 参数保留为别名。standard/remote 各 691 项 JVM 测试、两变体 lint/构建、Spotless 及 12 项只读日志 API 测试通过；签名与用户现有 remote 一致，bridge 与两个远程只读命令均未进入 standard。截图不足以判断具体端口或权限根因，用户设备仍待复测。
+
+- **11 月 2 日 CarWith 4.0.4 APK 静态核对：** 用户提供的 `4.0.4-20260522` / 104000004（SHA-256 `a20bd237…`）保留了已导出的 `CarlifeAdbActivity`，mcarplay 的普通 Intent 入口匹配。该路径自行转为 `startType=3`，再由 CarWith 请求小米 CarLife 服务；组件版本门槛为 versionCode ≥220，用户的 8.6.8 / 260 不会仅因这一门槛被否决。两份旧报告没有覆盖源端自检，无法据此定位所称无流；同版本搭配 8.8.5 在另一台手机已有 180 帧源端证据。未执行 APK、未修改协议，Android 13 / 8.6.8 组合仍待自检报告；详见 `docs/CARWITH-4.0.4-ANALYSIS.md`。
+
+- **11 月 2 日蓝牙建链诊断包（待用户复测）：** 用户提供的小米 `M2102J2SC` / Android 13、CarWith `4.0.4-20260522`、小米 CarLife `8.6.8` 的两份报告，分别为 standard/release 与 remote/debug；车型由用户补充为 2022 款艾瑞泽 8 雅，HyperOS 与车机固件未提供。两份均停在蓝牙阶段，没有 iAP2 成功、车机回连或媒体输入，不能据此判定 Android 13 不兼容。已补本地 SDP 注册/监听、配对/ACL、SDP 结果、RFCOMM 阶段/耗时/固定异常、回连接受/拒绝及取消计数；同轮摘要进入脱敏报告和远程只读命令。异常任意原文不写日志，晚到的旧轮事件不能覆盖新轮。`-Pmcarplay.btDiagnosticsBuild=true` 构建 `0.1.3-rd-btdiag1-debug`（包名仍为 `com.mcarplay.app.rd`），不新增权限或协议兜底。standard/remote 各 686 项 JVM 测试、两变体 lint/构建、Spotless 及 12 项只读日志 API 测试通过；已核对 APK 的远程命令与 bridge 代码未进入 standard，诊断包签名与用户现有 remote 报告一致。尚未在该用户手机/车机验证，不能把本地公告成功视为车机识别成功。用法见 `docs/DIAGNOSTICS.md`。
 
 - **10 月 31 日艾瑞泽 8 remote 长时使用与直接重连验收通过（日志已补证）：** 同一小米 `2509FPN0BC`、2022 款奇瑞艾瑞泽 8 / 固件 `M1E_IC2172/82_03_21.387_250619_R`，候选 `6417263` / APK `d4772ea9…`。remote 只读 API 的 12,069 条记录确认两轮媒体激活累计 106 分 59 秒，最长一轮 98 分 59 秒；用户确认 13:05 手动锁屏退出，约 26 秒后重新出画，14:44 结束测试，使用中无其他异常。长会话发送端音频时间轴跨 5882.335 秒的端点差约 -0.67ms，有 292 条 TTS 初始化与一次 MEDIA STOP/INIT 后持续发包。锁屏退出仍须修复；自动触发、完整冷启动、同步 UDP/控制协商问题及此前原厂崩溃仍未验证解决。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
 

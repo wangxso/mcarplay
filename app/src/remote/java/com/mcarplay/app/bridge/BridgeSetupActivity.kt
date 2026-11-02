@@ -13,7 +13,10 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.mcarplay.app.R
+import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
 import com.mcarplay.app.ui.DarkMessageDialog
 import com.mcarplay.app.util.Bg
 import java.io.File
@@ -38,6 +41,9 @@ class BridgeSetupActivity : AppCompatActivity() {
             }
         }
     private var statusText: TextView? = null
+    private var urlInput: EditText? = null
+    private var codeInput: EditText? = null
+    private var presetDialog: AlertDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,7 +68,8 @@ class BridgeSetupActivity : AppCompatActivity() {
         val urlInput =
             EditText(this).apply {
                 hint = "wss://example.trycloudflare.com  或  ws://192.168.1.2:8787"
-                setText(BridgePrefs.serverUrl(this@BridgeSetupActivity))
+                // 未手动配置时预填构建预置（仅填框不保存；点「连接」即视为确认）
+                setText(BridgePrefs.serverUrl(this@BridgeSetupActivity).ifBlank { BridgePrefs.presetUrl })
                 imeOptions = EditorInfo.IME_ACTION_NEXT
                 setSingleLine()
                 // 主题默认字色是黑，深色窗口上不可见（用户实测），必须显式给亮色
@@ -72,11 +79,13 @@ class BridgeSetupActivity : AppCompatActivity() {
         val codeInput =
             EditText(this).apply {
                 hint = "6 位配对码（服务器控制台显示）"
-                setText(BridgePrefs.pairCode(this@BridgeSetupActivity))
+                setText(BridgePrefs.pairCode(this@BridgeSetupActivity).ifBlank { BridgePrefs.presetKey })
                 setSingleLine()
                 setTextColor(0xFFE0E0E5.toInt())
                 setHintTextColor(0xFF8A9099.toInt())
             }
+        this.urlInput = urlInput
+        this.codeInput = codeInput
         val connect =
             Button(this).apply {
                 text = "连接"
@@ -161,6 +170,11 @@ class BridgeSetupActivity : AppCompatActivity() {
             }
 
         listOf(
+            label(getString(R.string.raw_diagnostics_notice)).apply {
+                visibility = if (DiagnosticExportPolicy.unredacted) View.VISIBLE else View.GONE
+                setTextColor(0xFFFFC766.toInt())
+                setLineSpacing(0f, 1.3f)
+            },
             label("调试服务器地址"),
             urlInput,
             label("配对码"),
@@ -207,6 +221,7 @@ class BridgeSetupActivity : AppCompatActivity() {
                 promptInstall(File(path), version, intent.getStringExtra("deltaNote"))
             }
             "resume" -> promptResume()
+            null -> maybePromptPreset()
             "confirm" -> {
                 // 安装确认的前台转发：系统确认框从后台 Receiver 直接拉起会被
                 // 荣耀静默拦截（无异常无界面），由前台 Activity 启动必然生效
@@ -260,11 +275,14 @@ class BridgeSetupActivity : AppCompatActivity() {
         DarkMessageDialog.show(
             this,
             title = "继续进入调试模式？",
-            message = "调试版已更新完成。继续后将自动连回调试服务器。",
+            message =
+                "调试版已更新完成。继续后将自动连回调试服务器。" +
+                    if (DiagnosticExportPolicy.unredacted) "\n\n${getString(R.string.raw_diagnostics_notice)}" else "",
             actions =
                 listOf(
                     DarkMessageDialog.Action("以后再说") {
                         BridgePrefs.setResumePending(this@BridgeSetupActivity, false)
+                        maybePromptPreset()
                     },
                     DarkMessageDialog.Action(
                         "继续",
@@ -272,9 +290,50 @@ class BridgeSetupActivity : AppCompatActivity() {
                     ) {
                         BridgePrefs.setResumePending(this@BridgeSetupActivity, false)
                         Bg.run("bridge-start") { BridgeClient.start(this@BridgeSetupActivity) }
+                        maybePromptPreset()
                     },
                 ),
         )
+    }
+
+    /**
+     * 构建预置服务器的连接确认：同意才写入并连接；拒绝则保持离线（日志只在本机，
+     * 可照常导出诊断报告）。返回键/点外部关闭不算答复，下次打开再问。
+     */
+    private fun maybePromptPreset() {
+        // singleTop：桌面图标再次点击走 onNewIntent，已弹出的不重复弹
+        if (!BridgePrefs.presetPending(this) || presetDialog?.isShowing == true) return
+        val host =
+            runCatching {
+                android.net.Uri
+                    .parse(BridgePrefs.presetUrl)
+                    .host
+            }.getOrNull() ?: BridgePrefs.presetUrl
+        presetDialog =
+            DarkMessageDialog.show(
+                this,
+                title = "连接远程调试服务器？",
+                message =
+                    "本调试版已预置服务器 $host，无需手动填写。\n\n" +
+                        "同意后将自动连接，并持续推送运行日志供排障；以后每次打开自动连回，可随时点「断开」。\n" +
+                        "拒绝则不连接，保持离线，诊断报告仍可在本机导出。" +
+                        if (DiagnosticExportPolicy.unredacted) "\n\n${getString(R.string.raw_diagnostics_notice)}" else "",
+                actions =
+                    listOf(
+                        DarkMessageDialog.Action("拒绝，保持离线") {
+                            BridgePrefs.answerPreset(this@BridgeSetupActivity, accepted = false)
+                        },
+                        DarkMessageDialog.Action(
+                            "同意并连接",
+                            emphasis = DarkMessageDialog.Emphasis.PRIMARY,
+                        ) {
+                            BridgePrefs.answerPreset(this@BridgeSetupActivity, accepted = true)
+                            urlInput?.setText(BridgePrefs.presetUrl)
+                            codeInput?.setText(BridgePrefs.presetKey)
+                            Bg.run("bridge-start") { BridgeClient.start(this@BridgeSetupActivity) }
+                        },
+                    ),
+            )
     }
 
     companion object {

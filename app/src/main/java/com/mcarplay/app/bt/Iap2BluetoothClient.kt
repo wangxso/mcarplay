@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.mcarplay.app.compat.BluetoothBringup
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
@@ -24,7 +25,7 @@ import java.util.concurrent.atomic.AtomicReference
  * 真无线 CarPlay 建链方向（对照 carplay-wifi-extractor client 模式，已在真车验证）：
  * 手机与车机完成系统级蓝牙配对后，由**手机主动连入**车机 SDP 广播的配件端服务
  * （UUID 00000000-deca-fade-deca-deafdecacaff，奥迪 MIB3 SDP 实测存在）；
- * 车机从不主动回连手机（测试台 DiPlay 会回连，那是接收端的测试行为）。
+ * 奇瑞等接收端则由车机主动回连手机，两个方向均需保留。
  *
  * 连上后复用与测试台完全相同的发送端 bring-up（[Iap2SenderSession]），
  * 成功时回调 [onEndpoint] 交出热点凭据与 AirPlay 端点。
@@ -47,6 +48,9 @@ class Iap2BluetoothClient(
     private val onGeneration: (ReceiverProfile.LinkGeneration) -> Unit = {},
     /** 目标车机（动态读取：选择后无需重启链路，下一轮尝试即生效）。 */
     private val targetProvider: () -> TargetDevicePrefs.Target? = { null },
+    private val diagnostics: BluetoothDiagnostics = BluetoothDiagnostics({}),
+    /** 车机拒绝主动连入、改为等它回连时调用一次（参数为设备名），界面据此提示「在车机上点本机」。 */
+    private val onAwaitingReceiverTap: (String) -> Unit = {},
 ) {
     /** 自动模式 SDP 闸门结论。 */
     enum class SdpGate {
@@ -185,6 +189,8 @@ class Iap2BluetoothClient(
 
     private var thread: Thread? = null
     private val currentSocket = AtomicReference<BluetoothSocket?>(null)
+    private val stateMonitor = AtomicReference<BluetoothStateMonitor?>(null)
+    private var diagnosticsEpoch = 0L
 
     /**
      * 客户端线程世代号：start()/stop() 都会递增。卡在阻塞 connect() 里的线程被
@@ -210,6 +216,9 @@ class Iap2BluetoothClient(
     /** 指定目标的 SDP 诊断已记录的地址（每轮 start 每台一次）。 */
     private val targetServicesReported = java.util.Collections.synchronizedSet(HashSet<String>())
 
+    /** 拒绝主动连入的车机改为等回连（见 [InboundWaitPolicy]）。 */
+    private val inboundWait = InboundWaitPolicy { SystemClock.elapsedRealtime() }
+
     /** 「是否提供 iAP2 服务」结论缓存（地址→结论）：SDP 查询不便宜，勿每 3s 重查。 */
     private val iap2ServiceCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
@@ -221,13 +230,16 @@ class Iap2BluetoothClient(
      * SecurityException 由 runCatching 吸收（探测失败按无服务处理，不断音频）。
      */
     @SuppressLint("MissingPermission")
-    private fun awaitIap2Service(device: BluetoothDevice): Boolean {
+    private fun awaitIap2Service(
+        device: BluetoothDevice,
+        diagnosticEpoch: Long,
+    ): Boolean {
         iap2ServiceCache[device.address]?.let { return it }
         if (cachedUuids(device).contains(ACCESSORY_IAP2_UUID)) {
             iap2ServiceCache[device.address] = true
             return true
         }
-        val has = probeServices(device).second.contains(ACCESSORY_IAP2_UUID)
+        val has = probeServices(device, diagnosticEpoch).second.contains(ACCESSORY_IAP2_UUID)
         iap2ServiceCache[device.address] = has
         return has
     }
@@ -238,7 +250,11 @@ class Iap2BluetoothClient(
 
     /** 触发一次 SDP 并等结果；返回（是否在等待窗内返回，服务 UUID 列表）。 */
     @SuppressLint("MissingPermission")
-    private fun probeServices(device: BluetoothDevice): Pair<Boolean, List<UUID>> {
+    private fun probeServices(
+        device: BluetoothDevice,
+        diagnosticEpoch: Long,
+    ): Pair<Boolean, List<UUID>> {
+        val startedAt = SystemClock.elapsedRealtime()
         val latch = java.util.concurrent.CountDownLatch(1)
         val receiver =
             object : android.content.BroadcastReceiver() {
@@ -251,26 +267,50 @@ class Iap2BluetoothClient(
                     if (hit?.address == device.address) latch.countDown()
                 }
             }
+        var registered = false
+        var error: RuntimeException? = null
         val started =
-            runCatching {
+            try {
                 ContextCompat.registerReceiver(
                     context,
                     receiver,
                     android.content.IntentFilter(BluetoothDevice.ACTION_UUID),
                     ContextCompat.RECEIVER_EXPORTED,
                 )
+                registered = true
                 device.fetchUuidsWithSdp()
-            }.getOrDefault(false)
+            } catch (failure: RuntimeException) {
+                error = failure
+                false
+            }
         var completed = false
+        var interrupted = false
         if (started) {
             try {
                 completed = latch.await(SDP_PROBE_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
             } catch (_: InterruptedException) {
+                interrupted = true
                 Thread.currentThread().interrupt()
             }
         }
-        runCatching { context.unregisterReceiver(receiver) }
-        return completed to cachedUuids(device)
+        if (registered) runCatching { context.unregisterReceiver(receiver) }
+        val uuids = cachedUuids(device)
+        diagnostics.sdp(
+            diagnosticEpoch,
+            device.address,
+            when {
+                error != null -> BluetoothDiagnostics.SdpOutcome.ERROR
+                interrupted -> BluetoothDiagnostics.SdpOutcome.CANCELLED
+                !started -> BluetoothDiagnostics.SdpOutcome.NOT_STARTED
+                completed -> BluetoothDiagnostics.SdpOutcome.COMPLETE
+                else -> BluetoothDiagnostics.SdpOutcome.TIMEOUT
+            },
+            SystemClock.elapsedRealtime() - startedAt,
+            uuids.size,
+            uuids.contains(ACCESSORY_IAP2_UUID),
+            error,
+        )
+        return completed to uuids
     }
 
     /**
@@ -280,8 +320,9 @@ class Iap2BluetoothClient(
     private fun reportTargetServices(
         device: BluetoothDevice,
         name: String,
+        diagnosticEpoch: Long,
     ) {
-        val (completed, uuids) = probeServices(device)
+        val (completed, uuids) = probeServices(device, diagnosticEpoch)
         if (uuids.contains(ACCESSORY_IAP2_UUID)) iap2ServiceCache[device.address] = true
         log("BT-C: 目标「$name」SDP ${describeServices(uuids, completed)}")
     }
@@ -315,8 +356,17 @@ class Iap2BluetoothClient(
         iap2ServiceCache.clear()
         skippedNoService.clear()
         targetServicesReported.clear()
+        inboundWait.reset()
         running = true
         val myGeneration = generation.incrementAndGet()
+        val diagnosticEpoch = diagnostics.epoch().also { diagnosticsEpoch = it }
+        diagnostics.client(diagnosticEpoch, started = true)
+        stateMonitor
+            .getAndSet(
+                BluetoothStateMonitor(context, diagnostics, diagnosticEpoch, targetProvider) {
+                    running && generation.get() == myGeneration
+                }.also { it.start() },
+            )?.stop()
         val target = targetProvider()
         log(
             "BT-C: 启动——将主动连入车机的无线 iAP2 服务（…caff）" +
@@ -326,7 +376,7 @@ class Iap2BluetoothClient(
                     "（未指定目标：依次尝试全部候选设备，可在「连接准备」中指定）"
                 },
         )
-        Thread({ connectLoop(myGeneration) }, "iap2-bt-client").apply {
+        Thread({ connectLoop(myGeneration, diagnosticEpoch) }, "iap2-bt-client").apply {
             isDaemon = true
             thread = this
             start()
@@ -335,7 +385,10 @@ class Iap2BluetoothClient(
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectLoop(myGeneration: Long) {
+    private fun connectLoop(
+        myGeneration: Long,
+        diagnosticEpoch: Long,
+    ) {
         val adapter =
             try {
                 context.getSystemService(BluetoothManager::class.java)?.adapter
@@ -356,7 +409,8 @@ class Iap2BluetoothClient(
             }
             val candidates = candidateDevices(adapter)
             if (candidates.isEmpty()) {
-                log("BT-C: 没有已配对的蓝牙设备——请先在系统设置里与车机完成蓝牙配对")
+                // 指定目标但未配对时 candidateDevices 已给出节流提示；此时其它已配对设备仍在，不能说「没有」
+                if (targetProvider() == null) log("BT-C: 没有已配对的蓝牙设备——请先在系统设置里与车机完成蓝牙配对")
                 sleepQuietly(RETRY_DELAY_MILLIS * 3)
                 continue
             }
@@ -375,9 +429,9 @@ class Iap2BluetoothClient(
                 // 其它在线设备）——确认提供 …caff 才进入「断开+连接」流程。选定目标
                 // 的设备不过闸（用户显式指定，保持原路径与时序）。
                 if (targetProvider() != null && targetServicesReported.add(device.address)) {
-                    reportTargetServices(device, name)
+                    reportTargetServices(device, name, diagnosticEpoch)
                 }
-                if (targetProvider() == null && !awaitIap2Service(device)) {
+                if (targetProvider() == null && !awaitIap2Service(device, diagnosticEpoch)) {
                     val deviceClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull()
                     val remembered = Iap2ReceiverMemory.contains(context, device.address)
                     val services = cachedUuids(device)
@@ -413,6 +467,10 @@ class Iap2BluetoothClient(
                             }
                     }
                 }
+                // SDP 等待期间用户可能已停止或重启；旧轮不能再创建一个无法被 stop() 关闭的新 socket。
+                if (!running || generation.get() != myGeneration) return
+                // 已确认只接受车机回连：不再每 3 秒连一次（也不做下面的断开配置文件对照），只按间隔探测
+                if (inboundWait.skipOutbound(device.address)) continue
                 // 未知设备先保留 HFP/A2DP；只有已保存的本地策略或用户发起的一次对照才断开。
                 // 每次 start 对同一目标最多执行一次，失败后恢复保留连接的基线，避免 ACL 反复震荡。
                 if (ReceiverDetectionRuntime.bluetooth(device.address) == BluetoothBringup.DISCONNECT_PROFILES &&
@@ -437,7 +495,7 @@ class Iap2BluetoothClient(
                         }
                     }
                 }
-                val socket = tryConnect(device)
+                val socket = tryConnect(device, name, myGeneration, diagnosticEpoch)
                 if (socket != null) {
                     log("BT-C: ✓ 已连入 $name 的无线 iAP2 服务（RFCOMM 建立）")
                     Iap2ReceiverMemory.remember(context, device.address)
@@ -445,9 +503,9 @@ class Iap2BluetoothClient(
                     break
                 } else {
                     val now = android.os.SystemClock.uptimeMillis()
-                    if (now - lastFailureLogAt > FAILURE_LOG_THROTTLE_MILLIS) {
+                    if (!inboundWait.isWaiting(device.address) && now - lastFailureLogAt > FAILURE_LOG_THROTTLE_MILLIS) {
                         lastFailureLogAt = now
-                        log("BT-C: 连接 $name 失败（车机未就绪或不在无线配对窗口），3 秒后重试…")
+                        log("BT-C: 连接 $name 失败（具体阶段与系统异常见 BT-DIAG），3 秒后重试…")
                     }
                 }
             }
@@ -509,24 +567,91 @@ class Iap2BluetoothClient(
     }
 
     @SuppressLint("MissingPermission")
-    private fun tryConnect(device: BluetoothDevice): BluetoothSocket? {
+    private fun tryConnect(
+        device: BluetoothDevice,
+        name: String,
+        myGeneration: Long,
+        diagnosticEpoch: Long,
+    ): BluetoothSocket? {
+        val target = targetProvider()
+        val trace =
+            diagnostics.connectStarted(
+                diagnosticEpoch,
+                device.address,
+                runCatching { device.bondState }.getOrNull(),
+                when {
+                    target == null -> BluetoothDiagnostics.PeerMatch.UNSELECTED
+                    TargetDevicePrefs.matches(target, device.address) -> BluetoothDiagnostics.PeerMatch.TARGET
+                    else -> BluetoothDiagnostics.PeerMatch.OTHER
+                },
+            )
         val socket =
             try {
                 device.createRfcommSocketToServiceRecord(ACCESSORY_IAP2_UUID)
             } catch (error: IOException) {
+                diagnostics.connectFinished(
+                    trace,
+                    creatingSocket = true,
+                    error = error,
+                    cancelled =
+                        !running || generation.get() != myGeneration,
+                )
+                return null
+            } catch (error: SecurityException) {
+                diagnostics.connectFinished(
+                    trace,
+                    creatingSocket = true,
+                    error = error,
+                    cancelled =
+                        !running || generation.get() != myGeneration,
+                )
                 return null
             }
         // 连接前就登记：connect() 是阻塞调用（SDP 查询 + 建链最长可达数十秒），
         // stop() 只有能拿到 socket 引用才能 close() 打断它，否则线程会滞留。
         currentSocket.set(socket)
+        if (!running || generation.get() != myGeneration) {
+            currentSocket.compareAndSet(socket, null)
+            runCatching { socket.close() }
+            diagnostics.connectFinished(trace, cancelled = true)
+            return null
+        }
+        val connectStartedAt = SystemClock.elapsedRealtime()
         return try {
             socket.connect()
+            diagnostics.connectFinished(trace, cancelled = !running || generation.get() != myGeneration)
+            inboundWait.connected(device.address)
             socket
         } catch (error: IOException) {
             currentSocket.compareAndSet(socket, null)
             runCatching { socket.close() }
+            val cancelled = !running || generation.get() != myGeneration
+            diagnostics.connectFinished(trace, error = error, cancelled = cancelled)
+            if (!cancelled) noteConnectFailure(device, name, error, SystemClock.elapsedRealtime() - connectStartedAt)
+            null
+        } catch (error: SecurityException) {
+            currentSocket.compareAndSet(socket, null)
+            runCatching { socket.close() }
+            diagnostics.connectFinished(trace, error = error, cancelled = !running || generation.get() != myGeneration)
             null
         }
+    }
+
+    private fun noteConnectFailure(
+        device: BluetoothDevice,
+        name: String,
+        error: IOException,
+        elapsedMs: Long,
+    ) {
+        val services = cachedUuids(device)
+        if (!inboundWait.failed(device.address, services, BluetoothFailure.reason(error), elapsedMs)) return
+        log(
+            "BT-C: 「$name」不接受手机主动连入（SDP 无 …caff，${elapsedMs}ms 即 READ_FAILED" +
+                (if (InboundWaitPolicy.INBOUND_ONLY_SIGNATURE in services) "，带艾瑞泽 8 同款厂商服务" else "") +
+                "）——改为等待车机回连：请在车机蓝牙/CarPlay 设备列表中点选本机；" +
+                "每 ${InboundWaitPolicy.PROBE_INTERVAL_MILLIS / 1000} 秒仍试一次主动连接",
+        )
+        onAwaitingReceiverTap(name)
     }
 
     private fun runSession(socket: BluetoothSocket) {
@@ -574,6 +699,8 @@ class Iap2BluetoothClient(
         running = false
         // 递增世代：即便有线程卡在 connect()，事后也会因世代不符自杀，不会在下次启动时复活
         generation.incrementAndGet()
+        stateMonitor.getAndSet(null)?.stop()
+        diagnostics.client(diagnosticsEpoch, started = false)
         currentSocket.getAndSet(null)?.let { runCatching { it.close() } }
         activeChannel.getAndSet(null)?.let { runCatching { it.close() } }
         thread?.interrupt()

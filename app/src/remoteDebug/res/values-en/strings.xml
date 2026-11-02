@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="export_diagnostics">Export full diagnostics (unredacted)</string>
+    <string name="ma_scope_support">Full environment, connection/self-test stages, original exceptions, exit records and recent history. Up to about 4 MB of runtime logs. This file is not redacted.</string>
+    <string name="ma_scope_current">Unredacted runtime logs from this process, diagnostic events and the full environment.</string>
+    <string name="ma_scope_all">The last two unredacted log segments, up to about 4 MB, plus the full environment and diagnostic events.</string>
+    <string name="ma_export_done_title">Unredacted diagnostic report exported</string>
+    <string name="ma_export_done_body">File:\n%1$s\n\nReport ID: %2$s\nSize: %3$s\n%4$s\n\nThis file retains original contents and may include device/network identities, hotspot passwords and session information. Share only with your intended support contact and include the reproduction time and steps.\n\nFind it under Files → Downloads → mcarplay, or share it below.</string>
+</resources>

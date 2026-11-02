@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Base64
 
@@ -80,6 +81,16 @@ class BinaryPlistTest {
      * 整数宽度必须按**有符号**范围选。端口号常落在 32768..65535，按无符号阈值写成
      * 2 字节时 Apple 端按 int16 读成负数（35449 → -30087），接收端会拒绝或绑错端口。
      */
+
+    /** 1/2/4 字节整数按无符号读：负数必须写成 8 字节（`speechMode=-1` 曾被车机读成 255）。 */
+    @Test
+    fun negativeIntegersUseSignedEightByteForm() {
+        val encoded = BinaryPlist.encode(linkedMapOf<String, Any?>("speechMode" to -1L))
+        val marker = byteArrayOf(0x13, -1, -1, -1, -1, -1, -1, -1, -1)
+        assertTrue(encoded.toList().windowed(marker.size).any { it == marker.toList() })
+        assertEquals(-1L, (BinaryPlist.parse(encoded) as Map<*, *>)["speechMode"])
+    }
+
     @Test
     fun encodeDecodeRoundTripsPortRangeIntegers() {
         for (value in listOf(0L, 127L, 128L, 255L, 256L, 32767L, 32768L, 35449L, 65535L, 65536L)) {

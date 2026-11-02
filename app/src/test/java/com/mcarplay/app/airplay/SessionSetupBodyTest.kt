@@ -38,6 +38,18 @@ class SessionSetupBodyTest {
         assertEquals("10:C1:97:1A:C7:44", root["deviceID"])
     }
 
+    /** 艾瑞泽 8：真 iPhone 在 macAddress 填自己的 Wi-Fi 地址，车机按它匹配热点终端（2026-11-02）。 */
+    @Test
+    fun macAddressDefaultsToPlaceholderAndCarriesRealWifiAddress() {
+        val placeholder = BinaryPlist.parse(client().buildSessionSetupBody("10:C1:97:1A:C7:44", timingPort = 35449)) as Map<*, *>
+        assertEquals("aa:bb:cc:dd:ee:ff", placeholder["macAddress"])
+        val real =
+            BinaryPlist.parse(
+                client().buildSessionSetupBody("10:C1:97:1A:C7:44", timingPort = 35449, macAddress = "c2:11:22:33:44:55"),
+            ) as Map<*, *>
+        assertEquals("c2:11:22:33:44:55", real["macAddress"])
+    }
+
     @Test
     fun deviceIdIsNotTheCatplayPlaceholder() {
         val body = client().buildSessionSetupBody("10:C1:97:1A:C7:44", timingPort = 35449)

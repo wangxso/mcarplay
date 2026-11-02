@@ -16,6 +16,26 @@ import java.util.concurrent.atomic.AtomicReference
 
 class CarLifeSessionTest {
     @Test
+    fun stopPreservesLastListenerFailureForReportAfterConnectorIsReleased() {
+        var now = 0L
+        val connector =
+            CarLifeChannelConnector(
+                connect = { throw ConnectException("connection refused") },
+                sleep = { now += 2 },
+                nowMs = { now },
+            )
+        org.junit.Assert.assertThrows(CarLifeListenerTimeoutException::class.java) { connector.connectAll(timeoutMs = 1) }
+        val session = CarLifeSession(Application(), onAccessUnit = {}, onEnded = {}, log = {})
+        field("connector").set(session, connector)
+        (field("running").get(session) as AtomicBoolean).set(true)
+        session.stop()
+        val summary = session.diagnosticSummary()
+        assertNull(field("connector").get(session))
+        assertTrue(summary, summary.contains("lastFailedPort=7240 lastFailure=REFUSED"))
+        assertTrue(summary, summary.contains("timedOut=true stopped=true"))
+    }
+
+    @Test
     fun stoppingSleepingHeartbeatDoesNotReachUncaughtHandler() {
         repeat(20) {
             val session = CarLifeSession(Application(), onAccessUnit = {}, onEnded = {}, log = {})

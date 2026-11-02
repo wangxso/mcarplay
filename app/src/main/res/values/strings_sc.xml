@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
     <string name="sc_cancelled">已取消连接</string>
+    <string name="sc_disconnecting">正在断开（通知车机结束会话）…</string>
     <string name="sc_hotspot_lost">车机热点已断开（%1$s）</string>
     <string name="sc_hotspot_lost_hint">车机热点 \"%1$s\" 已断开——请重新启动连接</string>
     <string name="sc_bt_ready">蓝牙就绪，等待车机回连…</string>
+    <string name="sc_tap_phone_on_receiver">等待车机「%1$s」回连——请在车机上点选本机…</string>
+    <string name="sc_tap_phone_on_receiver_hint">车机「%1$s」不接受手机主动连接：请在车机的蓝牙或 CarPlay 设备列表中点选本机</string>
     <string name="sc_got_credentials">拿到车机热点凭据，绑定 WiFi…</string>
     <string name="sc_bind_failed">已连上车机热点但未能绑定网络——请重新连接</string>
     <string name="sc_silent_join">正在静默连接车机热点 %1$s…</string>

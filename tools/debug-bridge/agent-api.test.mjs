@@ -132,3 +132,37 @@ test('matches the app redactor on names, identifiers and app constants', () => {
   const video = 'VIDEO: CarWith 参数集 profile=66 constraint=0x80 level=31\nENV: Wi-Fi rssi=-48dBm 5745MHz 速率=433Mbps\nEVENT: forceKeyFrame=60 requestUI=20 at 12:34:56.789 port=7240';
   assert.equal(createRedactor()(video), video);
 });
+
+test('serves the viewer without data or token, under a strict CSP', async () => {
+  const page = await fetch(base + '/log-viewer/');
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-security-policy'), /default-src 'none'.*connect-src 'self'/);
+  const html = await page.text();
+  assert.ok(html.includes('viewer.js') && !html.includes(token));
+  assert.equal((await fetch(base + '/log-viewer/viewer.js')).headers.get('content-type'), 'text/javascript; charset=utf-8');
+  assert.equal((await fetch(base + '/log-viewer', { redirect: 'manual' })).status, 308);
+  for (const route of ['/log-viewer/../agent-api.mjs', '/log-viewer/%2e%2e/agent-api.mjs', '/log-viewer/viewer.test.js']) {
+    assert.equal((await fetch(base + route)).status, 404, route);
+  }
+  assert.equal((await fetch(base + '/log-viewer/', { method: 'POST' })).status, 405);
+});
+
+test('exports a whole file with one redactor, so aliases match across every line', async () => {
+  const rows = ['WIFI: ssid=Home Car AP channel=36', ...Array.from({ length: 3000 }, (_, i) => `line ${i} joining Home Car AP 中文`), 'RAW rx 01 02'];
+  await fs.writeFile(path.join(root, 'export.jsonl'), rows.map((text, i) => JSON.stringify({ seq: i + 1, text }) + '\n').join('') + '{"seq":9999,"te');
+  assert.equal((await fetch(base + '/api/v1/export?deviceId=export')).status, 401);
+  const response = await request('/api/v1/export?deviceId=export');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-disposition'), 'attachment; filename="export-redacted.txt"');
+  const lines = (await response.text()).trimEnd().split('\n');
+  assert.equal(lines.length, rows.length);
+  assert.equal(lines.join('\n').includes('Home Car'), false);
+  assert.ok(lines.slice(1, -1).every((l) => l.includes('joining <NAME-1>')));
+  assert.equal(lines.at(-1), '[wire payload omitted]');
+  const jsonl = await request('/api/v1/export?deviceId=export&format=jsonl&contains=LINE 299');
+  const records = (await jsonl.text()).trimEnd().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(records.map((r) => r.seq), [301, ...Array.from({ length: 10 }, (_, i) => 2992 + i)]);
+  for (const query of ['deviceId=export&format=html', 'deviceId=export&file=../.env', 'deviceId=../export']) {
+    assert.ok([400, 404].includes((await request(`/api/v1/export?${query}`)).status), query);
+  }
+});

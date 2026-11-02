@@ -2,12 +2,15 @@ package com.mcarplay.app.carlife
 
 import android.app.ActivityManager
 import android.app.AppOpsManager
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Process
 import android.provider.Settings
+import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
 
 /** Uses ordinary intents to open CarWith's exported settings or compatibility entry. */
 object CarLifeLauncher {
@@ -17,6 +20,8 @@ object CarLifeLauncher {
     const val CARWITH_ENTRY =
         "com.miui.carlink.castfwk.usb.CarlifeAdbActivity"
     const val CARLIFE_PACKAGE = "com.baidu.carlife.xiaomi"
+
+    enum class EntryLaunchResult { NOT_REQUESTED, REQUESTED, MISSING, DISABLED, NOT_EXPORTED, PERMISSION_DENIED, FAILED }
 
     fun isAvailable(context: Context): Boolean =
         runCatching {
@@ -28,7 +33,29 @@ object CarLifeLauncher {
     fun openSettings(context: Context): Boolean = startActivity(context, CARWITH_SETTINGS)
 
     /** The component's name contains Adb, but this ordinary app intent needs no ADB client. */
-    fun launchPublicEntry(context: Context): Boolean = startActivity(context, CARWITH_ENTRY)
+    fun launchPublicEntry(context: Context): Boolean = requestPublicEntry(context) == EntryLaunchResult.REQUESTED
+
+    /** REQUESTED 只说明 startActivity 返回，不能证明 CarWith 真正收到入口请求。 */
+    fun requestPublicEntry(context: Context): EntryLaunchResult =
+        try {
+            val component = ComponentName(CARWITH_PACKAGE, CARWITH_ENTRY)
+            val info = context.packageManager.getActivityInfo(component, 0)
+            when {
+                !info.enabled -> EntryLaunchResult.DISABLED
+                !info.exported -> EntryLaunchResult.NOT_EXPORTED
+                else -> {
+                    context.startActivity(Intent().setComponent(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    EntryLaunchResult.REQUESTED
+                }
+            }
+        } catch (error: Exception) {
+            DiagnosticExportPolicy.exception("CARWITH_PUBLIC_ENTRY", error)
+            when (error) {
+                is PackageManager.NameNotFoundException, is ActivityNotFoundException -> EntryLaunchResult.MISSING
+                is SecurityException -> EntryLaunchResult.PERMISSION_DENIED
+                else -> EntryLaunchResult.FAILED
+            }
+        }
 
     /**
      * 后台发起的 startActivity 可能被系统静默丢弃且不抛异常（2026-10-26 小米实测：
