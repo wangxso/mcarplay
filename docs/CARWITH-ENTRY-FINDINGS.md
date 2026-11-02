@@ -791,6 +791,37 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
 原文含定位与设备序列号，仅存本机临时目录，不入库。手机为用户提供的真 iPhone（型号与 iOS 版本未记录）。用户操作：未在 iPhone 上忽略此车时
 连不上，忽略后重新配对；连上后先关 iPhone 蓝牙（会话不受影响），再关无线局域网（会话断开）；之后重新打开两者即自动重连。
 
+### 真 iPhone 连接全过程（逐步，19:49:38–19:51:44，车机 ADB logcat）
+
+以下按时间顺序列出同一次会话（会话时长 106 s、`noErr` 结束）在车机日志中的每一步；「+」为距用户在车机蓝牙设置点选 iPhone 的秒数。
+地址、热点名与口令已略去。末列为 mcarplay 在 2026-11-02 23:36 复测（APK `a029717a…`）中的对应表现。
+
+| 步骤 | 时刻 | 车机日志证据 | 说明 | mcarplay 现状 |
+|---|---|---|---|---|
+| 1 点选 | 38.073（+0） | `connectWirelessCarplay: iPhone` → 38.441 `FlcBsmSockConnect` | 车机发起蓝牙 SPP 连向手机的 iAP2 服务；手机不主动连车机 | 相同（手机主动连入在该车上 45 ms 内 `READ_FAILED`，改为等车机回连） |
+| 2 iAP2 识别 | 44.422–44.522（+6.4） | `Device_StartIdentificationMessage` → `Accessory_IdentificationInformationMessage`（含 `BluetoothTransportComponent`、`WirelessCarPlayTransportComponent`）→ `Device_IdentificationAcceptedMessage` | 点选到识别约 6 s，为车机侧链路建立耗时 | 相同 |
+| 3 蓝牙 MFi 认证 | 44.588–45.399（+7.3） | 证书 608 B → `Accessory_AuthenticationResponseMessage sem_wait` 44.875 → `sem_post` 45.307（0.43 s）→ `iAP AUTHENTICATION_PASS` | 一次挑战即通过；车机芯片为 MFi Auth 3.0，摘要 32 字节 | 修改后相同：只发一次 32 B，0.55 s 收到签名（此前先发 20/16 B，芯片挂起约 35 s） |
+| 4 热点凭据 | 45.404 | `Device_RequestAccessoryWiFiConfigurationInformationMessgae` → `Accessory_WiFiConfigurationInformationMessgae`（SSID、口令、`securityType = 2`、`channel = 149`） | iPhone 认证后立即请求车机热点信息（0x5702 → 0x5703） | 相同 |
+| 5 车机起 AirPlay | 45.458 | `Registering Bonjour _airplay._tcp. port 7000`、`AirPlay servers started` | 车机在发出凭据的同时开 AirPlay 服务 | 相同 |
+| 6 入网 | 49.262（+11.2） | `OnApLinkedStaJoin` | 拿到凭据约 3.9 s 后加入热点 | 相同；手机系统 WLAN 保存过该热点时会以系统身份入网并成为默认网络（无互联网） |
+| 7 车机连手机 ctrl | 入网后 | 车机以 `hostName=iPhone.local.` 连 iPhone 的 `_carplay-ctrl` | 车机按手机广播的 ctrl 服务回连 | 相同（手机广播 `_carplay-ctrl._tcp`） |
+| 8 配对 | 53.009–53.266（+15.2） | `Control pair-setup HK, type 0` ×3、`Control pair-verify 1/2` | 车机重启后首连做完整 pair-setup（M1/M3/M5）再 pair-verify；19:55、19:57 重连只走 pair-verify | 修改后配对类型相同（`X-Apple-HKP: 0`；原为 `type 2`）；**不同**：mcarplay 每次会话都做完整 pair-setup |
+| 9 会话内 MFi | 53.276–53.717 | `MFi _requestProcessAuthSetup` → `MFiSAP_Exchange start/end`（0.44 s） | pair-verify 后、会话开始前做 `/auth-setup` | 修改后相同（0.47–0.51 s，证书 608 B、签名 64 B） |
+| 10 会话开始 | 53.789–53.910（+15.8） | `AirPlay session started: From=iPhone … T=WiFi C=?`、`HID started`、`link_BindPort iap2_wificarplay_port` | 只记一次 `session started` | 修改后 `From=iPhone`；补发 RECORD 时会记两次（与崩溃无关） |
+| 11 初始模式 | 53.969 | `Modes changed: screen accessory …, mainAudio accessory …, speech n/a (none)` | iPhone 起步时屏幕与主音频都留给车机 | **不同**：mcarplay 不经此阶段，约 2 s 后直接 `screen controller / mainAudio controller` |
+| 12 网络 iAP2 识别 | 54.028 | `field_put_VehicleInformationComponent`、`field_put_LocationInformationComponent` | 经 AirPlay 内的 iAP2 链路再做一次识别 | 相同（23:36 为 39.254）；部分会话该链路未到 NORMAL |
+| 13 车机关蓝牙 | 54.041–54.130（+16.0） | `CarplayService_DisableBluetooth`、`CarPlayConnected and setBtDisable`；54.574 ACL 断开 | iPhone 在会话开始约 0.13 s 后发 `disableBluetooth`，会话改走纯 Wi-Fi | 修改后相同 |
+| 14 隧道 MFi 认证 | 54.197–54.752（+16.7） | 证书 608 B → `sem_wait` 54.230 → `sem_post` 54.677（0.45 s）→ `Option_WifiCarplay_Wifi AUTHENTICATION_PASS 2` | 网络 iAP2 一次挑战即通过 | 修改后相同（只发一次 32 B，0.48 s；此前先发 20 B，挂起约 37 s 并排队） |
+| 15 接管屏幕与主音频 | 55.366–55.549（+17.5） | `Modes changed: screen controller …`（55.366）→ `mainAudio controller`（55.539）→ `ScreenStreamStart`、`video stream status … 0` | 会话开始约 1.5 s 后才接管并出画 | **不同**：mcarplay 的屏幕流在会话开始前（39.063）就已启动 |
+| 16 主音频按需 | 58.066（+20.0） | `Main audio setting up AAC-LC/44100/2 for media` | 有媒体播放时才建主音频流 | **不同**：mcarplay 会话开始 0.1 s 即建主音频并全程保持 |
+| 17 辅音频（提示音） | 19:50:07.663–13.579 | `Alt audio setting up AAC-ELD/48000/1` → `[duer]Teardown` → `Alt audio torn down` | 约 6 s 的提示音单独建流、单独拆流；19:55、19:57 两次会话没有 | 不建辅音频（与崩溃无关，见下） |
+| 18 暂停时拆主音频 | 19:50:30.502 / 19:50:50.311 | `[duer]Teardown` → `Main audio torn down`；20 s 后 `Main audio setting up …` | 媒体停止即拆流，恢复播放再建；会话与屏幕流保持 | **不同**：mcarplay 不中途拆主音频 |
+| 19 断开 | 19:51:40.141–.530 | iAP2 `wirelessCarPlayStatus = 0`（0x4E0D）→ .270 第一条 `[duer]Teardown`（屏幕流）→ .494 第二条（整会话，间隔约 220 ms）→ .501 `session ended … noErr` → .530 `AirPlay servers stopped` | 先告知无线不可用，再拆屏幕流，最后拆会话 | 修改后相同（链路未到 NORMAL 时 0x4E0D 无法发送） |
+| 20 收尾 | 41.113–44.110 | `CarPlayDisconnected and setBtEnable`；41.346 `OnApLinkedStaLeave`（会话结束后 0.85 s）；44.102 蓝牙适配器 `10->11` 重新开启 | iPhone 立即离开热点；车机恢复蓝牙 | 手机按设置可能留在热点上；离开与否都会崩溃 |
+| 21 结束后 | 19:51:41 起 | 无 `Idle for`、无崩溃 | — | **不同**：mcarplay 每次会话结束 +10 s `### Idle for 10 seconds`、+20 s `_PerformPeriodTasks+640` SIGSEGV，原因未定位 |
+
+同日 19:55、19:57 两次 iPhone 重连不再点选：两者都开时 iAP2 报可用（状态 1）→ 入热点 → 车机连 `iPhone.local` → 会话开始，且只走 pair-verify（见下文）。
+
 - **连接（19:49:4x–19:49:55）：** 车机经蓝牙完成 iAP2 后，iPhone 加入车机热点，车机以 `hostName=iPhone.local.` 连 iPhone 的 ctrl，随后
   pair-setup/pair-verify、AirPlay MFiSAP，19:49:53.910 `AirPlay session started: From=iPhone … T=WiFi`，19:49:55 屏幕接收启动。
 - **会话中按流拆音频：** 音频结束时 iPhone 单独拆流——19:50:13 `[duer]Teardown` → `Alt audio torn down`，19:50:30 `[duer]Teardown` →
@@ -927,8 +958,10 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
   `carplayserver_stop` → `AirPlay servers stopped` → `CFRunLoopRun end` → `DeactiveWirelessCarPlay end`）与真 iPhone 19:51:40 逐行一致，
   仅 `DeactiveWirelessCarPlay linkid` 为 1（iPhone 为 2）。同一会话车机记两次 `session started`（第二次 `C=AAC-LC`，对应补发 RECORD），
   但 20:03、20:44、22:44、22:57 只记一次的会话同样崩溃，故非诱因。
-- **当晚结论：** 日志层面可见的与 iPhone 的差异已全部对齐（蓝牙释放、有序断开、真实 MAC、type-130、来源名、speechMode、HKP、auth-setup、MFi 32B），
-  断开后 +20 s 的 `_PerformPeriodTasks` 崩溃仍在。车机 CarPlay 进程崩溃后约 5 s 自动重启并能回连；继续定位需要车机 AirPlay 库内部的证据。
+- **当晚结论：** 已对齐并在车上验证的差异：蓝牙释放、有序断开、真实 MAC、type-130、来源名、speechMode、HKP、auth-setup、MFi 32B；
+  断开后 +20 s 的 `_PerformPeriodTasks` 崩溃仍在。车机 CarPlay 进程崩溃后约 5 s 自动重启并能回连。
+  **更正：** 按上文「真 iPhone 连接全过程」逐步对照，仍有三处行为差异未试：① iPhone 起步时屏幕与主音频都留给车机（`accessory`），约 1.5 s 后才接管；
+  ② 主音频只在媒体播放时建立、暂停即拆（会话结束时未必有主音频流），mcarplay 全程保持；③ iPhone 重连只走 pair-verify，mcarplay 每次完整 pair-setup。
 - **MFi 32B 固定修改包实车复测（2026-11-02 23:36–23:40，UTC+8；APK `a029717a…`，车机 ADB logcat + 调试桥手机日志）：** 23:36:25 车机点选，
   蓝牙 0xAA02 32B（一次、窗口 40 s）0.55 s 收到 0xAA03，车机芯片读取约 0.43 s；auth-setup 511 ms；23:36:38 会话开始，隧道 0xAA02 32B 一次、0.48 s 收到签名，
   车机记 `Option_WifiCarplay_Wifi AUTHENTICATION_PASS`。点选到出画约 12 s，全程无芯片挂起。会话 204 s（触摸 40 次），23:40:02 有序断开 `noErr`；
