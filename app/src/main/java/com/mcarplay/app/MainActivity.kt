@@ -45,6 +45,7 @@ import com.mcarplay.app.legal.DisclaimerDialog
 import com.mcarplay.app.legal.DisclaimerPrefs
 import com.mcarplay.app.legal.needsDisclaimerAtLaunch
 import com.mcarplay.app.media.NotificationAccess
+import com.mcarplay.app.service.BatteryExemption
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ExternalHuService
 import com.mcarplay.app.shizuku.CarInputClient
@@ -609,9 +610,43 @@ class MainActivity : AppCompatActivity() {
                 log("CARLIFE: 未允许「后台弹出界面」，CarPlay 会话建立后可能无法打开 CarWith 入口")
                 showBackgroundStartGuidance()
             } else {
+                continueAfterBackgroundStartCheck()
+            }
+        }
+    }
+
+    /** 本进程已提示过电池优化（「仍然连接」后不再每次连接都打断）。 */
+    private var batteryPromptShown = false
+
+    /** 未豁免电池优化时锁屏会被系统冻结断网（见 [BatteryExemption]）：连接前提示一次，用户仍可继续。 */
+    private fun continueAfterBackgroundStartCheck() {
+        runOnUiThread {
+            val exempt = BatteryExemption.isExempt(this)
+            if (BatteryExemption.shouldPrompt(exempt, batteryPromptShown)) {
+                batteryPromptShown = true
+                log("POWER: 未豁免电池优化——锁屏后系统可能冻结 mcarplay 并断网，提示用户设置")
+                showBatteryExemptionGuidance()
+            } else {
                 startConnectionUnchecked()
             }
         }
+    }
+
+    private fun showBatteryExemptionGuidance() {
+        DarkMessageDialog.show(
+            activity = this,
+            title = getString(R.string.ma_battery_title),
+            message = getString(R.string.ma_battery_body),
+            actions =
+                listOf(
+                    DarkMessageDialog.Action(getString(R.string.action_connect_anyway)) { startConnectionUnchecked() },
+                    DarkMessageDialog.Action(getString(R.string.action_go_grant), DarkMessageDialog.Emphasis.PRIMARY) {
+                        if (!BatteryExemption.openSettings(this)) {
+                            log("POWER: 无法打开电池优化设置，请到 设置 → 应用 → mcarplay → 省电策略 手动设为无限制")
+                        }
+                    },
+                ),
+        )
     }
 
     private fun showBackgroundStartGuidance() {
@@ -621,7 +656,7 @@ class MainActivity : AppCompatActivity() {
             message = getString(R.string.ma_background_body),
             actions =
                 listOf(
-                    DarkMessageDialog.Action(getString(R.string.action_connect_anyway)) { startConnectionUnchecked() },
+                    DarkMessageDialog.Action(getString(R.string.action_connect_anyway)) { continueAfterBackgroundStartCheck() },
                     DarkMessageDialog.Action(getString(R.string.action_go_grant), DarkMessageDialog.Emphasis.PRIMARY) {
                         if (!CarLifeLauncher.openBackgroundStartSettings(this)) {
                             log("CARLIFE: 无法打开权限页，请到 设置 → 应用 → mcarplay → 权限 手动开启")
