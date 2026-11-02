@@ -27,7 +27,9 @@ Resources and assets are in `app/src/main/res/` and `app/src/main/assets/`; the 
 
 Python tools in `tools/`: `carlife_probe.py` (CarLife loopback probe, writes raw H.264), `analyze_diagnostics.py` (offline summary
 of a redacted support report), `release_notes.py` (extracts a changelog entry for a tag) and `prepare_upload.py` (source-only
-upload bundle under `dist/`), each with `test_*.py`. Documentation:
+upload bundle under `dist/`), each with `test_*.py`. `tools/debug-bridge/agent-api.mjs` is the read-only, redacted log API that
+the external remote-debug bridge server mounts; its redactor mirrors `DiagnosticRedactor`, so change both together. Neither the
+hook nor CI runs it; test with `node --test tools/debug-bridge/agent-api.test.mjs` (Node 20+). Documentation:
 
 - `IMPLEMENTATION_PLAN.md` (Chinese): milestones, current baseline and acceptance criteria; update it when status changes.
 - `docs/CARWITH-ENTRY-FINDINGS.md`: dated, redacted device evidence and corrections of earlier conclusions.
