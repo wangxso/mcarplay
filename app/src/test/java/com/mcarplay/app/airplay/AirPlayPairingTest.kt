@@ -3,8 +3,11 @@ package com.mcarplay.app.airplay
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.EOFException
+import java.io.IOException
 import java.math.BigInteger
 import java.security.SecureRandom
 
@@ -93,14 +96,137 @@ class AirPlayPairingTest {
         assertArrayEquals(big, decoded[Tlv8.TYPE_PUBLIC_KEY])
     }
 
+    @Test
+    fun fourConnectionsRegisterOnceAndVerifyEveryTime() {
+        val receiver = MockReceiver()
+        val requests = ArrayList<String>()
+        val transport =
+            TlvTransport { path, body ->
+                requests.add(path)
+                receiver.handle(path, body)
+            }
+        val handshake = PairingHandshake(newIdentity(), { transport }, { error("unexpected reconnect") }, {})
+        var remembered: PairSetupClient.ReceiverIdentity? = null
+        repeat(4) {
+            val result = handshake.run(remembered, null)
+            remembered = result.receiver
+            assertNotNull(remembered)
+            assertArrayEquals(receiver.lastReadKey, result.keys.phoneWriteKey)
+            assertArrayEquals(receiver.lastWriteKey, result.keys.phoneReadKey)
+        }
+        assertEquals(3, requests.count { it == "/pair-setup" })
+        assertEquals(8, requests.count { it == "/pair-verify" })
+    }
+
+    @Test
+    fun forgottenControllerRepairsTrustOnceOnFreshConnection() {
+        val receiver = MockReceiver()
+        val requests = ArrayList<String>()
+        var reconnects = 0
+        var invalidations = 0
+        val transport =
+            TlvTransport { path, body ->
+                requests.add(path)
+                receiver.handle(path, body)
+            }
+        val handshake = PairingHandshake(newIdentity(), { transport }, { reconnects++ }, {}, onTrustInvalidated = { invalidations++ })
+        val remembered = PairSetupClient.ReceiverIdentity(receiver.pairingId, receiver.staticKey.publicKey)
+        val result = handshake.run(remembered, null)
+        assertEquals(
+            listOf(
+                "/pair-verify",
+                "/pair-verify",
+                "/pair-setup",
+                "/pair-setup",
+                "/pair-setup",
+                "/pair-verify",
+                "/pair-verify",
+            ),
+            requests,
+        )
+        assertEquals(1, reconnects)
+        assertEquals(1, invalidations)
+        assertArrayEquals(receiver.lastReadKey, result.keys.phoneWriteKey)
+    }
+
+    @Test
+    fun savedVerifyTransportAndBusyFailuresNeverRegisterOrRemoveTrust() {
+        val receiver = MockReceiver()
+        val remembered = PairSetupClient.ReceiverIdentity(receiver.pairingId, receiver.staticKey.publicKey)
+        val failures =
+            listOf(EOFException("closed"), IOException("HTTP/1.1 403 Forbidden")) +
+                listOf(1, 3, 4, 5, 6, 7).map { PairingRejectedException("/pair-verify", 2, it) }
+        for (failure in failures) {
+            val transport =
+                TlvTransport { path, _ ->
+                    assertEquals("/pair-verify", path)
+                    throw failure
+                }
+            val handshake =
+                PairingHandshake(
+                    newIdentity(),
+                    { transport },
+                    { error("unexpected reconnect") },
+                    {},
+                    onTrustInvalidated = { error("trust must survive ${failure.message}") },
+                )
+            assertThrows(IOException::class.java) { handshake.run(remembered, null) }
+        }
+    }
+
+    @Test
+    fun badSetupSignatureIsRejected() {
+        val receiver = MockReceiver(badSetupSignature = true)
+        val transport = TlvTransport { path, body -> receiver.handle(path, body) }
+        assertThrows(IOException::class.java) { PairSetupClient(newIdentity(), transport) {}.run() }
+    }
+
+    @Test
+    fun savedVerifyRejectsChangedReceiverIdentityAndSignature() {
+        val receiver = MockReceiver()
+        val transport = TlvTransport { path, body -> receiver.handle(path, body) }
+        val identity = newIdentity()
+        assertThrows(IOException::class.java) { PairVerifyClient(identity, transport) {}.run(receiver.staticKey.publicKey, "other-id") }
+        assertThrows(IOException::class.java) { PairVerifyClient(identity, transport) {}.run(newIdentity().publicKey, receiver.pairingId) }
+    }
+
+    @Test
+    fun pairingResponsesRejectErrorsAndUnexpectedStates() {
+        for ((path, state) in listOf(
+            "/pair-setup" to 2,
+            "/pair-setup" to 4,
+            "/pair-setup" to 6,
+            "/pair-verify" to 2,
+            "/pair-verify" to 4,
+        )) {
+            val error =
+                Tlv8.encode(
+                    listOf(
+                        Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(state.toByte())),
+                        Tlv8.Item(Tlv8.TYPE_ERROR, byteArrayOf(7)),
+                    ),
+                )
+            val rejected = assertThrows(PairingRejectedException::class.java) { decodePairingResponse(path, state, error) }
+            assertEquals(7, rejected.errorCode)
+            val unexpected = Tlv8.encode(listOf(Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(1))))
+            assertThrows(IOException::class.java) { decodePairingResponse(path, state, unexpected) }
+        }
+    }
+
+    private fun newIdentity(): ControllerIdentity {
+        val keyPair = AirPlayCrypto.ed25519Generate()
+        return ControllerIdentity("test-controller-id", keyPair.privateKey, keyPair.publicKey)
+    }
+
     /**
      * 按参考接收端算法实现的服务端。[padded] = false 时每项编码取反：A/B 去前导零参与哈希、B 不补零下发，
      * S 反而补零后求 K；
-     * [shortKeyRounds] 指定前几轮 M2 故意给首字节为 0 的 B。
+     * [shortKeyRounds] 指定前几轮 M2 故意给首字节为 0 的 B；[badSetupSignature] 让 M6 签名失效。
      */
     private class MockReceiver(
         private val padded: Boolean = true,
         private var shortKeyRounds: Int = 0,
+        private val badSetupSignature: Boolean = false,
     ) {
         val staticKey = AirPlayCrypto.ed25519Generate()
         val pairingId = "3e6f5739-b2bf-4ebf-bb87-5b6b57cc42e5"
@@ -151,6 +277,7 @@ class AirPlayPairingTest {
         }
 
         private fun setupM2(): ByteArray {
+            pvShared = ByteArray(0)
             salt = ByteArray(16).also(random::nextBytes)
             val identifier = Srp6aClient.USERNAME.toByteArray()
             val x =
@@ -237,6 +364,7 @@ class AirPlayPairingTest {
             val accessoryId = pairingId.toByteArray(Charsets.UTF_8)
             val accessorySignKey = hkdf("Pair-Setup-Accessory-Sign-Salt", "Pair-Setup-Accessory-Sign-Info")
             val signature = AirPlayCrypto.ed25519Sign(staticKey.privateKey, accessorySignKey + accessoryId + staticKey.publicKey)
+            if (badSetupSignature) signature[0] = (signature[0].toInt() xor 1).toByte()
             val subResponse =
                 Tlv8.encode(
                     listOf(

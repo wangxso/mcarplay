@@ -221,6 +221,12 @@ class AirPlayClient(
     private var recordAccepted = false
 
     @Volatile
+    private var sessionSetupAccepted = false
+
+    @Volatile
+    private var screenStreamUuid: String? = null
+
+    @Volatile
     private var networkIapAuthenticated = false
 
     @Volatile
@@ -327,6 +333,7 @@ class AirPlayClient(
 
     private fun runPairingLoop(windowMillis: Long): PairVerifyClient.ControlKeys? {
         val identity = loadOrCreateIdentity()
+        val pairings = ReceiverPairingStore(context)
         log("AIRPLAY: 控制器身份 pairingId=${identity.pairingId}")
         // 车机 AirPlay 窗口是「用户点车机上的手机图标 / 收到 ctrl 邀请后才开」的
         // （Audi 实测：端口从 Connection refused 变为开放）。因此重试采用时限制：
@@ -355,51 +362,35 @@ class AirPlayClient(
             attemptedPairing = true
             val transport = TlvTransport { path, body -> postPairing(path, body) }
             try {
-                val setupStatus =
-                    try {
-                        PairSetupClient(identity, transport, log).run()
-                        null
-                    } catch (error: IOException) {
-                        val message = error.message.orEmpty()
-                        val forbidden = message.contains("403")
-                        if (forbidden) {
+                val pairingEndpoint = endpoint
+                val handshake =
+                    PairingHandshake(
+                        identity = identity,
+                        transport = { transport },
+                        reconnect = {
+                            close()
+                            if (!ensureConnected(2_000)) throw IOException("pairing: 重新连接控制通道失败")
+                        },
+                        log = log,
+                        onSetupForbidden = {
                             pairSetupRejected = true
                             pairingForbidden = true
-                        }
-                        val unsupported = PAIRING_UNSUPPORTED_STATUS.any { message.contains(it) }
-                        log(
-                            "AIRPLAY: pair-setup " +
-                                when {
-                                    forbidden -> "被 403 拒绝（车机不接受匿名配对——iAP2 已完成信任）→ 转已配对快路径"
-                                    unsupported -> "不被支持（$message）——该接收端是 pre-HomeKit 老车机，转明文会话"
-                                    else -> "失败（$message）"
-                                },
-                        )
-                        if (unsupported) {
-                            pairingUnsupported = true
-                            close()
-                            return null
-                        }
-                        if (forbidden) "403" else "failed"
-                    }
-                // 403 后旧连接的状态机不可用：换全新连接走快路径
-                if (setupStatus == "403") {
-                    close()
-                    if (!ensureConnected(2_000)) continue
-                    val fastPathTransport = TlvTransport { path, body -> postPairing(path, body) }
-                    val receiverStaticKey = endpoint.publicKey?.let(::hexToBytes)
-                    val keys = PairVerifyClient(identity, fastPathTransport, log).run(receiverStaticKey)
-                    cipher = ControlCipher(keys.phoneReadKey, keys.phoneWriteKey)
-                    log("AIRPLAY: 控制通道加密已启用（已配对快路径）")
-                    return keys
-                }
-                val receiverStaticKey = endpoint.publicKey?.let(::hexToBytes)
-                val keys = PairVerifyClient(identity, transport, log).run(receiverStaticKey)
+                        },
+                        onTrustInvalidated = { pairings.remove(pairingEndpoint, identity.pairingId) },
+                    )
+                val result = handshake.run(pairings.load(pairingEndpoint, identity.pairingId), pairingEndpoint.publicKey?.let(::hexToBytes))
+                if (cancelled) return null
+                result.receiver?.let { pairings.save(pairingEndpoint, identity.pairingId, it) }
+                val keys = result.keys
                 // pair-verify 之后双方立即启用加密（接收端在 M4 应答后开启）
                 cipher = ControlCipher(keys.phoneReadKey, keys.phoneWriteKey)
                 log("AIRPLAY: 控制通道加密已启用")
                 return keys
             } catch (error: IOException) {
+                if (cancelled) {
+                    close()
+                    return null
+                }
                 val message = error.message.orEmpty()
                 // verify/认证段的 403 与 pair-setup 403 同源（车机信任已建立），
                 // 见 pairingForbidden 注释：标记后主控不再断 BT / 不降级明文
@@ -421,7 +412,8 @@ class AirPlayClient(
                 Thread.sleep(pairingRetryBackoffMs(message))
             }
         }
-        log("AIRPLAY: 配对最终失败（接收端 RTSP 无应答）")
+        close()
+        log(if (cancelled) "AIRPLAY: 配对已取消" else "AIRPLAY: 配对窗口结束（接收端连接或认证未完成）")
         return null
     }
 
@@ -628,6 +620,8 @@ class AirPlayClient(
     }
 
     fun close() {
+        sessionSetupAccepted = false
+        screenStreamUuid = null
         val closing =
             synchronized(this) {
                 closingConnections++
@@ -1033,6 +1027,7 @@ class AirPlayClient(
             }
             return null
         }
+        sessionSetupAccepted = true
         val root =
             try {
                 BinaryPlist.parse(responseBody)
@@ -2527,8 +2522,46 @@ class AirPlayClient(
         // MIB3：屏幕流 SETUP 200 拿到 dataPort 后，真机此时在控制通道发 detect（Frida
         // 时序：screen SETUP → phone detect on control → HU SYN on control）。见 armMib3VirtualLink。
         armMib3VirtualLink()
+        screenStreamUuid = streamUuid
         return ScreenStreamInfo(connectionId, dataPort, cipher)
     }
+
+    fun teardownScreenStream(): Boolean {
+        val uuid = screenStreamUuid ?: return true
+        val body = linkedMapOf("streams" to listOf(linkedMapOf<String, Any?>("type" to SCREEN_STREAM_TYPE, "uuid" to uuid)))
+        val success = sendTeardown(body, "屏幕流")
+        if (success && screenStreamUuid == uuid) screenStreamUuid = null
+        return success
+    }
+
+    fun teardownSession(): Boolean {
+        if (!sessionSetupAccepted && screenStreamUuid == null) return true
+        val screenStopped = teardownScreenStream()
+        val sessionStopped = sendTeardown(linkedMapOf(), "会话")
+        if (sessionStopped) sessionSetupAccepted = false
+        return screenStopped && sessionStopped
+    }
+
+    private fun sendTeardown(
+        body: Map<String, Any?>,
+        target: String,
+    ): Boolean =
+        try {
+            val (status, _) =
+                request(
+                    "TEARDOWN",
+                    "/",
+                    BinaryPlist.encode(body),
+                    timeoutMillis = 1_500,
+                    contentType = "application/x-apple-binary-plist",
+                    allowDuringStop = true,
+                )
+            log("AIRPLAY: TEARDOWN（$target）[$status]")
+            status.contains("200")
+        } catch (error: IOException) {
+            log("AIRPLAY: TEARDOWN（$target）失败 - ${error.message}")
+            false
+        }
 
     /**
      * RECORD 激活会话。受影响的车机每个连接最多发一次：并发调用共享结果，超时也不能在原会话重发。

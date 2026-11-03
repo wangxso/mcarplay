@@ -86,4 +86,58 @@ class ModeArbiterTest {
         borrowed.onChangeModes(mapOf("resources" to listOf(resource(1, 4, 500, 100))))
         assertTrue(borrowed.phoneOwnsScreen)
     }
+
+    @Test
+    fun homeReturnKeepsRebuildPendingUntilStreamIsRestored() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 500))))
+        val first = arbiter.onUserRequestedUi()
+        assertTrue(first.allowed)
+        assertTrue(first.rebuildStream)
+        assertFalse(first.retake)
+        assertTrue(arbiter.onUserRequestedUi().rebuildStream)
+        arbiter.onScreenStreamRestored()
+        assertFalse(arbiter.onUserRequestedUi().rebuildStream)
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 500))))
+        assertTrue(arbiter.onUserRequestedUi().rebuildStream)
+    }
+
+    @Test
+    fun initialUiRequestDoesNotRebuildStream() {
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(mapOf("resources" to listOf(resource(1, 1, 500, 500))))
+        assertFalse(arbiter.onUserRequestedUi().rebuildStream)
+    }
+
+    @Test
+    fun audioOwnershipChangesDoNotRebuildScreenStream() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(2, 1, 500, 500))))
+        assertFalse(arbiter.onUserRequestedUi().rebuildStream)
+    }
+
+    @Test
+    fun userRequestRespectsBorrowAndHigherTakeConstraints() {
+        for (constraint in listOf(501L, 1000L)) {
+            val taken = ModeArbiter()
+            taken.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, constraint))))
+            assertFalse(taken.onUserRequestedUi().allowed)
+            assertFalse(taken.phoneOwnsScreen)
+            val borrowed = ModeArbiter()
+            val request = resource(1, 3, 500, 100) + ("borrowConstraint" to constraint)
+            borrowed.onChangeModes(mapOf("resources" to listOf(request)))
+            assertFalse(borrowed.onUserRequestedUi().allowed)
+            assertFalse(borrowed.phoneOwnsScreen)
+        }
+    }
+
+    @Test
+    fun returningHomeDuringRecoveryKeepsNextRebuildPending() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 500))))
+        assertTrue(arbiter.onUserRequestedUi().rebuildStream)
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 500))))
+        arbiter.onScreenStreamRestored()
+        assertTrue(arbiter.onUserRequestedUi().rebuildStream)
+    }
 }
