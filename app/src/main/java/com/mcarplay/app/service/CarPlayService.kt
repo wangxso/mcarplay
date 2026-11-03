@@ -13,6 +13,8 @@ import com.mcarplay.app.MainActivity
 import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.SilentProjectionActivity
+import com.mcarplay.app.bt.AutoConnectTimeline
+import com.mcarplay.app.bt.AutoConnectTiming
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.compat.ReceiverCompatibility
@@ -117,6 +119,7 @@ class CarPlayService : Service() {
         // 放后台线程：冷启动时 ensure 要读偏好/绑定 UserService，别压在服务主线程上。
         if (intent?.action == ACTION_AUTO_START_SESSION) {
             fileLog("SVC: 收到「上车自动启动」——拉起会话")
+            AutoConnectTiming.timeline.mark(AutoConnectTimeline.Stage.SERVICE_STARTED)?.let(::fileLog)
             val app = applicationContext
             Bg.run("auto-session-start") {
                 SessionController.ensure(app)

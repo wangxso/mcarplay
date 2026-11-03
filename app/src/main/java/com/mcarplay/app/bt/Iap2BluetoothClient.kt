@@ -617,9 +617,13 @@ class Iap2BluetoothClient(
             return null
         }
         val connectStartedAt = SystemClock.elapsedRealtime()
+        AutoConnectTiming.timeline.mark(AutoConnectTimeline.Stage.OUTBOUND_STARTED)?.let(log)
         return try {
             socket.connect()
             diagnostics.connectFinished(trace, cancelled = !running || generation.get() != myGeneration)
+            AutoConnectTiming.timeline
+                .mark(AutoConnectTimeline.Stage.OUTBOUND_CONNECTED, "（建链 ${SystemClock.elapsedRealtime() - connectStartedAt}ms）")
+                ?.let(log)
             inboundWait.connected(device.address)
             socket
         } catch (error: IOException) {
@@ -627,7 +631,13 @@ class Iap2BluetoothClient(
             runCatching { socket.close() }
             val cancelled = !running || generation.get() != myGeneration
             diagnostics.connectFinished(trace, error = error, cancelled = cancelled)
-            if (!cancelled) noteConnectFailure(device, name, error, SystemClock.elapsedRealtime() - connectStartedAt)
+            if (!cancelled) {
+                val elapsed = SystemClock.elapsedRealtime() - connectStartedAt
+                AutoConnectTiming.timeline
+                    .mark(AutoConnectTimeline.Stage.OUTBOUND_FAILED, "（建链 ${elapsed}ms，${BluetoothFailure.describe(error)}）")
+                    ?.let(log)
+                noteConnectFailure(device, name, error, elapsed)
+            }
             null
         } catch (error: SecurityException) {
             currentSocket.compareAndSet(socket, null)
