@@ -57,11 +57,6 @@ still-redacted recent runtime history.
   recent `BT-DIAG` lines remain in the existing bounded runtime history.
   Only remote/debug additionally records original exception stacks and exact
   peer addresses in `REMOTE-RAW` lines.
-- `AUTO-TIMING` lines appear only when a target head unit's Bluetooth ACL starts an automatic connection.
-  The ACL line says whether the broadcast cold-started the process; each later stage (service start, iAP2 SDP
-  registration and listening, first outbound attempt and result, first capability-port or iAP2 connection, ACL
-  loss) is logged once as milliseconds since that ACL, within 120 s. They carry no names or addresses. The phone
-  cannot see when the head unit queries its SDP, so compare them with head-unit logs or a btsnoop capture.
 - `CARLIFE_SELF_TEST_DIAGNOSTICS` retains the current or last standalone source
   self-test snapshot in this process: entry request result, whether it began in
   the background, protocol state, elapsed time, parsed video counts, and the
@@ -288,8 +283,6 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 只读查看正在阻塞的连接、累计失败、配对/ACL 事件和回连接受/拒绝计数。固定摘要只保留原因、异常类型和必要数字；
 仅 remote/debug 另外记录原始异常和实际地址。旧轮迟到回调不能覆盖新轮结果，没有新增权限或连接兜底。
 本地公告成功不等于车机已识别；仍需用户在原车上复现，并反馈车机是否显示支持无线 CarPlay。
-上车自动连接另记 `AUTO-TIMING` 行：从车机 ACL 到达起，记录进程是否被冷启动，以及前台服务、iAP2 SDP 记录就绪、
-首次主动连车机、车机连入等环节距 ACL 的毫秒数，用来判断 SDP 记录是否晚于车机来连。手机看不到车机何时查询 SDP，需对照车机日志或 btsnoop。
 
 独立自检失败时，先停正式连接并保持解锁，在前台运行「CarWith 出流自检」约 30 秒后导出。
 `CARLIFE_SELF_TEST_DIAGNOSTICS` 和远程只读命令 `get_carlife_diagnostics` 会保留本轮/最近一次

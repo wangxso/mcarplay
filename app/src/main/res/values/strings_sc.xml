@@ -41,6 +41,7 @@
     <string name="sc_paired_setup">配对完成，建立 CarPlay 会话…</string>
     <string name="sc_setup_rejected">接收端拒绝了会话建立（SETUP 未通过）</string>
     <string name="sc_setup_rejected_hint">接收端拒绝了会话建立（SETUP）——请查看日志中的 deviceID 提示</string>
+    <string name="sc_record_unconfirmed">接收端未确认会话启动，请重新连接</string>
     <string name="sc_waiting_join">等待手机加入车机热点 %1$s…</string>
     <string name="sc_not_joined_hint">未连上车机热点 \"%1$s\"——请到 WLAN 设置中主动连接</string>
     <string name="sc_saved_title">已保存该车机热点</string>

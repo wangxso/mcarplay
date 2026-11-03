@@ -807,7 +807,7 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
 | 7 车机连手机 ctrl | 入网后 | 车机以 `hostName=iPhone.local.` 连 iPhone 的 `_carplay-ctrl` | 车机按手机广播的 ctrl 服务回连 | 相同（手机广播 `_carplay-ctrl._tcp`） |
 | 8 配对 | 53.009–53.266（+15.2） | `Control pair-setup HK, type 0` ×3、`Control pair-verify 1/2` | 车机重启后首连做完整 pair-setup（M1/M3/M5）再 pair-verify；19:55、19:57 重连只走 pair-verify | 修改后配对类型相同（`X-Apple-HKP: 0`；原为 `type 2`）；**不同**：mcarplay 每次会话都做完整 pair-setup |
 | 9 会话内 MFi | 53.276–53.717 | `MFi _requestProcessAuthSetup` → `MFiSAP_Exchange start/end`（0.44 s） | pair-verify 后、会话开始前做 `/auth-setup` | 修改后相同（0.47–0.51 s，证书 608 B、签名 64 B） |
-| 10 会话开始 | 53.789–53.910（+15.8） | `AirPlay session started: From=iPhone … T=WiFi C=?`、`HID started`、`link_BindPort iap2_wificarplay_port` | 只记一次 `session started` | 修改后 `From=iPhone`；补发 RECORD 时会记两次（与崩溃无关） |
+| 10 会话开始 | 53.789–53.910（+15.8） | `AirPlay session started: From=iPhone … T=WiFi C=?`、`HID started`、`link_BindPort iap2_wificarplay_port` | 只记一次 `session started` | 修改后 `From=iPhone`；补发 RECORD 时可能记两次（重复启动是待验证的崩溃诱因） |
 | 11 初始模式 | 53.969 | `Modes changed: screen accessory …, mainAudio accessory …, speech n/a (none)` | iPhone 起步时屏幕与主音频都留给车机 | **不同**：mcarplay 不经此阶段，约 2 s 后直接 `screen controller / mainAudio controller` |
 | 12 网络 iAP2 识别 | 54.028 | `field_put_VehicleInformationComponent`、`field_put_LocationInformationComponent` | 经 AirPlay 内的 iAP2 链路再做一次识别 | 相同（23:36 为 39.254）；部分会话该链路未到 NORMAL |
 | 13 车机关蓝牙 | 54.041–54.130（+16.0） | `CarplayService_DisableBluetooth`、`CarPlayConnected and setBtDisable`；54.574 ACL 断开 | iPhone 在会话开始约 0.13 s 后发 `disableBluetooth`，会话改走纯 Wi-Fi | 修改后相同 |
@@ -916,7 +916,7 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
 - **用户反馈（22:19）：** 连上后手机走车机热点 Wi-Fi、无互联网。抓包中会话入网 MAC 一直是系统已保存热点的身份（`1e:9a:…`），即手机系统 Wi-Fi
   连着该热点，而不是 mcarplay 的应用专属网络。
 - **崩溃前的「Idle」与 type-130（2026-11-02，同一车机，对照当日真 iPhone 抓包）：** mcarplay 每次会话结束（20:11、20:45、21:26、22:27、22:28，
-  `noErr` 与 `kConnectionErr` 都有）后，车机在会话线程上 +10 s 记 `### Idle for 10 seconds`，+20 s 同线程 `_PerformPeriodTasks+640` SIGSEGV
+  `noErr` 与 `kConnectionErr` 都有）后，车机 +10 s 记 `### Idle for 10 seconds`，+20 s 在 dispatch 工作线程 `_PerformPeriodTasks+640` SIGSEGV
   （22:28:51 一次直接记 `Idle for 20 seconds` 后同毫秒崩溃）。当日真 iPhone 三次会话结束（19:51 `noErr`；19:57、20:00 iPhone 先离热点、`kConnectionErr`）
   都没有 `Idle` 也没有崩溃。会话开始时只有 mcarplay 触发车机 `### Unsupported stream type: 130`（20:03、20:11、22:16），iPhone 从不请求该流类型。
   推断（未证实）：车机对不支持的 type-130 SETUP 留下了未清理的状态，会话结束后其空闲检查在 20 s 时访问已释放对象。
@@ -957,7 +957,7 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
   但 23:29:33 仍记 `Idle for 10 seconds`、23:29:43 `Idle for 20 seconds` 并 SIGSEGV。车机停止序列（`StopWirelessCarPlay` → `DeactiveCarPlay` →
   `carplayserver_stop` → `AirPlay servers stopped` → `CFRunLoopRun end` → `DeactiveWirelessCarPlay end`）与真 iPhone 19:51:40 逐行一致，
   仅 `DeactiveWirelessCarPlay linkid` 为 1（iPhone 为 2）。同一会话车机记两次 `session started`（第二次 `C=AAC-LC`，对应补发 RECORD），
-  但 20:03、20:44、22:44、22:57 只记一次的会话同样崩溃，故非诱因。
+  但 20:03、20:44、22:44、22:57 只记一次的会话同样崩溃；仅凭 started 日志条数不能排除重复 RECORD，见 11 月 3 日补充。
 - **当晚结论：** 已对齐并在车上验证的差异：蓝牙释放、有序断开、真实 MAC、type-130、来源名、speechMode、HKP、auth-setup、MFi 32B；
   断开后 +20 s 的 `_PerformPeriodTasks` 崩溃仍在。车机 CarPlay 进程崩溃后约 5 s 自动重启并能回连。
   **更正：** 按上文「真 iPhone 连接全过程」逐步对照，仍有三处行为差异未试：① iPhone 起步时屏幕与主音频都留给车机（`accessory`），约 1.5 s 后才接管；
@@ -967,3 +967,21 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
   车机记 `Option_WifiCarplay_Wifi AUTHENTICATION_PASS`。点选到出画约 12 s，全程无芯片挂起。会话 204 s（触摸 40 次），23:40:02 有序断开 `noErr`；
   **23:40:22（+20 s）仍 `Idle for 20 seconds` 后 SIGSEGV**。本会话网络 iAP2 控制会话未建立（车机 SYN marker 达 #200、链路 DEAD），0x4E0D 未发；
   而 22:45 等会话链路为 NORMAL、0x4E0D 已送达同样崩溃，二者无关。
+
+### 原厂断开崩溃的静态分析与单次 RECORD 候选（2026-11-03，未上车）
+
+对与上文车机一致的 ARM64 `libAirPlay_R14_vehicle.so`（SHA-256 `9e24ea4577c7eac52d0799bd88647a1a8bea561a179e54bafa7afe7c45b5438d`）
+做静态分析，并复核 13 份历史崩溃记录；未运行或修改原厂库，也未操作车机。
+
+- `_PerformPeriodTasks+640` 的 `0x3a420` 从 `[x8+0xac]` 读取字段；13 份崩溃的 `x8=0`。同一函数先从 `session+0x10` 取 server 引用，
+  Finalize 会清零该引用。server 的 `+0xac` 默认值为 20 秒，会话将其换算为空闲阈值；两份现场计时寄存器分别约 20.001 / 20.002 秒。
+  23:29 日志在 Finalize 后仍出现 Idle 10 / 20 秒并崩溃，说明周期回调未随会话彻底退役。
+- 原厂 SessionStart 每次成功都会新建定时器并覆盖 `session+0xd8`，TEARDOWN/Finalize 只能取消当前句柄；若同一 session 成功 Start 多次，
+  较早的定时器可能遗留。23:27 会话有两次 started 后崩溃；其他崩溃会话只见一次 started，缺少同一 session 的实际 Start 和定时器计数。
+  **更正上文：重复 RECORD 未被排除，是优先验证的触发候选；不能声称已证明全部现场均由它触发。**
+- 候选在 `manufacturer=CHERY`、`model=Tiggo`、AirPlay `srcvers=320.17.7` 同时匹配时，同一连接只发一次 RECORD；不同车机维持旧行为。
+  并发调用共享结果，超时/拒绝后不在原连接重发；首次 RECORD 未确认则终止本轮。`srcvers` 是栈版本，并非完整车机固件标识。
+- 有序停止时禁止新业务请求，终止本代心跳，屏幕推流停止接收新帧但数据 socket 暂留至 TEARDOWN；允许关闭所需的 iAP 通知。
+  音频初始化与资源声明按连接代次过滤迟到工作。候选同时包含这些收尾调整，若实车不再崩溃，仍需单变量对照才能归因于单次 RECORD。
+- **待实车验证：** 从干净的车机 CarPlay 进程起步，核对策略命中及单次 RECORD，检查画面、声音、触控；手动断开、动态开启声音与异常掉网后各观察至少 60 秒。
+  理想情况下记录同一 session 的 Start、timer 创建/取消与 Finalize。尚未验证此候选解决原厂崩溃或避免音频回归。

@@ -142,6 +142,21 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
+    fun singleRecordIsLimitedToTheObservedCheryStack() {
+        val observed = ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo", srcvers = "320.17.7")
+        val policy = ReceiverCompatibility.resolve(observed)
+        assertTrue(policy.singleRecordPerSession)
+        assertTrue("chery.tiggo.320.17.7.single-record" in policy.rules)
+        listOf(
+            observed.copy(manufacturer = "OTHER"),
+            observed.copy(model = "OTHER"),
+            observed.copy(srcvers = "320.17.8"),
+            observed.copy(srcvers = null),
+            mib3,
+        ).forEach { assertFalse(ReceiverCompatibility.resolve(it).singleRecordPerSession) }
+    }
+
+    @Test
     fun timeoutAndResetNeverAuthorizePlaintextOrUnknownBluetoothRetirement() {
         listOf(winPlay, mib3, ReceiverProfile.Signals()).forEach { signals ->
             val decision = failedPairing(signals)

@@ -6,8 +6,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.os.Process
-import android.os.SystemClock
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.util.DebugFileLog
 
@@ -57,8 +55,6 @@ class CarBluetoothReceiver : BroadcastReceiver() {
         }
 
         if (action == BluetoothDevice.ACTION_ACL_CONNECTED) {
-            val processAgeMs = runCatching { SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime() }.getOrNull()
-            DebugFileLog.append(app, AutoConnectTiming.timeline.arm(processAgeMs))
             DebugFileLog.append(app, "AUTO: 车机蓝牙已连上 ${name ?: "?"}（$address）——自动拉起会话")
             runCatching {
                 context.startForegroundService(
@@ -73,7 +69,6 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                 )
             }
         } else {
-            AutoConnectTiming.timeline.mark(AutoConnectTimeline.Stage.ACL_DISCONNECTED)?.let { DebugFileLog.append(app, it) }
             DebugFileLog.append(app, "AUTO: 车机蓝牙已断开 ${name ?: "?"}（$address）——检查是否需要结束会话")
             // 会话在跑时服务就是前台进程，startService 允许；不在跑说明本来就没有会话
             runCatching {

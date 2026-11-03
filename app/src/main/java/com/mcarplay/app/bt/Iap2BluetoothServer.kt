@@ -74,10 +74,7 @@ class Iap2BluetoothServer(
 
     @Synchronized
     fun start(): Boolean {
-        if (running) {
-            AutoConnectTiming.timeline.mark(AutoConnectTimeline.Stage.SDP_REGISTERED, "（此前已在监听）")?.let(log)
-            return true
-        }
+        if (running) return true
         if (!hasPermission()) {
             log("BT: 缺少 BLUETOOTH_CONNECT 权限")
             return false
@@ -93,7 +90,6 @@ class Iap2BluetoothServer(
             return false
         }
         val diagnosticEpoch = diagnostics.epoch().also { diagnosticsEpoch = it }
-        AutoConnectTiming.timeline.mark(AutoConnectTimeline.Stage.LISTEN_STARTED)?.let(log)
         return try {
             val records =
                 PhoneSdpRecords.open { name, uuid ->
@@ -120,7 +116,6 @@ class Iap2BluetoothServer(
             diagnostics.listener(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, listening = true)
             diagnostics.listener(diagnosticEpoch, BluetoothDiagnostics.Service.CARPLAY, listening = true)
             log("BT: 监听 iAP2 并发布无线 CarPlay 手机能力，等待接收端回连…")
-            AutoConnectTiming.timeline.mark(AutoConnectTimeline.Stage.SDP_REGISTERED)?.let(log)
             Thread({ acceptLoop(records, diagnosticEpoch) }, "iap2-bt-accept").apply {
                 isDaemon = true
                 start()
@@ -178,7 +173,6 @@ class Iap2BluetoothServer(
                 }
             val match = peerMatch(target, peerAddress)
             diagnostics.incoming(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, peerAddress, match)
-            AutoConnectTiming.timeline.mark(AutoConnectTimeline.Stage.INBOUND_IAP2, "（match=$match）")?.let(log)
             if (target != null && match == BluetoothDiagnostics.PeerMatch.OTHER) {
                 log(
                     "BT: 忽略非目标设备连入 name=$peerName addr=${peerAddress ?: "?"}" +
@@ -207,9 +201,12 @@ class Iap2BluetoothServer(
                 records.carPlay.accept().use { socket ->
                     if (serviceRecords.get() === records) {
                         val address = runCatching { socket.remoteDevice?.address }.getOrNull()
-                        val match = peerMatch(targetProvider(), address)
-                        diagnostics.incoming(diagnosticEpoch, BluetoothDiagnostics.Service.CARPLAY, address, match)
-                        AutoConnectTiming.timeline.mark(AutoConnectTimeline.Stage.CAPABILITY_CONNECTED, "（match=$match）")?.let(log)
+                        diagnostics.incoming(
+                            diagnosticEpoch,
+                            BluetoothDiagnostics.Service.CARPLAY,
+                            address,
+                            peerMatch(targetProvider(), address),
+                        )
                     }
                 }
             } catch (error: IOException) {

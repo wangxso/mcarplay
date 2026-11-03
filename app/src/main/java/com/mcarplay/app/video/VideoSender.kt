@@ -138,6 +138,10 @@ class VideoSender(
     private var encoder: MediaCodec? = null
     private var inputSurface: Surface? = null
     private val running = AtomicBoolean(false)
+    private val stopped = AtomicBoolean(false)
+
+    /** 有序拆会话时停止新帧，暂留数据 socket，直到 TEARDOWN 后由 stop() 关闭。 */
+    private val quiescing = AtomicBoolean(false)
     private var frameCounter = 0L
     private var configSent = false
 
@@ -176,6 +180,7 @@ class VideoSender(
      * finish_tx 连流，再协商音频）。
      */
     fun openDataPort(): Boolean {
+        if (stopped.get() || quiescing.get()) return false
         val existing = socket
         if (existing != null && !existing.isClosed) return true
         return try {
@@ -185,7 +190,19 @@ class VideoSender(
             // 推流是长连接：车机熄火/走出热点时链路常不发 RST，写入会阻塞在满窗口上，
             // 编码器线程随之卡死（表现为「画面停在最后一帧」）。
             TcpLiveness.configure(client, "视频数据口", log)
-            socket = client
+            val published =
+                synchronized(lifecycleLock) {
+                    if (stopped.get() || quiescing.get()) {
+                        false
+                    } else {
+                        socket = client
+                        true
+                    }
+                }
+            if (!published) {
+                client.close()
+                return false
+            }
             log(
                 "VIDEO: 数据端口已连通 $host:$dataPort（等 RECORD 后启动编码器） " +
                     "sndBuf=${runCatching { client.sendBufferSize }.getOrNull()} " +
@@ -241,15 +258,19 @@ class VideoSender(
      * （隐形屏模式下由 DualDisplayComposer 的合成画布填充）。
      */
     fun start(onSurfaceReady: (Surface) -> Unit): Boolean {
+        if (stopped.get() || quiescing.get()) return false
         if (running.get()) return true
         return try {
             if (!openDataPort()) {
-                stop()
+                if (!quiescing.get()) stop()
                 return false
             }
             if (externalVideoSource != null) {
-                running.set(true)
-                lastKeepAliveAt = android.os.SystemClock.uptimeMillis()
+                synchronized(lifecycleLock) {
+                    if (stopped.get() || quiescing.get()) return false
+                    running.set(true)
+                    lastKeepAliveAt = android.os.SystemClock.uptimeMillis()
+                }
                 Thread({ drainExternalVideo() }, "video-external-drain").apply {
                     isDaemon = true
                     start()
@@ -258,10 +279,22 @@ class VideoSender(
                 return true
             }
             val (codec, surface) = createEncoder(width, height, targetFps)
-            encoder = codec
-            inputSurface = surface
-            running.set(true)
-            lastKeepAliveAt = android.os.SystemClock.uptimeMillis()
+            val published =
+                synchronized(lifecycleLock) {
+                    if (stopped.get() || quiescing.get()) {
+                        false
+                    } else {
+                        encoder = codec
+                        inputSurface = surface
+                        running.set(true)
+                        lastKeepAliveAt = android.os.SystemClock.uptimeMillis()
+                        true
+                    }
+                }
+            if (!published) {
+                releaseVideoResources(null, codec, surface)
+                return false
+            }
 
             onSurfaceReady(surface)
 
@@ -346,6 +379,7 @@ class VideoSender(
     }
 
     fun stop() {
+        stopped.set(true)
         running.set(false)
         externalQueue.clear()
         // 先关 socket：解开阻塞在写入上的线程（它持有 writeLock，转码发布方持有 lifecycleLock 等它）
@@ -356,6 +390,7 @@ class VideoSender(
         val codec: MediaCodec?
         val surface: Surface?
         synchronized(lifecycleLock) {
+            running.set(false)
             active = transcoder
             codec = encoder
             surface = inputSurface
@@ -367,6 +402,12 @@ class VideoSender(
         if (externalVideoSource != null && streamStatsLogged.compareAndSet(false, true)) {
             log("VIDEO: 透传码流统计（会话结束）${streamStats.summary()}")
         }
+    }
+
+    /** 不等待写锁或关闭 socket：阻塞中的写仍可由随后的 stop() 解开。 */
+    fun quiesceForOrderlyStop() {
+        quiescing.set(true)
+        externalQueue.clear()
     }
 
     /** 先停转码（停止往编码器 Surface 渲染），再释放编码器与其输入 Surface。 */
@@ -391,6 +432,7 @@ class VideoSender(
      * [fromReceiver] = false 表示我们自己补的 I 帧（如 requestUI 后），不计入要帧风暴与诊断统计。
      */
     fun requestKeyFrame(fromReceiver: Boolean = true): Boolean {
+        if (quiescing.get()) return false
         if (fromReceiver && externalVideoSource != null) {
             lastReceiverRequestIdrGapMs =
                 streamStats.onReceiverKeyFrameRequest(android.os.SystemClock.uptimeMillis(), transcoding = transcoder != null)
@@ -454,7 +496,7 @@ class VideoSender(
      * packet rather than block CarLife's video reader.
      */
     fun submitExternalFrame(frame: ExternalVideoFrame): Boolean =
-        if (externalVideoSource == null || !running.get()) {
+        if (externalVideoSource == null || !running.get() || quiescing.get()) {
             false
         } else {
             externalQueue.offer(frame).also { accepted ->
@@ -489,7 +531,7 @@ class VideoSender(
      */
     @Synchronized
     private fun startTranscoding(storm: KeyFrameStorm.Level) {
-        if (!running.get()) return
+        if (!running.get() || quiescing.get()) return
         val fps = TranscodePolicy.cappedFps(targetFps, receiverMaxFps)
         val reason =
             if (TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)) {
@@ -518,7 +560,7 @@ class VideoSender(
             // 初始化可能耗时数秒：期间断开的话 stop() 已收尾，资源不再发布到字段
             published =
                 synchronized(lifecycleLock) {
-                    if (!running.get()) return@synchronized false
+                    if (!running.get() || quiescing.get()) return@synchronized false
                     synchronized(writeLock) {
                         width = streamWidth
                         height = streamHeight
@@ -552,6 +594,7 @@ class VideoSender(
                 val frame = externalQueue.poll(250, java.util.concurrent.TimeUnit.MILLISECONDS)
                 // 转码中：帧改喂解码器，数据口（含 keepAlive）由编码线程独占
                 val pipeline = transcoder
+                if (quiescing.get()) continue
                 if (pipeline != null) {
                     if (frame != null) pipeline.submit(frame)
                     continue
@@ -649,7 +692,7 @@ class VideoSender(
     ): Boolean =
         synchronized(writeLock) {
             // 已切换转码：透传线程在切换前取到的旧配置不得混进新流
-            if (transcoder != null) return@synchronized false
+            if (transcoder != null || quiescing.get()) return@synchronized false
             val header = buildVideoConfigHeader(avcC.size, width, height)
             output.write(header)
             output.write(avcC)
@@ -672,7 +715,7 @@ class VideoSender(
     ): Boolean =
         synchronized(writeLock) {
             // 已切换转码：透传线程在切换前取到的旧格式帧不得跨配置发出
-            if (transcoder != null) return@synchronized false
+            if (transcoder != null || quiescing.get()) return@synchronized false
             val header =
                 buildHeader(
                     OP_FRAME,
@@ -781,7 +824,7 @@ class VideoSender(
     }
 
     private fun maybeSendKeepAliveLocked(output: java.io.OutputStream) {
-        if (!running.get()) return
+        if (!running.get() || quiescing.get()) return
         val now = android.os.SystemClock.uptimeMillis()
         if (now - lastKeepAliveAt < KEEPALIVE_INTERVAL_MS) return
         val elapsedNanos = (now - lastKeepAliveAt).coerceAtLeast(1L) * 1_000_000.0
@@ -811,6 +854,7 @@ class VideoSender(
         output: java.io.OutputStream,
     ): Unit =
         synchronized(writeLock) {
+            if (quiescing.get()) return
             val annexB = ByteArray(size)
             buffer.get(annexB)
             val nalUnits = splitAnnexB(annexB)
@@ -851,6 +895,7 @@ class VideoSender(
         output: java.io.OutputStream,
     ): Int =
         synchronized(writeLock) {
+            if (quiescing.get()) return 0
             if (!configSent) {
                 log("VIDEO: 丢弃一帧（config 尚未发送）")
                 return 0

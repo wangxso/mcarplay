@@ -56,6 +56,8 @@ object ReceiverCompatibility {
          * `sem_wait` 无返回），后续挑战排队，会话结束仍有认证挂起；长度记忆还曾把 32B 误记为被拒（2026-11-02 车机日志）。
          */
         val pinnedMfiChallengeLength: Int? = null,
+        /** 对已核对的车机栈，同一会话只发送一次 RECORD，避免重复启动遗留定时器。 */
+        val singleRecordPerSession: Boolean = false,
     )
 
     data class PairingFallback(
@@ -98,6 +100,9 @@ object ReceiverCompatibility {
         val diPlayWire010 = diPlay && normalize(signals.firmwareVersion) == "0.1.0"
         // 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 会话期间车机蓝牙关闭（2026-11-02 车机日志）
         val cheryReleasesBluetooth = normalize(signals.manufacturer) == "chery"
+        // 只登记已取得原厂库和崩溃证据的协议身份；srcvers 是 AirPlay 栈版本，不等于整车固件。
+        val cherySingleRecord =
+            cheryReleasesBluetooth && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
         val rules =
             buildList {
                 add("protocol.${pairing.name.lowercase()}")
@@ -112,6 +117,7 @@ object ReceiverCompatibility {
                 if (cheryReleasesBluetooth) add("chery.apple-client-headers")
                 if (cheryReleasesBluetooth) add("chery.iphone-auth-sequence")
                 if (cheryReleasesBluetooth) add("chery.mfi-32-only")
+                if (cherySingleRecord) add("chery.tiggo.320.17.7.single-record")
             }
         return Policy(
             family = family,
@@ -128,6 +134,7 @@ object ReceiverCompatibility {
             sendAppleClientHeaders = cheryReleasesBluetooth,
             iphoneAuthSequence = cheryReleasesBluetooth,
             pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
+            singleRecordPerSession = cherySingleRecord,
         )
     }
 
