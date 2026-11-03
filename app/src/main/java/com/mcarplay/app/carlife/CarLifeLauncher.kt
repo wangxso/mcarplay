@@ -8,20 +8,38 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import android.provider.Settings
+import android.widget.Toast
+import com.mcarplay.app.R
 import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
+import com.mcarplay.app.shizuku.Shell
+import com.mcarplay.app.shizuku.ShizukuGate
+import java.util.concurrent.TimeUnit
 
-/** Uses ordinary intents to open CarWith's exported settings or compatibility entry. */
+/** Opens CarWith entries, with a verified-root fallback for legacy services. */
 object CarLifeLauncher {
     const val CARWITH_PACKAGE = "com.miui.carlink"
     const val CARWITH_SETTINGS =
         "com.carwith.launcher.settings.phone.UCarScreenSettingsActivity"
     const val CARWITH_ENTRY =
         "com.miui.carlink.castfwk.usb.CarlifeAdbActivity"
+    const val CARWITH_SERVICE =
+        "com.miui.carlink.castfwk.CarlinkService"
     const val CARLIFE_PACKAGE = "com.baidu.carlife.xiaomi"
 
-    enum class EntryLaunchResult { NOT_REQUESTED, REQUESTED, MISSING, DISABLED, NOT_EXPORTED, PERMISSION_DENIED, FAILED }
+    enum class EntryLaunchResult {
+        NOT_REQUESTED,
+        REQUESTED,
+        ATTACHED,
+        MISSING,
+        DISABLED,
+        NOT_EXPORTED,
+        PERMISSION_DENIED,
+        FAILED,
+    }
 
     fun isAvailable(context: Context): Boolean =
         runCatching {
@@ -55,6 +73,64 @@ object CarLifeLauncher {
                 is SecurityException -> EntryLaunchResult.PERMISSION_DENIED
                 else -> EntryLaunchResult.FAILED
             }
+        }
+
+    /**
+     * CarWith 3.1.2 之前没有 `CarlifeAdbActivity`，正常无线连接页直接启动受签名权限
+     * 保护的 [CARWITH_SERVICE]。root/ADB 身份可以执行同一 `startType=4`，但普通
+     * 应用和 uid 2000 的 Shizuku shell 都不行；因此这里只在确实拿到 uid 0 时请求。
+     */
+    fun requestLegacyCarWithService(context: Context): EntryLaunchResult =
+        try {
+            val component = ComponentName(CARWITH_PACKAGE, CARWITH_SERVICE)
+            val info = context.packageManager.getServiceInfo(component, 0)
+            when {
+                !info.enabled -> EntryLaunchResult.DISABLED
+                else -> {
+                    val result = runLegacyServiceCommand(context, legacyCarWithServiceCommand())
+                    if (result.ok) EntryLaunchResult.REQUESTED else EntryLaunchResult.PERMISSION_DENIED
+                }
+            }
+        } catch (error: Exception) {
+            DiagnosticExportPolicy.exception("CARWITH_LEGACY_SERVICE", error)
+            requestFailure(error)
+        }
+
+    /**
+     * 旧版没有自动入口且当前进程拿不到 uid 0 时，打开 CarWith 的已导出设置页。
+     *
+     * 用户完成原厂路径后就绪的七口会被会话直接附着。百度 CarLife 的首页只会启动
+     * 七口，不保证创建 CarWith 虚拟显示或编码器，因此不能作为自动出流回退。
+     */
+    fun requestCarWithSettings(context: Context): EntryLaunchResult {
+        val result = requestActivity(context, CARWITH_PACKAGE, CARWITH_SETTINGS)
+        if (result == EntryLaunchResult.REQUESTED) {
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context, R.string.ma_legacy_carwith_setup, Toast.LENGTH_LONG).show()
+            }
+        }
+        return result
+    }
+
+    private fun requestActivity(
+        context: Context,
+        packageName: String,
+        className: String,
+    ): EntryLaunchResult =
+        try {
+            val component = ComponentName(packageName, className)
+            val info = context.packageManager.getActivityInfo(component, 0)
+            when {
+                !info.enabled -> EntryLaunchResult.DISABLED
+                !info.exported -> EntryLaunchResult.NOT_EXPORTED
+                else -> {
+                    context.startActivity(Intent().setComponent(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    EntryLaunchResult.REQUESTED
+                }
+            }
+        } catch (error: Exception) {
+            DiagnosticExportPolicy.exception("CARWITH_PUBLIC_ENTRY", error)
+            requestFailure(error)
         }
 
     /**
@@ -115,6 +191,87 @@ object CarLifeLauncher {
     private const val MIUI_SECURITY_CENTER = "com.miui.securitycenter"
     private const val MIUI_PERMISSION_EDITOR = "com.miui.permcenter.permissions.PermissionsEditorActivity"
 
+    private fun requestFailure(error: Exception): EntryLaunchResult =
+        when (error) {
+            is PackageManager.NameNotFoundException, is ActivityNotFoundException -> EntryLaunchResult.MISSING
+            is SecurityException -> EntryLaunchResult.PERMISSION_DENIED
+            else -> EntryLaunchResult.FAILED
+        }
+
+    internal fun legacyCarWithServiceCommand(): String =
+        "am start-foreground-service -n $CARWITH_PACKAGE/$CARWITH_SERVICE " +
+            "--ei startType 4 --es carlife_wireless_type Baidu_ap " +
+            "--es carlife_wireless_type_name mcarplay"
+
+    private fun runLegacyServiceCommand(
+        context: Context,
+        command: String,
+    ): CommandResult =
+        runLegacyServiceCommand(
+            command = command,
+            runSu = ::runCommand,
+            runShell = { cmd, timeout ->
+                if (ShizukuGate.state(context) == ShizukuGate.State.READY) {
+                    val result = Shell.exec(cmd, timeout)
+                    CommandResult(result.exitCode, result.output)
+                } else {
+                    CommandResult(-1, "Shizuku unavailable")
+                }
+            },
+        )
+
+    internal fun runLegacyServiceCommand(
+        command: String,
+        runSu: (List<String>) -> CommandResult,
+        runShell: (String, Long) -> CommandResult,
+    ): CommandResult {
+        val su = runSu(listOf("su", "-c", "id -u"))
+        if (Thread.currentThread().isInterrupted) return CommandResult(-1, "cancelled")
+        if (su.ok && su.output
+                .lineSequence()
+                .lastOrNull { it.isNotBlank() }
+                ?.trim() == "0"
+        ) {
+            return runSu(listOf("su", "-c", command))
+        }
+        val uid = runShell("id -u", 2_000L)
+        if (Thread.currentThread().isInterrupted) return CommandResult(-1, "cancelled")
+        if (uid.ok && uid.output.trim() == "0") return runShell(command, 6_000L)
+        return CommandResult(-1, "uid 0 required")
+    }
+
+    private fun runCommand(command: List<String>): CommandResult {
+        var process: java.lang.Process? = null
+        return try {
+            process = ProcessBuilder(command).redirectErrorStream(true).start()
+            if (!process.waitFor(3_000L, TimeUnit.MILLISECONDS)) {
+                CommandResult(-1, "command timed out")
+            } else {
+                val output =
+                    process.inputStream
+                        .bufferedReader()
+                        .use { it.readText() }
+                        .trim()
+                CommandResult(process.exitValue(), output)
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            CommandResult(-1, "cancelled")
+        } catch (error: Exception) {
+            CommandResult(-1, error.javaClass.simpleName)
+        } finally {
+            process?.destroyForcibly()
+        }
+    }
+
+    internal data class CommandResult(
+        val exitCode: Int,
+        val output: String,
+    ) {
+        val ok: Boolean
+            get() = exitCode == 0 && !output.contains("Error", ignoreCase = true)
+    }
+
     /** 0 表示系统未填充，按前台处理，避免误报。 */
     internal fun isForegroundImportance(importance: Int): Boolean =
         importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
@@ -140,4 +297,10 @@ object CarLifeLauncher {
 enum class CarLifeLaunchStrategy {
     ATTACH_EXISTING,
     EXPORTED_ENTRY,
+
+    /**
+     * 先附着已有七口；连接失败后再按 CarWith 的公开入口、root 旧版服务、
+     * CarWith 设置页依次回退。
+     */
+    COMPATIBLE,
 }

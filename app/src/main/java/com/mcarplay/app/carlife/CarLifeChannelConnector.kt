@@ -44,6 +44,10 @@ class CarLifeChannelConnector(
     @Volatile
     private var finishedAtMs: Long? = null
 
+    /** 在所有端口就绪前触发，供调用方只在确有必要时请求 CarWith 入口。 */
+    @Volatile
+    var onAttemptFailed: ((attempt: Int, error: Exception) -> Unit)? = null
+
     /** 观察现有连接尝试；不额外探测端口，避免第二条连接重置 CarLife 会话。 */
     fun diagnosticSummary(): String {
         val current = progress
@@ -101,6 +105,9 @@ class CarLifeChannelConnector(
                 }
                 progress = progress.copy(pendingPort = null, lastFailedPort = connecting?.port, lastFailure = failure)
                 candidate.values.forEach { runCatching { it.close() } }
+                if (failure != Failure.CANCELLED) {
+                    runCatching { onAttemptFailed?.invoke(attempt, error) }
+                }
                 log("CARLIFE: 连接尝试 $attempt 未完成 port=${connecting?.port ?: 0} opened=${candidate.size} reason=$failure")
                 val remaining = deadline - nowMs()
                 if (!closed.get() && remaining > 0) sleep(minOf(retryDelayMs, remaining))

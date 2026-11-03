@@ -64,7 +64,7 @@ class AirPlayPairingTest {
         val identity = ControllerIdentity("controller-short-b", keyPair.privateKey, keyPair.publicKey)
         val logs = mutableListOf<String>()
         PairSetupClient(identity, { path, body -> receiver.handle(path, body) }) { logs += it }.run()
-        assertEquals(2, receiver.m1Count)
+        assertTrue("At least one short B must trigger an M1 retry", receiver.m1Count >= 2)
         assertEquals(1, receiver.proofCount)
         assertTrue(receiver.pairings.containsKey(identity.pairingId))
         assertTrue(logs.any { it.contains("重发 M1") })

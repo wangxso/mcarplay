@@ -67,4 +67,5 @@
     <string name="sc_keep_waiting">Keep waiting</string>
     <string name="sc_audio_all_incompatible">Audio is not compatible with this head unit; the next connection sends video only</string>
     <string name="sc_audio_profile_rejected">This audio profile caused a disconnect and was recorded; reconnecting switches profiles automatically</string>
+    <string name="ma_legacy_carwith_setup">In CarWith, select Baidu CarLife and start a wireless connection, then return to mcarplay</string>
 </resources>

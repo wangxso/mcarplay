@@ -67,4 +67,5 @@
     <string name="sc_keep_waiting">继续等待</string>
     <string name="sc_audio_all_incompatible">本车机音频不兼容，下次连接将自动只推视频</string>
     <string name="sc_audio_profile_rejected">该音频档位导致断开，已记录；重连会自动换档</string>
+    <string name="ma_legacy_carwith_setup">请在 CarWith 中选择“百度 CarLife”及无线连接，完成后返回 mcarplay</string>
 </resources>
