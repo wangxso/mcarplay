@@ -91,6 +91,14 @@ still-redacted recent runtime history.
   - `EVENT: 首次收到车机命令` (the structure of each new command type, never its values), `EVENT: 本轮车机命令统计`,
     non-200 event replies, the `modesChanged` reply shape and the full `/info modes`;
   - `SESSION: 本轮车机交互统计` (forceKeyFrame / requestUI / touch counts) and `CARLIFE: 入流门控` rejoin lines;
+  - `AUTO:` manual-disconnect cooldown skips, including already queued service and controller starts. The 30 s cooldown is
+    scoped to the selected receiver; a manual connection overrides it. A new connection waits for the previous teardown;
+  - `PAIRING: stage=SETUP/VERIFY reuse=…` distinguishes registration from verification with a saved receiver identity.
+    Only an explicit TLV authentication rejection invalidates saved trust; EOF, HTTP 403 and busy errors do not. Private
+    receiver identity records remain in app preferences and are not added to the support report;
+  - `AIRPLAY: TEARDOWN` records separate screen-stream and full-session responses before Bluetooth/Wi-Fi cleanup.
+    `SCREEN:` logs a screen-only SETUP/RECORD after a mid-session screen relinquishment and a later `requestUI`.
+    A 200 reply or fresh video writes do not prove that the receiver returned to CarPlay; check touch counts and user feedback;
   - `ENV:` at the first frame and every 60 s: Wi-Fi RSSI, frequency, standard and link speeds, estimated
     bandwidth, thermal status, interactive, power-save and battery level. SSID and BSSID are not recorded.
 - Uncaught stacks and up to five exit records from this app only; an available
