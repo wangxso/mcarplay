@@ -34,6 +34,7 @@ internal class ModeArbiter {
     )
 
     private val resources = linkedMapOf(SCREEN to Resource(), MAIN_AUDIO to Resource())
+    private var screenRelinquished = false
 
     /** 屏幕当前是否归手机（诊断与是否值得补关键帧）。 */
     @get:Synchronized
@@ -51,17 +52,30 @@ internal class ModeArbiter {
     class UiRequest(
         val note: String,
         val retake: Boolean,
+        val rebuildStream: Boolean = false,
+        val allowed: Boolean = true,
     )
 
     /** 用户在车机上点了 CarPlay 图标：用户发起的拿回主屏。 */
     @Synchronized
     fun onUserRequestedUi(): UiRequest {
         val screen = resources.getValue(SCREEN)
-        if (screen.owner == Entity.CONTROLLER) return UiRequest("主屏本就归手机，先报让出再拿回", retake = true)
-        if (screen.takeConstraint >= CONSTRAINT_NEVER) return UiRequest("车机以 never 约束持有主屏，不抢", retake = false)
+        if (screen.owner == Entity.CONTROLLER) {
+            return UiRequest("主屏本就归手机，先报让出再拿回", retake = true, rebuildStream = screenRelinquished)
+        }
+        val constraint = if (screen.permanent == Entity.CONTROLLER) screen.borrowConstraint else screen.takeConstraint
+        if (constraint > PRIORITY_USER_INITIATED) {
+            return UiRequest("车机持有主屏的约束高于 userInitiated，不抢", retake = false, allowed = false)
+        }
         screen.owner = Entity.CONTROLLER
         screen.permanent = Entity.CONTROLLER
-        return UiRequest("用户点图标，拿回主屏（车机约束 ${screen.takeConstraint} ≤ userInitiated）", retake = false)
+        val rebuild = screenRelinquished
+        return UiRequest("用户点图标，拿回主屏（车机约束 $constraint ≤ userInitiated）", retake = false, rebuildStream = rebuild)
+    }
+
+    @Synchronized
+    fun onScreenStreamRestored() {
+        if (phoneOwnsScreen) screenRelinquished = false
     }
 
     /** modesChanged 的 resources 段；[releaseScreen] = 本条报主屏归车机（拿回前的让出），不改记录的归属。 */
@@ -91,6 +105,7 @@ internal class ModeArbiter {
         for (entry in requests) {
             val request = entry as? Map<*, *> ?: continue
             val resource = resources[(request["resourceID"] as? Number)?.toLong()] ?: continue
+            val previousOwner = resource.owner
             val type = (request["transferType"] as? Number)?.toInt() ?: continue
             val priority = (request["transferPriority"] as? Number)?.toInt() ?: PRIORITY_NICE_TO_HAVE
             val takeConstraint = (request["takeConstraint"] as? Number)?.toInt() ?: CONSTRAINT_ANYTIME
@@ -118,6 +133,11 @@ internal class ModeArbiter {
                     resource.borrowConstraint = borrowConstraint
                 }
                 TRANSFER_UNBORROW -> resource.owner = resource.permanent
+            }
+            if (!initial && (request["resourceID"] as? Number)?.toLong() == SCREEN &&
+                previousOwner == Entity.CONTROLLER && resource.owner == Entity.ACCESSORY
+            ) {
+                screenRelinquished = true
             }
         }
         return describe()
