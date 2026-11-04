@@ -19,10 +19,10 @@ object ConnectionDiagnostics {
         Executors.newSingleThreadExecutor { task -> Thread(task, "diagnostics-writer").apply { isDaemon = true } }
 
     /** CarPlay connection attempts. The hero card, receiver callbacks and [finishCurrent] use this one. */
-    val timeline = ConnectionTimeline(sink = ::persist)
+    val timeline = ConnectionTimeline(sink = ::persist, detailFilter = DiagnosticExportPolicy::storedDetail)
 
     /** CarWith self-test runs, kept apart so a self-test and a CarPlay attempt never supersede each other. */
-    val selfTest = ConnectionTimeline(sink = ::persist, track = "self_test")
+    val selfTest = ConnectionTimeline(sink = ::persist, track = "self_test", detailFilter = DiagnosticExportPolicy::storedDetail)
 
     @Synchronized
     fun initialize(app: Context) {
@@ -89,7 +89,7 @@ object ConnectionDiagnostics {
         thread: Thread,
         throwable: Throwable,
     ) {
-        val safeStack = DiagnosticRedactor.scrubAtSource(throwable.stackTraceToString().take(32_000))
+        val safeStack = DiagnosticExportPolicy.storedDetail(throwable.stackTraceToString().take(32_000))
         listOf(timeline, selfTest).forEach { target ->
             target.snapshot()?.let { target.issue(it.id, DiagnosticCode.UNCAUGHT_EXCEPTION, throwable.javaClass.name) }
         }
@@ -123,6 +123,15 @@ object ConnectionDiagnostics {
 
     @Synchronized
     fun storageStatus(): String = "diagnosticWriteFailures=$writeFailures"
+
+    /** 低频诊断经同一后台队列写文件并交给 remote tap；明文详情由 remote/debug 策略控制。 */
+    fun runtimeLog(message: String) {
+        try {
+            writer.execute { context?.let { DebugFileLog.append(it, message) } }
+        } catch (_: Exception) {
+            synchronized(this) { writeFailures++ }
+        }
+    }
 
     private fun persist(line: String) {
         try {

@@ -56,6 +56,7 @@ def analyze_report(text: str) -> dict:
         summaries.append({
             "process": process,
             "attempt": attempt,
+            "track": last.get("track", "carplay"),
             "stage": last.get("stage", "unknown"),
             "status": (ended or last).get("status", "unknown"),
             "code": (ended or last).get("code", "NONE"),

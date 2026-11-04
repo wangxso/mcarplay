@@ -16,6 +16,26 @@ import java.util.concurrent.atomic.AtomicReference
 
 class CarLifeSessionTest {
     @Test
+    fun stopPreservesLastListenerFailureForReportAfterConnectorIsReleased() {
+        var now = 0L
+        val connector =
+            CarLifeChannelConnector(
+                connect = { throw ConnectException("connection refused") },
+                sleep = { now += 2 },
+                nowMs = { now },
+            )
+        org.junit.Assert.assertThrows(CarLifeListenerTimeoutException::class.java) { connector.connectAll(timeoutMs = 1) }
+        val session = CarLifeSession(Application(), onAccessUnit = {}, onEnded = {}, log = {})
+        field("connector").set(session, connector)
+        (field("running").get(session) as AtomicBoolean).set(true)
+        session.stop()
+        val summary = session.diagnosticSummary()
+        assertNull(field("connector").get(session))
+        assertTrue(summary, summary.contains("lastFailedPort=7240 lastFailure=REFUSED"))
+        assertTrue(summary, summary.contains("timedOut=true stopped=true"))
+    }
+
+    @Test
     fun stoppingSleepingHeartbeatDoesNotReachUncaughtHandler() {
         repeat(20) {
             val session = CarLifeSession(Application(), onAccessUnit = {}, onEnded = {}, log = {})
@@ -87,6 +107,87 @@ class CarLifeSessionTest {
     }
 
     @Test
+    fun cancellationDuringEntryRequestDoesNotLaunchLegacyServiceOrSettings() {
+        lateinit var session: CarLifeSession
+        session =
+            CarLifeSession(
+                Application(),
+                onAccessUnit = {},
+                onEnded = {},
+                log = {},
+                requestPublicEntry = {
+                    session.stop()
+                    CarLifeLauncher.EntryLaunchResult.MISSING
+                },
+                requestLegacyEntry = { error("must not launch after stop") },
+                requestSettingsEntry = { error("must not launch after stop") },
+            )
+        (field("running").get(session) as AtomicBoolean).set(true)
+        CarLifeSession::class.java
+            .getDeclaredMethod("requestCompatibleEntry")
+            .apply { isAccessible = true }
+            .invoke(session)
+        assertFalse(session.isRunning)
+    }
+
+    @Test
+    fun attachedSessionWithoutVideoRequestsTheEntryOnce() {
+        var requests = 0
+        val session =
+            CarLifeSession(
+                Application(),
+                onAccessUnit = {},
+                onEnded = {},
+                log = {},
+                requestPublicEntry = {
+                    requests++
+                    CarLifeLauncher.EntryLaunchResult.REQUESTED
+                },
+                requestLegacyEntry = { error("public entry succeeded") },
+                requestSettingsEntry = { error("public entry succeeded") },
+                attachedFirstFrameWaitMs = 10,
+            )
+        (field("running").get(session) as AtomicBoolean).set(true)
+        repeat(2) {
+            startAttachWatch(session).join(2_000)
+        }
+        assertEquals(1, requests)
+        assertEquals(CarLifeSession.EntryRoute.CARWITH_ENTRY, field("entryRoute").get(session))
+    }
+
+    @Test
+    fun stoppedAttachedSessionNeverRequestsTheEntry() {
+        val session =
+            CarLifeSession(
+                Application(),
+                onAccessUnit = {},
+                onEnded = {},
+                log = {},
+                requestPublicEntry = { error("must not launch after stop") },
+                attachedFirstFrameWaitMs = 60_000,
+            )
+        (field("running").get(session) as AtomicBoolean).set(true)
+        val watch = startAttachWatch(session)
+        session.stop()
+        watch.join(2_000)
+        assertFalse(watch.isAlive)
+    }
+
+    private fun startAttachWatch(session: CarLifeSession): Thread {
+        CarLifeSession::class.java
+            .getDeclaredMethod("startAttachedFirstFrameWatch")
+            .apply { isAccessible = true }
+            .invoke(session)
+        return field("attachWatchThread").get(session) as Thread
+    }
+
+    @Test
+    fun defaultLaunchStrategyAttachesBeforeRequestingAnEntry() {
+        val session = CarLifeSession(Application(), onAccessUnit = {}, onEnded = {}, log = {})
+        assertEquals(CarLifeLaunchStrategy.COMPATIBLE, field("launchStrategy").get(session))
+    }
+
+    @Test
     fun onlyTopImportanceCountsAsForeground() {
         assertTrue(CarLifeLauncher.isForegroundImportance(ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND))
         assertTrue("Unfilled importance must not raise a false warning", CarLifeLauncher.isForegroundImportance(0))
@@ -104,6 +205,65 @@ class CarLifeSessionTest {
             CarLifeLauncher.isBackgroundStartModeAllowed(android.app.AppOpsManager.MODE_ERRORED),
         )
         assertNull(CarLifeLauncher.isBackgroundStartModeAllowed(android.app.AppOpsManager.MODE_DEFAULT))
+    }
+
+    @Test
+    fun compatibleStrategyUsesRootLegacyServiceWhenCarWithEntryIsMissing() {
+        // CarWith 3.1.2 之前没有 CarlifeAdbActivity；有 uid 0 时直接启动原厂内部服务。
+        val plan =
+            CarLifeSession.planCompatibleEntry(
+                carWithEntry = CarLifeLauncher.EntryLaunchResult.MISSING,
+                legacyEntry = CarLifeLauncher.EntryLaunchResult.REQUESTED,
+                settingsEntry = CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED,
+            )
+        assertEquals(CarLifeLauncher.EntryLaunchResult.REQUESTED, plan.result)
+        assertEquals(CarLifeSession.EntryRoute.LEGACY_ROOT_SERVICE, plan.route)
+    }
+
+    @Test
+    fun compatibleStrategyKeepsCarWithEntryWhenItWorks() {
+        val plan =
+            CarLifeSession.planCompatibleEntry(
+                carWithEntry = CarLifeLauncher.EntryLaunchResult.REQUESTED,
+                legacyEntry = CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED,
+                settingsEntry = CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED,
+            )
+        assertEquals(CarLifeLauncher.EntryLaunchResult.REQUESTED, plan.result)
+        assertEquals(CarLifeSession.EntryRoute.CARWITH_ENTRY, plan.route)
+    }
+
+    @Test
+    fun compatibleStrategyOpensCarWithSettingsWhenPrivilegedLaunchFails() {
+        val plan =
+            CarLifeSession.planCompatibleEntry(
+                carWithEntry = CarLifeLauncher.EntryLaunchResult.MISSING,
+                legacyEntry = CarLifeLauncher.EntryLaunchResult.PERMISSION_DENIED,
+                settingsEntry = CarLifeLauncher.EntryLaunchResult.REQUESTED,
+            )
+        assertEquals(CarLifeLauncher.EntryLaunchResult.REQUESTED, plan.result)
+        assertEquals(CarLifeSession.EntryRoute.CARWITH_SETTINGS, plan.route)
+    }
+
+    @Test
+    fun compatibleStrategyReportsLastFailureWhenEveryRouteFails() {
+        val plan =
+            CarLifeSession.planCompatibleEntry(
+                carWithEntry = CarLifeLauncher.EntryLaunchResult.MISSING,
+                legacyEntry = CarLifeLauncher.EntryLaunchResult.PERMISSION_DENIED,
+                settingsEntry = CarLifeLauncher.EntryLaunchResult.FAILED,
+            )
+        assertEquals(CarLifeLauncher.EntryLaunchResult.FAILED, plan.result)
+        assertEquals(CarLifeSession.EntryRoute.NONE, plan.route)
+    }
+
+    @Test
+    fun legacyLaunchCommandMatchesCarWithNormalWirelessServicePath() {
+        assertEquals(
+            "am start-foreground-service -n com.miui.carlink/com.miui.carlink.castfwk.CarlinkService " +
+                "--ei startType 4 --es carlife_wireless_type Baidu_ap " +
+                "--es carlife_wireless_type_name mcarplay",
+            CarLifeLauncher.legacyCarWithServiceCommand(),
+        )
     }
 
     @Test

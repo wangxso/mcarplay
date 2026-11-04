@@ -8,6 +8,7 @@ import com.mcarplay.app.iap2.MfiLengthMemory
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.input.ConsumerKeys
 import com.mcarplay.app.input.HidNavigation
+import com.mcarplay.app.input.MediaKeyEdge
 import java.security.SecureRandom
 import java.util.TimeZone
 import java.util.UUID
@@ -129,11 +130,8 @@ class VirtualIap2Link(
     private var lastLinkState = Iap2LinkEngine.State.IDLE
 
     // ---- 车机 HID 媒体键（0x6802）状态 ----
-    /** 上一次报文里按下的 Usage 集合（用于判定「新按下」，松开后自动清空）。 */
-    private var lastHidUsages: Set<Int> = emptySet()
-
-    /** 当前这批按键的起始时刻（连续同一按键超过 [HID_HOLD_REPEAT_MILLIS] 才允许连发）。 */
-    private var hidHoldStartedAtMs = 0L
+    /** 按下/长按连发的边沿判定（状态式报告 → 一次按键一次触发）。 */
+    private val hidKeyEdge = MediaKeyEdge(HID_HOLD_REPEAT_MILLIS)
 
     /** 已打印的参数明细帧数（只打前几帧，之后按需打动作）。 */
     private var hidReportFrames = 0
@@ -143,6 +141,14 @@ class VirtualIap2Link(
     private var mfiIdentity: String? = null
     private var mfiMemory = MfiLengthMemory.Entry()
     private var mfiOrder: List<Int> = emptyList()
+
+    /**
+     * 固定隧道 MFi 挑战长度（策略给出；null = 按记忆/基线轮换）。固定时只发这一档、窗口 [PINNED_MFI_WINDOW_MS]，
+     * 静默也不再追加挑战，直接 0xAA05。2026-11-02 艾瑞泽 8：车机为 MFi Auth 3.0 芯片，真 iPhone 隧道认证一次 0.45 s；
+     * mcarplay 先发 20B 时车机芯片挂约 37 s，后续 32B/16B 排队，会话结束时仍有未完成的认证。
+     */
+    @Volatile
+    var pinnedMfiLength: Int? = null
     private var mfiPosition = -1
     private var mfiCurrentLength = 0
     private var mfiWindowMillis = 0L
@@ -433,7 +439,8 @@ class VirtualIap2Link(
         if (mfiFinished || mfiCurrentLength == 0) return
         if (nowMillis() - mfiChallengeSentAtMs < mfiWindowMillis) return
         val failed = mfiCurrentLength
-        MfiLengthMemory.recordSilent(mfiContext, identity, failed)
+        // 固定长度不做学习：不让一次挂起污染按车机记忆的轮换顺序
+        if (pinnedMfiLength == null) MfiLengthMemory.recordSilent(mfiContext, identity, failed)
         log("IAPLINK: 隧道 MFi ${failed}B 静默 ${mfiWindowMillis}ms——记入记忆，换下一档重试")
         mfiCurrentLength = 0
         startNextMfiChallengeLocked()
@@ -447,8 +454,11 @@ class VirtualIap2Link(
         val identity = mfiIdentity ?: return
         if (mfiOrder.isEmpty()) {
             mfiMemory = MfiLengthMemory.load(mfiContext, identity)
-            mfiOrder = MfiLengthMemory.orderAttempts(TUNNEL_MFI_BASELINE, mfiMemory)
-            if (!mfiMemory.isEmpty) {
+            val pinned = pinnedMfiLength
+            mfiOrder = if (pinned != null) listOf(pinned) else MfiLengthMemory.orderAttempts(TUNNEL_MFI_BASELINE, mfiMemory)
+            if (pinned != null) {
+                log("IAPLINK: 隧道 MFi 固定 ${pinned}B（接收端策略）——只发一次，窗口 ${PINNED_MFI_WINDOW_MS}ms")
+            } else if (!mfiMemory.isEmpty) {
                 log(
                     "IAPLINK: 隧道 MFi 按车机记忆：${MfiLengthMemory.describe(mfiMemory)}" +
                         " → 本轮顺序 ${mfiOrder.joinToString("/")}B",
@@ -467,10 +477,10 @@ class VirtualIap2Link(
         mfiCurrentLength = mfiOrder[mfiPosition]
         val base = TUNNEL_MFI_WINDOWS[mfiCurrentLength] ?: TUNNEL_MFI_SILENT_WINDOW_MS
         mfiWindowMillis =
-            if (mfiCurrentLength in mfiMemory.silent && mfiCurrentLength != mfiMemory.succeeded) {
-                minOf(base, TUNNEL_MFI_SILENT_WINDOW_MS)
+            if (pinnedMfiLength != null) {
+                PINNED_MFI_WINDOW_MS
             } else {
-                base
+                MfiLengthMemory.challengeWindow(mfiCurrentLength, mfiMemory, base, TUNNEL_MFI_SILENT_WINDOW_MS)
             }
         mfiChallengeSentAtMs = nowMillis()
         val challenge = ByteArray(mfiCurrentLength).also { SecureRandom().nextBytes(it) }
@@ -500,6 +510,19 @@ class VirtualIap2Link(
         }
         sendCsmLocked(Iap2MessageIds.START_IDENTIFICATION)
     }
+
+    /**
+     * 有序断开第一步：控制会话已建立时发 `0x4E0D WirelessCarPlayUpdate`=0（不可用）并立即冲刷。
+     * 真 iPhone 关无线局域网时先发这一条，车机随即走正常断开（2026-11-02 艾瑞泽 8 车机日志）。
+     */
+    fun announceWirelessUnavailable(): Boolean =
+        synchronized(lock) {
+            val controlSessionUp = tunnelCsmStarted || eventCsmStarted || mib3CsmStarted
+            if (engine.state != Iap2LinkEngine.State.NORMAL || !controlSessionUp) return@synchronized false
+            sendCsmLocked(Iap2MessageIds.WIRELESS_CARPLAY_UPDATE, Iap2Csm.u8(0, 0))
+            flushOutputLocked()
+            true
+        }
 
     /** 链路上的 CSM 发送（进入引擎 backlog，由引擎按发送窗口 flush）。 */
     private fun sendCsmLocked(
@@ -742,30 +765,10 @@ class VirtualIap2Link(
 
     /**
      * 把一批「本次按下的 Usage」转成 Android 媒体键注入。
-     *
-     * 车机的 HID 报告是**状态式**的：按住会以 ~10Hz 连推同一个位图，松开推 0x00。
-     * 因此只在「新出现」时触发一次（边沿触发），否则一次长按会跳掉几十首歌；
-     * 只有在同一按键持续按住超过 [HID_HOLD_REPEAT_MILLIS] 时才允许再触发，
-     * 保持方向盘长按「连续切歌」的手感。
+     * 边沿/长按连发语义见 [MediaKeyEdge]：按住期间的重复报告不会连跳几十首。
      */
     private fun fireHidKeysLocked(usages: List<Int>) {
-        val now = nowMillis()
-        if (usages.isEmpty()) {
-            lastHidUsages = emptySet()
-            hidHoldStartedAtMs = 0L
-            return
-        }
-        val fresh = usages.filter { it !in lastHidUsages }
-        val repeat =
-            fresh.isEmpty() &&
-                hidHoldStartedAtMs > 0 &&
-                now - hidHoldStartedAtMs >= HID_HOLD_REPEAT_MILLIS
-        lastHidUsages = usages.toSet()
-        if (fresh.isNotEmpty()) hidHoldStartedAtMs = now
-        if (fresh.isEmpty() && !repeat) return
-        if (repeat) hidHoldStartedAtMs = now
-        val firing = if (fresh.isNotEmpty()) fresh else usages
-        for (usage in firing) {
+        for (usage in hidKeyEdge.onReport(usages, nowMillis())) {
             val keyCode = ConsumerKeys.keyCodeFor(usage)
             log(
                 "IAPLINK: 车机媒体键 ${ConsumerKeys.nameOf(usage)}(0x%02x) → keyCode=".format(usage) +
@@ -893,6 +896,9 @@ class VirtualIap2Link(
         val TUNNEL_MFI_WINDOWS = mapOf(20 to 6_000L, 32 to 3_000L, 16 to 3_000L)
         const val TUNNEL_MFI_SILENT_WINDOW_MS = 1_500L
 
+        /** 固定长度挑战的应答等待（覆盖车机芯片约 35 s 的内部超时）。 */
+        const val PINNED_MFI_WINDOW_MS = 40_000L
+
         /**
          * 车机在事件通道上连续发到第几个 SYN marker 才判定「它在等我们回 marker」。
          * 真机（MIB3）在我们主动 detect 后就不再重发；Honda HFT 实测连发上百次，
@@ -920,7 +926,7 @@ class VirtualIap2Link(
         const val HID_REPORT_VERBOSE_FRAMES = 8
 
         /** 同一按键持续按住多久才允许再次触发（模拟长按连发，短按绝不重复）。 */
-        const val HID_HOLD_REPEAT_MILLIS = 1_500L
+        const val HID_HOLD_REPEAT_MILLIS = MediaKeyEdge.HOLD_REPEAT_MILLIS
 
         /**
          * 0x6802 的参数表 → HID 报文。

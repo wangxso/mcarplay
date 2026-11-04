@@ -7,7 +7,6 @@ import com.mcarplay.app.BuildConfig
 import com.mcarplay.app.diagnostics.DeviceEnvironment
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
@@ -68,8 +67,20 @@ object BridgeClient {
     @Volatile
     private var appContext: Context? = null
 
+    /**
+     * start/stop 串行化：曾经 `running` 是无锁的检查-置位，stop 后紧接 start 时旧
+     * runLoop 还在 connect/退避睡眠里，醒来看到 running=true 就继续跑——两根连接
+     * 线程并存、互相覆盖 [ws]。现在每次 start 发一个代号，循环只认自己的代号。
+     */
+    private val lifecycleLock = Any()
+
     @Volatile
     private var running = false
+
+    @Volatile
+    private var generation = 0
+
+    private var loopThread: Thread? = null
 
     @Volatile
     private var ws: WsClient? = null
@@ -84,37 +95,57 @@ object BridgeClient {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** 环形日志缓冲（断线重连后按 seq 回补给服务端）。 */
-    private val ringLock = Any()
-    private val ring = ArrayDeque<Pair<Long, String>>()
-    private const val RING_CAP = 5_000
-
     /** 待实时发送的日志（tap 线程入队，连接线程按批冲刷）。 */
     private val pendingLock = Any()
     private val pending = ArrayDeque<Pair<Long, String>>()
+
+    /** 本进程已发出日志的 seq 账本（回补与实时冲刷共用）。 */
+    private val sentLedger = LogSeqLedger()
+
+    /**
+     * 日志流闸门：已通过 welcome 的连接才承载日志；配对完成前的行留在环形缓冲里，
+     * 由 welcome 回补按序补上。
+     */
+    private val logStream = LogStreamGate<WsClient>(sentLedger, { client, text -> client.sendText(text) })
+
+    /** 环形日志缓冲（断线重连后按 seq 回补）。 */
+    private const val RING_CAP = 5_000
+    private val ring = LogRing(RING_CAP)
 
     private var tapInstalled = false
 
     fun start(context: Context) {
         appContext = context.applicationContext
         installTap()
-        if (running) return
-        running = true
-        // 蜂窝通道必须先就位：首次连接就可能发生在车机会话里（进程网络已被绑走）
-        route = InternetRoute(context.applicationContext).also { it.start() }
-        Thread({ runLoop() }, "bridge-client").apply {
-            isDaemon = true
-            start()
+        synchronized(lifecycleLock) {
+            if (running) return
+            running = true
+            val gen = ++generation
+            // 蜂窝通道必须先就位：首次连接就可能发生在车机会话里（进程网络已被绑走）
+            route = InternetRoute(context.applicationContext).also { it.start() }
+            loopThread =
+                Thread({ runLoop(gen) }, "bridge-client").apply {
+                    isDaemon = true
+                    start()
+                }
         }
     }
 
     fun stop() {
-        running = false
-        route?.stop()
-        route = null
-        ws?.close(1000, "客户端停止")
+        synchronized(lifecycleLock) {
+            running = false
+            generation++
+            route?.stop()
+            route = null
+            // 打断退避睡眠；阻塞在 socket 上的由下面的 close 打断
+            loopThread?.interrupt()
+            loopThread = null
+            ws?.close(1000, "客户端停止")
+        }
         setState("已断开")
     }
+
+    private fun isCurrent(gen: Int): Boolean = running && generation == gen
 
     /** 蜂窝互联网通道（供 APK 下载等复用）：车机会话期间进程默认网络被绑到
      *  车机热点（无互联网），不走它的一切联网操作都会失败。 */
@@ -129,18 +160,15 @@ object BridgeClient {
         if (tapInstalled) return
         tapInstalled = true
         DebugFileLog.tap = { seq, line ->
-            synchronized(ringLock) {
-                ring.addLast(seq to line)
-                while (ring.size > RING_CAP) ring.removeFirst()
-            }
+            ring.add(seq, line)
             synchronized(pendingLock) { pending.addLast(seq to line) }
         }
     }
 
-    private fun runLoop() {
+    private fun runLoop(gen: Int) {
         var backoffMs = 2_000L
         var attempt = 0
-        while (running) {
+        while (isCurrent(gen)) {
             val ctx = appContext ?: return
             val url = BridgePrefs.serverUrl(ctx)
             if (url.isBlank()) {
@@ -153,7 +181,8 @@ object BridgeClient {
             // WS 入热点即断、4 分钟后才自愈，期间日志流停更却无任何痕迹可查）
             val network = route?.current()
             attempt++
-            val client =
+            lateinit var client: WsClient
+            client =
                 WsClient(
                     url,
                     object : WsClient.Listener {
@@ -165,9 +194,10 @@ object BridgeClient {
                             sendHello()
                         }
 
-                        override fun onText(text: String) = onServerMessage(text)
+                        override fun onText(text: String) = onServerMessage(client, text)
 
                         override fun onClosed(reason: String) {
+                            logStream.end(client)
                             setState("连接断开：$reason")
                             lastDisconnectReason = reason.take(40)
                             debugLog("连接断开：$reason")
@@ -175,7 +205,11 @@ object BridgeClient {
                     },
                     network,
                 )
-            ws = client
+            synchronized(lifecycleLock) {
+                // stop() 可能刚好发生在本轮建连之前：不能把新连接挂到已停止的客户端上
+                if (!isCurrent(gen)) return
+                ws = client
+            }
             setState("连接中…")
             nextRetryAtElapsed = 0
             connUsedDefaultNetwork = network == null
@@ -197,13 +231,17 @@ object BridgeClient {
                 lastDisconnectReason = (error.message ?: error.javaClass.simpleName).take(40)
                 route?.noteFailure(connUsedDefaultNetwork)
             }
-            ws = null
+            logStream.end(client)
+            synchronized(lifecycleLock) {
+                // 只清自己的连接：已被新一轮 start 的循环替换时不能把它的 ws 置空
+                if (ws === client) ws = null
+            }
             // 已连上过的连接走到这里 = 断连；告知 App 层弹用户提示（倒计时在状态行）
             if (wasConnected) {
                 wasConnected = false
                 runCatching { connectionEvents?.invoke(false) }
             }
-            if (!running) break
+            if (!isCurrent(gen)) break
             nextRetryAtElapsed = android.os.SystemClock.elapsedRealtime() + backoffMs
             sleepQuiet(backoffMs)
             backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
@@ -225,7 +263,12 @@ object BridgeClient {
 
     // ---- 连接建立后的握手与消息 ----
 
-    private fun onServerMessage(text: String) {
+    private fun onServerMessage(
+        client: WsClient,
+        text: String,
+    ) {
+        // 已被替换/停止的旧连接上迟到的消息一律忽略
+        if (ws !== client) return
         val msg =
             runCatching { JSONObject(text) }.getOrNull() ?: return
         when (msg.optString("t")) {
@@ -242,15 +285,19 @@ object BridgeClient {
                         wasConnected = true
                         runCatching { connectionEvents?.invoke(true) }
                     }
-                    // 全量回补：服务端按 seq 去重并留环形缓冲
-                    sendLogBatch(since = 0)
+                    // 回补环形缓冲里本进程尚未成功发出的行，然后开放实时流
+                    logStream.begin(client) { ring.since(0) }
                 } else {
                     setState("配对被拒：${msg.optString("error")}")
                     ws?.close(1008, "配对被拒")
                 }
             }
 
-            "log.sync" -> sendLogBatch(msg.optLong("since"))
+            // 服务端要求的 since 只能收窄、不能让已发过的 seq 再发一遍
+            "log.sync" -> {
+                val since = msg.optLong("since")
+                logStream.replay(client) { ring.since(since) }
+            }
 
             "cmd" -> {
                 val id = msg.optString("id")
@@ -358,27 +405,10 @@ object BridgeClient {
         send(hello)
     }
 
-    /** 回补环形缓冲中 seq > since 的日志（since=0 全量）。 */
-    private fun sendLogBatch(since: Long) {
-        val snapshot: List<Pair<Long, String>> =
-            synchronized(ringLock) {
-                ring.filter { it.first > since }
-            }
-        if (snapshot.isEmpty()) {
-            send(JSONObject().put("t", "log.batch").put("lines", JSONArray()))
-            return
-        }
-        // 分片发送：单条 JSON 控制在 ~256KB 内（服务端 ws 消息上限友好）
-        snapshot.chunked(200).forEach { chunk ->
-            val lines = JSONArray()
-            chunk.forEach { (seq, line) ->
-                lines.put(JSONObject().put("seq", seq).put("text", line))
-            }
-            send(JSONObject().put("t", "log.batch").put("lines", lines))
-        }
-    }
-
-    /** 冲刷实时日志队列（连接线程周期调用）。 */
+    /**
+     * 冲刷实时日志队列（冲刷线程周期调用）。日志流未就绪（未配对/断开）时直接
+     * 丢弃队列：这些行仍在环形缓冲里，下次 welcome 回补会补发未发过的部分。
+     */
     fun flushPendingLogs() {
         val batch =
             synchronized(pendingLock) {
@@ -387,9 +417,7 @@ object BridgeClient {
                 while (pending.isNotEmpty()) taken.add(pending.removeFirst())
                 taken
             }
-        val lines = JSONArray()
-        batch.forEach { (seq, line) -> lines.put(JSONObject().put("seq", seq).put("text", line)) }
-        send(JSONObject().put("t", "log.batch").put("lines", lines))
+        logStream.flush(batch)
     }
 
     fun send(json: JSONObject) {
@@ -411,7 +439,8 @@ object BridgeClient {
             {
                 while (true) {
                     sleepQuiet(500)
-                    if (running) flushPendingLogs()
+                    // 停止状态下也要排空队列（日志流未就绪时直接丢弃），否则 pending 无界增长
+                    flushPendingLogs()
                 }
             },
             "bridge-log-flush",

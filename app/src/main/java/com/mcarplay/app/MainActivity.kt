@@ -35,6 +35,7 @@ import com.mcarplay.app.compat.ReceiverDetection
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
 import com.mcarplay.app.diagnostics.DiagnosticRedactor
 import com.mcarplay.app.diagnostics.DiagnosticText
 import com.mcarplay.app.i18n.AppLanguage
@@ -45,6 +46,7 @@ import com.mcarplay.app.legal.DisclaimerDialog
 import com.mcarplay.app.legal.DisclaimerPrefs
 import com.mcarplay.app.legal.needsDisclaimerAtLaunch
 import com.mcarplay.app.media.NotificationAccess
+import com.mcarplay.app.service.BatteryExemption
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ExternalHuService
 import com.mcarplay.app.shizuku.CarInputClient
@@ -609,9 +611,43 @@ class MainActivity : AppCompatActivity() {
                 log("CARLIFE: 未允许「后台弹出界面」，CarPlay 会话建立后可能无法打开 CarWith 入口")
                 showBackgroundStartGuidance()
             } else {
+                continueAfterBackgroundStartCheck()
+            }
+        }
+    }
+
+    /** 本进程已提示过电池优化（「仍然连接」后不再每次连接都打断）。 */
+    private var batteryPromptShown = false
+
+    /** 未豁免电池优化时锁屏会被系统冻结断网（见 [BatteryExemption]）：连接前提示一次，用户仍可继续。 */
+    private fun continueAfterBackgroundStartCheck() {
+        runOnUiThread {
+            val exempt = BatteryExemption.isExempt(this)
+            if (BatteryExemption.shouldPrompt(exempt, batteryPromptShown)) {
+                batteryPromptShown = true
+                log("POWER: 未豁免电池优化——锁屏后系统可能冻结 mcarplay 并断网，提示用户设置")
+                showBatteryExemptionGuidance()
+            } else {
                 startConnectionUnchecked()
             }
         }
+    }
+
+    private fun showBatteryExemptionGuidance() {
+        DarkMessageDialog.show(
+            activity = this,
+            title = getString(R.string.ma_battery_title),
+            message = getString(R.string.ma_battery_body),
+            actions =
+                listOf(
+                    DarkMessageDialog.Action(getString(R.string.action_connect_anyway)) { startConnectionUnchecked() },
+                    DarkMessageDialog.Action(getString(R.string.action_go_grant), DarkMessageDialog.Emphasis.PRIMARY) {
+                        if (!BatteryExemption.openSettings(this)) {
+                            log("POWER: 无法打开电池优化设置，请到 设置 → 应用 → mcarplay → 省电策略 手动设为无限制")
+                        }
+                    },
+                ),
+        )
     }
 
     private fun showBackgroundStartGuidance() {
@@ -621,7 +657,7 @@ class MainActivity : AppCompatActivity() {
             message = getString(R.string.ma_background_body),
             actions =
                 listOf(
-                    DarkMessageDialog.Action(getString(R.string.action_connect_anyway)) { startConnectionUnchecked() },
+                    DarkMessageDialog.Action(getString(R.string.action_connect_anyway)) { continueAfterBackgroundStartCheck() },
                     DarkMessageDialog.Action(getString(R.string.action_go_grant), DarkMessageDialog.Emphasis.PRIMARY) {
                         if (!CarLifeLauncher.openBackgroundStartSettings(this)) {
                             log("CARLIFE: 无法打开权限页，请到 设置 → 应用 → mcarplay → 权限 手动开启")
@@ -960,6 +996,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnCheckUpdates).setOnClickListener {
             startActivity(Intent(this, com.mcarplay.app.update.UpdateActivity::class.java))
         }
+        findViewById<View>(R.id.btnBtSnoop).setOnClickListener {
+            startActivity(Intent(this, com.mcarplay.app.diagnostics.btsnoop.BtSnoopActivity::class.java))
+        }
         findViewById<View>(R.id.btnLanguage).setOnClickListener { showLanguagePicker() }
         updateLanguageRow()
         // 清理旧版本遗留的模式偏好（模式已固定为「隐形屏」启动器）
@@ -1072,7 +1111,10 @@ class MainActivity : AppCompatActivity() {
                 )
             } else {
                 snack(getString(R.string.ma_psk_missing))
-                log("WiFi: 尚未拿到热点密码（需蓝牙会话 0x5703）——打开 WLAN 设置手动选择 \"$ssid\"")
+                log(
+                    "WiFi: 尚未拿到热点密码（需蓝牙会话 0x5703）——打开 WLAN 设置手动选择" +
+                        if (ssid.isEmpty()) "车机热点（名称未知：车机未经蓝牙下发，请在车机的 WLAN/CarPlay 设置里查看热点名与密码）" else " \"$ssid\"",
+                )
             }
             try {
                 startActivity(android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS))
@@ -1088,7 +1130,8 @@ class MainActivity : AppCompatActivity() {
         btnAudio.setOnClickListener {
             if (CarLifeLauncher.isAvailable(this)) {
                 SessionController.audioEnabledForSession = true
-                SessionController.maybeStartAudioNow(applicationContext)
+                // 音频 SETUP 是控制通道上的网络请求，不能在主线程发
+                Bg.run("audio-native-start") { SessionController.maybeStartAudioNow(applicationContext) }
                 snack(getString(R.string.ma_native_audio_requested))
                 return@setOnClickListener
             }
@@ -2195,12 +2238,32 @@ class MainActivity : AppCompatActivity() {
      * 导出日志到「下载/mcarplay/」并弹窗告知位置。
      *
      * 默认导出诊断摘要与最近历史；进程重启后仍能反馈前一轮问题。
-     * 长按导出按钮包含更大的最近运行日志（[LogExporter.Scope.ALL]），仍会脱敏。
+     * 长按导出按钮包含更大的最近运行日志（[LogExporter.Scope.ALL]）；仅 remote/debug 明文导出。
      * 为什么必须弹窗而不是 snack：snack 只在页面底部浮 2.4s，用户点了导出后
      * 往往正在看日志区、根本注意不到；且失败时也必须有明确反馈（写文件可能因
      * 存储满/媒体库异常失败）。
      */
     private fun exportLogFile(scope: LogExporter.Scope = LogExporter.Scope.SUPPORT) {
+        if (DiagnosticExportPolicy.unredacted) {
+            DarkMessageDialog.show(
+                this,
+                title = getString(R.string.raw_diagnostics_title),
+                message = getString(R.string.raw_diagnostics_notice),
+                actions =
+                    listOf(
+                        DarkMessageDialog.Action(getString(android.R.string.cancel), onClick = {}),
+                        DarkMessageDialog.Action(
+                            getString(R.string.raw_diagnostics_export_confirm),
+                            DarkMessageDialog.Emphasis.PRIMARY,
+                        ) { performLogExport(scope) },
+                    ),
+            )
+        } else {
+            performLogExport(scope)
+        }
+    }
+
+    private fun performLogExport(scope: LogExporter.Scope) {
         snack(getString(R.string.ma_exporting))
         val fallback = SessionController.logText()
         val knownNames = diagnosticNames()

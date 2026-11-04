@@ -81,9 +81,21 @@ class CarPlayCtrlAdvertiser(
     var inviteCount: Int = 0
         private set
 
+    /**
+     * 最近一次邀请的时刻（uptimeMillis；0 = 本轮尚无）。
+     *
+     * 帕萨特 2025（VW4211，2026-10-31 23:51–23:59）只接受「刚发过邀请」后的连入：
+     * 邀请后 7s/13s 连入成功，42s 前的旧邀请或邀请到达前抢先连入，初始 SETUP
+     * 一回就被关控制通道。只看计数无法区分新旧，故另记时刻。
+     */
+    @Volatile
+    var lastInviteAtMillis: Long = 0L
+        private set
+
     /** 新一轮连接开始时清零（避免把上一轮的邀请当成本轮信号）。 */
     fun resetInviteCount() {
         inviteCount = 0
+        lastInviteAtMillis = 0L
     }
 
     /** 注册时的 WiFi SSID：换网（2.4G→5G 或车机热点切换）后旧注册不可见，需重新注册。 */
@@ -95,6 +107,15 @@ class CarPlayCtrlAdvertiser(
     /** 本次注册时刻（force 冷却判定用）。 */
     @Volatile
     private var registeredAtMillis: Long = 0L
+
+    /**
+     * 当前广播在网络上确认可见（onServiceRegistered）的时刻；0 = 未注册或注销后尚未重新确认。
+     * 车机通常在广播可见后 0.1–0.3 s 发邀请（帕萨特 2026-11-01 21:45 / 10-31 23:50 实测），
+     * 邀请宽限期应从这里算，而不是从开始等待算。
+     */
+    @Volatile
+    var advertisedAtMillis: Long = 0L
+        private set
 
     /** 本次注册写入 TXT 的 MAC（占位值 = 车机不会邀请，需尽快重注册）。 */
     @Volatile
@@ -289,6 +310,7 @@ class CarPlayCtrlAdvertiser(
                         }?.substringAfter(':')
                         ?.trim()
                 inviteCount++
+                lastInviteAtMillis = android.os.SystemClock.uptimeMillis()
                 log("$TAG: ✓ 车机 ctrl 邀请（第 $inviteCount 次，receiver=${receiverId ?: "?"}）——AirPlay 窗口已开启")
             }
 
@@ -360,6 +382,7 @@ class CarPlayCtrlAdvertiser(
     @Synchronized
     private fun unregisterServiceOnly() {
         registered = false
+        advertisedAtMillis = 0L
         registeredWithMac = null
         activeListener?.let { runCatching { nsdManager.unregisterService(it) } }
         activeListener = null
@@ -380,6 +403,8 @@ class CarPlayCtrlAdvertiser(
     private fun createListener(): NsdManager.RegistrationListener =
         object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
+                // 只认当前这次注册：已被注销的旧注册迟到的回调不能把广播标成可见
+                if (activeListener === this) advertisedAtMillis = SystemClock.uptimeMillis()
                 log("$TAG: mDNS 注册成功 ${serviceInfo.serviceName}")
             }
 

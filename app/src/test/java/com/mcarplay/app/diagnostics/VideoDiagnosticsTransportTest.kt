@@ -5,17 +5,95 @@ import com.mcarplay.app.video.ExternalVideoFrame
 import com.mcarplay.app.video.ExternalVideoSource
 import com.mcarplay.app.video.VideoSender
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.DataInputStream
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class VideoDiagnosticsTransportTest {
+    @Test
+    fun quiescedSenderCannotBeStartedByALateTask() {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
+            val sender =
+                VideoSender(
+                    "127.0.0.1",
+                    receiver.localPort,
+                    StreamFrameCipher.ChaCha(ByteArray(32)),
+                    640,
+                    480,
+                    log = {},
+                    externalVideoSource =
+                        object : ExternalVideoSource {
+                            override fun requestKeyFrame(): Boolean = true
+                        },
+                )
+            try {
+                assertTrue(sender.openDataPort())
+                receiver.accept().use { socket ->
+                    sender.quiesceForOrderlyStop()
+                    assertFalse(sender.start {})
+                    assertFalse(sender.isRunning)
+                    sender.stop()
+                    assertFalse(sender.start {})
+                    socket.soTimeout = 2_000
+                    assertEquals(-1, socket.getInputStream().read())
+                }
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
+    @Test
+    fun orderlyStopQuiescesFramesWithoutClosingTheScreenSocket() {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
+            val ended = CountDownLatch(1)
+            val sender =
+                VideoSender(
+                    "127.0.0.1",
+                    receiver.localPort,
+                    StreamFrameCipher.ChaCha(ByteArray(32)),
+                    640,
+                    480,
+                    log = {},
+                    onEnded = { ended.countDown() },
+                    externalVideoSource =
+                        object : ExternalVideoSource {
+                            override fun requestKeyFrame(): Boolean = true
+                        },
+                )
+            try {
+                assertTrue(sender.start {})
+                receiver.accept().use { socket ->
+                    sender.quiesceForOrderlyStop()
+                    assertFalse(sender.submitExternalFrame(ExternalVideoFrame(byteArrayOf(0, 0, 0, 1, 0x65), true, 0)))
+                    assertFalse(sender.requestKeyFrame())
+                    socket.soTimeout = 350
+                    try {
+                        socket.getInputStream().read()
+                        fail("screen transport closed or wrote data before TEARDOWN")
+                    } catch (_: SocketTimeoutException) {
+                        // 没有新帧，也没有提前 EOF。
+                    }
+                    sender.stop()
+                    socket.soTimeout = 2_000
+                    assertEquals(-1, socket.getInputStream().read())
+                }
+            } finally {
+                sender.stop()
+                assertTrue(ended.await(2, TimeUnit.SECONDS))
+            }
+        }
+    }
+
     @Test
     fun connectionAloneIsNotAFrameAndObserverFailureCannotBreakVideo() {
         ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->

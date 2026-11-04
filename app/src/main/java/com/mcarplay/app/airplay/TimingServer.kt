@@ -26,6 +26,10 @@ class TimingServer(
     private var syncRequests = 0L
     private var lastSyncLogAt = 0L
 
+    /** 车机时钟与本机单调时钟之差（诊断：漂移或跳变会让车机按错误时刻排帧）。 */
+    @Volatile
+    private var clockTracker = ClockOffsetTracker()
+
     /** 非 timesync 包计数（诊断：有没有别的 UDP 报文打到这个端口）。 */
     private var unexpected = 0L
 
@@ -33,6 +37,7 @@ class TimingServer(
 
     fun start(): Boolean {
         if (port != 0 && running) return true
+        clockTracker = ClockOffsetTracker()
         return try {
             val s = DatagramSocket()
             s.reuseAddress = true
@@ -65,7 +70,8 @@ class TimingServer(
                 return // socket closed
             }
             val request = buffer.copyOfRange(0, packet.length)
-            val response = buildResponse(request, ntpNanosNow())
+            val nowNanos = ntpNanosNow()
+            val response = buildResponse(request, nowNanos)
             if (response == null) {
                 unexpected++
                 if (unexpected <= 5) {
@@ -74,10 +80,11 @@ class TimingServer(
                 continue
             }
             syncRequests++
+            val clockNote = clockTracker.record(requestTransmitNanos(request), nowNanos)
             val now = System.currentTimeMillis()
-            if (syncRequests <= 3 || now - lastSyncLogAt >= 30_000L) {
+            if (syncRequests <= 3 || now - lastSyncLogAt >= 30_000L || clockNote.jumped) {
                 lastSyncLogAt = now
-                log("TIMING: timesync 应答 #$syncRequests → ${packet.address.hostAddress}:${packet.port}")
+                log("TIMING: timesync 应答 #$syncRequests → ${packet.address.hostAddress}:${packet.port}；${clockNote.text}")
             }
             try {
                 s.send(DatagramPacket(response, response.size, packet.address, packet.port))
@@ -139,6 +146,15 @@ class TimingServer(
             return response
         }
 
+        /** 请求的 t3（车机发送时刻，NTP 64 位大端，字节 24..32）换算为纳秒。 */
+        fun requestTransmitNanos(request: ByteArray): Long {
+            var packed = 0L
+            for (index in 24 until 32) packed = (packed shl 8) or (request[index].toLong() and 0xFF)
+            val secs = packed ushr 32
+            val frac = packed and 0xFFFF_FFFFL
+            return secs * 1_000_000_000L + (frac * 1_000_000_000L ushr 32)
+        }
+
         /** 单调纳秒 → NTP 64 位（秒<<32 | (纳秒分数 * 2^32 / 1e9)），大端 8 字节。 */
         fun ntpFromNanos(nanos: Long): ByteArray {
             val secs = Math.floorDiv(nanos, 1_000_000_000L)
@@ -147,5 +163,64 @@ class TimingServer(
             val packed = (secs shl 32) or (frac and 0xFFFF_FFFFL)
             return ByteArray(8) { index -> (packed ushr (8 * (7 - index))).toByte() }
         }
+    }
+}
+
+/**
+ * 跟踪「本机时钟 − 车机时钟」：首个样本为基准，之后报告相对基准的漂移与请求间隔。
+ * 两端时钟起点不同，绝对差值本身无意义；漂移持续增大或突然跳变（> [jumpMillis]）才是异常信号。
+ */
+internal class ClockOffsetTracker(
+    private val jumpMillis: Long = 50L,
+    private val rebaseMillis: Long = 3_600_000L,
+) {
+    data class Note(
+        val text: String,
+        val jumped: Boolean,
+    )
+
+    private var baseOffsetNanos: Long? = null
+    private var lastOffsetNanos = 0L
+    private var lastLocalNanos = 0L
+    private var firstLocalNanos = 0L
+    private var maxIntervalMillis = 0L
+
+    fun record(
+        receiverNanos: Long,
+        localNanos: Long,
+    ): Note {
+        val offset = localNanos - receiverNanos
+        val base = baseOffsetNanos
+        if (base == null) {
+            baseOffsetNanos = offset
+            lastOffsetNanos = offset
+            lastLocalNanos = localNanos
+            firstLocalNanos = localNanos
+            return Note("车机时钟基准已记录", jumped = false)
+        }
+        val intervalMillis = (localNanos - lastLocalNanos) / 1_000_000L
+        if (intervalMillis > maxIntervalMillis) maxIntervalMillis = intervalMillis
+        // 车机首个请求可能用另一个时间基准（帕萨特 2026-11-01：第 1、2 个请求的时钟差相差约 70 年，接近 NTP 与 Unix 纪元之差），
+        // 超过 [rebaseMillis] 的差值不是漂移，换基准重算
+        val stepFromLast = (offset - lastOffsetNanos) / 1_000_000L
+        if (kotlin.math.abs(stepFromLast) > rebaseMillis) {
+            baseOffsetNanos = offset
+            lastOffsetNanos = offset
+            lastLocalNanos = localNanos
+            firstLocalNanos = localNanos
+            return Note("车机时钟换基准（与上一请求相差 ${stepFromLast / 1000}s，按新基准重算漂移）", jumped = true)
+        }
+        val driftMillis = (offset - base) / 1_000_000.0
+        val stepMillis = (offset - lastOffsetNanos) / 1_000_000L
+        val elapsedMinutes = (localNanos - firstLocalNanos) / 60_000_000_000.0
+        lastOffsetNanos = offset
+        lastLocalNanos = localNanos
+        val jumped = kotlin.math.abs(stepMillis) > jumpMillis
+        val rate = if (elapsedMinutes > 0.05) " (%.2fms/min)".format(driftMillis / elapsedMinutes) else ""
+        return Note(
+            "相对车机时钟漂移 %.1fms$rate，本次间隔 ${intervalMillis}ms（最长 ${maxIntervalMillis}ms）".format(driftMillis) +
+                if (jumped) "，时钟差跳变 ${stepMillis}ms" else "",
+            jumped,
+        )
     }
 }

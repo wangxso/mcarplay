@@ -10,8 +10,12 @@ import com.mcarplay.app.service.CarPlayService
 
 /** Standalone CarWith connectivity check, independent of the CarPlay transport. */
 object CarLifeDiagnostics {
+    @Volatile
     private var session: CarLifeSession? = null
     private var diagnosticAttempt: String? = null
+
+    @Volatile
+    private var lastReport = "schema=1 state=NOT_STARTED"
 
     @Synchronized
     fun start(context: Context): Boolean {
@@ -45,13 +49,16 @@ object CarLifeDiagnostics {
                     created?.let {
                         SessionController.releaseCarLifeSession(it)
                         synchronized(this) {
-                            if (session === it) session = null
+                            if (session === it) {
+                                lastReport = it.diagnosticSummary()
+                                session = null
+                            }
                         }
                     }
                     CarPlayService.stopDiagnostic(appContext)
                 },
                 log = ::log,
-                launchStrategy = CarLifeLaunchStrategy.EXPORTED_ENTRY,
+                launchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
             )
         val candidate = created ?: return false
         if (!SessionController.claimCarLifeSession(CarLifeSessionRegistry.Owner.DIAGNOSTIC, candidate)) {
@@ -59,6 +66,7 @@ object CarLifeDiagnostics {
             return false
         }
         session = candidate
+        lastReport = "schema=1 state=STARTING"
         attempt = ConnectionDiagnostics.selfTest.begin("carwith_self_test")
         diagnosticAttempt = attempt
         ConnectionDiagnostics.selfTest.stage(requireNotNull(attempt), ConnectionStage.SELF_TEST)
@@ -77,6 +85,7 @@ object CarLifeDiagnostics {
         diagnosticAttempt?.let { ConnectionDiagnostics.selfTest.finish(it, DiagnosticCode.USER_STOP, false) }
         session?.let { active ->
             active.stop()
+            lastReport = active.diagnosticSummary()
             release(active)
         }
     }
@@ -99,6 +108,9 @@ object CarLifeDiagnostics {
 
     @Synchronized
     fun isRunning(): Boolean = session?.isRunning == true
+
+    /** 不等待 start()/stop() 的活动启动或清理锁，remote 主线程只读轻量快照。 */
+    fun reportSummary(): String = session?.diagnosticSummary() ?: lastReport
 
     private fun release(candidate: CarLifeSession) {
         synchronized(this) {

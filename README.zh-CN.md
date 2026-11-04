@@ -14,55 +14,91 @@
 
 [更新日志](CHANGELOG.md) · [版本下载](https://github.com/wangxso/mcarplay/releases)
 
+QQ 反馈群：**1128172672**
+
 用一个 Android APK，把小米 CarWith 桥接到无线 CarPlay 接收端。
 mcarplay 在手机本机接收 CarWith 的原生视频和音频，发送到接收端，再把车机触控回传给
 CarWith。车机显示的是 CarWith 界面。
 
 ## 当前进度
 
-项目处于实验阶段，截至 2026 年 10 月 27 日已跑通小米到 DiPlay、小米到 WinPlay 1.2.5 的测试链路。
+项目处于实验阶段。截至 2026 年 11 月 4 日，已在 ARM64 AVD 上完成 HyperOS OS1–OS4
+的 CarWith 源端出流测试；截至 2026 年 10 月 31 日，也已跑通小米到 DiPlay、小米到
+WinPlay 1.2.5 的测试链路，并验证一条小米到奇瑞车机的手动无线连接路径。
+当前正式版为 `v0.1.3`，发布范围仍是已验收的手动连接路径。
 
 | 能力 | 验证结果 |
 | --- | --- |
 | 原生视频 | CarWith 按接收端宽高比编码（长边最多 1920），实测 1920 × 1080 与 1280 × 720、30fps；早期 DiPlay 测试实测送达约 20fps |
 | WinPlay 1.2.5 | 默认设置下画面、触控和音乐到达接收端；WinPlay 释放蓝牙后会话持续约 25 分钟；手动断开及手动断网后均能重连 |
 | WinPlay 1.2.4 | 短时实测出画面和声音 |
-| 接收端触控 | 已在 DiPlay 和 WinPlay 1.2.5 上验证点击与页面切换 |
-| 接收端媒体键 | 上一曲／下一曲转发给 CarWith；尚未实机验证 |
+| 接收端触控 | 已在 DiPlay 和 WinPlay 1.2.5 上验证点击与页面切换；用户另行确认奇瑞车机手动连接路径触控正常 |
+| 接收端媒体键 | 上一曲／下一曲转发给 CarWith，播放／暂停／停止交给手机当前媒体会话；按住只触发一次、长按每 1.5 秒连发；尚未实机验证 |
 | 原生音乐 | 44.1kHz PCM 转 48kHz AAC-LC，用户确认声音、音调和速度正常 |
 | 音视频同时运行 | WinPlay 1.2.5 上带音乐运行约 25 分钟；DiPlay 上连续约 6 分 36 秒，无音频丢包、欠载或写入错误 |
-| mcarplay CarWith 桥接的实车适配 | 尚待验证 |
+| mcarplay CarWith 桥接的实车适配 | 已在 2022 款奇瑞艾瑞泽 8、固件 `M1E_IC2172/82_03_21.387_250619_R` 上验证一条手动无线路径：画面、声音和触控到达车机；两轮媒体累计约 107 分钟，最长约 99 分钟。这不代表广泛车型兼容 |
 | 导航提示 | WinPlay 1.2.5 台架（2026-10-30）：提示期间音乐压低到 -15dB，结束后恢复；压低幅度可在「车机设置 → 显示」调整。其他接收端未验证 |
-| 暂停恢复、超过 25 分钟的运行 | 仍需专项验收 |
+| 手机锁屏 | 手动锁屏仍可能结束会话；已记录的奇瑞车机会话退出后可直接重连 |
 
 测试手机：小米 17 Pro Max（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，
 Android 17，CarWith `4.0.20-20260923`，小米 CarLife `8.8.5`（早期 DiPlay 测试为 `8.8.4`）。
-测试接收端：PA2353 / Android 14 平板，DiPlay 0.2.21；Windows 上的 WinPlay 1.2.5（x64）。
+下方实测覆盖：2022 款奇瑞艾瑞泽 8 车机、PA2353 / Android 14 平板上的 DiPlay 0.2.21，
+以及 Windows 上的 WinPlay 1.2.4 / 1.2.5（x64）。
 应用最低 SDK 为 Android 12 / API 31，这不代表所有 Android 12 及以上设备均兼容。
 上游 CarDeck 的实车测试不能直接作为 mcarplay CarWith 桥接的车型适配结论。
 
-### WinPlay 1.2.4 视频输出截图
+### CarWith 兼容矩阵
 
-![WinPlay 1.2.4 显示 mcarplay 发送的 CarWith 画面](docs/screenshots/winplay-1.2.4-video-output.png)
+2026 年 11 月 4 日，使用小米 CarLife `8.6.8/260`，在 HyperOS OS1–OS4 上测试了公开取得的
+CarWith 构建。“持续出流”要求七路 CarLife 通道全部连通，完成 RSA/AES、手机渠道准入和
+`VIDEO_INIT_DONE 1280x720@30`，并至少持续 20 秒收到非零 H.264 视频。
 
-实测截图（2026 年 10 月 27 日）：WinPlay 1.2.4 显示了 mcarplay 传来的 CarWith 画面。
-这张图只记录截图所示会话的视频输出，不证明音频、触控、连续运行 10 分钟、断线重连或实车兼容性。
+| 手机 / HyperOS | Android | 测试 CarWith 构建数 | 持续出流 |
+| --- | ---: | ---: | ---: |
+| `OS1.0.4.0.TGACNXM`<br>小米 10S / thyme 系统分区 | 13 | 50 | 37 |
+| `OS2.0.215.0.VMCCNXM`<br>小米 13 / fuxi 系统分区 | 15 | 50 | 38 |
+| `OS3.0.2.0.WMCCNXM`<br>HyperOS AVD | 16 | 50 | 39 |
+| `OS4.0.24.0.XFRCNXM`<br>HyperOS AVD | 17 | 5，从系统初始版 `4.0.16-20260907` 开始 | 4 |
 
-### DiPlay 实拍
+关键边界：
 
-![Android 平板上的 DiPlay 显示 mcarplay 发送的 CarWith 网易云音乐界面](docs/screenshots/diplay-carwith-photo.jpg)
+- `2.0.0-20231103` 至 `2.3.0-20240606` 共 11 个构建在 OS1–OS3 均未收到视频帧；
+  `2.3.1-20240712` 是首个能够持续出流的构建。
+- `3.8.2-20260117` 仅在 OS1 上发生 CarWith 自身崩溃；`3.8.3-20260203` 已修复。
+- `4.0.20-20261009` 在 APK 内限制为 Android SDK 36，会在 OS1、OS2 和 OS4 主动退出；
+  mcarplay 无法绕过该构建自身的平台门禁。
+- OS4 测试集为 `4.0.16-20260907`、`4.0.20-20260929`、`4.0.20-20261009`、
+  `4.0.21-20260929` 和 `4.0.23-20261016`，其中 4 个成功持续出流。
 
-实拍照片（2026 年 10 月 27 日 22:08）：Android 平板上的 DiPlay 显示了 mcarplay `v0.1.3-test.2`
-代码传来的 CarWith 网易云音乐界面，CarWith 编码为 1920 × 1080、30fps。拍照时音乐处于暂停，
-开始播放后音频正常到达。照片只记录该会话的画面输出，日志细节见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+<a href="docs/screenshots/carwith-hyperos-carlife-matrix-2026-11-04.png"><img src="docs/screenshots/carwith-hyperos-carlife-matrix-2026-11-04.png" width="960" alt="CarWith 2.x 至 4.x 在 HyperOS OS1 至 OS4 上配合小米 CarLife 8.6.8/260 的持续出流矩阵"></a>
+
+以上是 AVD 上的源端出流证据，不构成完整实体设备兼容结论。OS1–OS3 使用小米系统分区与
+ranchu vendor/kernel 混合镜像，并运行在 permissive 模式；OS4 为 enforcing，但硬件底座仍是
+模拟器。没有当前公开入口的旧版构建使用了 root 辅助的内部服务探针。本矩阵不能证明实体
+Qualcomm vendor、接收端解码、声音、触控或长时间稳定性。
+
+### 实测画面
+
+每张图只记录所拍会话。两张奇瑞图片是使用 **AI 图像编辑**从用户实拍生成的脱敏裁图：
+移除车窗、周边环境和内饰，并模糊地点文字。它们是 AI 脱敏后的派生图片，不是原始截图；
+原图保留在 Git 之外，涉及像素级或时间信息的结论仍以原图和日志为准。点击图片可查看大图。
+
+| 接收端 / 环境 | 实测画面 | 能确认什么 | 边界 |
+| --- | --- | --- | --- |
+| **2022 款奇瑞艾瑞泽 8**<br>固件 `M1E_IC2172/82_03_21.387_250619_R` | <a href="docs/screenshots/chery-arrizo8-2026-10-31-1237-redacted.png"><img src="docs/screenshots/chery-arrizo8-2026-10-31-1237-redacted.png" width="420" alt="AI 脱敏后的奇瑞艾瑞泽 8 车机在 12:37 显示 CarWith 仪表盘"></a><br>2026-10-31 12:37，手动无线连接 | CarWith 地图、媒体、应用栏和仪表盘到达实体车机；用户另行确认画面、声音和触控正常 | 图片经过 AI 脱敏，单张图不能单独证明声音、触控、时长或地点 |
+| **2022 款奇瑞艾瑞泽 8**<br>同一车机固件 | <a href="docs/screenshots/chery-arrizo8-2026-10-31-1305-redacted.png"><img src="docs/screenshots/chery-arrizo8-2026-10-31-1305-redacted.png" width="420" alt="AI 脱敏后的奇瑞艾瑞泽 8 车机在 13:05 显示 CarWith 长距离导航"></a><br>2026-10-31 13:05，长距离导航和媒体会话 | 导航、媒体、天气和转向卡片到达实体车机；日志记录两轮会话累计约 107 分钟，最长约 99 分钟 | 图片经过 AI 脱敏；手动锁屏仍可能结束会话，不据此承诺自动触发和完整冷启动 |
+| **WinPlay 1.2.4**<br>Windows x64 | <a href="docs/screenshots/winplay-1.2.4-video-output.png"><img src="docs/screenshots/winplay-1.2.4-video-output.png" width="420" alt="WinPlay 1.2.4 显示 mcarplay 发送的 CarWith 画面"></a><br>2026-10-27 台架截图 | WinPlay 1.2.4 显示了 mcarplay 传来的 CarWith 视频 | 截图只证明视频输出，不证明触控、连续运行 10 分钟、断线重连或实车兼容性 |
+| **DiPlay 0.2.21**<br>PA2353 / Android 14 平板 | <a href="docs/screenshots/diplay-carwith-photo.jpg"><img src="docs/screenshots/diplay-carwith-photo.jpg" width="420" alt="PA2353 Android 平板上的 DiPlay 显示 CarWith 网易云音乐界面"></a><br>2026-10-27 22:08，`v0.1.3-test.2` 代码 | DiPlay 显示了 CarWith 网易云音乐界面，CarWith 编码为 1920 × 1080、30fps；拍照时音乐暂停，开始播放后声音正常到达 | 照片只证明该会话的画面输出；当前版本的长时运行与重连仍待验证 |
 
 ## 已知限制与后续计划
 
 | 项目 | 已知情况 | 后续计划 | 优先级 |
 | --- | --- | --- | --- |
-| 实车测试 | 目前使用 DiPlay 和 WinPlay 桌面接收端验证，尚未在真实汽车车机上验证 mcarplay。 | 在真实车辆上测试配对、触控、音频、点火循环和断线重连，并记录车型与接收端组合。 | 高 |
-| 手机品牌与系统版本 | 目前只在一套小米 17 Pro Max 配置上验证。桥接依赖 CarWith 和小米 CarLife 组件，其他 Android 品牌尚未验证，也可能不提供兼容服务。 | 建立手机、系统和 CarWith 版本兼容表；在具备兼容 CarWith 服务的前提下探索其他品牌。 | 高 |
-| 会话稳定性 | WinPlay 1.2.5 上带音乐的会话持续约 25 分钟，手动断开及手动断网后均能恢复；更长时间运行和暂停恢复尚未覆盖。 | 测试 1 小时以上运行、暂停恢复、音乐中插入导航提示，以及模拟点火的断电重启。 | 高 |
+| 车型覆盖范围 | 已在一条记录的奇瑞车机固件上验证手动无线路径；其他车型与固件仍未验证。 | 继续记录车型与接收端组合，并覆盖点火、冷启动和更多车机状态。 | 高 |
+| 手机品牌与系统版本 | 2026-11-04 的 AVD 矩阵已覆盖小米 HyperOS OS1–OS4、CarWith 2.x–4.x 与小米 CarLife 8.6.8/260；实体设备证据仍限于一套小米 17 Pro Max 配置。其他 Android 品牌尚未验证，也可能不提供兼容服务。 | 在实体小米设备上复测代表性矩阵组合；在具备兼容 CarWith 服务的前提下探索其他品牌。 | 高 |
+| 会话稳定性 | 已记录的奇瑞车机固件上，两轮媒体累计约 107 分钟，最长约 99 分钟；手动锁屏仍可能结束会话。 | 保证自动息屏与手动锁屏不断连，并覆盖网络、蓝牙和媒体生命周期变化后的恢复。 | 高 |
+| 上车自动连接 | 已验证的实车路径由手机启动连接，再在车机蓝牙列表中选择手机。 | 在更多蓝牙状态下验证触发去重、取消、冷启动和失败恢复。 | 高 |
+| 方向盘控制 | 接收端上一曲／下一曲会转发给 CarWith，但完整方向盘按键与焦点状态矩阵尚未验证。 | 完成媒体键、暂停恢复、导航提示、电话打断和焦点状态回归。 | 高 |
 | 接收端兼容性 | WinPlay 1.2.5 已有画面、触控、声音、约 25 分钟运行和重连的桌面测试证据；DiPlay 已有画面、音频和触控证据，但当前版本的长时运行和重连尚未验证。 | 验证 DiPlay 在当前版本上的长时运行与重连，在实机上确认 WinPlay 1.2.5 网络交接规则，再测试其他接收端。 | 高 |
 
 以上为计划中的验证工作，不构成兼容性保证；实际结果可能受手机、CarWith 版本、接收端和车型影响。
@@ -79,7 +115,9 @@ Android 17，CarWith `4.0.20-20260923`，小米 CarLife `8.8.5`（早期 DiPlay 
    或在 Windows 电脑上运行 [WinPlay](https://github.com/Roylyl/WinPlay)。
    启动本机 CarWith 会话前，先断开其他 CarLife 接收端。
 
-CarWith 原生画面、音频和触控使用普通应用 Intent 和本机套接字，无需 root 或 Shizuku。
+具备公开入口的 CarWith 版本通过普通应用 Intent 和本机套接字接入原生画面、音频和触控。
+缺少该入口的旧版需要附着已启动的原厂会话、确认 root 后启动内部服务，或在 CarWith 设置页手动操作；
+普通 Shizuku shell 身份无法启动受签名权限保护的旧版服务。
 WinPlay 1.2.4、1.2.5 等接收端还会校验手机的真实蓝牙身份，而 Android 不允许普通应用直接读取：
 启动 [Shizuku](https://shizuku.rikka.app/) 后 mcarplay 会自动读取并保存；不用 Shizuku 时，
 在主界面「本机蓝牙地址」中填入手机设置里查到的蓝牙地址。Shizuku 实时读取优先于手动填写。
@@ -98,7 +136,8 @@ WinPlay 1.2.4、1.2.5 等接收端还会校验手机的真实蓝牙身份，而 
 下载后检查 SHA-256、包名/版本、Android 兼容性和当前应用的签名证书。
 Debug 包通常无法覆盖更新为正式签名包；未记录发行标签的旧构建无法判断同一基础版本的预发布先后，
 请从发行页手动更新。`remote` 调试版不支持标准 APK 更新。
-目前已通过离线检查，手机端实际安装仍待验证。详见 [更新机制、限制与验收项](docs/UPDATES.md)。
+正式签名的 `v0.1.3` APK 已覆盖安装到测试手机的上一版签名包；应用内下载和系统安装器流程
+仍需单独做手机端验收。详见 [更新机制、限制与验收项](docs/UPDATES.md)。
 
 ## 界面语言与更新说明
 
@@ -113,6 +152,9 @@ Debug 包通常无法覆盖更新为正式签名包；未记录发行标签的�
 点击首页 **导出脱敏诊断报告**，检查后分享文件，同时提供复现步骤、故障时间、接收端型号/固件和屏幕提示。
 意外退出后请重新打开并立即导出，不要先重装或清除数据。报告自动包含最近进程关键记录，
 无需电脑或 Shizuku，不会自动上传。详见 [诊断内容、错误码与排查方式](docs/DIAGNOSTICS.md)。
+
+`remote/debug` 诊断版在手机端告知后导出**完整、未脱敏报告**，可能包含真实设备/网络标识、
+原始异常和已记录的会话信息；已配置的调试桥也会传输运行日志。standard 版及所有 release 导出继续脱敏。
 
 ## 检测并记住当前车机
 
@@ -155,7 +197,8 @@ Debug 包通常无法覆盖更新为正式签名包；未记录发行标签的�
 
 ```bash
 ./gradlew spotlessCheck :app:testStandardDebugUnitTest \
-  :app:lintStandardDebug :app:assembleStandardDebug
+  :app:lintStandardDebug :app:assembleStandardDebug \
+  :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'
 ```
 
 APK 路径：`app/build/outputs/apk/standard/debug/app-standard-debug.apk`。

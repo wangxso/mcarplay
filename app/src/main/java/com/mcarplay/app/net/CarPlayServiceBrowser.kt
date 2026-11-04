@@ -56,30 +56,56 @@ class CarPlayServiceBrowser(
         return resolved
     }
 
+    @Synchronized
     fun start(serviceType: String = AIRPLAY_TYPE) {
         if (discovering) {
             log("$TAG: 已在扫描中")
             return
         }
         log("$TAG: 开始发现 $serviceType")
-        nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+        val listener = newDiscoveryListener()
+        discoveryListener = listener
+        nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, listener)
         discovering = true
     }
 
+    /**
+     * 清缓存后重新发现。NSD 只在首次看到服务时回调 onServiceFound：扫描一直开着时清掉缓存，
+     * 车机同一条 `_airplay._tcp` 不会再报上来，awaitEndpoint 只能干等
+     * （帕萨特 2026-11-01 23:02：「已在扫描中」后 3 s「mDNS 未发现」）。停掉再开一轮才会重报。
+     */
+    @Synchronized
+    fun restart(serviceType: String = AIRPLAY_TYPE) {
+        resetCache()
+        if (discovering) {
+            stop()
+            log("$TAG: 已清缓存，重新发现以重报现有服务")
+        }
+        start(serviceType)
+    }
+
+    @Synchronized
     fun stop() {
         if (!discovering) return
-        runCatching { nsdManager.stopServiceDiscovery(discoveryListener) }
+        discoveryListener?.let { listener -> runCatching { nsdManager.stopServiceDiscovery(listener) } }
+        discoveryListener = null
         discovering = false
         log("$TAG: 停止发现")
     }
 
-    private val discoveryListener =
+    // 每轮发现一个新监听器：stopServiceDiscovery 是异步的，旧监听器未注销前复用会抛「listener already in use」
+    private var discoveryListener: NsdManager.DiscoveryListener? = null
+
+    private fun newDiscoveryListener() =
         object : NsdManager.DiscoveryListener {
             override fun onStartDiscoveryFailed(
                 serviceType: String,
                 errorCode: Int,
             ) {
-                discovering = false
+                if (discoveryListener === this) {
+                    discoveryListener = null
+                    discovering = false
+                }
                 log("$TAG: 发现启动失败 code=$errorCode")
             }
 

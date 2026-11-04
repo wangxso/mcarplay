@@ -96,9 +96,11 @@ class ConsumerKeysTest {
         assertEquals(KeyEvent.KEYCODE_MEDIA_REWIND, ConsumerKeys.keyCodeFor(0xB4))
         assertEquals(KeyEvent.KEYCODE_MEDIA_NEXT, ConsumerKeys.keyCodeFor(0xB5))
         assertEquals(KeyEvent.KEYCODE_MEDIA_PREVIOUS, ConsumerKeys.keyCodeFor(0xB6))
-        assertEquals(KeyEvent.KEYCODE_MEDIA_STOP, ConsumerKeys.keyCodeFor(0xB9))
-        // Repeat 无对应 Android 键 → 0（调用方忽略）
+        assertEquals(KeyEvent.KEYCODE_MEDIA_STOP, ConsumerKeys.keyCodeFor(0xB7))
+        assertEquals(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, ConsumerKeys.keyCodeFor(0xCD))
+        // Repeat / Random Play 无对应 Android 键 → 0（调用方忽略）
         assertEquals(0, ConsumerKeys.keyCodeFor(0xBC))
+        assertEquals(0, ConsumerKeys.keyCodeFor(0xB9))
     }
 
     @Test
@@ -113,7 +115,7 @@ class ConsumerKeysTest {
 
     @Test
     fun allDescriptorUsagesNamed() {
-        listOf(0xB0, 0xB1, 0xB3, 0xB4, 0xB5, 0xB6, 0xB9, 0xBC).forEach { usage ->
+        listOf(0xB0, 0xB1, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB9, 0xBC, 0xCD).forEach { usage ->
             assertFalse(
                 "usage=0x%02x 应可读".format(usage),
                 ConsumerKeys.nameOf(usage).startsWith("未知"),

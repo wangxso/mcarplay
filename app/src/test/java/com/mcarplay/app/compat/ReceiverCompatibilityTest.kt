@@ -100,6 +100,62 @@ class ReceiverCompatibilityTest {
         )
     }
 
+    /** 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 每次会话都请车机关蓝牙（2026-11-02）。 */
+    @Test
+    fun onlyCheryReleasesBluetoothAfterSetup() {
+        val chery = ReceiverProfile.Signals(name = "Cloudrive", model = "Tiggo", manufacturer = "CHERY")
+        val policy = ReceiverCompatibility.resolve(chery)
+        assertTrue(policy.releaseBluetoothAfterSetup)
+        assertTrue("chery.disable-bluetooth" in policy.rules)
+        assertTrue(policy.reportWifiMacInSetup)
+        assertTrue("chery.real-wifi-mac" in policy.rules)
+        assertTrue(policy.skipIapTunnel)
+        assertTrue("chery.no-iap-tunnel" in policy.rules)
+        assertTrue(policy.sendAppleClientHeaders)
+        assertTrue("chery.apple-client-headers" in policy.rules)
+        assertTrue(policy.iphoneAuthSequence)
+        assertTrue("chery.iphone-auth-sequence" in policy.rules)
+        assertEquals(32, policy.pinnedMfiChallengeLength)
+        assertTrue("chery.mfi-32-only" in policy.rules)
+        listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals(), ReceiverProfile.Signals(name = "CHERY")).forEach { signals ->
+            val other = ReceiverCompatibility.resolve(signals)
+            assertFalse(other.releaseBluetoothAfterSetup)
+            assertFalse(other.reportWifiMacInSetup)
+            assertFalse(other.skipIapTunnel)
+            assertFalse(other.sendAppleClientHeaders)
+            assertFalse(other.iphoneAuthSequence)
+            assertNull(other.pinnedMfiChallengeLength)
+        }
+    }
+
+    @Test
+    fun requestedBluetoothReleaseKeepsSessionBeforeVideoStarts() {
+        val policy = ReceiverCompatibility.resolve(ReceiverProfile.Signals(manufacturer = "CHERY"))
+        assertEquals(
+            ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION,
+            ReceiverCompatibility.bluetoothLossAction(policy, false, false, bluetoothReleased = true),
+        )
+        assertEquals(
+            ReceiverCompatibility.BluetoothLossAction.END_SESSION,
+            ReceiverCompatibility.bluetoothLossAction(policy, false, false, bluetoothReleased = false),
+        )
+    }
+
+    @Test
+    fun singleRecordIsLimitedToTheObservedCheryStack() {
+        val observed = ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo", srcvers = "320.17.7")
+        val policy = ReceiverCompatibility.resolve(observed)
+        assertTrue(policy.singleRecordPerSession)
+        assertTrue("chery.tiggo.320.17.7.single-record" in policy.rules)
+        listOf(
+            observed.copy(manufacturer = "OTHER"),
+            observed.copy(model = "OTHER"),
+            observed.copy(srcvers = "320.17.8"),
+            observed.copy(srcvers = null),
+            mib3,
+        ).forEach { assertFalse(ReceiverCompatibility.resolve(it).singleRecordPerSession) }
+    }
+
     @Test
     fun timeoutAndResetNeverAuthorizePlaintextOrUnknownBluetoothRetirement() {
         listOf(winPlay, mib3, ReceiverProfile.Signals()).forEach { signals ->

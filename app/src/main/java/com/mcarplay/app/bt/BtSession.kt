@@ -23,6 +23,8 @@ internal fun Iap2LinkChannel.runSenderSession(
     onLinkClosed: () -> Unit = {},
     /** 本进程已知的车机热点 SSID（无新凭据时沿用，避免每轮拆链）。 */
     knownCarSsid: () -> String? = { null },
+    /** 车机是否已在 WiFi 上发过 ctrl 邀请（无凭据时据此不拆链）。 */
+    receiverInvited: () -> Boolean = { false },
     /** 0x1D01 画像判定的链路代际（CLASSIC_MIB3/EVENT_LINK），Phase 1 完成后回调。 */
     onGeneration: (ReceiverProfile.LinkGeneration) -> Unit = {},
     peerAddress: String? = null,
@@ -39,6 +41,7 @@ internal fun Iap2LinkChannel.runSenderSession(
                 if (ReceiverDetectionRuntime.isCurrent(observation)) onEndpointUpdate(update.copy(observation = observation))
             },
             knownCarSsid,
+            receiverInvited,
             // MFi 挑战长度按车机身份持久化（省掉 20B 静默 6 秒的试探）
             context.applicationContext,
             receiverBinding = observation?.binding,

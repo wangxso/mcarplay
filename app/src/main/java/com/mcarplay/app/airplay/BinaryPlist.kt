@@ -165,13 +165,17 @@ object BinaryPlist {
      * -30087。整型端口（timingPort/eventPort/dataPort）一旦落到 32768..65535 就会
      * 变成负值——接收端可能直接拒绝或绑定到错误端口。单测 `SessionSetupBodyTest`
      * 即由此发现。
+     *
+     * **负数一律 8 字节**：CoreFoundation 只把 8 字节整数当有符号，1/2/4 字节按无符号读。`speechMode=-1`
+     * 曾写成单字节 0xFF，艾瑞泽 8 读成 255、日志记 `speech n/a (?)`；真 iPhone 同一字段记 `(none)`（2026-11-02）。
      */
     private fun encodeInt(value: Long): ByteArray {
         val size =
             when {
-                value >= Byte.MIN_VALUE && value <= Byte.MAX_VALUE -> 1
-                value >= Short.MIN_VALUE && value <= Short.MAX_VALUE -> 2
-                value >= Int.MIN_VALUE && value <= Int.MAX_VALUE -> 4
+                value < 0 -> 8
+                value <= Byte.MAX_VALUE -> 1
+                value <= Short.MAX_VALUE -> 2
+                value <= Int.MAX_VALUE -> 4
                 else -> 8
             }
         return byteArrayOf((0x10 or (log2(size))).toByte()) + value.toBytes(size)

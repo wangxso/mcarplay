@@ -27,6 +27,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 锁屏不断连：引导用户把本应用加入电池优化豁免（HyperOS 未豁免时锁屏约 9 秒冻结进程） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- 音频通道：AudioPlaybackCapture（捕获本机媒体/导航声音上车）必需 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -86,6 +88,20 @@
             android:name=".update.UpdateActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+        <!-- 蓝牙抓包分析：exported 只为接收系统错误报告的分享（SEND_MULTIPLE，zip + 截图）；
+             收到的文件只在本机流式解析，结果脱敏后写进诊断日志。 -->
+        <activity
+            android:name=".diagnostics.btsnoop.BtSnoopActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.android.bugreport" />
+                <data android:mimeType="application/zip" />
+            </intent-filter>
+        </activity>
         <provider
             android:name=".update.UpdateFileProvider"
             android:authorities="${applicationId}.updates"

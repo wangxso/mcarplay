@@ -1,6 +1,7 @@
 package com.mcarplay.app.carlife
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -20,6 +21,24 @@ class CarLifeJoinGateTest {
         assertSame(key, gate.admit(key))
         val next = unit(annexB(slice), keyFrame = false)
         assertSame(next, gate.admit(next))
+    }
+
+    @Test
+    fun countsFramesDroppedBeforeEachJoin() {
+        val gate = CarLifeJoinGate()
+        gate.admit(unit(annexB(slice), keyFrame = false))
+        gate.admit(unit(annexB(slice), keyFrame = false))
+        gate.admit(unit(annexB(idr), keyFrame = true))
+        assertEquals(1, gate.joins)
+        assertEquals(2L, gate.droppedBeforeLastJoin)
+        assertEquals("SPS+PPS", gate.filledAtLastJoin)
+        // 队列满后重新等 IDR：第二次接入单独计数
+        gate.reset()
+        gate.admit(unit(annexB(slice), keyFrame = false))
+        gate.admit(unit(annexB(sps, pps, idr), keyFrame = true))
+        assertEquals(2, gate.joins)
+        assertEquals(1L, gate.droppedBeforeLastJoin)
+        assertEquals("", gate.filledAtLastJoin)
     }
 
     @Test

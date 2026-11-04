@@ -52,7 +52,7 @@ object ConsumerKeys {
          * 本田 HFT（Alpine 8A250-30A）的 StartHID 描述符正是位图：
          * `… 75 01 95 05 09 B0 09 B1 09 B5 09 B6 09 B9 81 02 …` → 1 字节报告，
          * bit0=播放(0xB0)、bit1=暂停(0xB1)、bit2=下一首(0xB5)、bit3=上一首(0xB6)、
-         * bit4=停止(0xB9)；报告 0x04 = 下一首、0x00 = 全部松开。
+         * bit4=随机播放(0xB9)；报告 0x04 = 下一首、0x00 = 全部松开。
          */
         fun usagesFor(report: ByteArray): List<Int> {
             if (report.isEmpty()) return emptyList()
@@ -134,7 +134,14 @@ object ConsumerKeys {
         return null
     }
 
-    /** Usage ID → Android 媒体键；无对应键返回 0（如 Repeat）。 */
+    /**
+     * Usage ID → Android 媒体键；无对应键返回 0（如 Repeat、Random Play）。
+     *
+     * 按 HID Usage Tables 的 Consumer 页：0xB7 才是 Stop，0xB9 是 Random Play（随机播放）。
+     * 早期把 0xB9 当成「停止」，方向盘上的随机键会直接停掉音乐，且多数播放器停止后
+     * 不能再用「播放」恢复——随机播放在 Android 没有标准媒体键，宁可忽略。
+     * 0xCD（Play/Pause 切换）是单键车型最常见的播放键，映射到 PLAY_PAUSE。
+     */
     fun keyCodeFor(usage: Int): Int =
         when (usage) {
             0xB0 -> KeyEvent.KEYCODE_MEDIA_PLAY
@@ -143,7 +150,8 @@ object ConsumerKeys {
             0xB4 -> KeyEvent.KEYCODE_MEDIA_REWIND
             0xB5 -> KeyEvent.KEYCODE_MEDIA_NEXT
             0xB6 -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
-            0xB9 -> KeyEvent.KEYCODE_MEDIA_STOP
+            0xB7 -> KeyEvent.KEYCODE_MEDIA_STOP
+            0xCD -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
             else -> 0
         }
 
@@ -156,8 +164,10 @@ object ConsumerKeys {
             0xB4 -> "快退"
             0xB5 -> "下一首"
             0xB6 -> "上一首"
-            0xB9 -> "停止"
+            0xB7 -> "停止"
+            0xB9 -> "随机播放"
             0xBC -> "循环"
+            0xCD -> "播放/暂停"
             else -> "未知(0x%02x)".format(usage)
         }
 }

@@ -26,10 +26,20 @@ Resources and assets are in `app/src/main/res/` and `app/src/main/assets/`; the 
 - `app/src/debug/`: debug-only `BtAnchorService`, used only for bench emulation; it is not evidence for no-ADB or vehicle support.
 - `app/src/remote/`: the `remote` flavor's remote-debug bridge (`bridge/`); it must never leak into `standard`.
 - `app/src/test/java/`: JVM unit tests, including protocol replay under `replay/`; fixtures notes in `app/src/test/resources/carplay/fixtures/`.
+- `app/src/testRemote/java/`: JVM tests for `remote`-only code (package `com.mcarplay.app.bridge`), run by the filtered
+  `:app:testRemoteDebugUnitTest` in the gate.
 
 Python tools in `tools/`: `carlife_probe.py` (CarLife loopback probe, writes raw H.264), `analyze_diagnostics.py` (offline summary
 of a redacted support report), `release_notes.py` (extracts a changelog entry for a tag) and `prepare_upload.py` (source-only
-upload bundle under `dist/`), each with `test_*.py`. Documentation:
+upload bundle under `dist/`), each with `test_*.py`. `logbot/` is a QQ official-bot webhook service that diagnoses uploaded
+reports with rules (mirroring `DiagnosticCode`) plus an optional OpenAI-compatible AI pass; keep `logbot/rules.py` in sync with
+`diagnostics/` and `docs/DIAGNOSTICS.md`. `tools/debug-bridge/agent-api.mjs` is the read-only, redacted log API that
+the external remote-debug bridge server mounts; its redactor mirrors `DiagnosticRedactor`, so change both together. The same
+`handle()` serves the static viewer in `tools/debug-bridge/viewer/` at `/log-viewer/` (browse, filter, follow and export via
+`/api/v1/export`, which redacts a whole file with one redactor); deploy that directory beside the module.
+`tools/debug-bridge/local-viewer.mjs` runs the viewer on `127.0.0.1:8790` and forwards `/api/v1` to the bridge in
+`mcarplay.bridgeUrl` (or `--upstream`), falling back to paged export for a bridge without `/api/v1/export`. Neither the
+hook nor CI runs them; test with `node --test tools/debug-bridge/*.test.mjs` (Node 20+). Documentation:
 
 - `IMPLEMENTATION_PLAN.md` (Chinese): milestones, current baseline and acceptance criteria; update it when status changes.
 - `docs/CARWITH-ENTRY-FINDINGS.md`: dated, redacted device evidence and corrections of earlier conclusions.
@@ -41,7 +51,9 @@ upload bundle under `dist/`), each with `test_*.py`. Documentation:
 Use JDK 21 (bytecode targets Java 17), Android SDK Platform 35 and Build Tools 35.0.0; set `ANDROID_HOME` or `sdk.dir` in the
 ignored `local.properties`. `minSdk` is 31, `targetSdk` 34. Run from the repository root:
 
-- Full gate, as in CI: `./gradlew spotlessCheck :app:testStandardDebugUnitTest :app:lintStandardDebug :app:assembleStandardDebug`.
+- Full gate, as in CI: `./gradlew spotlessCheck :app:testStandardDebugUnitTest :app:lintStandardDebug :app:assembleStandardDebug
+  :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'`. The filtered remote task runs only the `remote` flavor's own
+  tests in `app/src/testRemote/` (it also compiles the remote sources) without repeating the shared suite.
 - `./gradlew spotlessApply` formats Kotlin and `*.gradle.kts`.
 - `./gradlew :app:updateLintBaseline` rebuilds `app/lint-baseline.xml`; do it only for intentional exemptions. Lint aborts on errors.
 - Python tests: `python3 -m venv .venv && .venv/bin/python -m pip install -r tools/requirements.txt`, then
@@ -53,7 +65,7 @@ ignored `local.properties`. `minSdk` is 31, `targetSdk` 34. Run from the reposit
 - On-device debug log: `adb shell run-as com.mcarplay.app cat files/main_debug.log`.
 
 Enable the repository hook once per clone with `git config core.hooksPath .githooks`. `.githooks/pre-commit` blocks
-signing files, local configuration, captures and replay fixtures, then runs Spotless, lint and unit tests for app/Gradle
+signing files, local configuration, captures and replay fixtures, then runs Spotless, lint and unit tests (standard plus the remote bridge tests) for app/Gradle
 changes and the Python tests for `tools/` changes; documentation-only commits skip the checks. `MCARPLAY_HOOK_SKIP_TESTS=1`
 skips only unit tests; use `git commit --no-verify` sparingly, since CI still runs the full gate. Do not add an `applicationIdSuffix` to `standard` or
 `debug`: Shizuku grants and the `run-as` path are bound to `com.mcarplay.app`. R8/minification is intentionally off.
