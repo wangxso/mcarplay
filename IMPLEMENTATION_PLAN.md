@@ -6,6 +6,38 @@
 
 ## 当前基线与结论
 
+- **11 月 4 日入口兼容代码提交候选：** 正式会话与自检改用 `COMPATIBLE`，先附着已有七口，再按公开入口、确认 UID 0 的旧版服务、已导出的原厂设置页回退。普通 Shizuku shell 不具备旧版签名权限；失败和取消不误报服务成功。不改认证或视频协议。新增 UID 与取消回归，最终整理构建尚待重跑完整 AVD 矩阵和真机验收。
+
+- **11 月 4 日 OS1–OS4 CarWith 兼容矩阵：** 在同一批 50 个公开 CarWith 构建上，OS1 / Android 13 有 37 个持续出流，
+  OS2 / Android 15 有 38 个，OS3 / Android 16 有 39 个；其余失败集中在 `2.3.0` 及更早的 11 个构建（七路或
+  `VIDEO_INIT_DONE` 可成功，但编码器 0 帧）、OS1 上的 `3.8.2` CarWith Surface 空指针崩溃，以及
+  `4.0.20-20261009` 的 OS3-only 门禁。OS4 / Android 17 按本轮要求不测全局最低版，只从系统初始 CarWith
+  `4.0.16-20260907` 开始测该初始版及其后取得的 4 个构建：4 个持续出流，
+  `4.0.20-20261009` 因 APK 内固定 `SDK_INT == 36` 而只能用于 OS3。OS4 的有效结果是在接受 mcarplay 首次免责声明后重跑所得；
+  此前免责声明未处理时产生的 `listener_timeout` 不计兼容性。OS1–OS3 矩阵使用 SHA-256 `42a827a792ef843a92d9d10e7d58ae56b8b148a0c13750ae0dba8ce0d2908aba`
+  的 mcarplay 构建；OS4 又在当前完整构建 `dff6481f484e04ec6c9ba89c7209b91b7998fd0221f6a249cc89d148f2562b7c`
+  上复测同一组 5 项，结论不变。CarLife 固定为 `8.6.8/260`。这些均为源端 AVD
+  证据，不能证明接收端解码、声音、触控或实体 Qualcomm vendor/kernel 等价性。完整矩阵和逐项限制见
+  `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+- **11 月 3 日 CarWith 2.x / 3.x 矩阵（37 个构建，已完成）：** 在 OS1 混合 AVD 上逐版测得 18 个构建在当前日期下
+  由 mcarplay 公开入口完成七路、RSA/AES、手机渠道准入与 `VIDEO_INIT_DONE 1280x720@30`，访问单元持续增长 20–24 秒；
+  9 个内测包因内置截止日期已过而主动退出，把隔离 AVD 时钟调进有效期后这 9 项全部出流；`3.8.2-20260117` 在收到
+  1–4 个访问单元后崩溃，已定位为 `CastController.displayConnectedInNormalCast` 在 SDK<34 分支先于
+  `mSurface = surface` 赋值调用 `mSurface.setFrameRate()`，3.8.3 改为传入的 `surface` 后不再崩溃；14 个 2.0–3.0 构建
+  没有 mcarplay 当前调用的 `CarlifeAdbActivity`，用 root 强制启动内部服务的对照探针显示 2.3.1 起开始出流、
+  2.3.0 及更早零视频的原因是 CarLife 编码器拿不到输入帧（`DQoutput: 0 success out of ~95 tries`），
+  3.0.1／3.0.2 的 H.264 经 ffprobe 确认为 1280×720 且可完整解码。另把 `CarLifeDiagnostics` 临时切到已有的
+  `ATTACH_EXISTING` 策略实测：mcarplay 自己的代码在 CarWith 2.3.1 上完成七路、RSA、ENCRYPT_READY、渠道准入与
+  `VIDEO_INIT_DONE 1280x720@30`，40 秒收到 613 个访问单元（测试后已还原该文件）。因此旧版出流不需要改协议代码，
+  缺的是入口策略——旧版没有 `CarlifeAdbActivity`，而 `ATTACH_EXISTING` 在仓库里已定义但没有调用方。
+  详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+- **11 月 3 日 HyperOS 1 混合 AVD 排查：** 以小米 10S `OS1.0.4.0.TGACNXM` 的系统分区和 Android 13 模拟器 vendor/kernel 构建 6 GiB root AVD，SELinux 为 permissive。原厂 CarWith `2.0.1-20231207` 缺少 mcarplay 当前调用的 `CarlifeAdbActivity`，自检返回 `ENTRY=MISSING`；另用 root 强制启动内部服务并由 Python 探针连接，七路及 RSA/AES、手机渠道准入通过，收到视频初始化响应，但 0 个视频包。覆盖安装 CarWith `4.0.4-20260522` 后，mcarplay 自检完成七路、RSA/AES、准入和 `VIDEO_INIT_DONE 1280x720@30`，持续 301 秒收到 4,481 个访问单元及 71,549,028 字节；虚拟屏处于运行状态。模拟器 Wi-Fi 已关闭，混合 AVD 与实机不等价，结果不能证明真实手机、车机音频及触控兼容。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+- **11 月 3 日 HyperOS 3 模拟器出流与 OS1 边界：** Apple Silicon AVD 上通过 KernelSU 普通系统应用模块解决 CarWith 的 CTA 白名单拒绝，并在 `vendor.perfservice` 运行状态下完成 CarWith `4.0.4-20260522` → 小米 CarLife `8.6.8/260` 的七路连接、RSA/AES、准入、`VIDEO_INIT_DONE 1280x720@30` 与连续 H.264。实跑约 142 秒累计 2,001 个访问单元、51 个关键帧、31,378,042 字节，CarWith 与 CarLife 进程未被 LMKD 杀死；这排除了 OS3 / Android 16 AVD 的入口、CTA、七口监听和视频源到达阻塞。自检未保存连续 Annex-B，也没有 CarPlay 接收端、有效音频或触控证据。默认 2.5 GiB 内存在 CTA 较慢时曾杀死 CarWith，重复测试建议 6 GiB。公开 HyperOS-AVD 目前只有 OS3/A16 与 OS4/A17，不提供 OS1/A13；普通 AOSP A13 不能替代小米安全中心与 CARWITH 系统集成。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+
 - **11 月 4 日候选整合：** 合并远程大众手动断开、配对复用、主屏回切修复；保留奇瑞单次 RECORD 与连接代次保护。断开先暂停媒体并保留屏幕 socket，待 TEARDOWN 后关闭；停止状态仍允许屏幕流和会话 TEARDOWN，新增实际 TCP 回归。候选仍待实车复测。
 
 - **11 月 3 日艾瑞泽 8 断开崩溃候选（待实车验证）：** 原厂库和历史 tombstone 确认，Finalize 后周期回调仍访问已清零的 server 指针；20 秒来自原厂空闲超时。原厂重复 SessionStart 会覆盖旧定时器句柄，重复 RECORD 为首要待验证诱因，此前仅按日志条数将其排除的结论撤回。对 `CHERY / Tiggo / srcvers 320.17.7` 增加每连接至多一次 RECORD；并发、超时及旧世代受保护，首次激活失败不再启动媒体。停止时阻止新业务请求、停止本代心跳并保留屏幕连接至 TEARDOWN，同时保护迟到音频/资源声明。候选尚未在车上验证，且同时改变了停止行为；须检查声音并观察断开后至少 60 秒，不能据此宣称崩溃已修复或单独证明 RECORD 的因果。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。

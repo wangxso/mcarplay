@@ -58,7 +58,7 @@ object CarLifeDiagnostics {
                     CarPlayService.stopDiagnostic(appContext)
                 },
                 log = ::log,
-                launchStrategy = CarLifeLaunchStrategy.EXPORTED_ENTRY,
+                launchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
             )
         val candidate = created ?: return false
         if (!SessionController.claimCarLifeSession(CarLifeSessionRegistry.Owner.DIAGNOSTIC, candidate)) {

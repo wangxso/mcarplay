@@ -119,6 +119,58 @@ class CarLifeChannelConnectorTest {
     }
 
     @Test
+    fun existingSevenChannelsNeverRequestAnEntry() {
+        val connector = CarLifeChannelConnector(connect = { Socket() })
+        var requests = 0
+        connector.onAttemptFailed = { _, _ -> requests++ }
+        assertEquals(7, connector.connectAll(timeoutMs = 1_000).size)
+        assertEquals(0, requests)
+        connector.close()
+    }
+
+    @Test
+    fun closingDuringConnectDoesNotRequestAnEntryOrRetry() {
+        lateinit var connector: CarLifeChannelConnector
+        var requests = 0
+        connector =
+            CarLifeChannelConnector(
+                connect = {
+                    connector.close()
+                    throw ConnectException("cancelled")
+                },
+                sleep = { error("must not sleep after cancellation") },
+            )
+        connector.onAttemptFailed = { _, _ -> requests++ }
+        org.junit.Assert.assertThrows(IOException::class.java) { connector.connectAll(timeoutMs = 1_000) }
+        assertEquals(0, requests)
+    }
+
+    @Test
+    fun failedAttemptCanRequestTheEntryBeforeRetry() {
+        val failedAttempts = mutableListOf<Int>()
+        var requests = 0
+        val connector =
+            CarLifeChannelConnector(
+                connect = { port ->
+                    if (requests == 0) throw ConnectException("listeners not started")
+                    Socket()
+                },
+                sleep = {},
+            )
+        connector.onAttemptFailed = { attempt, error ->
+            failedAttempts += attempt
+            assertTrue(error is ConnectException)
+            requests++
+        }
+
+        val sockets = connector.connectAll(timeoutMs = 100, retryDelayMs = 1)
+
+        assertEquals(listOf(1), failedAttempts)
+        assertEquals(7, sockets.size)
+        connector.close()
+    }
+
+    @Test
     fun missingListenersFailWithoutClaimingSuccess() {
         var now = 0L
         val connector =

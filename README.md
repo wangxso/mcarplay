@@ -90,7 +90,9 @@ with the phone, CarWith version, receiver and vehicle.
    Disconnect other CarLife receivers before starting the native session.
 
 CarWith's native video, audio and touch use ordinary application intents and local
-sockets without root or Shizuku. Some receivers, including WinPlay 1.2.4 and 1.2.5, also check
+sockets on versions with the public entry. Legacy builds without that entry require
+an already-started native session, verified root to launch the legacy service, or
+manual setup in CarWith; ordinary Shizuku shell identity cannot start the protected service. Some receivers, including WinPlay 1.2.4 and 1.2.5, also check
 the phone's real Bluetooth identity. Android does not let ordinary apps read it: with
 [Shizuku](https://shizuku.rikka.app/) running, mcarplay reads and remembers it; without
 Shizuku, enter the address from the phone's settings under **本机蓝牙地址** on the main

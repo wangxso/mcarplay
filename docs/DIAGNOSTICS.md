@@ -58,7 +58,8 @@ still-redacted recent runtime history.
   Only remote/debug additionally records original exception stacks and exact
   peer addresses in `REMOTE-RAW` lines.
 - `CARLIFE_SELF_TEST_DIAGNOSTICS` retains the current or last standalone source
-  self-test snapshot in this process: entry request result, whether it began in
+  self-test snapshot in this process: entry request result and route (`ATTACHED`,
+  `CARWITH_ENTRY`, `LEGACY_ROOT_SERVICE`, `CARWITH_SETTINGS`, or `NONE`), whether it began in
   the background, protocol state, elapsed time, parsed video counts, and the
   existing seven-channel connection attempt's progress. `pendingPort` is the
   current connect, `lastFailedPort` the last observed failure, and
@@ -294,7 +295,7 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 
 独立自检失败时，先停正式连接并保持解锁，在前台运行「CarWith 出流自检」约 30 秒后导出。
 `CARLIFE_SELF_TEST_DIAGNOSTICS` 和远程只读命令 `get_carlife_diagnostics` 会保留本轮/最近一次
-入口请求结果、后台状态、等待时长、最后失败端口、部分连入端口及协议/源帧计数。
+入口请求结果与路径（已有会话附着、公开入口、root 旧版服务或原厂设置页）、后台状态、等待时长、最后失败端口、部分连入端口及协议/源帧计数。
 诊断只观察原有七路连接，不额外探测端口。报告还列出 CarWith/CarLife 的启用、系统应用和权限状态，
 以及 CarLife 服务声明；这些字段不能替代 CarWith 内部运行日志或证明某项未授权就是根因。
 

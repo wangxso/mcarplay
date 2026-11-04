@@ -26,7 +26,7 @@ class CarLifeSession(
     private val onAudioEvent: (CarLifeChannel, CarLifeAudioEvent) -> Unit = { _, _ -> },
     private val onEnded: (String) -> Unit,
     private val log: (String) -> Unit,
-    private val launchStrategy: CarLifeLaunchStrategy = CarLifeLaunchStrategy.EXPORTED_ENTRY,
+    private val launchStrategy: CarLifeLaunchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
     /** 向 CarWith 请求的编码尺寸；null 时沿用协议默认值。CarWith 可能不采纳。 */
     private val requestedVideoSize: Pair<Int, Int>? = null,
     private val isAppInForeground: () -> Boolean = CarLifeLauncher::isAppInForeground,
@@ -34,6 +34,9 @@ class CarLifeSession(
         { _, connect ->
             CarLifeChannelConnector(connect, log = log)
         },
+    private val requestPublicEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestPublicEntry(application) },
+    private val requestLegacyEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestLegacyCarWithService(application) },
+    private val requestSettingsEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestCarWithSettings(application) },
 ) {
     private val appContext: Application = application
     internal val lease = CarLifeSessionLease()
@@ -60,6 +63,14 @@ class CarLifeSession(
 
     @Volatile
     private var entryResult = CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED
+
+    @Volatile
+    private var entryRoute = EntryRoute.NONE
+
+    private val entryRequestLock = Any()
+
+    @Volatile
+    private var compatibleEntryRequested = false
 
     @Volatile
     private var lastChannelSummary = "not_started"
@@ -115,7 +126,8 @@ class CarLifeSession(
         val elapsed = startedAtMs?.let { ((endedAtMs ?: monotonicMs()) - it).coerceAtLeast(0) } ?: 0
         return "schema=1 run=$sourceRun running=${running.get() && !endReported} failed=$endReported " +
             "elapsedMs=$elapsed state=${state.name} " +
-            "entry=$entryResult background=$entryLaunchedInBackground entryBlockedSuspected=$entryBlockedSuspected " +
+            "entry=$entryResult route=$entryRoute background=$entryLaunchedInBackground " +
+            "entryBlockedSuspected=$entryBlockedSuspected " +
             "listeners=[${connector?.diagnosticSummary() ?: lastChannelSummary}] video=${videoInfo()} ${stats.snapshot().summary()}"
     }
 
@@ -130,22 +142,31 @@ class CarLifeSession(
             fail("未找到 CarWith（${CarLifeLauncher.CARWITH_PACKAGE}）或 CarLife 组件")
             return false
         }
-        if (launchStrategy == CarLifeLaunchStrategy.EXPORTED_ENTRY) {
-            entryLaunchedInBackground = !isAppInForeground()
-            entryResult = CarLifeLauncher.requestPublicEntry(appContext)
-            ConnectionDiagnostics.runtimeLog(
-                "CARLIFE-DIAG run=$sourceRun event=ENTRY result=$entryResult background=$entryLaunchedInBackground",
-            )
-            if (entryResult != CarLifeLauncher.EntryLaunchResult.REQUESTED) {
-                fail("当前 CarWith 版本不允许打开兼容入口，请检查 CarWith 设置")
-                return false
+        when (launchStrategy) {
+            CarLifeLaunchStrategy.EXPORTED_ENTRY -> {
+                entryLaunchedInBackground = !isAppInForeground()
+                entryResult = requestPublicEntry()
+                ConnectionDiagnostics.runtimeLog(
+                    "CARLIFE-DIAG run=$sourceRun event=ENTRY result=$entryResult background=$entryLaunchedInBackground",
+                )
+                if (entryResult != CarLifeLauncher.EntryLaunchResult.REQUESTED) {
+                    fail("当前 CarWith 版本不允许打开兼容入口，请检查 CarWith 设置")
+                    return false
+                }
+                log("CARLIFE: 已通过应用 Intent 请求 CarWith 公开入口，等待七路端口")
+                if (entryLaunchedInBackground) {
+                    log("CARLIFE: 本应用当前不在前台，系统可能拦截 CarWith 入口（小米需允许「后台弹出界面」）")
+                }
             }
-            log("CARLIFE: 已通过应用 Intent 请求 CarWith 公开入口，等待七路端口")
-            if (entryLaunchedInBackground) {
-                log("CARLIFE: 本应用当前不在前台，系统可能拦截 CarWith 入口（小米需允许「后台弹出界面」）")
+
+            CarLifeLaunchStrategy.COMPATIBLE -> {
+                entryLaunchedInBackground = !isAppInForeground()
+                log("CARLIFE: 先附着已有 CarWith 会话；七口未就绪时再请求入口")
             }
-        } else {
-            log("CARLIFE: 附着已有 CarWith 会话，等待七路端口")
+
+            CarLifeLaunchStrategy.ATTACH_EXISTING -> {
+                log("CARLIFE: 附着已有 CarWith 会话，等待七路端口")
+            }
         }
         sourceThread =
             thread(name = "carlife-client", isDaemon = true) {
@@ -204,10 +225,23 @@ class CarLifeSession(
             connectorFactory(host) { port ->
                 connectCarLifeSocket(host, port, CONNECT_TIMEOUT_MS)
             }
+        activeConnector.onAttemptFailed = { attempt, _ ->
+            if (launchStrategy == CarLifeLaunchStrategy.COMPATIBLE && attempt == 1) {
+                requestCompatibleEntry()
+            }
+        }
         connector = activeConnector
         try {
             activeConnector.connectAll(LISTENER_WAIT_MS)
             if (!running.get()) return
+            if (entryResult == CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED) {
+                entryResult = CarLifeLauncher.EntryLaunchResult.ATTACHED
+                entryRoute = EntryRoute.ATTACHED
+                ConnectionDiagnostics.runtimeLog(
+                    "CARLIFE-DIAG run=$sourceRun event=ENTRY result=$entryResult route=$entryRoute",
+                )
+                log("CARLIFE: 已附着现有 CarWith 七口会话，无需再打开入口")
+            }
             ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG run=$sourceRun event=LISTENERS_CONNECTED ${activeConnector.diagnosticSummary()}")
             log("CARLIFE: 七路连接完成，开始协议握手")
             stateMachine.onConnected().forEach(::sendAction)
@@ -229,6 +263,68 @@ class CarLifeSession(
             if (running.get() && stateMachine.state != CarLifeStateMachine.State.FAILED) {
                 fail("CarLife 命令通道已结束")
             }
+        }
+    }
+
+    /**
+     * 第一次连接失败才请求入口。旧版没有公开入口时依次尝试 root 服务和设置页；
+     * 不打开百度 CarLife 首页，因为它只启动七口，不能创建 CarWith 编码器。
+     */
+    private fun requestCompatibleEntry() {
+        synchronized(entryRequestLock) {
+            if (compatibleEntryRequested || !running.get()) return
+            compatibleEntryRequested = true
+        }
+        entryLaunchedInBackground = !isAppInForeground()
+        val carWithEntry = requestPublicEntry()
+        if (!running.get() || Thread.currentThread().isInterrupted) return
+        val legacyEntry =
+            if (carWithEntry == CarLifeLauncher.EntryLaunchResult.REQUESTED) {
+                CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED
+            } else {
+                requestLegacyEntry()
+            }
+        if (!running.get() || Thread.currentThread().isInterrupted) return
+        val settingsEntry =
+            if (
+                carWithEntry == CarLifeLauncher.EntryLaunchResult.REQUESTED ||
+                legacyEntry == CarLifeLauncher.EntryLaunchResult.REQUESTED
+            ) {
+                CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED
+            } else {
+                requestSettingsEntry()
+            }
+        if (legacyEntry != CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED) {
+            ConnectionDiagnostics.runtimeLog(
+                "CARLIFE-DIAG run=$sourceRun event=ENTRY_LEGACY result=$legacyEntry " +
+                    "from=$carWithEntry background=$entryLaunchedInBackground",
+            )
+        }
+        if (settingsEntry != CarLifeLauncher.EntryLaunchResult.NOT_REQUESTED) {
+            ConnectionDiagnostics.runtimeLog(
+                "CARLIFE-DIAG run=$sourceRun event=ENTRY_SETTINGS result=$settingsEntry " +
+                    "from=$carWithEntry legacy=$legacyEntry background=$entryLaunchedInBackground",
+            )
+        }
+        val plan = planCompatibleEntry(carWithEntry, legacyEntry, settingsEntry)
+        entryResult = plan.result
+        entryRoute = plan.route
+        ConnectionDiagnostics.runtimeLog(
+            "CARLIFE-DIAG run=$sourceRun event=ENTRY result=$entryResult route=$entryRoute " +
+                "background=$entryLaunchedInBackground",
+        )
+        when (plan.route) {
+            EntryRoute.CARWITH_ENTRY ->
+                log("CARLIFE: 已请求 CarWith 公开入口，等待七路端口")
+            EntryRoute.LEGACY_ROOT_SERVICE ->
+                log("CARLIFE: 已通过 root 启动旧版 CarWith CarLife 服务，等待七路端口")
+            EntryRoute.CARWITH_SETTINGS ->
+                log("CARLIFE: 当前版本需要原厂设置页启动连接；请在 CarWith 中选择百度 CarLife 无线连接")
+            EntryRoute.ATTACHED, EntryRoute.NONE ->
+                log("CARLIFE: 无法自动打开 CarWith 入口，继续等待已有七口")
+        }
+        if (entryLaunchedInBackground && plan.route != EntryRoute.LEGACY_ROOT_SERVICE) {
+            log("CARLIFE: 本应用当前不在前台，系统可能拦截 CarWith 入口（小米需允许「后台弹出界面」）")
         }
     }
 
@@ -535,11 +631,38 @@ class CarLifeSession(
         stop()
     }
 
+    /** 连接前已有七口，或实际请求到的入口及回退层级。 */
+    enum class EntryRoute { NONE, ATTACHED, CARWITH_ENTRY, LEGACY_ROOT_SERVICE, CARWITH_SETTINGS }
+
     internal companion object {
         private fun monotonicMs(): Long = System.nanoTime() / 1_000_000
 
         const val ENTRY_BLOCKED_HINT = "CarWith 入口在后台发起，可能被系统拦截"
         const val UNPARSED_AUDIO_LOG_EVERY = 2_000L
+
+        data class EntryPlan(
+            val result: CarLifeLauncher.EntryLaunchResult,
+            val route: EntryRoute,
+        )
+
+        /**
+         * 选入口：CarWith 自己的公开入口优先，其次 root 启动旧版内部服务，
+         * 最后打开原厂设置页让用户完成无线连接。百度 CarLife 首页不在此列。
+         */
+        fun planCompatibleEntry(
+            carWithEntry: CarLifeLauncher.EntryLaunchResult,
+            legacyEntry: CarLifeLauncher.EntryLaunchResult,
+            settingsEntry: CarLifeLauncher.EntryLaunchResult,
+        ): EntryPlan =
+            when {
+                carWithEntry == CarLifeLauncher.EntryLaunchResult.REQUESTED ->
+                    EntryPlan(carWithEntry, EntryRoute.CARWITH_ENTRY)
+                legacyEntry == CarLifeLauncher.EntryLaunchResult.REQUESTED ->
+                    EntryPlan(legacyEntry, EntryRoute.LEGACY_ROOT_SERVICE)
+                settingsEntry == CarLifeLauncher.EntryLaunchResult.REQUESTED ->
+                    EntryPlan(settingsEntry, EntryRoute.CARWITH_SETTINGS)
+                else -> EntryPlan(settingsEntry, EntryRoute.NONE)
+            }
 
         fun isEntryBlockedSuspected(
             error: Exception,

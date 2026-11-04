@@ -1026,3 +1026,457 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
 remote/debug（`0.1.3-rd-debug`）为 `e693eb819783b05111bfa3516060660e0657a5a01cb2b1a65a0f2b91114323ac`；未安装、未发布。
 实车仍需连续断开重连至少四轮、确认手动停止后不抢连，
 并多次验证「原车主界面 → CarPlay」的实际画面/声音/触控；现有拒连残留状态能否恢复需单独复测。
+
+## HyperOS 3 AVD 与 CarLife 8.6.8 出流排查（2026-11-03）
+
+本轮仅操作 Mac 上的 `HyperOS_3` ARM64 模拟器，未操作同时在线的实体 Pad 或车机。目标是把 CarWith 的七路本地
+CarLife 源端从零帧推进到持续 H.264，并区分 AVD 系统集成问题与 mcarplay 协议问题；OS3 的结果不能直接外推为
+OS1 或 OS2 兼容性结论。
+
+| 项目 | 本轮最终环境 |
+| --- | --- |
+| 系统 | HyperOS `OS3.0.2.0.WMCCNXM`，Android 16 / SDK 36，`sdk_gphone64_arm64` |
+| 内存 | AVD 默认 2,531,864 KiB，另有约 1.9 GiB swap |
+| mcarplay | standard/debug `0.1.3-debug`，`com.mcarplay.app` |
+| CarWith | `4.0.4-20260522` / `104000004`，`com.miui.carlink`；通过普通系统应用模块变为 updated system app |
+| 小米 CarLife | `8.6.8` / `260`，`com.baidu.carlife.xiaomi`，用户应用 |
+| Root / 模块 | KernelSU `3.3.0`，`meta-overlayfs 1.3.1`，模块 `carwith-system` |
+| CarWith APK SHA-256 | `a20bd237534d82df08d561974365dc7da66e36899d3e64cc1b137cac0b084605` |
+| CarLife APK SHA-256 | `ab7b001a7b3eba95819da6808b29e2038629b30f2bbe3a363256e34ff7cbd4ee` |
+
+测试前已保存 AVD 快照 `before-carwith-system`。CarWith APK 通过 KernelSU 模块暂存到 `/system/app/CarWith`，没有放进
+`priv-app`；重启后 `dumpsys package com.miui.carlink` 同时列出 `/system/app/CarWith` 与数据版覆盖，实际包包含
+`SYSTEM HAS_CODE ALLOW_CLEAR_USER_DATA UPDATED_SYSTEM_APP`。数据版 `codePath` 仍位于 `/data/app` 是正常覆盖关系。
+
+### 阻塞一：Qualcomm 性能服务调用使应用启动 ANR
+
+- 11:25:09–11:25:34，mcarplay 前台自检记录 `entry=REQUESTED`、`background=false`，25 秒内连接尝试 63 次，
+  7240 始终 `ECONNREFUSED`，`allConnectedOnce=false`，视频、关键帧与字节数均为 0。
+  `REQUESTED` 仅表示启动请求已提交；摘要中的初始 `state=CONNECTED` 也不能替代七路连通或媒体证据。
+- 系统将跨应用启动转给安全中心的 `ConfirmStartActivity`，但安全中心自身启动 ANR。直接由 ADB 请求 CarWith 导出入口也启动 ANR；
+  11:41 在亮屏、解锁状态复测仍因 `failed to complete startup` 被终止，因此不能只归因于锁屏或后台启动限制。
+- 两份 ANR 都显示主线程等待 `ActivityThreadImpl.waitHandlerThread()`；`ActivityHelper` 线程则同步阻塞在
+  `IPerfManager$Stub$Proxy.setClientBinder()` → `Performance.connectPerfServiceLocked()` → `BoostFramework` 初始化。
+  对该镜像的 `QPerformance.jar` 做静态检查，确认调用的是 `vendor.perfservice`。
+- 利用模拟器已有 root 停止再启动性能服务后，CarWith 入口恢复。最终 `service list` 含
+  `vendor.perfservice: [com.qualcomm.qti.IPerfManager]`，`ps` 中 `perfservice` 存活；该服务与 CarWith 持续共存时完成了下述
+  142 秒出流。现有证据足以把它列为启动 ANR 的直接环境阻塞，但尚不足以断言原生服务内部的具体死锁原因。
+
+### 阻塞二：安全中心拒绝 CarWith 的 CTA 授权入口
+
+入口能够运行后，CarWith 原先仍是普通用户应用，11:43、11:51 及 11:58 均出现：
+
+```text
+CarlifeAdbActivity: onCreate CarlifeAdbActivity
+SystemAppPDA: can't launch this for out of whiteList, com.miui.carlink
+PermissionActivity: onActivityResult ...-2
+```
+
+对安全中心与 CarWith APK 的静态核对表明，CarWith `PermissionActivity` 请求
+`miui.intent.action.SYSTEM_PERMISSION_DECLARE_NEW`；安全中心最终接受的任一入口包括内置 CTA 名单、系统应用/系统 UID，
+或该 CTA 权限。普通安装身份未通过检查，`-2` 来自白名单拒绝，并非用户点击了拒绝。
+
+本轮的解决办法是让 CarWith 保持原 APK、原签名和用户数据，通过模块获得系统应用身份；没有修改安全中心白名单，
+也没有伪造 CTA 权限。重启后安全中心正常打开 CarWith 隐私授权页，用户点击同意后记录
+`SystemAppPDA: user agreed! com.miui.carlink` 与 `PermissionActivity: carlife adb connect`，下一轮自检的
+`CARLIFE-DIAG event=ENV` 也变为 `systemApp=true updatedSystemApp=true`、`mcarplay.backgroundStartAllowed=true`。
+
+AVD 只有约 2.5 GiB 物理内存。一次较慢的 CTA 操作期间，`lowmemorykiller` 曾以 `oom_score_adj=701` 杀死
+`com.miui.carlink`。这不是 CTA 逻辑失败；重新启动并尽快完成同意即可。成功轮中 CarWith 约占用 287–365 MiB，
+142 秒内未被 LMKD 杀死，但系统持续回收了天气、设置等低优先级进程。若要求重复冷启动稳定，建议给该 AVD 分配 6 GiB 内存。
+
+### 七路握手与 H.264 验证
+
+mcarplay 保持前台并点击「CarWith 出流自检」后，12:17:25.114 记录 `entry=REQUESTED background=false`；
+12:17:26.361 已在 4 次尝试、1,244 ms 内完成：
+
+```text
+openedThisAttempt=7240,8240,9240,9241,9242,9340,9440
+allConnectedOnce=true timedOut=false
+```
+
+随后完成协议握手与准入：
+
+1. 收到前台请求并回 `GO_TO_FOREGROUND`；
+2. 发送设备信息，完成 RSA 公钥请求与加密 AES 种子交换；
+3. 收到 `ENCRYPT_READY`，手机渠道准入结果为“通过”；
+4. 发送视频初始化请求，收到 `VIDEO_INIT_DONE 1280x720@30`；
+5. 首个访问单元为关键帧，随后帧数稳定增长。
+
+到 12:19:48.293 的最后一条周期统计，已连续运行约 142 秒：
+
+```text
+视频帧 #2001 1280x720 frames=2001 key=51 bytes=31378042 span=142s
+```
+
+同一时间 CarWith、小米 CarLife 与 mcarplay 进程都存活，七个监听端口仍在。该结果排除了：
+
+- Qualcomm 性能服务导致的入口 ANR；
+- 安全中心 CTA 白名单拒绝；
+- CarWith 七路监听未创建；
+- RSA/AES/手机渠道准入失败；
+- 1280×720@30 H.264 数据未到达 mcarplay。
+
+自检只统计访问单元，没有保存可直接交给 `ffprobe` 的连续 Annex-B 文件；也没有 CarPlay 接收端，因此本轮不能证明
+接收端解码、声音或触控通过。日志里 CarLife 的 VOICE 通道首先收到零字节数据，音频没有形成有效 PCM。
+
+测试结束时通过 `am force-stop com.mcarplay.app` 停止 mcarplay；随后设备侧七口全部消失。完整运行日志保存在本机
+git 忽略范围的下载文件中，以上为脱敏摘要。
+
+### 复现与排障顺序
+
+1. 在修改系统盘前保存 AVD 快照；启动 KernelSU 与 `meta-overlayfs`，确认 `service list` 可注册
+   `vendor.perfservice` 且进程存活。
+2. 把 CarWith 原 APK 放入普通 `/system/app/CarWith` 模块并重启，确认包标志包含 `SYSTEM` 与
+   `UPDATED_SYSTEM_APP`；再安装原版小米 CarLife 8.6.8。
+3. 保持 mcarplay 在前台，直接点「CarWith 出流自检」。CTA 页出现后迅速同意，避免 2.5 GiB 默认镜像在等待期间触发 LMKD。
+4. 用 `adb shell su -c "ss -lnt"` 核对七口。看到 `LISTEN` 后继续看
+   `adb shell run-as com.mcarplay.app tail -n 200 files/main_debug.log`，至少等到
+   `LISTENERS_CONNECTED allConnectedOnce=true`、`VIDEO_INIT_DONE`，以及 `frames`/`bytes` 持续增长。
+5. 若仅有 `REQUESTED` 且入口长时间无 `CarlifeAdbActivity.onCreate`，先查性能服务 ANR；若入口立即退出并出现
+   `SystemAppPDA ... whiteList` / `-2`，查 CarWith 系统应用身份与 CTA；若七口已监听但无媒体，才进入 mcarplay
+   协议层排查。
+
+### OS1/OS2 边界
+
+在上述 OS3 排查结束时，HyperOS-AVD 公开发布只提供 OS3 / Android 16 与 OS4 / Android 17，没有 OS1 或 Android 13 镜像。
+之后另建的 OS1 混合 AVD 排查见下一节。HyperOS 版本号也不能单独推出 Android API：
+同一大版本会因机型和固件落在不同 Android 基线，必须记录具体设备、HyperOS 版本、`ro.build.version.sdk`。
+
+普通 Android 13 AOSP AVD 只能验证 APK 的基础 API 兼容性，缺少小米安全中心、CTA、性能服务和对应系统权限，不能代替
+OS1 结论。要精确复现 OS1 + Android 13，需要一台对应机型的实机，或为该机型制作包含匹配 kernel/vendor 的可启动系统镜像；
+仅把 CarWith、CarLife 和安全中心 APK 推进通用模拟器不构成等价环境。OS2 同样需要对应设备固件实测，当前没有可引用的
+OS2 AVD 或视频流证据。该段是当时状态；后续 OS2 / Android 15 完整矩阵见文末的跨系统兼容矩阵。
+
+## HyperOS 1 / Android 13 混合 AVD 排查（2026-11-03）
+
+本轮没有操作在线实体设备或车机。单独构建 `HyperOS_1_Thyme_A13`、端口 `5582`，将小米 10S 固件的
+`system`、`system_ext`、`product` 和 `mi_ext` 与 Android 13 AVD 的 ranchu vendor/kernel 组合；为启动 framework
+修补了模拟器镜像中的灯光服务等兼容项。设备属性设置为 `thyme` / `M2102J2SC`，不表示硬件为真实小米 10S。
+启动后 `sys.boot_completed=1`，可 `adb root`；AVD 配置内存 6144 MiB，`MemTotal=6057224 kB`，SELinux 为 permissive。
+
+| 项目 | 本轮环境与 SHA-256 |
+| --- | --- |
+| ROM | `OS1.0.4.0.TGACNXM`，Android 13 / SDK 33；Fastboot 包 `5cf9f192f9eee191e5f74307af7785a8df27a0c6f0eb257dbd606688603c0ad7` |
+| 原厂 CarWith | `2.0.1-20231207` / `102000001`，系统应用；APK `a3d082b867d15a1a2303a791b9c2522e7298afc3e3c07a838a4a7f6e2a51515c` |
+| 小米 CarLife | `8.6.8` / `260`；APK `ab7b001a7b3eba95819da6808b29e2038629b30f2bbe3a363256e34ff7cbd4ee` |
+| mcarplay | standard/debug `0.1.3-debug`；APK `ab1517d7607197d3b29e84655aeb0b57aab6f8693c811db7f6ce4427fa00b0c8` |
+| 对照 CarWith 更新 | `4.0.4-20260522` / `104000004`，原系统应用上的同签名更新；APK `a20bd237534d82df08d561974365dc7da66e36899d3e64cc1b137cac0b084605` |
+
+### 原厂 2.0.1 入口及受控探针
+
+- mcarplay 前台自检立即报告 `ENTRY=MISSING`、`listeners=not_started`。检查 APK manifest 确认原厂 2.0.1
+  没有声明 mcarplay 所调用的 `com.miui.carlink.castfwk.usb.CarlifeAdbActivity`；这是一处已证实的入口差异，
+  不能单独推出协议不兼容。
+- 为继续观察底层链路，以 root / ADB 强制启动 CarWith 的非导出内部服务并指定 `Baidu_ap`，再使用仓库现有
+  Python CarLife 探针连接；这不是 mcarplay 无 root 的普通启动方式，也不是正常无线连接。七个端口 `7240`、
+  `8240`、`9240`、`9241`、`9242`、`9340`、`9440` 均连通，探针报告 RSA 验证、AES 和手机渠道准入成功，
+  收到视频初始化响应并发送启动消息，随后控制通道关闭；总计 `video packets=0 bytes=0`。
+- CarLife 创建了 `c2.android.avc.encoder`（1280×720、15 fps），两次周期统计均为 `DQoutput: 0 success out of
+  99 tries`。CarWith 的状态机记录 `MSG_CASTCONTROLLER_CAST_FAILURE`；现有日志未确定失败原因，不能仅据此认定
+  虚拟显示从未建立。独立 `screenrecord` 对模拟器主屏的短测产生了可由 `ffprobe` 识别的 H.264、720×1280、2 帧，
+  只说明基础屏幕编码能产出数据，不证明 CarLife 的虚拟显示链路或持续出流正常。
+- 混合镜像中的 Wi-Fi 和蓝牙服务出现崩溃；探针运行时为抑制 Wi-Fi 反复崩溃而关闭了模拟器 Wi-Fi。该环境缺少原机
+  Qualcomm vendor/kernel，且使用 permissive 与 root 强制入口，因此零帧不能归因于 OS1、旧版 CarWith 或 mcarplay
+  协议中的某一项，也不能作为实体手机不支持的证据。
+
+### 4.0.4 对照复测：持续收到视频
+
+覆盖安装后 CarWith 仍具有 `SYSTEM UPDATED_SYSTEM_APP` 标志；原厂 2.0.1 系统 APK 保留。首次用户须知等待期间的
+25 秒监听超时不能视为该版本无法出流的结论。用户处理须知后，通过 ADB 模拟点击 mcarplay 前台的「CarWith 出流自检」，
+16:04:26 的新会话由 mcarplay 自身的应用 Intent 请求 CarWith 4.0.4 公开入口；没有用 root 强制启动 CarWith 内部服务。
+
+- 约 1.2 秒内连通七路：`7240,8240,9240,9241,9242,9340,9440`，记录 `allConnectedOnce=true timedOut=false`。
+- 收到 RSA 公钥请求和加密 AES 种子、`ENCRYPT_READY`，手机渠道准入通过，随后记录 `VIDEO_INIT_DONE 1280x720@30`。
+- 16:04:27 收到首个视频访问单元并识别为关键帧；到 16:09:28 的周期记录为 `frames=4481 key=113 bytes=71549028
+  span=301s`。观察期间 CarWith、CarLife、mcarplay 进程存活，七个监听端口仍在。
+- 运行中 `dumpsys display` 记录 CarWith 自有的 1280×720 虚拟屏处于 `ON`。协议初始化返回 30 fps，而 CarLife 的
+  `c2.android.avc.encoder` 配置为 20 fps；按上述访问单元和时间粗算约 15 个/秒，不将返回值当作实测帧率。
+- 该自检未保存可供独立解码的连续视频文件，VOICE 通道只看到零字节记录，没有有效音频证据。没有 CarPlay 接收端，
+  因此不能证明车机解码、声音或触控通过；也不能将 4.0.4 的结果归给原厂 2.0.1。
+
+本轮没有修改 mcarplay 源码或协议代码；没有 CarPlay 接收端、有效音频、触控及真实手机验证。该轮没有 OS2 结果；
+后续 OS2 / Android 15 完整矩阵见文末的跨系统兼容矩阵。
+
+## CarWith 2.x / 3.x 版本矩阵（2026-11-03）
+
+在上述同一 OS1 / Android 13 混合 AVD、CarLife `8.6.8/260`、mcarplay `0.1.3-debug` 环境下，测试了 37 个
+2.x / 3.x 独立构建。来源为公开历史版本目录与用户从 Telegram 公开附件下载的 APK；逐个用 `apksigner verify`
+核对包名与版本，签名证书 SHA-256 均为小米 ROM 原厂 CarWith 的
+`c9009d01ebf9f5d0302bc71b2fe9aa9a47a432bba17308a3111b75d7b2149025`。相同版本号不同日期的构建单列。
+这些是本轮取得的构建，不代表小米发布过的全部内部版本。
+
+3.1.2 及之后的自检从用户已同意条款的干净 3.1.2 数据快照升级，旧版分别清理测试数据。早期复用 4.0.4 数据
+触发的 `SQLiteException: Can't downgrade database from version 6 to 3` 已排除，未计入结果。自检通过指当前实际
+日期下 mcarplay 调用公开入口，七路、RSA/AES、手机渠道准入与 `VIDEO_INIT_DONE 1280x720@30` 均成功，且视频
+访问单元与字节至少增长 20 秒；帧数是日志中的访问单元计数，不是独立解码或车机显示验收。
+
+| CarWith 构建 | 当前日期下 mcarplay 自检 | 补充对照 |
+| --- | --- | --- |
+| `2.0.0-20231103` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.0.1-20231129` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.0.1-20231207` | 缺当前入口 | root 探针：七路已连、0 视频包 |
+| `2.1.0-20240118` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.1.1-20240131` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.1.2-20240301` | 缺当前入口 | root 探针：七路已连、0 视频包 |
+| `2.2.0-20240322` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.2.1-20240401` | 缺当前入口 | root 探针：七路已连、0 视频包 |
+| `2.2.2-20240429` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.2.2-20240509` | 缺当前入口 | root 探针：七路已连、0 视频包 |
+| `2.3.0-20240606` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.3.1-20240712` | 缺当前入口 | root 探针：有效期内收到 557 个视频包 |
+| `3.0.1-20240722` | 缺当前入口 | root 探针：当前日期下收到 515 个视频包 |
+| `3.0.2-20240801` | 缺当前入口 | root 探针：当前日期下收到 568 个视频包 |
+| `3.1.2-20240828` | 视频 257 个访问单元 / 21 秒 | — |
+| `3.1.4-20240904` | 视频 263 个访问单元 / 21 秒 | — |
+| `3.1.5-20240911` | 视频 218 个访问单元 / 20 秒 | — |
+| `3.2.0-20241009` | 视频 274 个访问单元 / 21 秒 | — |
+| `3.2.1-20241105` | 已过期，当前日期下退出 | 有效期内视频 279 / 21 秒 |
+| `3.3.0-20241114` | 视频 244 个访问单元 / 22 秒 | — |
+| `3.3.2-20241210` | 视频 343 个访问单元 / 24 秒 | — |
+| `3.4.0-20250120` | 视频 317 个访问单元 / 20 秒 | — |
+| `3.4.1-20250227` | 视频 368 个访问单元 / 20 秒 | — |
+| `3.4.2-20250319` | 已过期，当前日期下退出 | 有效期内视频 346 / 22 秒 |
+| `3.4.2-20250402` | 已过期，当前日期下退出 | 有效期内视频 304 / 20 秒 |
+| `3.5.0-20250407` | 视频 340 个访问单元 / 22 秒 | — |
+| `3.5.2-20250521` | 视频 336 个访问单元 / 24 秒 | — |
+| `3.5.3-20250528` | 已过期，当前日期下退出 | 有效期内视频 348 / 22 秒 |
+| `3.6.0-20250612` | 视频 330 个访问单元 / 21 秒 | — |
+| `3.6.2-20250815` | 已过期，当前日期下退出 | 有效期内视频 268 / 22 秒 |
+| `3.7.2-20250923` | 视频 334 个访问单元 / 22 秒 | — |
+| `3.8.0-20251113` | 视频 265 个访问单元 / 21 秒 | — |
+| `3.8.2-20260117` | 4 个访问单元后 CarWith 崩溃 | 同环境四次复现 |
+| `3.8.3-20260203` | 视频 285 个访问单元 / 23 秒 | — |
+| `3.8.4-20260302` | 已过期，当前日期下退出 | 有效期内视频 295 / 24 秒 |
+| `3.8.4-20260313` | 已过期，当前日期下退出 | 有效期内视频 289 / 24 秒 |
+| `3.8.4-20260320` | 已过期，当前日期下退出 | 有效期内视频 296 / 24 秒 |
+
+### 两类补充对照
+
+**过期构建。** 反编译 `UCarApplication` 后可见这些内测包内置了截止日期：到期后应用主动退出，
+较新的版本还会弹出「CarWith内测版本已到期，请卸载更新后使用」并跳到应用详情页。已确认的截止日期包括
+`2.0.0-20231103`（2023-12-10）、`3.2.1-20241105`（2024-11-22）、`3.4.2-20250319`（2025-04-11）、
+`3.4.2-20250402`（2025-04-20）、`3.5.3-20250528`（2025-06-18）、`3.6.2-20250815`（2025-08-24）、
+`3.8.4-20260302`（2026-03-17）、`3.8.4-20260313`（2026-03-31）、`3.8.4-20260320`（2026-04-09）。
+为区分过期与链路兼容性，只把隔离 AVD 的时钟临时调到构建有效期内，再运行同一自检；这八项在有效期内
+全部通过七路、认证、准入与视频初始化，之后恢复当前时间。对照不改变这些构建在真实当前日期下已过期的事实。
+
+**缺入口构建。** 另有 14 个 2.0–3.0 构建没有声明 mcarplay 目前调用的
+`com.miui.carlink.castfwk.usb.CarlifeAdbActivity`，自检报告 `ENTRY=MISSING`。为继续观察底层链路，另以
+root / ADB 强制启动非导出的 `CarlinkService` 并指定 `Baidu_ap`，用 Python 探针连接七路。这不是 mcarplay 的
+普通公开入口，也不是实体手机的正常无线连接，模拟器 Wi-Fi 期间关闭。
+
+- 当前日期下，`2.0.0-20231103`、`2.0.1-20231129`、`2.1.0-20240118`、`2.2.0-20240322`、
+  `2.2.2-20240429`、`2.3.0-20240606`、`2.3.1-20240712` 因过期直接退出，未观察到监听；
+  `2.0.1-20231207`、`2.1.1-20240131`、`2.1.2-20240301`、`2.2.1-20240401`、`2.2.2-20240509`
+  能监听七路并完成认证，但 0 视频包。
+- 把时钟调到各构建的有效期后，12 个 2.x 构建全部可以监听七路并完成认证；其中 `2.3.1-20240712`
+  收到 557 个视频包（37 秒），`2.3.0-20240606` 及更早的 11 项仍是 0 视频包。
+- `3.0.1-20240722` 与 `3.0.2-20240801` 在当前日期下即可收到视频，延长到 37 秒后分别收到 515 和 568 个
+  视频包并通过探针自身的完整视频判定。保存的 H.264 经 ffprobe 确认为 1280×720，ffmpeg 解码无错误。
+
+**旧版零视频的原因在设备侧。** 对 `2.2.2-20240509` 和 `2.3.0-20240606` 的 logcat 显示，CarLife 已创建
+`c2.android.avc.encoder`（1280×720），但周期统计始终是 `Render: 0, Drop: 0, DQoutput: 0 success out of ~95 tries`，
+即编码器从未拿到输入帧；`2.3.0` 的 logcat 中完全没有编码器创建记录。`2.3.1-20240712` 与之后的构建则
+编码器持续出帧（配置 15 fps）。分界点是 `2.3.1`。该现象发生在 CarLife 侧取帧阶段，与 mcarplay 的协议实现无关，
+但混合 AVD 的虚拟显示链路与实体机不同，仍不能据此断定实体机的旧版同样无画面。
+
+### mcarplay 自身协议在旧版 CarWith 上的验证
+
+前面所有旧版结果都来自仓库外的 Python 探针。为回答「不改 mcarplay 能否把旧版 CarWith 的流引出」，
+本轮临时把 `CarLifeDiagnostics` 的 `launchStrategy` 从 `EXPORTED_ENTRY` 改为已有的 `ATTACH_EXISTING`，
+重新构建并在模拟器上实测，随后已还原该文件（`git status` 中不再出现该文件）。
+
+在 CarWith `2.3.1-20240712`（时钟调到其有效期内）上，mcarplay 自己的代码完成了完整链路：
+
+```text
+[20:03:58.426] CARLIFE: 七路连接完成，开始协议握手        attempts=1 waitMs=4 allConnectedOnce=true
+[20:03:58.568] CARLIFE: 收到 RSA 公钥请求
+[20:03:58.571] CARLIFE: 收到 ENCRYPT_READY
+[20:03:58.572] CARLIFE: 手机渠道准入结果 通过
+[20:03:58.624] CARLIFE: VIDEO_INIT_DONE 1280x720@30
+[20:04:39.030] CARLIFE-DIAG event=FAILED ... video=1280x720 frames=613 key=41 bytes=1243998 span=40s
+```
+
+结束原因是 CarWith 自行退出投屏（`CastingActivity` 结束后 `System.exit`），不是 mcarplay 断开；
+mcarplay 侧状态为 `VIDEO_RUNNING`，40 秒内收到 613 个访问单元、41 个关键帧、1,243,998 字节。
+
+结论分层如下：
+
+- **协议层无需修改。** mcarplay 既有的认证、种子交换、渠道准入、视频解析与计数逻辑在旧版 CarWith 上原样工作，
+  没有为旧版写任何特例代码。
+- **入口层是唯一缺口。** 旧版没有 `CarlifeAdbActivity`，当前自检固定使用 `EXPORTED_ENTRY`，因此直接报
+  `ENTRY=MISSING`。`ATTACH_EXISTING` 策略在仓库里已定义但没有任何调用方；要支持旧版，需要给自检或正式会话
+  增加一个「先尝试公开入口，缺失则附着」的回退分支，属于入口策略改动，不是协议改动。
+- **2.3.0 及更早仍不可用。** 用 `ATTACH_EXISTING` 复测 `2.0.1-20231129`：CarWith 短暂监听了七路后自行退出，
+  与 root 探针的零视频结论一致。旧版的零视频是设备侧编码器拿不到输入帧，不是 mcarplay 的问题。
+
+### 3.8.2 崩溃定位
+
+`3.8.2-20260117` 四次均在完成七路、RSA/AES、渠道准入与 `VIDEO_INIT_DONE` 后，只收到 1–4 个访问单元，
+随后 CarWith 的 `CarlinkSM` 线程崩溃：
+
+```text
+FATAL EXCEPTION: CarlinkSM
+java.lang.NullPointerException: Attempt to invoke virtual method 'void android.view.Surface.setFrameRate(float, int)' on a null object reference
+    at com.miui.carlink.castfwk.CastController.displayConnectedInNormalCast(CastController.java:157)
+    at com.miui.carlink.castfwk.CarlinkStateMachine$i.c(CarlinkStateMachine.java:188)
+```
+
+对照反编译代码：`displayConnectedInNormalCast` 在 SDK<34 分支调用 `mSurface.setFrameRate(i14, 0)`，
+而调用方 `displayConnected` 中的 `mSurface = surface` 赋值发生在该方法返回之后，首次连接时 `mSurface` 仍为 null。
+`3.8.3` 把这一行改为使用传入的 `surface`，同环境自检有持续视频。该关联来自模拟器 logcat 与静态代码比较，
+仍需实机确认。
+
+### 边界
+
+本轮未修改 mcarplay 的 Kotlin 或协议源码。AVD 使用 ranchu vendor/kernel、root、SELinux permissive，Wi-Fi 因
+混合镜像问题关闭；没有真实手机和车机的画面、声音、触控或长时间连接证据，也没有 OS2 测试结果。
+过期对照使用修改过的模拟器时钟，root 探针使用非公开入口，两者都不能直接代表实体机的普通使用路径。
+第三方 APK、logcat 与 H.264 文件均留在仓库外。
+
+## CarWith 2.x / 3.x / 4.x 跨系统兼容矩阵（2026-11-04）
+
+本轮把同一批 50 个 CarWith 构建分别放入 OS1–OS3 的独立 AVD，并按用户要求让 OS4 只从该系统的初始 CarWith
+`4.0.16-20260907` 开始测，不再向上追测 2.x 或更早的 4.x。全部系统固定使用原签名 CarWith、小米 CarLife
+`8.6.8/260`。OS1–OS3 矩阵使用 mcarplay standard/debug `0.1.3-debug`，APK SHA-256 为
+`42a827a792ef843a92d9d10e7d58ae56b8b148a0c13750ae0dba8ce0d2908aba`；OS4 最后又在当前完整构建
+`dff6481f484e04ec6c9ba89c7209b91b7998fd0221f6a249cc89d148f2562b7c` 上重跑 5 项。CarLife APK SHA-256 为
+`ab7b001a7b3eba95819da6808b29e2038629b30f2bbe3a363256e34ff7cbd4ee`。
+
+| 系统 | Android / SDK | 固件 | 测试范围 | Root / SELinux |
+| --- | --- | --- | --- | --- |
+| OS1 | 13 / 33 | `OS1.0.4.0.TGACNXM`，thyme 系统分区 + Android 13 ranchu vendor/kernel | 50 个构建 | `adb root` / permissive |
+| OS2 | 15 / 35 | `OS2.0.215.0.VMCCNXM`，fuxi 系统分区 + Android 15 ranchu vendor/kernel | 50 个构建 | `adb root` / permissive |
+| OS3 | 16 / 36 | `OS3.0.2.0.WMCCNXM` | 50 个构建 | KernelSU `3.3.0` / permissive |
+| OS4 | 17 / 37 | `OS4.0.24.0.XFRCNXM`，6 GiB、4 核 | 从系统初始版开始的 5 个构建 | KernelSU `3.3.1` / enforcing |
+
+每个成功项均要求同时具备：公开入口/旧版 root 服务的 `ENTRY=REQUESTED`，或附着现有会话的 `ENTRY=ATTACHED`、七口
+`7240/8240/9240/9241/9242/9340/9440` 全连、RSA、AES `ENCRYPT_READY`、手机渠道准入通过、
+`VIDEO_INIT_DONE 1280x720@30`，并持续至少 20 秒收到 H.264 访问单元、关键帧和非零字节。下表“出流”只代表
+mcarplay 收到源端媒体，不代表 CarPlay 接收端已解码或有声音。
+
+| CarWith 构建 | OS1/A13 | OS2/A15 | OS3/A16 | OS4/A17 |
+| --- | --- | --- | --- | --- |
+| `2.0.0-20231103` | 0帧 | 0帧 | 0帧 | — |
+| `2.0.1-20231129` | 0帧 | 0帧 | 0帧 | — |
+| `2.0.1-20231207` | 0帧 | 0帧 | 0帧 | — |
+| `2.1.0-20240118` | 0帧 | 0帧 | 0帧 | — |
+| `2.1.1-20240131` | 0帧 | 0帧 | 0帧 | — |
+| `2.1.2-20240301` | 0帧 | 0帧 | 0帧 | — |
+| `2.2.0-20240322` | 0帧 | 0帧 | 0帧 | — |
+| `2.2.1-20240401` | 0帧 | 0帧 | 0帧 | — |
+| `2.2.2-20240429` | 0帧 | 0帧 | 0帧 | — |
+| `2.2.2-20240509` | 0帧 | 0帧 | 0帧 | — |
+| `2.3.0-20240606` | 0帧 | 0帧 | 0帧 | — |
+| `2.3.1-20240712` | 出流 | 出流 | 出流 | — |
+| `3.0.1-20240722` | 出流 | 出流 | 出流 | — |
+| `3.0.2-20240801` | 出流 | 出流 | 出流 | — |
+| `3.1.2-20240828` | 出流 | 出流 | 出流 | — |
+| `3.1.4-20240904` | 出流 | 出流 | 出流 | — |
+| `3.1.5-20240911` | 出流 | 出流 | 出流 | — |
+| `3.2.0-20241009` | 出流 | 出流 | 出流 | — |
+| `3.2.1-20241105` | 出流 | 出流 | 出流 | — |
+| `3.3.0-20241114` | 出流 | 出流 | 出流 | — |
+| `3.3.2-20241210` | 出流 | 出流 | 出流 | — |
+| `3.4.0-20250120` | 出流 | 出流 | 出流 | — |
+| `3.4.1-20250227` | 出流 | 出流 | 出流 | — |
+| `3.4.2-20250319` | 出流 | 出流 | 出流 | — |
+| `3.4.2-20250402` | 出流 | 出流 | 出流 | — |
+| `3.5.0-20250407` | 出流 | 出流 | 出流 | — |
+| `3.5.2-20250521` | 出流 | 出流 | 出流 | — |
+| `3.5.3-20250528` | 出流 | 出流 | 出流 | — |
+| `3.6.0-20250612` | 出流 | 出流 | 出流 | — |
+| `3.6.2-20250815` | 出流 | 出流 | 出流 | — |
+| `3.7.2-20250923` | 出流 | 出流 | 出流 | — |
+| `3.8.0-20251113` | 出流 | 出流 | 出流 | — |
+| `3.8.2-20260117` | CarWith 崩溃 | 出流 | 出流 | — |
+| `3.8.3-20260203` | 出流 | 出流 | 出流 | — |
+| `3.8.4-20260302` | 出流 | 出流 | 出流 | — |
+| `3.8.4-20260313` | 出流 | 出流 | 出流 | — |
+| `3.8.4-20260320` | 出流 | 出流 | 出流 | — |
+| `4.0.2-20260429` | 出流 | 出流 | 出流 | — |
+| `4.0.2-20260515` | 出流 | 出流 | 出流 | — |
+| `4.0.2-20260528` | 出流 | 出流 | 出流 | — |
+| `4.0.4-20260522` | 出流 | 出流 | 出流 | — |
+| `4.0.6-20260603` | 出流 | 出流 | 出流 | — |
+| `4.0.9-20260629` | 出流 | 出流 | 出流 | — |
+| `4.0.12-20260707` | 出流 | 出流 | 出流 | — |
+| `4.0.14-20260801` | 出流 | 出流 | 出流 | — |
+| `4.0.16-20260907` | 出流 | 出流 | 出流 | 出流 |
+| `4.0.20-20260929` | 出流 | 出流 | 出流 | 出流 |
+| `4.0.20-20261009` | OS3 门禁 | OS3 门禁 | 出流 | OS3 门禁 |
+| `4.0.21-20260929` | 出流 | 出流 | 出流 | 出流 |
+| `4.0.23-20261016` | 出流 | 出流 | 出流 | 出流 |
+
+汇总：OS1 为 37/50 出流，OS2 为 38/50，OS3 为 39/50；OS4 的指定 5 个测试点为 4/5。三个系统都复现了
+`2.3.0` 及更早 11 个构建的编码器 0 帧，说明该边界跨越 Android 13–16，且此前的 CarLife 编码器诊断不是 OS1
+混合镜像的一次性现象。`3.8.2-20260117` 只在 OS1 崩溃；OS2/OS3 同 APK 持续出流，因此不是 mcarplay 的解密或
+视频解析问题。OS2 / OS3 的 3.x、4.x 全部出流（OS2/OS4 的 OS3-only 构建除外）。
+
+### OS4 系统初始版本起点
+
+早期 OS4 的 4 条 `listener_timeout` 是在 mcarplay 首次免责声明尚未接受时产生，不能作为 CarWith 兼容结果。
+本轮在 1120×2436 模拟屏上将声明滑至底部并接受，确认主界面
+`com.mcarplay.app/.MainActivity` 正常前台后重建测试目录并重跑。有效结果为：
+
+| CarWith 构建 | frames | key | bytes | span |
+| --- | ---: | ---: | ---: | ---: |
+| `4.0.16-20260907` | 276 | 10 | 4,910,918 | 22 s |
+| `4.0.20-20260929` | 336 | 9 | 4,802,876 | 22 s |
+| `4.0.20-20261009` | 0 | 0 | 0 | 0 s |
+| `4.0.21-20260929` | 338 | 9 | 4,943,798 | 22 s |
+| `4.0.23-20261016` | 334 | 9 | 4,902,309 | 22 s |
+
+四个成功项的 `entry_result` 均为 `REQUESTED`，`all_channels/rsa/aes_ready/admitted` 均为 true，
+`video_init` 均为 `1280x720@30`。没有 `4.0.20-20261029` 这个测试项；本轮测试的是公开取得的
+`4.0.20-20260929` 与 `4.0.20-20261009`。
+
+### `4.0.20-20261009` 是 OS3-only 构建
+
+该 APK 在 OS1、OS2、OS4 均表现为入口请求成功但 CarWith 进程立即退出；OS3 / SDK 36 同一 APK 正常出流。
+reproducible 两次且 installed `base.apk` SHA-256 与测试 APK 一致，排除了安装未更新。
+
+反编译该 APK 的 `com.carwith.launcher.UCarApplication` 可见：
+
+```java
+public static boolean v() {
+    return Build.VERSION.SDK_INT == 36;
+}
+
+// onCreate()
+if (s(2026, 10, 24)) {
+    System.exit(0);
+    return;
+}
+```
+
+`s(...)` 在 `v()` 为 false 时显示“该CarWith测试版本只能用于OS3”并返回 true，随后进程主动 `System.exit(0)`。
+OS4 logcat 中对应进程在 `onCreate CarlifeAdbActivity` 之前以 status 0 退出，故 7240 始终
+`ECONNREFUSED`。这是 CarWith 自身设置的平台门禁。mcarplay 的协议与入口代码即使继续等待也无法解除；直接启动
+CarWith 内部服务仍会先执行同一个 `Application.onCreate`。把它当普通 OS4 CarWith 更新测试会得到假失败。
+
+### 边界与复现
+
+- 50 个构建是当前公开取得的集合，不代表小米发布过的全部内部版本。
+- OS1–OS3 使用 ranchu vendor/kernel 并与 Xiaomi system 混合，且 permissive；OS4 虽为 enforcing，仍是 AVD
+  vendor/kernel。结果证明相应软件栈可建立源端媒体链路，不证明实体 Qualcomm vendor、真实车机、接收端解码、声音或触控。
+- 2.x 旧版没有当前公开入口时，矩阵用 root 启动内部服务后由 mcarplay `ATTACH_EXISTING` 连接；这是受控探针，
+  不等价于无 root 的正常用户流程。
+- 测试脚本把隔离 AVD 时钟临时调到各内测构建有效期内，并在结束后恢复；这不改变构建在当前真实日期已到期的行为。
+- 复现入口为仓库外的 `run_carwith_matrix.py`。有效结果目录分别为：
+  `os1-thyme-a13/carwith-matrix/v-final`、`os2-fuxi-a15/carwith-matrix/v-final`、
+  `instances/HyperOS_3/carwith-matrix/v-final`、`instances/HyperOS_4/carwith-matrix/system-base-v3`。
+  OS4 的 `system-base-v1` 含未接受免责声明造成的无效失败，不作为兼容证据；`system-base-v2` 是较旧 mcarplay 构建，
+  已由 `system-base-v3` 的当前构建复测取代。
+
+## 入口兼容代码整理（2026-11-04）
+
+正式会话与独立自检统一使用 `COMPATIBLE`：先连接现有七口，第一次连接失败后请求公开入口；入口缺失或不可调用时，
+先确认 `su` 或已授权的 Shizuku 进程 UID 为 0，再启动原厂 `CarlinkService`，否则打开已导出的 CarWith 设置页，
+提示用户选择百度 CarLife 无线连接。普通 UID 2000 不会被当作 root；命令返回失败仍报告失败；用户停止后不再发起后续入口。
+入口过程在源连接线程中执行，不在 UI/媒体线程等待进程。不打开仅启动监听而不创建 CarWith 虚拟屏的百度 CarLife 首页。
+
+这些变更补齐旧版没有 `CarlifeAdbActivity` 的启动路径，不改变认证、AES、视频解析、第三方 APK、系统权限或内测截止日期。
+上述矩阵来自已记录的 AVD 和 APK 构建；本次整理还修正了 UID 检查与取消行为，最终提交构建尚未重新跑完整 AVD 矩阵或实体手机。
+回归覆盖已有七口不重启入口、首次连接失败后的重试、取消、入口层级选择、非 root 拒绝和 root/Shizuku 服务结果。
