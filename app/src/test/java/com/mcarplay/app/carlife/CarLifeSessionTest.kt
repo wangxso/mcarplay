@@ -131,6 +131,57 @@ class CarLifeSessionTest {
     }
 
     @Test
+    fun attachedSessionWithoutVideoRequestsTheEntryOnce() {
+        var requests = 0
+        val session =
+            CarLifeSession(
+                Application(),
+                onAccessUnit = {},
+                onEnded = {},
+                log = {},
+                requestPublicEntry = {
+                    requests++
+                    CarLifeLauncher.EntryLaunchResult.REQUESTED
+                },
+                requestLegacyEntry = { error("public entry succeeded") },
+                requestSettingsEntry = { error("public entry succeeded") },
+                attachedFirstFrameWaitMs = 10,
+            )
+        (field("running").get(session) as AtomicBoolean).set(true)
+        repeat(2) {
+            startAttachWatch(session).join(2_000)
+        }
+        assertEquals(1, requests)
+        assertEquals(CarLifeSession.EntryRoute.CARWITH_ENTRY, field("entryRoute").get(session))
+    }
+
+    @Test
+    fun stoppedAttachedSessionNeverRequestsTheEntry() {
+        val session =
+            CarLifeSession(
+                Application(),
+                onAccessUnit = {},
+                onEnded = {},
+                log = {},
+                requestPublicEntry = { error("must not launch after stop") },
+                attachedFirstFrameWaitMs = 60_000,
+            )
+        (field("running").get(session) as AtomicBoolean).set(true)
+        val watch = startAttachWatch(session)
+        session.stop()
+        watch.join(2_000)
+        assertFalse(watch.isAlive)
+    }
+
+    private fun startAttachWatch(session: CarLifeSession): Thread {
+        CarLifeSession::class.java
+            .getDeclaredMethod("startAttachedFirstFrameWatch")
+            .apply { isAccessible = true }
+            .invoke(session)
+        return field("attachWatchThread").get(session) as Thread
+    }
+
+    @Test
     fun defaultLaunchStrategyAttachesBeforeRequestingAnEntry() {
         val session = CarLifeSession(Application(), onAccessUnit = {}, onEnded = {}, log = {})
         assertEquals(CarLifeLaunchStrategy.COMPATIBLE, field("launchStrategy").get(session))

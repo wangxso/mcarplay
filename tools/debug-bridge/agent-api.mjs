@@ -289,6 +289,24 @@ export function createAgentApi({ logsDir, token, listDevices = () => [], allowed
     }
   }
 
+  /** Resolves true on 'drain', false once the response closes or errors, so a cancelled download never waits forever. */
+  function drained(res) {
+    if (res.destroyed) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const finish = (ok) => () => {
+        res.off('drain', onDrain);
+        res.off('close', onClose);
+        res.off('error', onClose);
+        resolve(ok);
+      };
+      const onDrain = finish(true);
+      const onClose = finish(false);
+      res.once('drain', onDrain);
+      res.once('close', onClose);
+      res.once('error', onClose);
+    });
+  }
+
   /** One redactor over the whole file, so <NAME-n> aliases stay consistent across the export. */
   async function exportLog(options, res) {
     const id = deviceId(options.deviceId);
@@ -331,7 +349,7 @@ export function createAgentApi({ logsDir, token, listDevices = () => [], allowed
         const text = redact(row.text);
         if (contains && !text.toLowerCase().includes(contains)) continue;
         const out = format === 'txt' ? `${text}\n` : `${JSON.stringify({ seq: row.seq, text })}\n`;
-        if (!res.write(out)) await new Promise((resolve) => res.once('drain', resolve));
+        if (!res.write(out) && !(await drained(res))) return; // Client went away: finally still frees the read slot.
       }
       res.end();
     } catch (e) {

@@ -37,6 +37,7 @@ class CarLifeSession(
     private val requestPublicEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestPublicEntry(application) },
     private val requestLegacyEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestLegacyCarWithService(application) },
     private val requestSettingsEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestCarWithSettings(application) },
+    private val attachedFirstFrameWaitMs: Long = ATTACHED_FIRST_FRAME_WAIT_MS,
 ) {
     private val appContext: Application = application
     internal val lease = CarLifeSessionLease()
@@ -82,6 +83,7 @@ class CarLifeSession(
     private var endedAtMs: Long? = null
     private var sourceThread: Thread? = null
     private var heartbeatThread: Thread? = null
+    private var attachWatchThread: Thread? = null
 
     @Volatile
     private var connector: CarLifeChannelConnector? = null
@@ -214,6 +216,8 @@ class CarLifeSession(
         sourceThread = null
         heartbeatThread?.interrupt()
         heartbeatThread = null
+        attachWatchThread?.interrupt()
+        attachWatchThread = null
         stateMachine.close()
         ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG event=STOP ${diagnosticSummary()}")
         log("CARLIFE: 七路连接已关闭")
@@ -241,6 +245,7 @@ class CarLifeSession(
                     "CARLIFE-DIAG run=$sourceRun event=ENTRY result=$entryResult route=$entryRoute",
                 )
                 log("CARLIFE: 已附着现有 CarWith 七口会话，无需再打开入口")
+                if (launchStrategy == CarLifeLaunchStrategy.COMPATIBLE) startAttachedFirstFrameWatch()
             }
             ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG run=$sourceRun event=LISTENERS_CONNECTED ${activeConnector.diagnosticSummary()}")
             log("CARLIFE: 七路连接完成，开始协议握手")
@@ -326,6 +331,27 @@ class CarLifeSession(
         if (entryLaunchedInBackground && plan.route != EntryRoute.LEGACY_ROOT_SERVICE) {
             log("CARLIFE: 本应用当前不在前台，系统可能拦截 CarWith 入口（小米需允许「后台弹出界面」）")
         }
+    }
+
+    /**
+     * 七口就绪不代表 CarWith 已建虚拟屏和编码器（例如只开了百度 CarLife 首页，见
+     * [CarLifeLauncher.requestCarWithSettings]）。附着后限时内没有视频帧，就按兼容顺序补请求一次入口。
+     */
+    private fun startAttachedFirstFrameWatch() {
+        attachWatchThread =
+            thread(name = "carlife-attach-watch", isDaemon = true) {
+                try {
+                    Thread.sleep(attachedFirstFrameWaitMs)
+                } catch (_: InterruptedException) {
+                    return@thread
+                }
+                if (!running.get() || stats.snapshot().frames > 0) return@thread
+                ConnectionDiagnostics.runtimeLog(
+                    "CARLIFE-DIAG run=$sourceRun event=ATTACHED_NO_VIDEO waitMs=$attachedFirstFrameWaitMs",
+                )
+                log("CARLIFE: 已附着七口但 ${attachedFirstFrameWaitMs / 1000} s 内无视频帧，CarWith 投射可能未就绪，补请求入口")
+                requestCompatibleEntry()
+            }
     }
 
     private fun readCommandLoop(activeConnector: CarLifeChannelConnector) {
@@ -683,6 +709,9 @@ class CarLifeSession(
 
         const val CONNECT_TIMEOUT_MS = 800
         const val LISTENER_WAIT_MS = 25_000L
+
+        /** 附着已有七口后等待首个视频帧的时长；超时才补请求入口。 */
+        const val ATTACHED_FIRST_FRAME_WAIT_MS = 8_000L
         const val VIDEO_HEARTBEAT_INTERVAL_MS = 1_000L
     }
 }

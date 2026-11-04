@@ -30,6 +30,8 @@ const el = {
 const state = {
   token: '', devices: [], rows: [], nextCursor: null, pages: 0, file: null, generation: null,
   level: 'all', tag: null, selected: null, loads: 0, followTimer: null, unseen: 0, updatedAt: null,
+  // Bumped by every load that replaces the view; a response from an older generation is dropped.
+  view: 0,
 };
 
 class HttpError extends Error {
@@ -344,9 +346,12 @@ async function loadLatest() {
   const q = query();
   const keepSeq = state.selected?.seq;
   const stick = state.pages === 0 || atBottom();
+  const view = ++state.view;
+  state.nextCursor = null; // An older page must not use the previous selection's cursor meanwhile.
   setLoading(1);
   try {
     const page = await getJson('/api/v1/logs', q);
+    if (view !== state.view) return;
     const { fragment, rows } = renderBatch(page.lines, q.contains);
     state.rows = rows;
     state.selected = null;
@@ -372,7 +377,7 @@ async function loadLatest() {
     updateJump();
     setStatus(page.lines.length ? `显示最近 ${realRows().length} 行（已脱敏）${state.nextCursor ? '，向上可加载更早' : ''}` : '没有日志');
   } catch (e) {
-    setStatus(`读取失败：${e.message}`, true);
+    if (view === state.view) setStatus(`读取失败：${e.message}`, true);
   } finally {
     setLoading(-1);
   }
@@ -382,8 +387,10 @@ async function loadLatest() {
 async function appendLatest() {
   if (!state.rows.length) return loadLatest();
   const q = query();
+  const view = state.view;
   try {
     const page = await getJson('/api/v1/logs', { ...q, limit: FOLLOW_LIMIT });
+    if (view !== state.view) return;
     if (page.file !== state.file || page.generation !== state.generation) return loadLatest();
     const lastSeq = state.rows.at(-1).seq;
     const fresh = page.lines.filter((l) => l.seq > lastSeq);
@@ -401,17 +408,19 @@ async function appendLatest() {
     updateCounts();
     updateJump();
   } catch (e) {
-    setStatus(`跟随失败：${e.message}`, true);
+    if (view === state.view) setStatus(`跟随失败：${e.message}`, true);
   }
 }
 
 async function loadOlder() {
   if (!state.nextCursor || el.older.disabled) return;
   el.older.disabled = true;
+  const view = state.view;
   setLoading(1);
   try {
     const q = query();
     const page = await getJson('/api/v1/logs', { deviceId: q.deviceId, limit: q.limit, contains: q.contains, cursor: state.nextCursor });
+    if (view !== state.view) return;
     const { fragment, rows } = renderBatch(page.lines, q.contains);
     fragment.append(separator('page', '以上为更早一页 · <NAME-n> 等别名只在同一页内一致'));
     const before = el.viewport.scrollHeight;
@@ -425,6 +434,7 @@ async function loadOlder() {
     updateCounts();
     setStatus(`已加载 ${state.pages} 页${state.nextCursor ? '' : '，已到文件开头'}`);
   } catch (e) {
+    if (view !== state.view) return;
     if (e.status === 409) {
       setStatus('日志已轮转，已重新读取最新内容', true);
       await loadFiles();
@@ -440,9 +450,12 @@ async function loadOlder() {
 async function loadFiles() {
   const deviceId = el.device.value;
   if (!deviceId) return;
+  const view = ++state.view;
+  state.nextCursor = null;
   setLoading(1);
   try {
     const { files } = await getJson('/api/v1/files', { deviceId });
+    if (view !== state.view) return;
     el.file.replaceChildren(...files.map((f) => option(f.file,
       `${f.file === `${deviceId}.jsonl` ? '当前文件' : new Date(f.modifiedAt).toLocaleString()} · ${formatBytes(f.bytes)}`)));
     const current = files.find((f) => f.file === `${deviceId}.jsonl`);
@@ -458,7 +471,7 @@ async function loadFiles() {
     }
     await loadLatest();
   } catch (e) {
-    setStatus(`读取文件列表失败：${e.message}`, true);
+    if (view === state.view) setStatus(`读取文件列表失败：${e.message}`, true);
   } finally {
     setLoading(-1);
   }

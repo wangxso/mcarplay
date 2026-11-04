@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
@@ -165,4 +166,19 @@ test('exports a whole file with one redactor, so aliases match across every line
   for (const query of ['deviceId=export&format=html', 'deviceId=export&file=../.env', 'deviceId=../export']) {
     assert.ok([400, 404].includes((await request(`/api/v1/export?${query}`)).status), query);
   }
+});
+
+test('a download cancelled while waiting for drain still frees its read slot', async () => {
+  await fs.writeFile(path.join(root, 'cancel.jsonl'), Array.from({ length: 50 }, (_, i) => JSON.stringify({ seq: i + 1, text: `line ${i}` }) + '\n').join(''));
+  class ClosingResponse extends EventEmitter {
+    destroyed = false;
+    writeHead() { return this; }
+    write() {
+      setImmediate(() => { this.destroyed = true; this.emit('close'); });
+      return false;
+    }
+    end() {}
+  }
+  for (let i = 0; i < 5; i++) await api.exportLog({ deviceId: 'cancel' }, new ClosingResponse());
+  assert.equal((await request('/api/v1/logs?deviceId=cancel&limit=5')).status, 200);
 });
