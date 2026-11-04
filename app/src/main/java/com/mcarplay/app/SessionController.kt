@@ -3158,6 +3158,8 @@ object SessionController {
                                                 nativeAudioBridge = null
                                                 // 会话真实结束：解除静默降噪（客户端恢复探测/重连）
                                                 appendLog(">>> CarPlay 会话结束（推流终止）——恢复蓝牙探测")
+                                                // 只给一个短暂宽限：车机 ACL 已断（熄火）时到点即停，不整夜探测
+                                                bluetoothClient?.armAfterSessionEnd()
                                                 BtSessionGate.sessionActive = false
                                                 // 车机掉线类结束（无用户断开操作）：暗幕/常亮必须一起收掉。
                                                 // 这条路径不经过 retireSession（VirtualLauncher 仍挂着），
