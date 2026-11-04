@@ -6,6 +6,10 @@ const PREFS_KEY = 'mcarplay.logViewer.prefs';
 const FOLLOW_MS = 5000;
 const FOLLOW_LIMIT = 200;
 const GAP_SECONDS = 120;
+// The bridge scans at most this much of a file per request (MAX_BYTES in agent-api.mjs). A filtered window can be
+// empty while older text still matches, so one action follows the cursor through at most SCAN_WINDOWS windows.
+const WINDOW_MIB = 2;
+const SCAN_WINDOWS = 16;
 const ERROR = /error|exception|fatal|fail|crash|失败|错误|异常|崩溃/i;
 const WARN = /warn|timeout|retry|超时|重试|警告/i;
 const STAMP = /^\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?\]\s?/;
@@ -35,6 +39,11 @@ const state = {
   // The file list has its own generation: a log refresh must not make a device's pending list look stale.
   // filesFor is the device whose files fill the file selector; filesPending is the device being listed.
   filesView: 0, filesFor: null, filesPending: null,
+  // Windows scanned since the latest load, for the "no match yet" message.
+  scanned: 0,
+  // Every request of this connection uses this signal; disconnect() aborts it and starts a new one.
+  abort: new AbortController(),
+  filterTimer: null,
 };
 
 class HttpError extends Error {
@@ -140,7 +149,7 @@ async function copyText(text) {
 async function request(route, params = {}) {
   const url = new URL(route, window.location.origin);
   for (const [key, value] of Object.entries(params)) if (value !== '' && value != null) url.searchParams.set(key, value);
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${state.token}` }, cache: 'no-store' });
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${state.token}` }, cache: 'no-store', signal: state.abort.signal });
   if (response.status === 401) {
     disconnect('令牌无效或已过期，请重新连接');
     throw new HttpError(401, '令牌无效或已过期');
@@ -283,12 +292,30 @@ function updateCounts() {
   el.stats.textContent = parts.join(' · ');
 }
 
-function showEmpty(title, text) {
+function showEmpty(title, text, { older = false } = {}) {
   el.empty.hidden = false;
   el.emptyTitle.textContent = title;
   el.emptyText.textContent = text;
   el.lines.hidden = true;
-  el.older.hidden = true;
+  el.older.hidden = !older;
+}
+
+/** No rows yet: final only once the cursor reaches the file start; until then older windows can still match. */
+function showNoMatch(term) {
+  if (state.nextCursor) {
+    showEmpty(term ? '最近的日志里没有匹配' : '最近的日志里没有可读记录',
+      `已向前扫描约 ${state.scanned * WINDOW_MIB} MiB${term ? `，仍没有包含「${term}」的行` : ''}。点「加载更早的日志」继续向前搜索。`,
+      { older: true });
+  } else if (term) {
+    showEmpty('没有匹配的日志', `当前文件里没有包含「${term}」的行。`);
+  } else {
+    showEmpty('这个文件还是空的', '手机上报新日志后，刷新或打开跟随即可看到。');
+  }
+}
+
+/** True for a request that disconnect() aborted; its caller stays silent. */
+function cancelled(error) {
+  return error?.name === 'AbortError';
 }
 
 /* ---------- Scrolling, selection & navigation ---------- */
@@ -344,6 +371,18 @@ function jumpIssue(step) {
 }
 
 /* ---------- Loading ---------- */
+/** Reads a page; while it holds no rows but a cursor remains, keeps reading older windows, at most SCAN_WINDOWS in all. */
+async function readMatches(params, view) {
+  let page = await getJson('/api/v1/logs', params);
+  let windows = 1;
+  while (!page.lines.length && page.nextCursor && windows < SCAN_WINDOWS && view === state.view) {
+    setStatus(`约 ${windows * WINDOW_MIB} MiB 内没有匹配，继续向前搜索…`);
+    page = await getJson('/api/v1/logs', { deviceId: params.deviceId, limit: params.limit, contains: params.contains, cursor: page.nextCursor });
+    windows++;
+  }
+  return { page, windows };
+}
+
 /** True once the file selector holds the current device's files; otherwise starts listing them unless already in flight. */
 function filesReady() {
   if (state.filesFor === el.device.value) return true;
@@ -360,7 +399,7 @@ async function loadLatest() {
   state.nextCursor = null; // An older page must not use the previous selection's cursor meanwhile.
   setLoading(1);
   try {
-    const page = await getJson('/api/v1/logs', q);
+    const { page, windows } = await readMatches(q, view);
     if (view !== state.view) return;
     const { fragment, rows } = renderBatch(page.lines, q.contains);
     state.rows = rows;
@@ -369,11 +408,12 @@ async function loadLatest() {
     state.generation = page.generation;
     state.nextCursor = page.nextCursor;
     state.pages = 1;
+    state.scanned = windows;
     state.unseen = 0;
     state.updatedAt = new Date();
     el.lines.replaceChildren(fragment);
     if (!page.lines.length) {
-      showEmpty(q.contains ? '没有匹配的日志' : '这个文件还是空的', q.contains ? `当前文件里没有包含「${q.contains}」的行。` : '手机上报新日志后，刷新或打开跟随即可看到。');
+      showNoMatch(q.contains);
     } else {
       el.empty.hidden = true;
       el.lines.hidden = false;
@@ -385,7 +425,10 @@ async function loadLatest() {
     if (keep) select(keep);
     if (stick) scrollToBottom();
     updateJump();
-    setStatus(page.lines.length ? `显示最近 ${realRows().length} 行（已脱敏）${state.nextCursor ? '，向上可加载更早' : ''}` : '没有日志');
+    const scannedBack = windows > 1 ? `，向前扫描了约 ${windows * WINDOW_MIB} MiB` : '';
+    if (page.lines.length) setStatus(`显示最近 ${realRows().length} 行（已脱敏）${scannedBack}${state.nextCursor ? '，向上可加载更早' : ''}`);
+    else if (state.nextCursor) setStatus(`约 ${windows * WINDOW_MIB} MiB 内没有匹配，可继续向前搜索`);
+    else setStatus(q.contains ? '整个文件都没有匹配' : '没有日志');
   } catch (e) {
     if (view === state.view) setStatus(`读取失败：${e.message}`, true);
   } finally {
@@ -396,13 +439,18 @@ async function loadLatest() {
 /** Follow mode: append only records newer than the last one shown, keeping scroll position and selection. */
 async function appendLatest() {
   if (!filesReady()) return;
-  if (!state.rows.length) return loadLatest();
+  if (!state.pages) return loadLatest();
   const q = query();
   const view = state.view;
   try {
     const page = await getJson('/api/v1/logs', { ...q, limit: FOLLOW_LIMIT });
     if (view !== state.view) return;
     if (page.file !== state.file || page.generation !== state.generation) return loadLatest();
+    if (!state.rows.length) {
+      // Nothing matched yet, perhaps after a long backward search: repeat that search only once the newest window matches.
+      state.updatedAt = new Date();
+      return page.lines.length ? loadLatest() : undefined;
+    }
     const lastSeq = state.rows.at(-1).seq;
     const fresh = page.lines.filter((l) => l.seq > lastSeq);
     if (fresh.length && fresh.length === page.lines.length && page.nextCursor) return loadLatest(); // More arrived than one poll covers.
@@ -430,19 +478,35 @@ async function loadOlder() {
   setLoading(1);
   try {
     const q = query();
-    const page = await getJson('/api/v1/logs', { deviceId: q.deviceId, limit: q.limit, contains: q.contains, cursor: state.nextCursor });
+    const { page, windows } = await readMatches({ deviceId: q.deviceId, limit: q.limit, contains: q.contains, cursor: state.nextCursor }, view);
     if (view !== state.view) return;
-    const { fragment, rows } = renderBatch(page.lines, q.contains);
-    fragment.append(separator('page', '以上为更早一页 · <NAME-n> 等别名只在同一页内一致'));
-    const before = el.viewport.scrollHeight;
-    el.lines.prepend(fragment);
-    el.viewport.scrollTop += el.viewport.scrollHeight - before;
-    state.rows = rows.concat(state.rows);
     state.nextCursor = page.nextCursor;
+    state.scanned += windows;
+    if (!page.lines.length) {
+      if (!state.rows.length) showNoMatch(q.contains);
+      el.older.hidden = !state.nextCursor;
+      setStatus(state.nextCursor ? `更早的约 ${windows * WINDOW_MIB} MiB 里也没有匹配，可继续向前搜索` : '已到文件开头，没有更早的匹配');
+      return;
+    }
+    const { fragment, rows } = renderBatch(page.lines, q.contains);
+    if (state.rows.length) {
+      fragment.append(separator('page', '以上为更早一页 · <NAME-n> 等别名只在同一页内一致'));
+      const before = el.viewport.scrollHeight;
+      el.lines.prepend(fragment);
+      el.viewport.scrollTop += el.viewport.scrollHeight - before;
+    } else {
+      // The first rows found after an empty window: show the list in place of the "no match yet" message.
+      el.lines.prepend(fragment);
+      el.empty.hidden = true;
+      el.lines.hidden = false;
+      scrollToBottom();
+    }
+    state.rows = rows.concat(state.rows);
     state.pages++;
     el.older.hidden = !state.nextCursor;
     applyFilters();
     updateCounts();
+    updateJump();
     setStatus(`已加载 ${state.pages} 页${state.nextCursor ? '' : '，已到文件开头'}`);
   } catch (e) {
     if (view !== state.view) return;
@@ -501,11 +565,14 @@ function updatePill() {
   el.pillText.textContent = [device.online ? '在线' : '离线', device.model || device.deviceId, device.appVersion].filter(Boolean).join(' · ');
 }
 
+/** Resolves false when disconnect() cancelled this connection meanwhile. */
 async function connect() {
+  const { signal } = state.abort;
   setStatus('正在连接…');
   setLoading(1);
   try {
     const { devices } = await getJson('/api/v1/devices');
+    if (signal.aborted) return false;
     devices.sort((a, b) => Number(b.online) - Number(a.online) || a.deviceId.localeCompare(b.deviceId));
     state.devices = devices;
     const previous = el.device.value;
@@ -522,19 +589,32 @@ async function connect() {
     if (!devices.length) {
       showEmpty('还没有设备', '已连接调试桥，但还没有手机上报日志。');
       setStatus('已连接，暂无设备');
-      return;
+      return true;
     }
     await loadFiles();
+    return !signal.aborted;
   } finally {
     setLoading(-1);
   }
 }
 
 function disconnect(message = '已断开') {
+  // Cancel this connection's requests and retire every generation, so no late response repaints the page.
+  state.abort.abort();
+  state.abort = new AbortController();
+  state.view++;
+  state.filesView++;
+  clearTimeout(state.filterTimer);
   state.token = '';
   state.rows = [];
   state.devices = [];
   state.filesFor = null;
+  state.filesPending = null;
+  state.nextCursor = null;
+  state.pages = 0;
+  state.file = null;
+  state.generation = null;
+  state.selected = null;
   session((s) => s.removeItem(TOKEN_KEY));
   setFollow(false);
   el.toolbar.hidden = true;
@@ -562,6 +642,7 @@ async function exportFile(format) {
   if (!filesReady()) return setStatus('文件列表尚未就绪，请稍候再导出');
   const q = query();
   if (!q.deviceId || !q.file) return;
+  const { signal } = state.abort;
   const buttons = [el.exportTxt, el.exportJsonl];
   buttons.forEach((b) => { b.disabled = true; });
   setStatus('正在导出整个文件…');
@@ -569,6 +650,7 @@ async function exportFile(format) {
   try {
     const response = await request('/api/v1/export', { deviceId: q.deviceId, file: q.file, contains: q.contains, format });
     const blob = await response.blob();
+    if (signal.aborted) return;
     const match = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '');
     const link = make('a');
     link.href = URL.createObjectURL(blob);
@@ -581,7 +663,7 @@ async function exportFile(format) {
     setStatus(`已导出 ${link.download}（${formatBytes(blob.size)}）${paged ? '。桥接端尚无整文件导出，本文件按页拼接，<NAME-n> 等别名跨页可能不一致' : ''}`);
     toast('导出完成');
   } catch (e) {
-    setStatus(`导出失败：${e.message}`, true);
+    if (!signal.aborted) setStatus(`导出失败：${e.message}`, true);
   } finally {
     buttons.forEach((b) => { b.disabled = false; });
     setLoading(-1);
@@ -629,8 +711,8 @@ el.auth.addEventListener('submit', (event) => {
   if (!value) return;
   state.token = value;
   connect().then(
-    () => session((s) => s.setItem(TOKEN_KEY, state.token)),
-    (e) => setStatus(`连接失败：${e.message}`, true),
+    (connected) => connected && session((s) => s.setItem(TOKEN_KEY, state.token)),
+    (e) => cancelled(e) || setStatus(`连接失败：${e.message}`, true),
   );
 });
 el.logout.addEventListener('click', () => disconnect());
@@ -690,10 +772,9 @@ el.lines.addEventListener('click', (event) => {
   select(state.selected === li.row ? null : li.row);
 });
 
-let filterTimer = null;
 el.contains.addEventListener('input', () => {
-  clearTimeout(filterTimer);
-  filterTimer = setTimeout(() => void loadLatest(), 400);
+  clearTimeout(state.filterTimer);
+  state.filterTimer = setTimeout(() => void loadLatest(), 400);
 });
 
 document.addEventListener('keydown', (event) => {
@@ -740,5 +821,5 @@ applyPrefs();
 const saved = session((s) => s.getItem(TOKEN_KEY));
 if (saved) {
   state.token = saved;
-  connect().catch((e) => setStatus(`连接失败：${e.message}`, true));
+  connect().catch((e) => cancelled(e) || setStatus(`连接失败：${e.message}`, true));
 }
