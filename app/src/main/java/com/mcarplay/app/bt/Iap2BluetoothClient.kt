@@ -262,6 +262,16 @@ class Iap2BluetoothClient(
         return online
     }
 
+    /** 包住一次本应用发起的蓝牙链路操作（见 [OutboundProbePolicy.beginSelfLinkChange]）。 */
+    private inline fun <T> selfLinkChange(block: () -> T): T {
+        probePolicy.beginSelfLinkChange(SystemClock.elapsedRealtime())
+        try {
+            return block()
+        } finally {
+            probePolicy.endSelfLinkChange(SystemClock.elapsedRealtime())
+        }
+    }
+
     /** 「蓝牙已连接→已断开」日志节流时间戳。 */
     private var lastProfileLogAt = 0L
 
@@ -386,9 +396,7 @@ class Iap2BluetoothClient(
                 ) {
                     val trialEpoch = ReceiverDetectionRuntime.profileTrialStarting(device.address)
                     // 主动断 HFP/A2DP 可能连带 ACL 断开：标记为自己引起，不能据此停止重试
-                    probePolicy.noteSelfLinkChange(SystemClock.elapsedRealtime())
-                    val result = BtProfiles.disconnectChecked(context, device)
-                    probePolicy.noteSelfLinkChange(SystemClock.elapsedRealtime())
+                    val result = selfLinkChange { BtProfiles.disconnectChecked(context, device) }
                     ReceiverDetectionRuntime.profileTrialCompleted(
                         trialEpoch,
                         result.known,
@@ -406,10 +414,8 @@ class Iap2BluetoothClient(
                         }
                     }
                 }
-                // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起
-                probePolicy.noteSelfLinkChange(SystemClock.elapsedRealtime())
-                val socket = tryConnect(device)
-                probePolicy.noteSelfLinkChange(SystemClock.elapsedRealtime())
+                // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起（connect() 可阻塞数十秒）
+                val socket = selfLinkChange { tryConnect(device) }
                 if (socket != null) {
                     log("BT-C: ✓ 已连入 $name 的无线 iAP2 服务（RFCOMM 建立）")
                     connected = socket

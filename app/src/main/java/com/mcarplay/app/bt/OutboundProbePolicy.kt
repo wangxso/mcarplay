@@ -44,7 +44,7 @@ object BtAclTracker {
  * - 该设备 ACL 已连上（车机在线）；
  * - 刚刚 [arm] 过（用户点连接 / ACL 自动拉起 / 会话结束后的短暂宽限），且在那之后
  *   没有收到该设备的 ACL 断开；ACL 状态未知（本进程没见过广播）时只看窗口。
- *   本应用自己引起的断开（[noteSelfLinkChange]：主动断 HFP/A2DP、出站 RFCOMM 尝试）
+ *   本应用自己引起的断开（[beginSelfLinkChange]/[endSelfLinkChange] 包住的主动断 HFP/A2DP、出站 RFCOMM 尝试）
  *   不算车机离线，窗口照常有效（PR #29 审查：DISCONNECT_PROFILES 后首次 RFCOMM 失败，
  *   后续重试不能被自己触发的 ACL 断开挡掉）。
  * 其余情况暂停，不再发起任何连接（不耗电、不在车机侧刷连接记录）。
@@ -65,6 +65,7 @@ class OutboundProbePolicy {
     private var armedUntil = Long.MIN_VALUE
     private var selfLinkFrom = Long.MIN_VALUE
     private var selfLinkUntil = Long.MIN_VALUE
+    private var selfLinkDepth = 0
 
     /** 打开一个探测窗口（替换此前的窗口）。 */
     @Synchronized
@@ -77,15 +78,23 @@ class OutboundProbePolicy {
     }
 
     /**
-     * 记录「本应用正在/刚刚改动蓝牙链路」（断配置文件前后、每次出站连接前后各调一次）。
-     * 连续操作合并为一段：从第一次记录起，到最后一次记录后 [SELF_LINK_TAIL_MILLIS] 止，
-     * 这段时间内的 ACL 断开视为自己引起。代价：这段时间里车机恰好真的离线，会继续探测到
-     * 窗口结束（最多 [USER_WINDOW_MILLIS]），仍然有界。
+     * 本应用开始改动蓝牙链路（主动断配置文件、出站 RFCOMM 连接），与 [endSelfLinkChange] 成对调用。
+     * 操作进行中（不论阻塞多久）范围一直有效；结束后再延 [SELF_LINK_TAIL_MILLIS] 接住晚到的广播。
+     * 上一段的尾巴内开始的新操作并入同一段，起点不变。这段时间内的 ACL 断开视为自己引起。
+     * 代价：这段时间里车机恰好真的离线，会继续探测到窗口结束（最多 [USER_WINDOW_MILLIS]），仍然有界。
      */
     @Synchronized
-    fun noteSelfLinkChange(nowMillis: Long) {
-        if (nowMillis > selfLinkUntil) selfLinkFrom = nowMillis
-        selfLinkUntil = nowMillis + SELF_LINK_TAIL_MILLIS
+    fun beginSelfLinkChange(nowMillis: Long) {
+        if (selfLinkDepth == 0 && nowMillis > selfLinkUntil) selfLinkFrom = nowMillis
+        selfLinkDepth++
+        selfLinkUntil = Long.MAX_VALUE
+    }
+
+    /** 见 [beginSelfLinkChange]。 */
+    @Synchronized
+    fun endSelfLinkChange(nowMillis: Long) {
+        if (selfLinkDepth > 0) selfLinkDepth--
+        if (selfLinkDepth == 0) selfLinkUntil = nowMillis + SELF_LINK_TAIL_MILLIS
     }
 
     /**
