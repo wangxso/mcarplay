@@ -37,6 +37,11 @@ still-redacted recent runtime history.
   installation secrets and environment/capability digests are excluded. Counts do
   not replace the user's picture, sound or input confirmation. See
   [receiver detection](RECEIVER-AUTODETECT.md).
+- `POWER` notes record screen-off, screen-on, unlock and Doze transitions while
+  streaming: interactive, keyguard locked/secure, Doze and battery-optimization
+  exemption flags only. `STREAM_END_SCREEN_OFF afterScreenOffMs=…` marks a stream
+  that ended while the screen was off. They locate lock-screen exits; they do not
+  change any system state.
 - Uncaught stacks and up to five exit records from this app only; an available
   recent crash/ANR trace is capped at 64KB. Other apps' logcat is not read.
 - Default runtime tail: 512KB; journal: two 128KB segments; runtime storage: two
@@ -55,7 +60,9 @@ Arbitrary free text cannot be guaranteed anonymous: review before sharing.
 python3 tools/analyze_diagnostics.py /path/to/mcarplay-log-...-diagnostics.txt
 ```
 
-The offline tool summarizes the last five retained attempts. Correlate `process`,
+The offline tool summarizes the last five retained attempts. The QQ bot in
+[`tools/logbot/`](../tools/logbot/README.md) builds a user-facing diagnosis on top of it;
+update its `rules.py` when adding a `DiagnosticCode`. Correlate `process`,
 `attempt`, `stage`, `elapsedMs`, `code` and counters with logs and user observations.
 `track` separates CarPlay attempts (`carplay`) from CarWith self-tests (`self_test`);
 the two never supersede each other. Showing a permission dialog is not recorded;

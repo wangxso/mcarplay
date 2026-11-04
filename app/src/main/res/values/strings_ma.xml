@@ -39,6 +39,8 @@
     <string name="ma_enter_manually">手动填写</string>
     <string name="ma_background_title">需要允许「后台弹出界面」</string>
     <string name="ma_background_body">CarPlay 会话建立时 mcarplay 通常已在系统 WLAN 设置之后，此时需要从后台打开 CarWith。小米未授权时系统会静默拒绝，车机将没有画面。\n\n请在权限页把「后台弹出界面」设为允许，返回后重新点「启动连接」。</string>
+    <string name="ma_battery_title">锁屏会断开：请关闭电池优化</string>
+    <string name="ma_battery_body">mcarplay 还没有电池优化豁免。小米实测：锁屏约 9 秒后系统会冻结 mcarplay 并切断它的网络，车机随即退出 CarPlay。\n\n请在打开的页面把「省电策略」设为「无限制」（其他手机选「允许」），返回后重新点「启动连接」。</string>
     <string name="ma_detection_not_started">未开始检测：请确认目标设备与连接状态后重试</string>
     <string name="ma_stop_first">请先停止当前连接或 CarWith 自检</string>
     <string name="ma_retry_not_allowed">当前阶段不能重试蓝牙，请继续等待或重新检测</string>
