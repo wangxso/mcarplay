@@ -40,7 +40,8 @@ class WsClientTest {
                     flush()
                 }
                 accepted.countDown()
-                Thread.sleep(60_000)
+                // 测试结束时被 interrupt 唤醒
+                runCatching { Thread.sleep(60_000) }
                 peer.close()
             }
 

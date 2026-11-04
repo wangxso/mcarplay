@@ -5,12 +5,11 @@ import java.util.ArrayDeque
 /**
  * 环形日志缓冲（断线重连后按 seq 回补给服务端）。
  *
- * 被淘汰的行逐条记进 [ledger] 为「已处理」：只有真实到达过的 seq 才会被淘汰，
- * 所以账本下界不会越过尚未到达 tap 的迟到 seq（见 [LogSeqLedger]）。
+ * 淘汰只影响回补：被淘汰的行可能仍在实时冲刷队列里等着发送，所以淘汰**不**改
+ * 发送账本（见 [LogSeqLedger]）。
  */
 class LogRing(
     private val capacity: Int,
-    private val ledger: LogSeqLedger,
 ) {
     private val lock = Any()
     private val entries = ArrayDeque<Pair<Long, String>>()
@@ -21,7 +20,7 @@ class LogRing(
     ) {
         synchronized(lock) {
             entries.addLast(seq to line)
-            while (entries.size > capacity) ledger.markDropped(entries.removeFirst().first)
+            while (entries.size > capacity) entries.removeFirst()
         }
     }
 

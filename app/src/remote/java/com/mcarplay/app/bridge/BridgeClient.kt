@@ -99,7 +99,7 @@ object BridgeClient {
     private val pendingLock = Any()
     private val pending = ArrayDeque<Pair<Long, String>>()
 
-    /** 本进程日志 seq 账本（回补、实时冲刷、缓冲淘汰共用）。 */
+    /** 本进程已发出日志的 seq 账本（回补与实时冲刷共用）。 */
     private val sentLedger = LogSeqLedger()
 
     /**
@@ -108,9 +108,9 @@ object BridgeClient {
      */
     private val logStream = LogStreamGate<WsClient>(sentLedger, { client, text -> client.sendText(text) })
 
-    /** 环形日志缓冲（断线重连后按 seq 回补）；淘汰的行记进账本。 */
+    /** 环形日志缓冲（断线重连后按 seq 回补）。 */
     private const val RING_CAP = 5_000
-    private val ring = LogRing(RING_CAP, sentLedger)
+    private val ring = LogRing(RING_CAP)
 
     private var tapInstalled = false
 

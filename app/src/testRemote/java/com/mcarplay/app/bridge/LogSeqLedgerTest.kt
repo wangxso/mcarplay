@@ -59,15 +59,15 @@ class LogSeqLedgerTest {
     }
 
     @Test
-    fun droppedSeqsCloseHolesButNeverSkipAnUnarrivedSeq() {
+    fun holesStayOpenUntilTheirSeqIsSent() {
         val ledger = LogSeqLedger()
         ledger.markSent(50)
-        ledger.markDropped(51)
+        ledger.markSent(51)
         assertEquals(2, ledger.sparseCount)
-        // 1..49 尚未到达/处理：下界不能越过它们
+        // 1..49 尚未发出：下界不能越过它们
         assertEquals(0, ledger.floor)
         assertFalse(ledger.isSent(1))
-        (1L..49L).forEach(ledger::markDropped)
+        (1L..49L).forEach(ledger::markSent)
         assertEquals(51, ledger.floor)
         assertEquals(0, ledger.sparseCount)
     }
