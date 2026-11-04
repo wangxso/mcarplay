@@ -31,7 +31,13 @@ Python tools in `tools/`: `carlife_probe.py` (CarLife loopback probe, writes raw
 of a redacted support report), `release_notes.py` (extracts a changelog entry for a tag) and `prepare_upload.py` (source-only
 upload bundle under `dist/`), each with `test_*.py`. `logbot/` is a QQ official-bot webhook service that diagnoses uploaded
 reports with rules (mirroring `DiagnosticCode`) plus an optional OpenAI-compatible AI pass; keep `logbot/rules.py` in sync with
-`diagnostics/` and `docs/DIAGNOSTICS.md`. Documentation:
+`diagnostics/` and `docs/DIAGNOSTICS.md`. `tools/debug-bridge/agent-api.mjs` is the read-only, redacted log API that
+the external remote-debug bridge server mounts; its redactor mirrors `DiagnosticRedactor`, so change both together. The same
+`handle()` serves the static viewer in `tools/debug-bridge/viewer/` at `/log-viewer/` (browse, filter, follow and export via
+`/api/v1/export`, which redacts a whole file with one redactor); deploy that directory beside the module.
+`tools/debug-bridge/local-viewer.mjs` runs the viewer on `127.0.0.1:8790` and forwards `/api/v1` to the bridge in
+`mcarplay.bridgeUrl` (or `--upstream`), falling back to paged export for a bridge without `/api/v1/export`. Neither the
+hook nor CI runs them; test with `node --test tools/debug-bridge/*.test.mjs` (Node 20+). Documentation:
 
 - `IMPLEMENTATION_PLAN.md` (Chinese): milestones, current baseline and acceptance criteria; update it when status changes.
 - `docs/CARWITH-ENTRY-FINDINGS.md`: dated, redacted device evidence and corrections of earlier conclusions.

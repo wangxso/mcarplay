@@ -11,21 +11,47 @@ class CarLifeJoinGate {
     @Volatile
     private var joined = false
 
+    /** 接入次数（首次接入 + 每次 [reset] 后的重新接入），诊断用。 */
+    @Volatile
+    var joins = 0
+        private set
+
+    /** 最近一次接入前因等 IDR / 参数集而丢弃的帧数。 */
+    @Volatile
+    var droppedBeforeLastJoin = 0L
+        private set
+
+    /** 最近一次接入时从解析器缓存补进 IDR 的参数集（如 "SPS+PPS"；空 = 帧内已带齐）。 */
+    @Volatile
+    var filledAtLastJoin = ""
+        private set
+
+    private var droppedWhileWaiting = 0L
+
     /** 返回应提交的帧；null 表示丢弃（尚未等到可解码的起点）。 */
     fun admit(unit: CarLifeVideoAccessUnit): CarLifeVideoAccessUnit? {
         if (joined) return unit
-        if (!unit.keyFrame) return null
+        if (!unit.keyFrame) return waiting()
         val inline = inlineNalTypes(unit.data)
         val missingSps = SPS !in inline
         val missingPps = PPS !in inline
-        if (missingSps && unit.sps == null) return null
-        if (missingPps && unit.pps == null) return null
+        if (missingSps && unit.sps == null) return waiting()
+        if (missingPps && unit.pps == null) return waiting()
         joined = true
+        droppedBeforeLastJoin = droppedWhileWaiting
+        droppedWhileWaiting = 0
+        filledAtLastJoin = listOfNotNull("SPS".takeIf { missingSps }, "PPS".takeIf { missingPps }).joinToString("+")
+        joins++
         if (!missingSps && !missingPps) return unit
         var prefix = ByteArray(0)
         if (missingSps) prefix += START_CODE + unit.sps!!
         if (missingPps) prefix += START_CODE + unit.pps!!
         return unit.copy(data = prefix + unit.data)
+    }
+
+    private fun waiting(): CarLifeVideoAccessUnit? {
+        droppedWhileWaiting++
+        return null
     }
 
     /** 提交失败（发送端未运行或队列满）后重新等待 IDR，避免参考帧缺失导致花屏。 */

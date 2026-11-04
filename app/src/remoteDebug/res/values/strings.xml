@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="export_diagnostics">导出完整诊断报告（未脱敏）</string>
+    <string name="ma_scope_support">完整环境、连接/自检阶段、原始异常、退出记录及最近历史，运行日志最多约 4MB；本文件未脱敏。</string>
+    <string name="ma_scope_current">仅含本次启动后的未脱敏运行日志，以及诊断事件和完整环境。</string>
+    <string name="ma_scope_all">最近两段未脱敏历史日志，最多约 4MB，附完整环境及诊断事件。</string>
+    <string name="ma_export_done_title">未脱敏诊断报告已导出</string>
+    <string name="ma_export_done_body">文件位置：\n%1$s\n\n报告编号：%2$s\n大小：%3$s\n%4$s\n\n此文件保留原始内容，可能含真实设备、网络、热点密码和会话信息。请仅分享给已确认的排障人员，并补充复现时间及步骤。\n\n可在「文件管理 → 下载 → mcarplay」中找到，或通过下方按钮分享。</string>
+</resources>

@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
     <string name="sc_cancelled">已取消连接</string>
+    <string name="sc_disconnecting">正在断开（通知车机结束会话）…</string>
     <string name="sc_hotspot_lost">车机热点已断开（%1$s）</string>
     <string name="sc_hotspot_lost_hint">车机热点 \"%1$s\" 已断开——请重新启动连接</string>
     <string name="sc_bt_ready">蓝牙就绪，等待车机回连…</string>
+    <string name="sc_tap_phone_on_receiver">等待车机「%1$s」回连——请在车机上点选本机…</string>
+    <string name="sc_tap_phone_on_receiver_hint">车机「%1$s」不接受手机主动连接：请在车机的蓝牙或 CarPlay 设备列表中点选本机</string>
     <string name="sc_got_credentials">拿到车机热点凭据，绑定 WiFi…</string>
     <string name="sc_bind_failed">已连上车机热点但未能绑定网络——请重新连接</string>
     <string name="sc_silent_join">正在静默连接车机热点 %1$s…</string>
@@ -38,6 +41,7 @@
     <string name="sc_paired_setup">配对完成，建立 CarPlay 会话…</string>
     <string name="sc_setup_rejected">接收端拒绝了会话建立（SETUP 未通过）</string>
     <string name="sc_setup_rejected_hint">接收端拒绝了会话建立（SETUP）——请查看日志中的 deviceID 提示</string>
+    <string name="sc_record_unconfirmed">接收端未确认会话启动，请重新连接</string>
     <string name="sc_waiting_join">等待手机加入车机热点 %1$s…</string>
     <string name="sc_not_joined_hint">未连上车机热点 \"%1$s\"——请到 WLAN 设置中主动连接</string>
     <string name="sc_saved_title">已保存该车机热点</string>
@@ -63,4 +67,5 @@
     <string name="sc_keep_waiting">继续等待</string>
     <string name="sc_audio_all_incompatible">本车机音频不兼容，下次连接将自动只推视频</string>
     <string name="sc_audio_profile_rejected">该音频档位导致断开，已记录；重连会自动换档</string>
+    <string name="ma_legacy_carwith_setup">请在 CarWith 中选择“百度 CarLife”及无线连接，完成后返回 mcarplay</string>
 </resources>

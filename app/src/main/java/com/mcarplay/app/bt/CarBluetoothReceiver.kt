@@ -63,6 +63,10 @@ class CarBluetoothReceiver : BroadcastReceiver() {
         }
 
         if (action == BluetoothDevice.ACTION_ACL_CONNECTED) {
+            if (AutoConnectPrefs.isManualStopCoolingDown(app, address)) {
+                DebugFileLog.append(app, "AUTO: 手动断开后的 30 秒冷却期——忽略蓝牙回连")
+                return
+            }
             DebugFileLog.append(app, "AUTO: 车机蓝牙已连上 ${name ?: "?"}（$address）——自动拉起会话")
             runCatching {
                 context.startForegroundService(

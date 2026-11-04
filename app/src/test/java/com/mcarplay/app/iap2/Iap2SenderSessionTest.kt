@@ -256,6 +256,103 @@ class Iap2SenderSessionTest {
     }
 
     /**
+     * 大众车机（2026-10-31 诊断报告）：已入网的手机拿不到 0x5703，车机也不声明 0x4301，
+     * 却在 WiFi 上反复发 ctrl 邀请。邀请到达就说明同网——不能再按「无线索」拆链。
+     */
+    @Test
+    fun ctrlInviteWithoutCredentialsKeepsLinkInsteadOfAborting() {
+        assertEquals(
+            CredentiallessFallback.RECEIVER_INVITED,
+            credentiallessFallback(knownSsid = null, declaresStartSession = false, receiverInvited = true),
+        )
+        assertEquals(
+            CredentiallessFallback.RECEIVER_INVITED,
+            credentiallessFallback(knownSsid = "  ", declaresStartSession = null, receiverInvited = true),
+        )
+    }
+
+    /**
+     * 帕萨特 2025 端到端：首次 AirPlay 配对前车机不回 0x5703。ctrl 邀请已到时，发送端必须在救援剧本后
+     * 立即转入兜底返回空端点，而不是干等到会话期限（真车 23:50 日志白等约 60 秒）。
+     */
+    @Test
+    fun passatInviteStopsWaitingForWifiCredentials() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory")
+        val accessory = MockAccessory(accessoryChannel, shape = MockAccessory.Shape.VW_PASSAT)
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+
+        val startedAt = System.nanoTime()
+        val endpoint =
+            Iap2SenderSession(
+                phoneChannel,
+                log = { line -> println("PHONE $line") },
+                bluetoothMac = "34:86:DA:86:BB:96",
+                deviceName = "test-device",
+                receiverInvited = { true },
+            ).run(timeoutMillis = 60_000L)
+        val elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L
+
+        assertTrue("应发过 0x5702", accessory.sawWifiRequest)
+        assertEquals("", endpoint.ssid)
+        assertEquals(0, endpoint.airPlayPort)
+        assertTrue("收到邀请后不应等满会话期限（实际 ${elapsedMillis}ms）", elapsedMillis < 10_000L)
+
+        phoneChannel.close()
+        accessoryChannel.close()
+    }
+
+    /** 同一车机、没有邀请也没有已知热点：仍按「无线索」拆链（不改变旧行为）。 */
+    @Test
+    fun passatWithoutInviteStillAbortsAtDeadline() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory")
+        val accessory = MockAccessory(accessoryChannel, shape = MockAccessory.Shape.VW_PASSAT)
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+
+        val error =
+            runCatching {
+                Iap2SenderSession(
+                    phoneChannel,
+                    log = { line -> println("PHONE $line") },
+                    bluetoothMac = "34:86:DA:86:BB:96",
+                    deviceName = "test-device",
+                    receiverInvited = { false },
+                ).run(timeoutMillis = 6_000L)
+            }.exceptionOrNull()
+        assertTrue("应因无凭据拆链，实际 $error", error?.message?.contains("未拿到车机热点凭据") == true)
+
+        phoneChannel.close()
+        accessoryChannel.close()
+    }
+
+    @Test
+    fun credentiallessFallbackPriorityIsKnownSsidThenStartSessionThenInvite() {
+        assertEquals(
+            CredentiallessFallback.KNOWN_SSID,
+            credentiallessFallback(knownSsid = "Car_AP", declaresStartSession = true, receiverInvited = true),
+        )
+        assertEquals(
+            CredentiallessFallback.AWAIT_LATE_START_SESSION,
+            credentiallessFallback(knownSsid = null, declaresStartSession = true, receiverInvited = true),
+        )
+        assertEquals(
+            CredentiallessFallback.ABORT,
+            credentiallessFallback(knownSsid = null, declaresStartSession = false, receiverInvited = false),
+        )
+        assertEquals(
+            CredentiallessFallback.ABORT,
+            credentiallessFallback(knownSsid = null, declaresStartSession = null, receiverInvited = false),
+        )
+    }
+
+    /**
      * Audi MMI 3315 形态：0x4301 的地址字段按定长 NUL 填充（IPv6 后 22 个、IPv4 后 5 个）。
      * 旧实现只去掉**一个**尾部 NUL，得到 `"10.174.189.1\0\0\0\0\0"`——它 contains('.')=true、
      * contains(':')=false，能骗过所有「是不是 IPv4」的判断，但 Android 的 getaddrinfo 解不了，
@@ -368,6 +465,10 @@ class Iap2SenderSessionTest {
             // 凯迪拉克 CT5（GM/Cinemo）：声明会发 0x4301、无 0x5702/0x5703——
             // AP 信息只能在 0x4301 里，且窗口内常不到（PR #19，2026-10-21 日志）
             CT5_NEW_PROTOCOL,
+
+            // 大众帕萨特 2025（2026-10-31 诊断报告）：声明发 0x5703、收 0x5702，
+            // 但首次 AirPlay 配对前不回 0x5703，也不发 0x4301——只在 WiFi 上发 ctrl 邀请
+            VW_PASSAT,
         }
 
         /** 老式奥迪/测试台：不声明接收清单，也不发 StartHID。 */
@@ -416,6 +517,12 @@ class Iap2SenderSessionTest {
             // WiFi 配置：BMW/CT5 形态不发 0x5702（AP 信息由 0x4301 自带）。
             // 若发送端在 BMW 形态下仍发 0x5702，下面第一个 expect(0x4e0d) 会立刻
             // 报「expected 0x4e0d got 0x5702」——分派错误无处可藏。
+            if (shape == Shape.VW_PASSAT) {
+                // 只收 0x5702、永不应答（链路层 ACK 由通道自动完成）
+                expect(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
+                sawWifiRequest = true
+                return
+            }
             if (answersWifiRequest) {
                 expect(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
                 sawWifiRequest = true
@@ -467,6 +574,7 @@ class Iap2SenderSessionTest {
                 Shape.AUDI_9310, Shape.AUDI_3315 -> "Audi_MMI_3315"
                 Shape.BMW_ID9 -> "BMW 87866"
                 Shape.CT5_NEW_PROTOCOL -> "CADILLAC_2179"
+                Shape.VW_PASSAT -> "Volkswagen"
                 Shape.TEST_BENCH -> "MockCarPlay"
             }
 
@@ -478,6 +586,12 @@ class Iap2SenderSessionTest {
          */
         private fun declarationParams(): Array<ByteArray> =
             when (shape) {
+                // 大众帕萨特 2025：发 2 项、收 4 项（真实识别帧）
+                Shape.VW_PASSAT ->
+                    arrayOf(
+                        Iap2Csm.u16List(6, intArrayOf(0xaa06, 0x5703)),
+                        Iap2Csm.u16List(7, intArrayOf(0x4e0c, 0x4e0d, 0x4e0e, 0x5702)),
+                    )
                 // 测试台：完全不声明 → 画像 UNKNOWN → 走旧协议
                 Shape.TEST_BENCH -> emptyArray()
                 // 奥迪 MMI 9310：只声明发 0x5703/0xea03（无接收清单）

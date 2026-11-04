@@ -28,7 +28,7 @@ mcarplay 真正面对的是**接收端协议实现**，所以记录分三层，�
 
 | 族编号 | 厂商 | 公开线索（待核实） | 已知 OEM 线索（待核实） | 优先级 | mcarplay 状态 |
 | --- | --- | --- | --- | --- | --- |
-| `DESAY_SV` | 德赛西威 | 自称国内首家申请 CarPlay 认证的汽车电子企业；奇瑞、荣威、MG 车型 CarPlay 车机配套（[1](https://www.desaysv.com/newsDetails/75.html)、[2](https://www.desaysv.com/newsDetails/76.html)、[3](https://www.desaysv.com/newsDetails/575.html)） | 奇瑞（瑞虎、艾瑞泽）、荣威、MG、理想海外车型 | 1 | 未测 |
+| `DESAY_SV` | 德赛西威 | 自称国内首家申请 CarPlay 认证的汽车电子企业；奇瑞、荣威、MG 车型 CarPlay 车机配套（[1](https://www.desaysv.com/newsDetails/75.html)、[2](https://www.desaysv.com/newsDetails/76.html)、[3](https://www.desaysv.com/newsDetails/575.html)） | 奇瑞（瑞虎、艾瑞泽）、荣威、MG、理想海外车型 | 1 | 艾瑞泽 8（2022）已通过；同族第二台未通过（见矩阵） |
 | `ECARX_CLOUDPEAK` | 亿咖通 | Cloudpeak 软件栈声明原生 CarPlay/无线 CarPlay（[1](https://www.ecarxgroup.com/press/ecarx-hosts-2026-global-partner-conference-accelerating-innovation-led-global-expansion/)、[2](https://ir.ecarxgroup.com/news-releases/news-release-details/ecarx-cloudpeak-digital-cockpit-software-stack-will-be-essential)） | 吉利、领克、Volvo EX30、Galaxy 海外车型、VW/Škoda 部分平台 | 1 | 未测 |
 | `NEUSOFT_NAGIVI` | 东软 | NAGIVI 全球 IVI 声明有线/无线 CarPlay、Android Auto、CarLife、HiCar（[1](https://www.neusoft.com/cn/products/%E6%99%BA%E8%83%BD%E6%B1%BD%E8%BD%A6%E4%BA%92%E8%81%94/%E6%99%BA%E8%83%BD%E5%BA%A7%E8%88%B1/nagivi%E5%85%A8%E7%90%83ivi%E8%BD%AF%E4%BB%B6%E4%BA%A7%E5%93%81/)、[2](https://www.neusoft.com/cn/%E4%B8%9C%E8%BD%AF%E8%8E%B7%E5%90%89%E5%88%A9%E6%B1%BD%E8%BD%A6%E6%96%B0%E8%AE%A2%E5%8D%95/)） | 吉利、领克、几何（经亿咖通定点）、一汽红旗 | 1 | 未测 |
 | `ADAYO` | 华阳通用 | 智能座舱手机互联列出 CarPlay、Android Auto、HiCar、CarLife | 国内前装 OEM、海外 OEM/ODM | 1 | 未测 |
@@ -50,7 +50,10 @@ CarPlay 的座舱项目，但「提供 IVI」不等于 CarPlay 接收端协议�
 | WinPlay 1.2.5（Windows） | 桌面基线 | — | WinPlay（开源） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | [2026-10-27](CARWITH-ENTRY-FINDINGS.md) |
 | DiPlay（Android 平板） | 桌面基线 | — | DiPlay（开源） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | [2026-10-25/27](CARWITH-ENTRY-FINDINGS.md) |
 | 小米 SU7 Max | 未知 | 小米（待查）/ 待查 / 待查 | 未知 | ✗ | · | · | · | · | · | · | · | [2026-10-28](CARWITH-ENTRY-FINDINGS.md)：iAP2 RFCOMM 未被接受，车机未回连，未拿到协议指纹；尚不能判定是否支持无线 CarPlay |
-| 奇瑞 瑞虎 / 艾瑞泽（年款待定） | `DESAY_SV` | 德赛西威 / 待查 / 待查 | 未知 | · | · | · | · | · | · | · | · | — |
+| 奇瑞 艾瑞泽 8（2022 款） | `DESAY_SV` | 德赛西威 / Renesas R-Car H3（`r8a7795`）/ Android 9，固件 `M1E_IC2172/82_03_21.387_250619_R` | Apple CarPlay 接收端 R14 库（`libAirPlay_R14_vehicle.so`、`libcarplayserver_R14_vehicle.so`），德赛西威集成 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | [2026-10-31](CARWITH-ENTRY-FINDINGS.md)：首次音画触控、两轮媒体约 107 分钟、直接重连验收；[2026-11-02](CARWITH-ENTRY-FINDINGS.md)：MFi 固定 32B 后点选到出画约 12 s。蓝牙须由车机回连（手机主动连入不被接受），中控重启或车机 CarPlay 崩溃后需在车机蓝牙设置点选手机。**已知问题：** 每次断开约 20 s 后车机 CarPlay 进程崩溃（`_PerformPeriodTasks+640`），约 5 s 后自动重启并可回连 |
+| 奇瑞 艾瑞泽 8 雅（2022 款，用户报车机版本「2.0.4」） | `DESAY_SV` | 德赛西威（推断）/ 待查 / 待查 | 未知；SDP 与上一行同为无 `…caff`、带 `ec884348…` 厂商服务 | ✗ | · | · | · | · | · | · | · | [2026-11-02](CARWITH-ENTRY-FINDINGS.md)：手机主动连入 34 次均在 43–127 ms 内 `READ_FAILED`，车机未回连；「等车机回连」修改待该车复测 |
+| 奇瑞 瑞虎（车型待定） | `DESAY_SV` | 德赛西威 / 待查 / 待查 | 未知 | · | · | · | · | · | · | · | · | — |
+| 大众 帕萨特 2025 款 | 未知 | 待查（iAP2 自报厂商大众，型号字段为空）/ 待查 / 待查 | 未知 | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✗ | [2026-10-31 至 11-01](CARWITH-ENTRY-FINDINGS.md)：SDP 无 `…caff` 但 RFCOMM 可连入；收到 ctrl 邀请后入网、配对、推流；11-01 22:46 首次出画并可触控。手机端「开启声音」曾使会话被车机重置，重连后点 CarPlay 图标无效，对应修复待同车复测 |
 | 吉利 / 领克（车型待定） | `ECARX_CLOUDPEAK` 或 `NEUSOFT_NAGIVI` | 待查 | 未知 | · | · | · | · | · | · | · | · | — |
 | Volvo EX30 | `ECARX_CLOUDPEAK` | 亿咖通 / 待查 / 待查 | 未知 | · | · | · | · | · | · | · | · | — |
 | 华阳配套车型（待定） | `ADAYO` | 华阳 / 待查 / 待查 | 未知 | · | · | · | · | · | · | · | · | — |
@@ -59,6 +62,11 @@ CarPlay 的座舱项目，但「提供 IVI」不等于 CarPlay 接收端协议�
 | Audi MIB3（DELPHI 画像） | 既有 `CLASSIC_MIB3` | 待查 | 未知 | · | · | · | · | · | · | · | · | 早期 CarDeck 记录，未在 CarWith 桥接上复测 |
 
 DiPlay 的重连尚未在当前版本上验证；WinPlay 与 DiPlay 都是桌面接收端，不能代表任何车机。
+
+**`DESAY_SV` 协议指纹（艾瑞泽 8，2026-10-31 / 11-02）：** iAP2 `0x1d01` 自报 `Cloudrive / Tiggo / CHERY`、硬件 `HWS002`；SDP 不提供 `…caff`，
+带厂商 UUID `ec884348-cd41-40a2-9727-575d50bf1fd3`；MFi 为 Auth 3.0 芯片，只接受 32 字节挑战（20/16 字节会让芯片挂起约 35 s）；
+AirPlay 端口 7000，车机不支持 type-130 流。兼容策略按 iAP2 厂商 `CHERY` 登记 `chery.*` 规则（见 [接收端兼容设计](RECEIVER-COMPATIBILITY.md)）；
+同族其他车机的指纹核对后再决定是否扩展到 `DESAY_SV` 全族。
 
 ## 晋级规则
 
@@ -69,5 +77,9 @@ DiPlay 的重连尚未在当前版本上验证；WinPlay 与 DiPlay 都是桌面
 
 ## 下一步
 
-按「车型 → Tier-1 → SoC → OS → CarPlay 中间件」反查奇瑞、吉利、长安、上汽、广汽、比亚迪的常见车型，
-补齐上表「待查」，得到最少需要实测的车机清单。
+1. 艾瑞泽 8：定位断开后约 20 s 的车机崩溃。按 [findings「真 iPhone 连接全过程」](CARWITH-ENTRY-FINDINGS.md) 逐项试仍未对齐的三处 iPhone 行为：
+   起步时屏幕与主音频先留给车机、主音频按需建拆、重连只走 pair-verify。
+2. 艾瑞泽 8 雅：用含「等车机回连」与 MFi 32B 的测试包复测，并记录车机固件版本，核对是否与艾瑞泽 8 同一指纹。
+3. 帕萨特 2025：复测「开启声音」与「进入 → 回主界面 → 再进入」。
+4. 按「车型 → Tier-1 → SoC → OS → CarPlay 中间件」反查奇瑞、吉利、长安、上汽、广汽、比亚迪的常见车型，
+   补齐上表「待查」，得到最少需要实测的车机清单。

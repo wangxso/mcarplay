@@ -3,6 +3,7 @@ package com.mcarplay.app.bridge
 import android.content.Context
 import android.content.Intent
 import com.mcarplay.app.SessionController
+import com.mcarplay.app.carlife.CarLifeDiagnostics
 import org.json.JSONObject
 
 /**
@@ -28,6 +29,16 @@ object BridgeCommands {
                 JSONObject()
                     .put("ok", true)
                     .put("detail", SessionController.statusLine() + " 会话=${if (SessionController.isSessionRunning()) "运行中" else "停止"}")
+
+            "get_bluetooth_diagnostics" ->
+                JSONObject()
+                    .put("ok", true)
+                    .put("detail", SessionController.bluetoothDiagnosticSummary())
+
+            "get_carlife_diagnostics" ->
+                JSONObject()
+                    .put("ok", true)
+                    .put("detail", CarLifeDiagnostics.reportSummary())
 
             "start_connection" -> {
                 // 与手机上点「启动连接」等价：前置（Shizuku/蓝牙）不满足时日志会说明

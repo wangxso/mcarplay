@@ -29,28 +29,42 @@ class PairSetupClient(
 ) {
     /** 完成后接收端已保存我们的长期公钥；返回接收端静态身份（来自 M6，可选用）。 */
     fun run(): ReceiverIdentity? {
-        // M1: 请求 SRP 参数（Method=None + State=1，对照 catplay PairSetup::start）
-        val m2 =
-            Tlv8.decode(
-                transport.exchange(
+        // M1: 请求 SRP 参数（Method=None + State=1，对照 catplay PairSetup::start）。
+        // B 首字节为 0 时补零/去零两种编码不同，接收端用哪种无从得知（见 Srp6aClient）：
+        // 尚未提交证明，重发 M1 换一个 B 不消耗接收端的失败计数。
+        var salt: ByteArray
+        var serverPublic: ByteArray
+        var round = 0
+        while (true) {
+            round++
+            val m2 =
+                decodePairingResponse(
                     "/pair-setup",
-                    Tlv8.encode(
-                        listOf(
-                            Tlv8.Item(Tlv8.TYPE_METHOD, byteArrayOf(0)),
-                            Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(1)),
+                    2,
+                    transport.exchange(
+                        "/pair-setup",
+                        Tlv8.encode(
+                            listOf(
+                                Tlv8.Item(Tlv8.TYPE_METHOD, byteArrayOf(0)),
+                                Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(1)),
+                            ),
                         ),
                     ),
-                ),
-            )
-        val salt = m2[Tlv8.TYPE_SALT] ?: throw IOException("pair-setup M2 缺少 salt")
-        val serverPublic = m2[Tlv8.TYPE_PUBLIC_KEY] ?: throw IOException("pair-setup M2 缺少 publicKey")
-        log("pair-setup: M2 收到 SRP 参数 salt=${salt.size}B B=${serverPublic.size}B")
+                )
+            salt = m2[Tlv8.TYPE_SALT] ?: throw IOException("pair-setup M2 缺少 salt")
+            serverPublic = m2[Tlv8.TYPE_PUBLIC_KEY] ?: throw IOException("pair-setup M2 缺少 publicKey")
+            log("pair-setup: M2 收到 SRP 参数 salt=${salt.size}B B=${serverPublic.size}B")
+            if (Srp6aClient.isFullLength(serverPublic) || round >= MAX_M1_ROUNDS) break
+            log("pair-setup: B 首字节为 0（填充约定可能与接收端不一致）→ 重发 M1 换 B（第 $round 次）")
+        }
 
         // M3: 客户端公钥 A + 证明 M1
         val srp = Srp6aClient.start(salt, serverPublic)
         val clientProof = srp.clientProof() ?: throw IOException("pair-setup: SRP B 非法")
         val m4 =
-            Tlv8.decode(
+            decodePairingResponse(
+                "/pair-setup",
+                4,
                 transport.exchange(
                     "/pair-setup",
                     Tlv8.encode(
@@ -95,7 +109,9 @@ class PairSetupClient(
                 ),
             )
         val m6 =
-            Tlv8.decode(
+            decodePairingResponse(
+                "/pair-setup",
+                6,
                 transport.exchange(
                     "/pair-setup",
                     Tlv8.encode(
@@ -109,9 +125,6 @@ class PairSetupClient(
                     ),
                 ),
             )
-        if (m6[Tlv8.TYPE_STATE]?.firstOrNull()?.toInt() != 6) {
-            throw IOException("pair-setup M6 状态非 6：${m6[Tlv8.TYPE_ERROR]?.firstOrNull()}")
-        }
         log("pair-setup: ✓ M6 完成，接收端已保存我们的长期公钥")
 
         // 解析 M6 加密信封里的接收端身份（完整性校验）
@@ -135,6 +148,7 @@ class PairSetupClient(
                 accessorySignKey + receiverId + receiverKey,
                 receiverSignature,
             )
+        if (!valid) throw IOException("pair-setup: 接收端签名校验失败")
         log(
             "pair-setup: 接收端身份 id=${receiverId.toString(Charsets.UTF_8)} " +
                 "pub=${receiverKey.toHexString().take(16)}… 签名校验=$valid",
@@ -146,6 +160,11 @@ class PairSetupClient(
         val pairingId: String,
         val publicKey: ByteArray,
     )
+
+    private companion object {
+        /** M1 最多发几轮：每轮 B 不满长概率 1/256，3 轮后仍不满长时照常提交。 */
+        const val MAX_M1_ROUNDS = 3
+    }
 }
 
 /**
@@ -163,11 +182,16 @@ class PairVerifyClient(
         val sharedSecret: ByteArray,
     )
 
-    fun run(receiverStaticPublicKey: ByteArray? = null): ControlKeys {
+    fun run(
+        receiverStaticPublicKey: ByteArray? = null,
+        expectedReceiverId: String? = null,
+    ): ControlKeys {
         // M1: 临时 X25519 公钥
         val ephemeral = AirPlayCrypto.x25519Generate()
         val m2 =
-            Tlv8.decode(
+            decodePairingResponse(
+                "/pair-verify",
+                2,
                 transport.exchange(
                     "/pair-verify",
                     Tlv8.encode(
@@ -194,6 +218,9 @@ class PairVerifyClient(
             )
         val receiverId = inner[Tlv8.TYPE_IDENTIFIER] ?: throw IOException("pair-verify M2 信封缺少 identifier")
         val receiverSignature = inner[Tlv8.TYPE_SIGNATURE] ?: throw IOException("pair-verify M2 信封缺少 signature")
+        if (expectedReceiverId != null && receiverId.toString(Charsets.UTF_8) != expectedReceiverId) {
+            throw IOException("pair-verify: 接收端身份与已保存配对不符")
+        }
 
         // 用 mDNS/0x4301 提供的接收端静态公钥验证（有则验，无则跳过）
         if (receiverStaticPublicKey != null) {
@@ -204,6 +231,7 @@ class PairVerifyClient(
                     receiverSignature,
                 )
             log("pair-verify: 接收端签名校验（对照 pk）=$valid")
+            if (!valid) throw IOException("pair-verify: 接收端签名校验失败")
         }
 
         // M3: 我们的长期签名
@@ -221,7 +249,9 @@ class PairVerifyClient(
                 ),
             )
         val m4 =
-            Tlv8.decode(
+            decodePairingResponse(
+                "/pair-verify",
+                4,
                 transport.exchange(
                     "/pair-verify",
                     Tlv8.encode(

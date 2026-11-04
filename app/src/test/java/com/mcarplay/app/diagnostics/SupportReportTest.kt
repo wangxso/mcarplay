@@ -1,11 +1,39 @@
 package com.mcarplay.app.diagnostics
 
 import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SupportReportTest {
+    @Test
+    fun rawReportRetainsNamesAddressesCredentialsPayloadsAndExitDetails() {
+        val detail = "name=FamilyCar address=10.2.3.4 psk=SecretValue"
+        val journal = JSONObject().put("event", "NOTE").put("detail", detail).toString()
+        val log = "目标「FamilyCar」 AA:BB:CC:DD:EE:FF\nRAW tx: 01020304\n$detail"
+        val report =
+            SupportReport.render(
+                "raw-example",
+                mapOf("raw.target" to "AA:BB:CC:DD:EE:FF"),
+                detail,
+                journal,
+                log,
+                "exit description=$detail",
+                "remote debug raw",
+                "ok",
+                knownNames = listOf("FamilyCar"),
+                redact = false,
+            )
+        assertTrue(report.contains("privacyMode=UNREDACTED_REMOTE_DEBUG"))
+        assertTrue(report.contains(log))
+        assertTrue(report.contains("exit description=$detail"))
+        assertTrue(report.contains("raw.target=AA:BB:CC:DD:EE:FF"))
+        assertEquals(detail, JSONObject(report.lineSequence().single { it.startsWith('{') }).getString("detail"))
+        assertFalse(report.contains("report-local aliases"))
+        assertFalse(report.contains("<NAME-"))
+    }
+
     @Test
     fun journalRemainsMachineReadableAfterRedaction() {
         val journal =

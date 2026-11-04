@@ -130,6 +130,144 @@ class CarLifeVideoParserTest {
     }
 
     @Test
+    fun externalFrameCarriesCachedParameterSets() {
+        // 转码器中途起步时，IDR 不内联 PPS 也能从帧携带的解析器缓存补齐
+        val pps = byteArrayOf(0x68, 0xCE.toByte(), 0x06, 0xE2.toByte())
+        val unit = CarLifeVideoAccessUnit(1, byteArrayOf(0, 0, 0, 1, 0x65, 0x80.toByte()), true, sps, pps)
+        val frame = unit.toExternalVideoFrame()
+        assertTrue(frame.sps!!.contentEquals(sps))
+        assertTrue(frame.pps!!.contentEquals(pps))
+    }
+
+    @Test
+    fun baselineSpsSummaryKeepsDimensions() {
+        val info = parseSps(sps)!!
+        assertEquals(66, info.profileIdc)
+        assertEquals(0x80, info.constraintFlags)
+        assertEquals(31, info.levelIdc)
+        assertEquals(1280, info.width)
+        assertEquals(720, info.height)
+        assertEquals(1280 to 720, spsDimensions(sps))
+    }
+
+    @Test
+    fun highProfileSpsReportsVuiTimingAndReorder() {
+        // High 3.1、1280×720、VUI 带 timing（60/2 = 30fps，含 00 00 00 01 需 emulation prevention）与 bitstream_restriction
+        val nal =
+            H264BitWriter()
+                .bits(100, 8)
+                .bits(0, 8)
+                .bits(31, 8)
+                .ue(0)
+                .ue(1)
+                .ue(0)
+                .ue(0)
+                .bit(0)
+                .bit(0)
+                .ue(0)
+                .ue(0)
+                .ue(0)
+                .ue(1)
+                .bit(0)
+                .ue(79)
+                .ue(44)
+                .bit(1)
+                .bit(1)
+                .bit(0)
+                .bit(1)
+                .bit(0)
+                .bit(0)
+                .bit(1)
+                .bits(5, 3)
+                .bit(1)
+                .bit(0)
+                .bit(0)
+                .bit(1)
+                .bits(1, 32)
+                .bits(60, 32)
+                .bit(0)
+                .bit(0)
+                .bit(0)
+                .bit(0)
+                .bit(1)
+                .bit(1)
+                .ue(0)
+                .ue(0)
+                .ue(0)
+                .ue(0)
+                .ue(2)
+                .ue(3)
+                .nal(0x67)
+        val info = parseSps(nal)!!
+        assertEquals(100, info.profileIdc)
+        assertEquals(1280 to 720, info.width to info.height)
+        assertTrue(info.vuiParsed)
+        assertEquals(true, info.fullRange)
+        assertEquals(30.0, info.timingFps!!, 0.001)
+        assertEquals(2, info.maxNumReorderFrames)
+        assertEquals(3, info.maxDecFrameBuffering)
+        assertTrue(info.describe().contains("reorder=2 dpb=3"))
+    }
+
+    @Test
+    fun ppsReportsEntropyCodingAndTransform8x8() {
+        val high =
+            H264BitWriter()
+                .ue(0)
+                .ue(0)
+                .bit(1)
+                .bit(0)
+                .ue(0)
+                .ue(0)
+                .ue(0)
+                .bit(0)
+                .bits(0, 2)
+                .se(0)
+                .se(0)
+                .se(-2)
+                .bit(1)
+                .bit(0)
+                .bit(0)
+                .bit(1)
+                .bit(0)
+                .se(-2)
+                .nal(0x68)
+        val highInfo = parsePps(high)!!
+        assertTrue(highInfo.cabac)
+        assertEquals(true, highInfo.transform8x8)
+        val baseline =
+            H264BitWriter()
+                .ue(0)
+                .ue(0)
+                .bit(0)
+                .bit(0)
+                .ue(0)
+                .ue(0)
+                .ue(0)
+                .bit(0)
+                .bits(0, 2)
+                .se(0)
+                .se(0)
+                .se(0)
+                .bit(1)
+                .bit(0)
+                .bit(0)
+                .nal(0x68)
+        val baselineInfo = parsePps(baseline)!!
+        assertFalse(baselineInfo.cabac)
+        assertNull(baselineInfo.transform8x8)
+        assertNull(parsePps(sps))
+    }
+
+    @Test
+    fun sliceTypeReadsSecondExpGolomb() {
+        assertEquals(7, sliceType(byteArrayOf(0x65, 0x88.toByte(), 0x80.toByte())))
+        assertEquals(5, sliceType(byteArrayOf(0x41, 0x98.toByte())))
+        assertEquals(6, sliceType(byteArrayOf(0x41, 0x9C.toByte())))
+        assertNull(sliceType(byteArrayOf(0x67, 0x80.toByte())))
+    }
+
+    @Test
     fun firstMbInSliceParsesExpGolomb() {
         assertEquals(0, firstMbInSlice(byteArrayOf(0x65, 0x80.toByte(), 1)))
         assertEquals(1, firstMbInSlice(byteArrayOf(0x41, 0x40, 0)))

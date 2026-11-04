@@ -7,6 +7,34 @@ import org.junit.Test
 
 class DiagnosticRedactorTest {
     @Test
+    fun sourceStartupDiagnosticsRetainFixedPortAndPermissionEvidence() {
+        val text =
+            "CARLIFE-DIAG event=ENTRY result=REQUESTED background=false\n" +
+                "CARLIFE_SELF_TEST_DIAGNOSTICS schema=1 state=CONNECTED entry=REQUESTED " +
+                "lastFailedPort=7240 lastFailure=REFUSED openedThisAttempt=none allConnectedOnce=false timedOut=true\n" +
+                "carwith.application=enabled=true systemApp=false updatedSystemApp=false targetSdk=33\n" +
+                "carwith.permission.CAPTURE_VIDEO_OUTPUT=declared=true granted=false"
+        assertEquals(text, DiagnosticRedactor().redact(text))
+    }
+
+    @Test
+    fun bluetoothDiagnosticsRetainFixedEvidenceWithoutRevealingPeer() {
+        val safe =
+            DiagnosticRedactor().redact(
+                "BT-DIAG schema=1 run=2 event=CONNECT_END number=3 peer=1 phase=CONNECT outcome=FAILED " +
+                    "elapsedMs=120 error=IOException reason=READ_FAILED readRet=-1\n" +
+                    "BT-DIAG event=SDP_REGISTER service=CARPLAY uuid=2d8d2466-e14d-451c-88bc-7301abea291a " +
+                    "outcome=OK evidence=LOCAL_REGISTRATION_ONLY\n" +
+                    "目标「Family Car」 address=AA:BB:CC:DD:EE:FF",
+            )
+        assertTrue(safe.contains("error=IOException reason=READ_FAILED readRet=-1"))
+        assertTrue(safe.contains("uuid=2d8d2466-e14d-451c-88bc-7301abea291a"))
+        assertTrue(safe.contains("evidence=LOCAL_REGISTRATION_ONLY"))
+        assertFalse(safe.contains("Family Car"))
+        assertFalse(safe.contains("AA:BB:CC:DD:EE:FF"))
+    }
+
+    @Test
     fun detectionPrivateIndexesAreOmittedWhileProgressCountersRemainUseful() {
         val safe =
             DiagnosticRedactor().redact(
@@ -17,6 +45,21 @@ class DiagnosticRedactorTest {
         assertFalse(safe.contains("private-capabilities"))
         assertFalse(safe.contains("private-environment"))
         assertTrue(safe.contains("state=COLLECTING videoFrames=42 audioPackets=21 touches=5"))
+    }
+
+    @Test
+    fun videoDiagnosticsSurviveRedaction() {
+        // 帕萨特排查依赖这些行进报告：参数集字节、码流统计、链路环境都不含标识，不得被当成线上报文删掉
+        val lines =
+            listOf(
+                "  ↳ avcC=01 42 80 28 ff e1 00 0c 67 42 80 28 da 01 40 16 e9 a8 28 30 01 00 04 68 ce 06 e2",
+                "VIDEO: CarWith 参数集 profile=66 constraint=0x80 level=31 chroma=1 poc=2 refs=1 | cabac=0 sliceGroups=1",
+                "VIDEO: 车机经屏幕数据口回传 4B（累计 4B）前 32 字节=00 01 02 03",
+                "ENV: Wi-Fi rssi=-48dBm 5745MHz 标准=5 速率=433Mbps tx=433 rx=390；温控=正常 亮屏=true",
+                "EVENT: 本轮车机命令统计 forceKeyFrame=60 requestUI=20 hidSendReport=0",
+            )
+        val safe = DiagnosticRedactor().redact(lines.joinToString("\n"))
+        assertEquals(lines.joinToString("\n"), safe)
     }
 
     @Test
@@ -79,6 +122,16 @@ class DiagnosticRedactorTest {
         assertFalse(safe.contains("PrivateHome"))
         assertFalse(safe.contains("Family Pad"))
         assertEquals(2, Regex("<NAME-1>").findAll(safe).count())
+    }
+
+    @Test
+    fun invitedWifiLogLineHidesLiveSsid() {
+        val safe =
+            DiagnosticRedactor().redact(
+                ">>> [主动连车机] 车机已在 WiFi 上发 ctrl 邀请（无 0x5703/0x4301）——按手机当前 WiFi \"MIB3 Car AP\" 绑定后继续",
+            )
+        assertFalse(safe, safe.contains("MIB3 Car AP"))
+        assertTrue(safe, safe.contains("0x5703/0x4301"))
     }
 
     @Test

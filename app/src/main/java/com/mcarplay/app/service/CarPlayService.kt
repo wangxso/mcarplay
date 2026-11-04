@@ -13,6 +13,7 @@ import com.mcarplay.app.MainActivity
 import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.SilentProjectionActivity
+import com.mcarplay.app.bt.AutoConnectPrefs
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.compat.ReceiverCompatibility
@@ -85,6 +86,13 @@ class CarPlayService : Service() {
             }
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_AUTO_START_SESSION && AutoConnectPrefs.isManualStopCoolingDown(applicationContext)) {
+            fileLog("AUTO: 手动断开后的冷却期——忽略服务队列中的自动启动")
+            if ((SessionController.isDisconnecting() || !SessionController.isSessionRunning()) && !CarLifeDiagnostics.isRunning()) {
+                stopSelfResult(startId)
+            }
+            return START_NOT_STICKY
+        }
         // 必须显式指定类型为 connectedDevice：
         // 2 参 startForeground 会拾取 manifest 声明的全部类型（含 mediaProjection），
         // 而 Android 14 启动 mediaProjection 类型要求 AppOps PROJECT_MEDIA（用户当次授权才有效）——
@@ -119,6 +127,7 @@ class CarPlayService : Service() {
             fileLog("SVC: 收到「上车自动启动」——拉起会话")
             val app = applicationContext
             Bg.run("auto-session-start") {
+                if (AutoConnectPrefs.isManualStopCoolingDown(app)) return@run
                 SessionController.ensure(app)
                 // 自动连接默认带声音：CarWith 原生音频无需投屏授权；否则先静默领取投屏令牌，
                 // 失败退回只推视频。（旧写法 `!isAvailable && …` 在 CarWith 可用时恒为 false，
@@ -126,7 +135,7 @@ class CarPlayService : Service() {
                 SessionController.audioEnabledForSession =
                     CarLifeLauncher.isAvailable(app) ||
                     acquireProjectionSilently()
-                SessionController.startConnection(app)
+                SessionController.startConnection(app, automatic = true)
             }
         } else if (intent?.action == ACTION_START_DIAGNOSTIC) {
             fileLog("SVC: 收到「启动 CarWith 自检」")

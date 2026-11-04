@@ -339,6 +339,28 @@ class VirtualIap2LinkTest {
         )
     }
 
+    /** 固定长度：只发一次 32B，静默到窗口结束也不追加挑战，直接 0xAA05（不让车机排队多个认证）。 */
+    @Test
+    fun pinnedChallengeIsSentOnceAndNeverQueuesMore() {
+        val h = Harness()
+        h.link.pinnedMfiLength = 32
+        h.link.setGeneration(ReceiverProfile.LinkGeneration.CLASSIC_MIB3)
+        h.link.armMib3()
+        h.car.start(0)
+        h.exchangeUntilNormal()
+        h.carSends(0x1D01, Iap2Csm.string(0, "PinCar") + Iap2Csm.string(1, "PinMfr"))
+        h.carSends(0xAA01, Iap2Csm.param(0, ByteArray(642)))
+        assertEquals(listOf(32), h.challengeLengths())
+        // 20B 档的 6 s 窗口早已过去也不换档
+        h.clock += 7_000
+        h.link.onCarBytes(Iap2LinkEngine.MARKER)
+        assertEquals(listOf(32), h.challengeLengths())
+        h.clock += VirtualIap2Link.PINNED_MFI_WINDOW_MS
+        h.link.onCarBytes(Iap2LinkEngine.MARKER)
+        assertEquals(listOf(32), h.challengeLengths())
+        assertTrue(h.controlFrames().any { it.second == 0xAA05 })
+    }
+
     /**
      * 0x6802 取参数：本田 HFT 实测帧 `00 06 00 00 00 03 | 00 05 00 01 04`。
      *

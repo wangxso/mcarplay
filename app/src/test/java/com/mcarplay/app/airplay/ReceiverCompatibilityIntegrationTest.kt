@@ -17,6 +17,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -179,19 +181,30 @@ class ReceiverCompatibilityIntegrationTest {
 
     @Test
     fun oldNetworkLinkCallbacksCannotAuthenticateReplacementConnection() {
-        val client = AirPlayClient(endpoint(), log = {})
-        val obtain = AirPlayClient::class.java.getDeclaredMethod("obtainIapLink").apply { isAccessible = true }
-        val oldLink = obtain.invoke(client) as VirtualIap2Link
-        client.close()
-        val newLink = obtain.invoke(client) as VirtualIap2Link
-        field("recordAccepted").setBoolean(client, true)
-        oldLink.onAuthenticationComplete!!.invoke()
-        oldLink.onControlSessionComplete!!.invoke()
-        assertFalse(client.networkHandoffReady)
-        assertFalse(client.mib3ControlSessionDone)
-        newLink.onAuthenticationComplete!!.invoke()
-        assertTrue(client.networkHandoffReady)
-        client.close()
+        ServerSocket(0, 2, InetAddress.getByName("127.0.0.1")).use { server ->
+            val client = AirPlayClient(endpoint().copy(airPlayPort = server.localPort), log = {})
+            try {
+                assertTrue(client.reconnect())
+                server.accept().use {
+                    val obtain = AirPlayClient::class.java.getDeclaredMethod("obtainIapLink").apply { isAccessible = true }
+                    val oldLink = obtain.invoke(client) as VirtualIap2Link
+                    client.close()
+                    assertTrue(client.reconnect())
+                    server.accept().use {
+                        val newLink = obtain.invoke(client) as VirtualIap2Link
+                        field("recordAccepted").setBoolean(client, true)
+                        oldLink.onAuthenticationComplete!!.invoke()
+                        oldLink.onControlSessionComplete!!.invoke()
+                        assertFalse(client.networkHandoffReady)
+                        assertFalse(client.mib3ControlSessionDone)
+                        newLink.onAuthenticationComplete!!.invoke()
+                        assertTrue(client.networkHandoffReady)
+                    }
+                }
+            } finally {
+                client.close()
+            }
+        }
     }
 
     private fun setInfo(
