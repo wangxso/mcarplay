@@ -73,6 +73,20 @@ class ScreenStreamLifecycleTest {
         assertTrue(requests.last().body.isEmpty())
     }
 
+    @Test
+    fun stoppingSessionStillSendsScreenAndSessionTeardown() {
+        val requests =
+            exchange(3) { client ->
+                assertNotNull(client.runScreenStream(null, "display-test"))
+                client.beginOrderlyStop()
+                client.cancelled = true
+                assertTrue(client.teardownSession())
+                assertFalse(client.record())
+            }
+        assertEquals(listOf("SETUP", "TEARDOWN", "TEARDOWN"), requests.map { it.method })
+        assertTrue(requests.last().body.isEmpty())
+    }
+
     private fun exchange(
         requestCount: Int,
         rejectScreenTeardown: Boolean = false,

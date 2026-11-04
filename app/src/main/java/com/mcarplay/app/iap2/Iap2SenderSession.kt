@@ -1,5 +1,6 @@
 package com.mcarplay.app.iap2
 
+import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverFingerprint
 import com.mcarplay.app.compat.ReceiverObservation
 import com.mcarplay.app.transport.Iap2LinkChannel
@@ -255,10 +256,20 @@ class Iap2SenderSession(
         //    32B→20B 的会话全部卡死，20B→（记忆命中）的会话全部秒通。
         //  - 测试台 DiPlay（Carlinkit AuthV3 EC 身份）：**只接受精确 32B**，长度不符直接断链。
         // 全部无应答也不中止——我们不校验签名（0xAA05 自报），由 0x5702 是否应答判定放行。
+        val pinnedLength = ReceiverCompatibility.resolve(receiverSignals).pinnedMfiChallengeLength
         runMfiChallenge(
             deadline,
             prefer20First = legacyCar,
-            receiverKey = if (rememberMfi) ReceiverFingerprint.handshake(receiverBinding, receiverSignals) else null,
+            // 固定长度时不读也不写长度记忆：一次挂起或断链不能把唯一可用的长度判死
+            receiverKey =
+                if (rememberMfi &&
+                    pinnedLength == null
+                ) {
+                    ReceiverFingerprint.handshake(receiverBinding, receiverSignals)
+                } else {
+                    null
+                },
+            pinnedLength = pinnedLength,
         )
         send(Iap2MessageIds.MFI_AUTHENTICATION_SUCCEEDED)
         log("iap2 tx=0xaa05 authentication-succeeded（自报）")
@@ -657,6 +668,8 @@ class Iap2SenderSession(
         deadline: Long,
         prefer20First: Boolean = false,
         receiverKey: String?,
+        /** 接收端策略固定的挑战长度：只发这一档，等 [MfiLengthMemory.KNOWN_GOOD_WINDOW_MS]。 */
+        pinnedLength: Int? = null,
     ) {
         val baselineLengths =
             if (prefer20First) {
@@ -666,21 +679,23 @@ class Iap2SenderSession(
             }
         val windowOf = MFI_ATTEMPTS.associate { it.first to it.second }
         val memory = receiverKey?.let { MfiLengthMemory.load(context, it) } ?: MfiLengthMemory.Entry()
-        val order = MfiLengthMemory.orderAttempts(baselineLengths, memory)
-        if (!memory.isEmpty) {
+        val order = pinnedLength?.let { listOf(it) } ?: MfiLengthMemory.orderAttempts(baselineLengths, memory)
+        if (pinnedLength != null) {
+            log("iap2 MFi 固定 ${pinnedLength}B（接收端策略）——只发一次，窗口 ${MfiLengthMemory.KNOWN_GOOD_WINDOW_MS}ms")
+        } else if (!memory.isEmpty) {
             log(
                 "iap2 MFi 按车机记忆（$receiverKey）：${MfiLengthMemory.describe(memory)}" +
                     " → 本轮顺序 ${order.joinToString("/")}B",
             )
         }
         for ((position, size) in order.withIndex()) {
-            // 已知「静默过」的档位缩短窗口：它已经失败过一次，没必要再等满。
+            // 成功过的档位等足（车机芯片可能卡住数十秒），静默过的档位缩短窗口
             val baseWindow = windowOf[size] ?: MFI_ATTEMPTS.last().second
             val windowMillis =
-                if (size in memory.silent && size != memory.succeeded) {
-                    minOf(baseWindow, MFI_SILENT_RETRY_WINDOW_MS)
+                if (pinnedLength != null) {
+                    MfiLengthMemory.KNOWN_GOOD_WINDOW_MS
                 } else {
-                    baseWindow
+                    MfiLengthMemory.challengeWindow(size, memory, baseWindow, MFI_SILENT_RETRY_WINDOW_MS)
                 }
             val challenge = ByteArray(size).also(random::nextBytes)
             send(Iap2MessageIds.MFI_REQUEST_CHALLENGE, Iap2Csm.param(0, challenge))

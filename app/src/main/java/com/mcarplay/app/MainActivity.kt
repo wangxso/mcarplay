@@ -35,6 +35,7 @@ import com.mcarplay.app.compat.ReceiverDetection
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
 import com.mcarplay.app.diagnostics.DiagnosticRedactor
 import com.mcarplay.app.diagnostics.DiagnosticText
 import com.mcarplay.app.i18n.AppLanguage
@@ -994,6 +995,9 @@ class MainActivity : AppCompatActivity() {
         val preferences = getSharedPreferences("settings", Context.MODE_PRIVATE)
         findViewById<View>(R.id.btnCheckUpdates).setOnClickListener {
             startActivity(Intent(this, com.mcarplay.app.update.UpdateActivity::class.java))
+        }
+        findViewById<View>(R.id.btnBtSnoop).setOnClickListener {
+            startActivity(Intent(this, com.mcarplay.app.diagnostics.btsnoop.BtSnoopActivity::class.java))
         }
         findViewById<View>(R.id.btnLanguage).setOnClickListener { showLanguagePicker() }
         updateLanguageRow()
@@ -2222,12 +2226,32 @@ class MainActivity : AppCompatActivity() {
      * 导出日志到「下载/mcarplay/」并弹窗告知位置。
      *
      * 默认导出诊断摘要与最近历史；进程重启后仍能反馈前一轮问题。
-     * 长按导出按钮包含更大的最近运行日志（[LogExporter.Scope.ALL]），仍会脱敏。
+     * 长按导出按钮包含更大的最近运行日志（[LogExporter.Scope.ALL]）；仅 remote/debug 明文导出。
      * 为什么必须弹窗而不是 snack：snack 只在页面底部浮 2.4s，用户点了导出后
      * 往往正在看日志区、根本注意不到；且失败时也必须有明确反馈（写文件可能因
      * 存储满/媒体库异常失败）。
      */
     private fun exportLogFile(scope: LogExporter.Scope = LogExporter.Scope.SUPPORT) {
+        if (DiagnosticExportPolicy.unredacted) {
+            DarkMessageDialog.show(
+                this,
+                title = getString(R.string.raw_diagnostics_title),
+                message = getString(R.string.raw_diagnostics_notice),
+                actions =
+                    listOf(
+                        DarkMessageDialog.Action(getString(android.R.string.cancel), onClick = {}),
+                        DarkMessageDialog.Action(
+                            getString(R.string.raw_diagnostics_export_confirm),
+                            DarkMessageDialog.Emphasis.PRIMARY,
+                        ) { performLogExport(scope) },
+                    ),
+            )
+        } else {
+            performLogExport(scope)
+        }
+    }
+
+    private fun performLogExport(scope: LogExporter.Scope) {
         snack(getString(R.string.ma_exporting))
         val fallback = SessionController.logText()
         val knownNames = diagnosticNames()

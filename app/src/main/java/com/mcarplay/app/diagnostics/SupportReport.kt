@@ -13,7 +13,10 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.SystemClock
 import com.mcarplay.app.BuildConfig
+import com.mcarplay.app.SessionController
+import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
+import com.mcarplay.app.carlife.CarLifeSourceEnvironment
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.util.DebugFileLog
 import com.mcarplay.app.util.DeviceIdentity
@@ -24,6 +27,10 @@ import java.time.Instant
 import java.util.TimeZone
 
 object SupportReport {
+    /** 仅 remote Application 安装；create() 仍检查 remote/debug 策略后才调用。 */
+    @Volatile
+    var rawEnvironmentProvider: ((Context) -> Map<String, String>)? = null
+
     fun create(
         context: Context,
         reportId: String,
@@ -39,10 +46,19 @@ object SupportReport {
                 ConnectionDiagnostics.timeline.snapshot()?.let { "CarPlay 连接：" + exportSummary(it) },
                 ConnectionDiagnostics.selfTest.snapshot()?.let { "CarWith 自检：" + exportSummary(it) },
                 "RECEIVER_DETECTION " + ReceiverDetectionRuntime.reportSummary(),
+                "BLUETOOTH_DIAGNOSTICS " + SessionController.bluetoothDiagnosticSummary(),
+                "CARLIFE_SELF_TEST_DIAGNOSTICS " + CarLifeDiagnostics.reportSummary(),
             ).joinToString("\n\n").ifEmpty { "本进程尚无连接尝试；请复现问题后再导出" }
         return render(
             reportId = reportId,
-            environment = environment(context),
+            environment =
+                environment(context) +
+                    if (DiagnosticExportPolicy.unredacted) {
+                        runCatching { rawEnvironmentProvider?.invoke(context).orEmpty() }
+                            .getOrElse { mapOf("raw.collectionError" to "${it.javaClass.name}: ${it.message}") }
+                    } else {
+                        emptyMap()
+                    },
             summary = summary,
             journal = ConnectionDiagnostics.history(),
             log = if (log.isBlank()) "[file log unavailable; using UI fallback]\n$fallback" else log,
@@ -50,6 +66,7 @@ object SupportReport {
             scope = scope,
             storage = ConnectionDiagnostics.storageStatus(),
             knownNames = knownNames,
+            redact = !DiagnosticExportPolicy.unredacted,
         )
     }
 
@@ -67,29 +84,34 @@ object SupportReport {
         scope: String,
         storage: String,
         knownNames: List<String> = emptyList(),
+        redact: Boolean = true,
     ): String {
         val redactor = DiagnosticRedactor(knownNames)
-        val safeLog = redactor.redact(log)
-        val safeExits = redactor.redact(exitInfo)
+        val safeLog = if (redact) redactor.redact(log) else log
+        val safeExits = if (redact) redactor.redact(exitInfo) else exitInfo
         val safeJournal =
-            journal.lineSequence().joinToString("\n") { line ->
-                if (!line.startsWith('{')) {
-                    redactor.redact(line)
-                } else {
-                    runCatching {
-                        val record = JSONObject(line)
-                        record.keys().asSequence().toList().forEach { key ->
-                            val value = record.opt(key)
-                            if (value is String) record.put(key, redactor.redact(value))
-                        }
-                        record.toString()
-                    }.getOrElse { "[unreadable diagnostic event omitted]" }
+            if (!redact) {
+                journal
+            } else {
+                journal.lineSequence().joinToString("\n") { line ->
+                    if (!line.startsWith('{')) {
+                        redactor.redact(line)
+                    } else {
+                        runCatching {
+                            val record = JSONObject(line)
+                            record.keys().asSequence().toList().forEach { key ->
+                                val value = record.opt(key)
+                                if (value is String) record.put(key, redactor.redact(value))
+                            }
+                            record.toString()
+                        }.getOrElse { "[unreadable diagnostic event omitted]" }
+                    }
                 }
             }
         val untrusted =
             buildString {
                 appendLine("=== CONNECTION SUMMARY / 连接摘要 ===")
-                appendLine(redactor.redact(summary))
+                appendLine(if (redact) redactor.redact(summary) else summary)
                 appendLine("=== CONNECTION TIMELINE / 最近进程与连接事件 (JSONL schema=1) ===")
                 appendLine(safeJournal)
                 appendLine("=== SYSTEM EXIT HISTORY / 本应用系统退出记录 ===")
@@ -103,8 +125,17 @@ object SupportReport {
             appendLine("generatedAt=${Instant.now()} timezone=${TimeZone.getDefault().id}")
             appendLine("runtimeScope=$scope; timeline includes recent previous processes")
             appendLine("$storage; UI log display does not disable file diagnostics")
-            appendLine("PRIVACY: addresses/names are report-local aliases; credentials and wire payloads are omitted.")
-            appendLine("No automatic upload. Review before sharing; redaction cannot guarantee removal of arbitrary user text.")
+            if (redact) {
+                appendLine("privacyMode=REDACTED")
+                appendLine("PRIVACY: addresses/names are report-local aliases; credentials and wire payloads are omitted.")
+                appendLine("No automatic upload. Review before sharing; redaction cannot guarantee removal of arbitrary user text.")
+            } else {
+                appendLine("privacyMode=UNREDACTED_REMOTE_DEBUG")
+                appendLine("PRIVACY: 未脱敏 remote/debug 诊断，包含真实设备/网络标识、原始运行日志及可能的凭据/会话信息。")
+                appendLine("UNREDACTED: names, addresses, network details, exception text and retained payloads are not filtered.")
+                appendLine("Exported file is not uploaded automatically; a configured remote bridge may stream runtime logs.")
+                appendLine("仅供已事先告知并同意的远程排障使用；分享前检查接收方。")
+            }
             appendLine("请同时提供：复现步骤、故障时间、接收端品牌/型号/固件、屏幕提示，以及是否有声/有画面/能触控。")
             appendLine("缺少 END 只代表记录中断，不足以认定崩溃；无系统退出记录也不等于从未退出。")
             appendLine(
@@ -120,6 +151,7 @@ object SupportReport {
     @Suppress("DEPRECATION")
     private fun environment(context: Context): Map<String, String> =
         linkedMapOf<String, String>().apply {
+            putAll(CarLifeSourceEnvironment.snapshot(context))
             put("app.version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             put("app.variant", "${BuildConfig.FLAVOR}/${BuildConfig.BUILD_TYPE}")
             put("app.process", ConnectionDiagnostics.processId)

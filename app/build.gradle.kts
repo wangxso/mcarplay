@@ -16,6 +16,12 @@ plugins {
  * Tagged releases use the base version; update it before publishing a new tag.
  */
 val appVersionName = "0.1.3"
+// 可覆盖安装的 remote 诊断包；兼容第一版诊断包的构建参数。
+val diagnosticsBuild =
+    providers
+        .gradleProperty("mcarplay.diagnosticsBuild")
+        .orElse(providers.gradleProperty("mcarplay.btDiagnosticsBuild"))
+        .orNull == "true"
 val releaseTag =
     providers.gradleProperty("mcarplay.releaseTag").orNull
         ?: if (providers.environmentVariable("GITHUB_REF_TYPE").orNull == "tag") {
@@ -77,6 +83,24 @@ val releaseStorePassword = keystoreProps.getProperty("storePassword") ?: provide
 val releaseKeyAlias = keystoreProps.getProperty("keyAlias") ?: providers.environmentVariable("KEY_ALIAS").orNull
 val releaseKeyPassword = keystoreProps.getProperty("keyPassword") ?: providers.environmentVariable("KEY_PASSWORD").orNull
 val hasReleaseKeystore = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
+
+/**
+ * 远程调试版预置服务器（仅 remoteDebug 写入 BuildConfig；首次打开仍弹确认框）。
+ * 地址与密钥属于私有部署信息，只从不入库的 `local.properties` 或 Gradle 属性读取：
+ * `mcarplay.bridgeUrl=ws://host:8787`、`mcarplay.bridgeKey=…`。缺省时退回手动填写。
+ */
+val localProps =
+    Properties().apply {
+        val file = rootProject.file("local.properties")
+        if (file.exists()) file.inputStream().use { load(it) }
+    }
+
+fun bridgePreset(name: String): String = (providers.gradleProperty(name).orNull ?: localProps.getProperty(name)).orEmpty().trim()
+val bridgePresetUrl = bridgePreset("mcarplay.bridgeUrl")
+val bridgePresetKey = bridgePreset("mcarplay.bridgeKey")
+check(Regex("""(wss?://[^\s"\\]+)?""").matches(bridgePresetUrl) && Regex("""[A-Za-z0-9_-]*""").matches(bridgePresetKey)) {
+    "mcarplay.bridgeUrl must be a ws:// or wss:// URL and mcarplay.bridgeKey must be alphanumeric"
+}
 val requireReleaseSigning = providers.gradleProperty("mcarplay.requireReleaseSigning").orNull == "true"
 
 // 预发布/CI 构建（带构建号）禁止落到 debug 签名：宁可构建失败，也不要把一个
@@ -121,7 +145,10 @@ android {
         create("remote") {
             dimension = "bridge"
             applicationIdSuffix = ".rd"
-            versionNameSuffix = "-rd"
+            versionNameSuffix = if (diagnosticsBuild) "-rd-diag3" else "-rd"
+            // 默认空：remoteRelease 不带预置服务器，remoteDebug 在 androidComponents 中覆盖
+            buildConfigField("String", "BRIDGE_PRESET_URL", "\"\"")
+            buildConfigField("String", "BRIDGE_PRESET_KEY", "\"\"")
         }
     }
 
@@ -206,6 +233,20 @@ val bundleChangelog =
 androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(bundleChangelog, BundleChangelogTask::outputDir)
+    }
+    onVariants(selector().withFlavor("bridge" to "remote").withBuildType("debug")) { variant ->
+        if (bridgePresetUrl.isNotEmpty() && bridgePresetKey.isNotEmpty()) {
+            variant.buildConfigFields.put(
+                "BRIDGE_PRESET_URL",
+                com.android.build.api.variant
+                    .BuildConfigField("String", "\"$bridgePresetUrl\"", null),
+            )
+            variant.buildConfigFields.put(
+                "BRIDGE_PRESET_KEY",
+                com.android.build.api.variant
+                    .BuildConfigField("String", "\"$bridgePresetKey\"", null),
+            )
+        }
     }
 }
 

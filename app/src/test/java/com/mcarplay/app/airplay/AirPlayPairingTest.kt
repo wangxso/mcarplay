@@ -42,6 +42,45 @@ class AirPlayPairingTest {
         assertArrayEquals(receiver.lastWriteKey, keys.phoneReadKey)
     }
 
+    /**
+     * 接收端对 A/B/S 用去前导零编码时（2026-11-02 艾瑞泽 8 偶发 `bad setup code`），
+     * 客户端也必须每次都通过：修复前约 3/256 的轮次会失败，40 轮几乎必现。
+     */
+    @Test
+    fun pairSetupSucceedsAgainstUnpaddedReceiverEveryTime() {
+        repeat(40) { round ->
+            val receiver = MockReceiver(padded = false)
+            val keyPair = AirPlayCrypto.ed25519Generate()
+            val identity = ControllerIdentity("controller-$round", keyPair.privateKey, keyPair.publicKey)
+            PairSetupClient(identity, { path, body -> receiver.handle(path, body) }) { }.run()
+            assertTrue("第 $round 轮应完成 pair-setup", receiver.pairings.containsKey(identity.pairingId))
+        }
+    }
+
+    @Test
+    fun shortServerKeyRestartsM1BeforeSubmittingProof() {
+        val receiver = MockReceiver(padded = false, shortKeyRounds = 1)
+        val keyPair = AirPlayCrypto.ed25519Generate()
+        val identity = ControllerIdentity("controller-short-b", keyPair.privateKey, keyPair.publicKey)
+        val logs = mutableListOf<String>()
+        PairSetupClient(identity, { path, body -> receiver.handle(path, body) }) { logs += it }.run()
+        assertTrue("At least one short B must trigger an M1 retry", receiver.m1Count >= 2)
+        assertEquals(1, receiver.proofCount)
+        assertTrue(receiver.pairings.containsKey(identity.pairingId))
+        assertTrue(logs.any { it.contains("重发 M1") })
+    }
+
+    @Test
+    fun clientKeysAreAlwaysFullLength() {
+        val salt = ByteArray(16).also(random::nextBytes)
+        repeat(64) {
+            val b = Srp6aClient.generator().modPow(BigInteger(256, random), Srp6aClient.modulus())
+            val session = Srp6aClient.start(salt, Srp6aClient.pad(b))
+            assertTrue(Srp6aClient.isFullLength(session.publicKeyA))
+            assertEquals(Srp6aClient.KEY_BYTES, session.sharedSecretSize)
+        }
+    }
+
     @Test
     fun tlv8FragmentationRoundTrip() {
         val big = ByteArray(600) { (it % 251).toByte() }
@@ -179,8 +218,15 @@ class AirPlayPairingTest {
         return ControllerIdentity("test-controller-id", keyPair.privateKey, keyPair.publicKey)
     }
 
-    /** 按参考接收端算法实现的服务端。 */
+    /**
+     * 按参考接收端算法实现的服务端。[padded] = false 时每项编码取反：A/B 去前导零参与哈希、B 不补零下发，
+     * S 反而补零后求 K；
+     * [shortKeyRounds] 指定前几轮 M2 故意给首字节为 0 的 B，其余轮次 B 恒满长（否则约 1/256 触发重发 M1，请求计数不稳）；
+     * [badSetupSignature] 让 M6 签名失效。
+     */
     private class MockReceiver(
+        private val padded: Boolean = true,
+        private var shortKeyRounds: Int = 0,
         private val badSetupSignature: Boolean = false,
     ) {
         val staticKey = AirPlayCrypto.ed25519Generate()
@@ -243,20 +289,25 @@ class AirPlayPairingTest {
                     ),
                 )
             verifier = Srp6aClient.generator().modPow(x, Srp6aClient.modulus())
-            privateB = Srp6aClient.toBigInt(ByteArray(32).also(random::nextBytes))
-            publicKeyB =
-                (
-                    Srp6aClient.multiplier() * verifier +
-                        Srp6aClient.generator().modPow(
-                            privateB,
-                            Srp6aClient.modulus(),
-                        )
-                ).mod(Srp6aClient.modulus())
+            m1Count++
+            val wantShort = shortKeyRounds > 0
+            if (wantShort) shortKeyRounds--
+            do {
+                privateB = Srp6aClient.toBigInt(ByteArray(32).also(random::nextBytes))
+                publicKeyB =
+                    (
+                        Srp6aClient.multiplier() * verifier +
+                            Srp6aClient.generator().modPow(
+                                privateB,
+                                Srp6aClient.modulus(),
+                            )
+                    ).mod(Srp6aClient.modulus())
+            } while (Srp6aClient.isFullLength(Srp6aClient.pad(publicKeyB)) == wantShort)
             return Tlv8.encode(
                 listOf(
                     Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(2)),
                     Tlv8.Item(Tlv8.TYPE_SALT, salt),
-                    Tlv8.Item(Tlv8.TYPE_PUBLIC_KEY, Srp6aClient.pad(publicKeyB)),
+                    Tlv8.Item(Tlv8.TYPE_PUBLIC_KEY, enc(publicKeyB)),
                 ),
             )
         }
@@ -264,10 +315,12 @@ class AirPlayPairingTest {
         private fun setupM4(tlv: Map<Int, ByteArray>): ByteArray {
             val publicKeyA = tlv[Tlv8.TYPE_PUBLIC_KEY] ?: return error(4)
             val clientProof = tlv[Tlv8.TYPE_PROOF] ?: return error(4)
+            proofCount++
             val a = Srp6aClient.toBigInt(publicKeyA)
-            val u = Srp6aClient.toBigInt(AirPlayCrypto.sha512(Srp6aClient.pad(a), Srp6aClient.pad(publicKeyB)))
+            val u = Srp6aClient.toBigInt(AirPlayCrypto.sha512(enc(a), enc(publicKeyB)))
             val s = (a * verifier.modPow(u, Srp6aClient.modulus())).mod(Srp6aClient.modulus()).modPow(privateB, Srp6aClient.modulus())
-            sessionKey = AirPlayCrypto.sha512(Srp6aClient.toBytes(s))
+            // 参考接收端 K = H(去零 S)；反向约定下改为 H(补零 S)，与 A/B 一起逐项取反
+            sessionKey = AirPlayCrypto.sha512(if (padded) Srp6aClient.toBytes(s) else Srp6aClient.pad(s))
 
             val hashN = AirPlayCrypto.sha512(Srp6aClient.toBytes(Srp6aClient.modulus()))
             val hashG = AirPlayCrypto.sha512(Srp6aClient.toBytes(Srp6aClient.generator()))
@@ -281,12 +334,12 @@ class AirPlayPairingTest {
                     hashXor,
                     AirPlayCrypto.sha512(identifier),
                     salt,
-                    Srp6aClient.pad(a),
-                    Srp6aClient.pad(publicKeyB),
+                    enc(a),
+                    enc(publicKeyB),
                     sessionKey,
                 )
             if (!expected.contentEquals(clientProof)) return error(4)
-            val serverProof = AirPlayCrypto.sha512(Srp6aClient.pad(a), clientProof, sessionKey)
+            val serverProof = AirPlayCrypto.sha512(enc(a), clientProof, sessionKey)
             return Tlv8.encode(
                 listOf(
                     Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(4)),
@@ -385,6 +438,13 @@ class AirPlayPairingTest {
         }
 
         private var pvClientEphemeral: ByteArray? = null
+
+        var m1Count = 0
+            private set
+        var proofCount = 0
+            private set
+
+        private fun enc(value: BigInteger): ByteArray = if (padded) Srp6aClient.pad(value) else Srp6aClient.toBytes(value)
 
         private fun hkdf(
             salt: String,

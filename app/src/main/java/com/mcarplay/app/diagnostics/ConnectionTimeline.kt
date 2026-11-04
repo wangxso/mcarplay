@@ -55,6 +55,7 @@ class ConnectionTimeline(
     private val idFactory: () -> String = { UUID.randomUUID().toString().take(8) },
     private val sink: (String) -> Unit,
     private val track: String = "carplay",
+    private val detailFilter: (String) -> String = DiagnosticRedactor::scrubAtSource,
 ) {
     data class Snapshot(
         val id: String,
@@ -328,7 +329,7 @@ class ConnectionTimeline(
             while (true) {
                 val next = synchronized(lock) { outbox.removeFirstOrNull() } ?: return
                 runCatching {
-                    next.record.put("detail", DiagnosticRedactor.scrubAtSource(next.detail).take(2_000))
+                    next.record.put("detail", detailFilter(next.detail).take(2_000))
                     sink(next.record.toString())
                 }
             }

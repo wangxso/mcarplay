@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="raw_diagnostics_title">Export full diagnostics (unredacted)</string>
+    <string name="raw_diagnostics_notice">This remote debug build collects detailed diagnostics. Runtime logs and exported reports are not redacted. They include phone/receiver names, Bluetooth/MAC/IP addresses, hotspot and network details, component permissions, threads and original system exceptions. Existing log entries may also contain hotspot passwords and pairing/session information.\n\nConnecting the debug bridge streams runtime logs to the server you configured. You choose whether to share the exported file; send it only to your intended support contact.</string>
+    <string name="raw_diagnostics_export_confirm">I understand — export full report</string>
+</resources>

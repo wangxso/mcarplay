@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="btsnoop_title">蓝牙抓包分析</string>
+    <string name="btsnoop_entry_desc">分析错误报告里的蓝牙 HCI 日志，看车机收到了什么</string>
+    <string name="btsnoop_steps">1. 开发者选项 → 「启用蓝牙 HCI 信息收集日志」选「已启用」。Android 13 的「已过滤」等于没开。\n2. 关闭再打开蓝牙，让日志从头记录。\n3. 回到 mcarplay 点「连接」，按平时的方式让车机搜索并配对，保持连接至少 3–5 分钟。尽量不要播放音乐，日志满了会覆盖前面的内容。\n4. 开发者选项 → 「提交错误报告」，生成后在通知里分享给 mcarplay，或回到本页选择文件。\n5. 测完把 HCI 日志改回「已停用」。</string>
+    <string name="btsnoop_privacy">文件只在本机读取分析，不复制、不保存、不上传。结果只含时间、计数、CoD 和服务 UUID，不含地址和设备名，并会写入诊断日志。错误报告本身含大量个人信息，不要把它发到群里。</string>
+    <string name="btsnoop_open_developer">打开开发者选项</string>
+    <string name="btsnoop_pick">选择错误报告或 btsnoop 文件</string>
+    <string name="btsnoop_copy">复制结果</string>
+    <string name="btsnoop_idle">尚未分析</string>
+    <string name="btsnoop_running">正在分析，错误报告较大时可能需要一两分钟…</string>
+    <string name="btsnoop_done">分析完成：%1$d 个抓包文件</string>
+    <string name="btsnoop_no_capture">文件里没有 btsnoop_hci.log。请确认 HCI 日志选的是「已启用」，并在打开后重启过蓝牙。</string>
+    <string name="btsnoop_unsupported">不是错误报告 zip 或 btsnoop 文件</string>
+    <string name="btsnoop_failed">读取失败（%1$s）</string>
+    <string name="btsnoop_developer_disabled">开发者选项还没打开：在「设置 → 我的设备 → 全部参数」连续点「OS 版本」7 次</string>
+    <string name="btsnoop_copied">已复制分析结果</string>
+    <string name="btsnoop_busy">正在分析，请稍候</string>
+    <string name="btsnoop_clip_label">mcarplay 蓝牙抓包分析</string>
+</resources>

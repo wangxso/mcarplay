@@ -741,6 +741,251 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
 - **对应修改（未上车验证）：** 每次 `requestUI` 拿回主屏后，在下一个 CarWith IDR 前重发 VideoConfig，并用解析器缓存给该 IDR 内联 SPS/PPS
   （假设：车机回原车界面时拆掉了解码器，再进入时只等参数集）。拿回 3 s 后记一行「车机触控 +N、要关键帧 +M」，用于区分仲裁未生效与解码失败。
 
+## 奇瑞艾瑞泽 8 雅（2022 款）：手机主动连入全部快速失败、车机未回连（2026-11-02 18:32–18:36，UTC+8，remote 实时日志）
+
+手机小米 `M2102J2SC`，Android 13（SDK 33），HyperOS `OS1.0`，ROM `V816.0.4.0.TGACNXM`；CarWith `4.0.4-20260522`（104000004），
+小米 CarLife `8.6.8`（260）；应用 remote/debug `0.1.3-rd-diag3-debug`。车型由用户确认为 2022 款艾瑞泽 8 雅，用户报车机版本
+「2.0.4」，与 10-31 那台的固件 `M1E_IC2172/82_03_21.387_250619_R` 是否同一版本无法对应。证据为调试桥实时日志，经只读 API 脱敏
+（设备名/地址为占位符），原文不入库。
+
+- **三轮均停在蓝牙阶段**（各约 57 s、39 s、98 s 后由用户取消），没有 iAP2、热点凭据或媒体。每轮都先在本机注册 `…cafe` iAP2 监听与
+  CarPlay 能力 UUID 并开始监听；第三轮注册（18:35:15）早于配对完成（18:35:21），顺序与 10-31 成功路径一致。
+- **车机不提供 `…caff`：** 18:34:37 SDP 实时查询完成（295 ms），8 项服务为 SPP、A2DP 接收、AVRCP、HFP、0x1133（MAP 通知）、
+  `4de17a00-52cb-11e6-bdf4-0800200c9a66`、`ec884348-cd41-40a2-9727-575d50bf1fd3` 及一项 0x0000，与 10-31 那台同样有 `ec884348…` 而无 `…caff`。
+- **手机主动连入 34 次全部失败**（第二轮 6 次、第三轮 28 次），都在 43–127 ms 内 `IOException reason=READ_FAILED readRet=-1`；
+  如此之快与 SDP 找不到服务一致，重试不会改变结果。
+- **车机始终没有回连：** 三轮 `incomingAccepted=0`。日志无法反映用户是否在车机上点选了手机；10-31 的成功均为车机回连，且需用户在车机
+  蓝牙列表手动点手机。
+- **配对不稳定：** 第一轮 `BONDING→NONE`；第二轮 18:34:37 配对完成，18:34:59 断开后到 18:35:15 第三轮开始时目标已不在已配对列表，
+  随后重新配对。应用代码无 `removeBond`，由用户还是车机删除未定。
+- 当时目标未配对，日志在「目标不在已配对列表」后又写「没有已配对的蓝牙设备」，而手机上另有 7 台已配对设备，属误导。
+
+**对应修改（未上车验证）：** 对未声明 `…caff` 的车机，出站在 1 s 内 `READ_FAILED` 后改为等车机回连：带 `ec884348…` 时首次即转，
+否则连续 3 次；之后每 60 s 才试一次出站，不再每 3 s 一次，也不做配置文件断开对照。声明 `…caff` 的车机、较慢或其它原因的失败不受影响；
+帕萨特这类首连成功的车机不会进入此路径。转入时日志与界面提示「请在车机的蓝牙或 CarPlay 设备列表中点选本机」；指定目标未配对时不再
+误报「没有已配对的蓝牙设备」。是否因此连上，需同一车机在完整重启中控、两侧删除配对、先启动 mcarplay、再由车机点选手机后复测。
+
+- **修改包复测（18:53–18:56，remote 日志；测试包 SHA-256 `249f5b4e…`，日志版本串仍为 `0.1.3-rd-diag3-debug`）：** 新逻辑按预期生效——
+  第二、三轮各只在配对后连一次，75 ms / 174 ms `READ_FAILED` 即转入等待并给出提示，第三轮此后只在 60 s 后探测一次（18:56:53，75 ms 失败），
+  不再每 3 s 重试。**车机仍未回连**（`incomingAccepted=0`），能力记录均在配对前注册。配对依旧不稳：第一轮 `BONDING` 持续约 35 s 后随 ACL
+  断开回到 `NONE`；第二轮配对成功，用户取消、车机蓝牙断开后，第三轮开始时目标又不在已配对列表。日志不能说明用户是否在车机上点选了手机、
+  车机是否显示支持无线 CarPlay，也不能说明配对由谁删除。
+
+## 奇瑞艾瑞泽 8（2022 款，10-31 同一辆）：删除配对后首轮出画，用户断开后车机认证与链路无应答（2026-11-02 19:18–19:22，UTC+8，remote 实时日志）
+
+手机小米 `2509FPN0BC`，Android 17（SDK 37），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.23-20261016`（104000023），小米 CarLife `8.8.5`（274）；
+应用 remote/debug `0.1.3-rd-diag3-debug`（`fix/chery-inbound-wait` 测试包）。用户反馈此前删除了车机蓝牙配对，「只在开始连上一次」。
+
+- **第一轮成功：** 19:18:53 车机回连 `…cafe`，MFi 32B 应答、`0x5703`、加入热点、AirPlay 配对/SETUP/RECORD 均完成，19:19:11 发出 CarWith 首帧，
+  约 9 s 内发送 170 帧。19:19:20 以 `USER_STOP` 结束（手机断开按钮或调试桥 `stop_connection`，二者在设备日志中无法区分）。
+- **第二轮（19:21:23 车机回连）：** 链路同步与 `0x1d01` 正常，32/20/16B 三次 MFi 挑战车机都只回链路 ACK、不回 `0xaa03`，之后 `0x5702` 无 `0x5703`，
+  19:21:53 车机关闭 RFCOMM。与 10-31 12:50 原厂崩溃后「认证共享锁」的现象一致。
+- **第三轮（19:22:15 车机回连）：** 手机每 500 ms 发 iAP2 链路 SYN，车机 28 s 内无任何应答，「链路协商超时」。
+- 本轮没有任何车机 ADB 操作；10-31 起对车机的操作仅为重启 CarPlay 服务与经用户授权的中控重启，没有持久改动。
+- 另见：车机回连会话进行中，出站客户端仍按本轮候选列表走到该车机并尝试一次 `…caff`（19:19:12、19:21:39），因为
+  `BtSessionGate` 只在每轮列表开始时检查。该尝试 100 ms 内失败，是否影响车机未知。
+
+## 奇瑞艾瑞泽 8（2022 款，10-31 同一辆）：真 iPhone 无线 CarPlay 的断开时序（2026-11-02 19:49–19:52，UTC+8，车机 ADB logcat）
+
+车机 `G6SH_r8a7795`，Android 9，固件 `M1E_IC2172/82_03_21.387_250619_R`，19:44 刚重启；车机无 root，只取 logcat（main/system/crash），
+原文含定位与设备序列号，仅存本机临时目录，不入库。手机为用户提供的真 iPhone（型号与 iOS 版本未记录）。用户操作：未在 iPhone 上忽略此车时
+连不上，忽略后重新配对；连上后先关 iPhone 蓝牙（会话不受影响），再关无线局域网（会话断开）；之后重新打开两者即自动重连。
+
+### 真 iPhone 连接全过程（逐步，19:49:38–19:51:44，车机 ADB logcat）
+
+以下按时间顺序列出同一次会话（会话时长 106 s、`noErr` 结束）在车机日志中的每一步；「+」为距用户在车机蓝牙设置点选 iPhone 的秒数。
+地址、热点名与口令已略去。末列为 mcarplay 在 2026-11-02 23:36 复测（APK `a029717a…`）中的对应表现。
+
+| 步骤 | 时刻 | 车机日志证据 | 说明 | mcarplay 现状 |
+|---|---|---|---|---|
+| 1 点选 | 38.073（+0） | `connectWirelessCarplay: iPhone` → 38.441 `FlcBsmSockConnect` | 车机发起蓝牙 SPP 连向手机的 iAP2 服务；手机不主动连车机 | 相同（手机主动连入在该车上 45 ms 内 `READ_FAILED`，改为等车机回连） |
+| 2 iAP2 识别 | 44.422–44.522（+6.4） | `Device_StartIdentificationMessage` → `Accessory_IdentificationInformationMessage`（含 `BluetoothTransportComponent`、`WirelessCarPlayTransportComponent`）→ `Device_IdentificationAcceptedMessage` | 点选到识别约 6 s，为车机侧链路建立耗时 | 相同 |
+| 3 蓝牙 MFi 认证 | 44.588–45.399（+7.3） | 证书 608 B → `Accessory_AuthenticationResponseMessage sem_wait` 44.875 → `sem_post` 45.307（0.43 s）→ `iAP AUTHENTICATION_PASS` | 一次挑战即通过；车机芯片为 MFi Auth 3.0，摘要 32 字节 | 修改后相同：只发一次 32 B，0.55 s 收到签名（此前先发 20/16 B，芯片挂起约 35 s） |
+| 4 热点凭据 | 45.404 | `Device_RequestAccessoryWiFiConfigurationInformationMessgae` → `Accessory_WiFiConfigurationInformationMessgae`（SSID、口令、`securityType = 2`、`channel = 149`） | iPhone 认证后立即请求车机热点信息（0x5702 → 0x5703） | 相同 |
+| 5 车机起 AirPlay | 45.458 | `Registering Bonjour _airplay._tcp. port 7000`、`AirPlay servers started` | 车机在发出凭据的同时开 AirPlay 服务 | 相同 |
+| 6 入网 | 49.262（+11.2） | `OnApLinkedStaJoin` | 拿到凭据约 3.9 s 后加入热点 | 相同；手机系统 WLAN 保存过该热点时会以系统身份入网并成为默认网络（无互联网） |
+| 7 车机连手机 ctrl | 入网后 | 车机以 `hostName=iPhone.local.` 连 iPhone 的 `_carplay-ctrl` | 车机按手机广播的 ctrl 服务回连 | 相同（手机广播 `_carplay-ctrl._tcp`） |
+| 8 配对 | 53.009–53.266（+15.2） | `Control pair-setup HK, type 0` ×3、`Control pair-verify 1/2` | 车机重启后首连做完整 pair-setup（M1/M3/M5）再 pair-verify；19:55、19:57 重连只走 pair-verify | 修改后配对类型相同（`X-Apple-HKP: 0`；原为 `type 2`）；**不同**：mcarplay 每次会话都做完整 pair-setup |
+| 9 会话内 MFi | 53.276–53.717 | `MFi _requestProcessAuthSetup` → `MFiSAP_Exchange start/end`（0.44 s） | pair-verify 后、会话开始前做 `/auth-setup` | 修改后相同（0.47–0.51 s，证书 608 B、签名 64 B） |
+| 10 会话开始 | 53.789–53.910（+15.8） | `AirPlay session started: From=iPhone … T=WiFi C=?`、`HID started`、`link_BindPort iap2_wificarplay_port` | 只记一次 `session started` | 修改后 `From=iPhone`；补发 RECORD 时可能记两次（重复启动是待验证的崩溃诱因） |
+| 11 初始模式 | 53.969 | `Modes changed: screen accessory …, mainAudio accessory …, speech n/a (none)` | iPhone 起步时屏幕与主音频都留给车机 | **不同**：mcarplay 不经此阶段，约 2 s 后直接 `screen controller / mainAudio controller` |
+| 12 网络 iAP2 识别 | 54.028 | `field_put_VehicleInformationComponent`、`field_put_LocationInformationComponent` | 经 AirPlay 内的 iAP2 链路再做一次识别 | 相同（23:36 为 39.254）；部分会话该链路未到 NORMAL |
+| 13 车机关蓝牙 | 54.041–54.130（+16.0） | `CarplayService_DisableBluetooth`、`CarPlayConnected and setBtDisable`；54.574 ACL 断开 | iPhone 在会话开始约 0.13 s 后发 `disableBluetooth`，会话改走纯 Wi-Fi | 修改后相同 |
+| 14 隧道 MFi 认证 | 54.197–54.752（+16.7） | 证书 608 B → `sem_wait` 54.230 → `sem_post` 54.677（0.45 s）→ `Option_WifiCarplay_Wifi AUTHENTICATION_PASS 2` | 网络 iAP2 一次挑战即通过 | 修改后相同（只发一次 32 B，0.48 s；此前先发 20 B，挂起约 37 s 并排队） |
+| 15 接管屏幕与主音频 | 55.366–55.549（+17.5） | `Modes changed: screen controller …`（55.366）→ `mainAudio controller`（55.539）→ `ScreenStreamStart`、`video stream status … 0` | 会话开始约 1.5 s 后才接管并出画 | **不同**：mcarplay 的屏幕流在会话开始前（39.063）就已启动 |
+| 16 主音频按需 | 58.066（+20.0） | `Main audio setting up AAC-LC/44100/2 for media` | 有媒体播放时才建主音频流 | **不同**：mcarplay 会话开始 0.1 s 即建主音频并全程保持 |
+| 17 辅音频（提示音） | 19:50:07.663–13.579 | `Alt audio setting up AAC-ELD/48000/1` → `[duer]Teardown` → `Alt audio torn down` | 约 6 s 的提示音单独建流、单独拆流；19:55、19:57 两次会话没有 | 不建辅音频（与崩溃无关，见下） |
+| 18 暂停时拆主音频 | 19:50:30.502 / 19:50:50.311 | `[duer]Teardown` → `Main audio torn down`；20 s 后 `Main audio setting up …` | 媒体停止即拆流，恢复播放再建；会话与屏幕流保持 | **不同**：mcarplay 不中途拆主音频 |
+| 19 断开 | 19:51:40.141–.530 | iAP2 `wirelessCarPlayStatus = 0`（0x4E0D）→ .270 第一条 `[duer]Teardown`（屏幕流）→ .494 第二条（整会话，间隔约 220 ms）→ .501 `session ended … noErr` → .530 `AirPlay servers stopped` | 先告知无线不可用，再拆屏幕流，最后拆会话 | 修改后相同（链路未到 NORMAL 时 0x4E0D 无法发送） |
+| 20 收尾 | 41.113–44.110 | `CarPlayDisconnected and setBtEnable`；41.346 `OnApLinkedStaLeave`（会话结束后 0.85 s）；44.102 蓝牙适配器 `10->11` 重新开启 | iPhone 立即离开热点；车机恢复蓝牙 | 手机按设置可能留在热点上；离开与否都会崩溃 |
+| 21 结束后 | 19:51:41 起 | 无 `Idle for`、无崩溃 | — | **不同**：mcarplay 每次会话结束 +10 s `### Idle for 10 seconds`、+20 s `_PerformPeriodTasks+640` SIGSEGV，原因未定位 |
+
+同日 19:55、19:57 两次 iPhone 重连不再点选：两者都开时 iAP2 报可用（状态 1）→ 入热点 → 车机连 `iPhone.local` → 会话开始，且只走 pair-verify（见下文）。
+
+- **连接（19:49:4x–19:49:55）：** 车机经蓝牙完成 iAP2 后，iPhone 加入车机热点，车机以 `hostName=iPhone.local.` 连 iPhone 的 ctrl，随后
+  pair-setup/pair-verify、AirPlay MFiSAP，19:49:53.910 `AirPlay session started: From=iPhone … T=WiFi`，19:49:55 屏幕接收启动。
+- **会话中按流拆音频：** 音频结束时 iPhone 单独拆流——19:50:13 `[duer]Teardown` → `Alt audio torn down`，19:50:30 `[duer]Teardown` →
+  `Main audio torn down`，会话与屏幕流保持。
+- **断开时序（19:51:40）：**
+  1. **.141** iAP2 先到（车机蓝牙此时已关，见下，应经 AirPlay 内的 iAP2 隧道）：`SVP_iAP_WirelessCarPlayUpdateCB wirelessCarPlayStatus = 0` → `WirelessCarPlayUpdateStatusCallBack Available=0`，
+     即 `0x4E0D WirelessCarPlayUpdate` 置为不可用。
+  2. **.270–.475** 第一条 `[duer]Teardown`：只拆屏幕流（`ScreenStreamStop` → `_ScreenTearDown` → `Screen thread exit`）。
+  3. **.494** 第二条 `[duer]Teardown`（距上一条约 220 ms）：`HID stopping`、`Main audio torn down`，即整会话拆除。
+  4. **.510–.958** 车机自行收尾：连接状态 `Normal_Disconnected(5)` → `StopWirelessCarPlay` → 注销 `_airplay._tcp`、`AirPlay servers stopped`
+     → `SVP_iAP_DeactivateDevice`。
+  5. **41.345** iPhone 离开车机热点（`AP-STA-DISCONNECTED`）；41.113 车机设置记 `CarPlayDisconnected and setBtEnable`，19:51:44 车机蓝牙适配器
+     状态变化。
+- **会话期间车机关闭自身蓝牙：** 19:49:54.574（会话开始约 0.7 s 后）iPhone ACL 以 `Adapter State: BLE_TURNING_OFF` 断开；会话结束后
+  `CarPlayDisconnected and setBtEnable`，19:51:44 适配器重新开启，蓝牙服务进程号随之变化（19:57 再次变化）。因此关 iPhone 蓝牙不影响会话。
+- **配对身份：** 19:49:45 车机记 `Created AirPlay Pairing Identity`（重启后新建；同日 19:19 mcarplay 读到的 `/info pi` 与之不同），首连走
+  pair-setup；19:55、19:57 重连只走 pair-verify。用户需先在 iPhone 上忽略此车才能连上，与车机身份更换一致（推断）。
+- **只开蓝牙、未开 Wi-Fi（19:54:13–19:54:52）：** iAP2 报 `wirelessCarPlayStatus = 0`，车机状态 6 后停服务，约 39 s 后 ACL 断开。
+- **两者都开即自动重连（19:55:14–19:55:28）：** iAP2 报可用（状态 1）→ iPhone 入热点 → 车机连 `iPhone.local` → 会话开始。
+- **无拆除请求的断开（19:56:59）：** iPhone 直接离开热点（`AP-STA-DISCONNECTED`），此前无 `0x4E0D` 与 `TEARDOWN`；车机 0.5 s 后由
+  `WIFI_AP_STA_LEAVE` 触发 `StopWirelessCarPlay`，先停 AirPlay 服务再拆会话（伴随一条 `kTimeoutErr`），状态 5。19:57:17 起自动重连，19:57:29 会话开始。
+  用户此次的具体操作未记录。
+- **没有崩溃：** 19:44–19:57 全程 crash 缓冲无记录，匹配 `tombstone` 的只有 SELinux 审计噪声，CarPlay 进程 PID 3652 不变。
+- **两种 iPhone 断开对车机都是「先停服务/有序拆除」：** 要么 iPhone 主动 `0x4E0D` + 两次 `TEARDOWN`，要么 iPhone 离开热点由车机自己收尾。
+  mcarplay 现在是关闭全部 TCP 后才释放热点，车机先看到连接被断而手机仍在热点上，这条路径 iPhone 两次都没有走过。
+- **与 mcarplay 的差异：** mcarplay 断开时不发 `0x4E0D` 不可用、不发 `TEARDOWN`，同时关闭全部 TCP 与蓝牙 RFCOMM；10-31 与今日的崩溃/认证无应答
+  均发生在这种断开之后。车机日志只显示 `Teardown` 及所拆部分，不含请求体；按流拆除的请求体格式（`streams` 列表）为按 AirPlay 惯例的推断。
+- **认证卡住的直接原因是车机 MFi 芯片 I2C 读不返回（20:00–20:05，同一抓包，另含车机 `dmesg`）：** 车机 iAP2 应答挑战时先取共享信号量，
+  再经 `/dev/i2c-4` 写挑战并轮询读取芯片（日志 `i2c_read 133` → 正常约 0.4 s 后到 `143/149/158` 并 `sem_post`）。
+  - 19:55:29 **真 iPhone** 的 Wi-Fi 隧道 iAP2 认证（线程 7209）同样停在 `i2c_read 133` 无后续；iPhone 会话不受影响，19:57 重连 BT 认证正常。
+  - 20:00:47 iPhone 直接离开热点（无 `TEARDOWN`），车机自行收尾，会话结束原因 `kConnectionErr`。
+  - 20:02:23 用户在车机上点选 mcarplay 手机（蓝牙地址与随后 AirPlay 会话 `D=` 相同），车机主动连其 `…cafe`；20:02:26 认证线程 8488 取锁、写挑战后停在
+    `i2c_read 133` 不再返回且未释放；车机对后续挑战无处理，20:02:38 手机端关闭 RFCOMM。**此前本次开机内 mcarplay 没有任何连接或断开，车机也没有崩溃。**
+  - 20:03:27 再次点选：BT 认证 0.6 s 通过，20:03:38 AirPlay 会话开始，20:03:38.95 车机收到视频；隧道认证（线程 8821）先后两次各等 35 s 超时，
+    20:04:48 第三次通过（`Option_WifiCarplay_Wifi AUTHENTICATION_PASS`）。
+  - 车机 `dmesg`（20:02:26 之前的条目已被审计日志挤出）记 `i2c-rcar e66d8000.i2c: error -110`（即 `i2c-4`，20:04:00.9）及 `i2c-6` 多次 -110。
+  - 结论：「认证锁」是车机读 MFi 芯片挂起、持锁线程不返回所致，真 iPhone 也会碰到；10-31「崩溃后遗留锁」只是其中一种情形的推断，需修正为此。
+    车机内部等待约 35 s 超时；手机端在此期间重发的挑战会排队，各再耗 35 s。触发条件未知。
+- **mcarplay 断开后复现原厂崩溃（20:11，同一抓包）：** 20:03 的 mcarplay 会话运行约 461 s 后，用户在 mcarplay 点断开：
+  20:11:18.558 车机屏幕流先停、18.589 车机读到 mcarplay 关闭蓝牙 RFCOMM（`bt socket closed`）、18.614 会话以 `kConnectionErr` 结束、
+  18.643 手机离开热点、18.732 车机才停 AirPlay 服务；19.263 手机以另一 MAC（系统 Wi-Fi 已保存的热点）0.6 s 后重新入网。
+  **20:11:39.040（断开后 20.4 s）`SIGSEGV`，`libAirPlay_R14_vehicle.so (_PerformPeriodTasks+640)`，空指针 0xac**——与 10-31 完全相同，
+  库 SHA-256 仍为 `9e24ea45…`。CarPlay 进程由 3652 重启为 9935。真 iPhone 当日四次断开（两次有序、两次直接离开热点）均未触发。
+- **重启后的进程再次崩溃：** 20:11:51 用户在车机上点选 mcarplay 手机，BT 认证通过，20:11:58 会话开始、20:11:59.95 收到视频；
+  **20:12:02.2 `SIGILL`（ILL_ILLOPC）于 Binder 线程的 JIT 代码（`dalvik-jit-code-cache` ← `Binder.execTransact`）**，20:12:03.6 进程退出，
+  之后未再拉起（20:13 `pidof` 为空）。这就是用户看到的「出画几秒退出」；20:12:06 手机从系统 Wi-Fi 身份（`.168`）切回 mcarplay 专属网络（`.25`）
+  发生在崩溃之后。SIGILL 的原因无直接证据，与 10-31「崩溃后原厂模块不稳定、需重启中控」一致。
+- **iPhone 会话开始即发 `disableBluetooth`：** 三次 iPhone 会话分别在 19:49:54.041、19:55:28.893、19:57:29.584（会话开始后约 0.1–0.6 s）
+  触发车机 `_AirPlayHandleSessionControl` → `CarplayService_DisableBluetooth Dev_BtAddr=<iPhone 蓝牙地址>`，车机随即
+  `CarPlayConnected and setBtDisable` 关闭整个蓝牙适配器，断开后 `setBtEnable` 恢复。车机 `libcarplayserver_R14_vehicle.so` 中该会话控制的类型串为
+  `disableBluetooth`、参数键 `deviceID`（静态字符串）。mcarplay 不发此命令，故其会话期间车机蓝牙与 iAP2 RFCOMM 保持，断开时车机多出一路
+  蓝牙链路关闭；这是否为崩溃诱因未证实。iPhone 在哪条通道、以何种请求体发送，日志未记录，需按 AirPlay 会话命令惯例实现后上车验证。
+- **对应修改（`fix/chery-inbound-wait`，未上车验证）：**
+  1. 车机 iAP2/`/info` 自报厂商 CHERY 时（策略规则 `chery.disable-bluetooth`），初始 SETUP 与事件通道建立后、`modesChanged` 前经控制通道
+     `POST /command` 发 `{type: disableBluetooth, params: {deviceID: <本机蓝牙地址小写>}}`；发出前即置位，本连接内蓝牙断开（RFCOMM 关闭或 ACL 断开）
+     按预期处理、不收会话。其它接收端不发。
+  2. 用户断开且会话已激活时，后台按 iPhone 顺序：网络 iAP2 控制会话已建立则先发 `0x4E0D`=0；停本地推流；约 150 ms 后 `TEARDOWN` 屏幕流
+     （`{streams: [{type: 110}]}`）；约 150 ms 后 `TEARDOWN` 会话（空体），各等应答最多 1.5 s；之后执行原收尾。会话 `TEARDOWN` 未得 200 时先释放车机热点
+     再收尾（模仿 iPhone 直接离网）。期间再点断开或发起新连接立即收尾。车机掉线等非用户断开不变。
+  3. MFi 挑战（蓝牙与网络隧道两路）：该车机记忆中成功过的长度等待窗口延长到 40 s（车机内部约 35 s 超时），静默过的仍缩短，未知长度照旧。
+  需同一车机验证：会话开始后车机是否关蓝牙且会话保持；断开后 30 s 内车机是否不再崩溃、能否直接重连。
+- **修改包实车复测（2026-11-02 20:43–20:46，UTC+8，车机 ADB logcat；remote/debug APK `b42cbef3…`，手机小米 `2509FPN0BC`）：** 中控 20:39 重启后车机
+  CarPlay 正常。20:44:18 车机点选 mcarplay 手机，BT 认证通过，20:44:31.773 会话开始，**20:44:31.929 车机执行 `CarplayService_DisableBluetooth`
+  并 `setBtDisable`**，蓝牙适配器关闭，会话保持（用户确认车机蓝牙已关）。20:45:09.927 屏幕流 `[duer]Teardown`、20:45:10.221 会话 `[duer]Teardown`，
+  **会话结束原因 `noErr`**（此前为 `kConnectionErr`），随后车机停 AirPlay 服务、手机离开热点、车机 `setBtEnable`，与真 iPhone 有序断开的车机侧序列一致。
+  **但 20:45:30.293（断开后约 20 s）仍 `SIGSEGV`，`_PerformPeriodTasks+640`、空指针 0xac**，CarPlay 进程重启。可排除蓝牙 iAP2 链路与断开顺序为唯一诱因。
+  仍存差异：① 车机记 `mAutoReConnectMacAddress = AA:BB:CC:DD:EE…`，即 mcarplay SETUP `macAddress` 的占位值，真 iPhone 为其真实 Wi-Fi 地址；
+  ② 网络 iAP2 认证再次停在车机 MFi 芯片读取（`sem_wait` 无后续），`0x4E0D` 不可用未送达车机；③ 手机系统 Wi-Fi 仍保存车机热点，离开 0.7 s 后以另一 MAC 重新入网。
+- **对应修改（未上车验证）：** CHERY 车机（规则 `chery.real-wifi-mac`）的会话 SETUP `macAddress` 改填本机在车机热点上的 Wi-Fi 地址：取控制连接本地地址所在接口，
+  依次用接口硬件地址、sysfs 直读、Shizuku 读 sysfs、EUI-64 链路本地 IPv6 反推；都失败时保留占位并记日志。其它接收端不变。
+- **SETUP `macAddress` 修改包行车实测（2026-11-02 20:57–22:01，UTC+8，车机 ADB logcat；remote/debug APK `0e8378f5…`，手机小米 `2509FPN0BC`；
+  中控 20:51 重启，固件不变）：** 只有车机侧日志，手机端日志未取得。
+  - 20:58:15 手机以系统 Wi-Fi 已保存热点的身份（`1e:9a:…`）入网，随后会话开始；车机 `mAutoReConnectMacAddress = 1E:9A:…`，与热点终端 MAC 一致，
+    **占位值问题已消除**。会话在行车中持续 **1661 s**（约 28 min），视频 `Glitches 7%, 3 total`。
+  - 21:26:05 用户断开：屏幕流 `[duer]Teardown` → 会话 `[duer]Teardown`，**`AirPlay session ended … Reason=0 noErr`**，车机报 `Normal_Disconnected`、停
+    AirPlay 服务；21:26:16 手机离开热点。**21:26:25.79（断开后约 20 s）仍 `SIGSEGV`，`_PerformPeriodTasks+640`、空指针 0xac**，进程 5892 → 10255。
+    因此 SETUP `macAddress` 不是崩溃诱因；蓝牙释放、有序断开、真实 MAC 三项均已与 iPhone 一致仍崩溃。
+  - 21:26:32 手机重新入网，21:26:41 新进程上 pair-setup/pair-verify 通过、会话开始并再次 `DisableBluetooth`（`Dev_BtAddr` 为 mcarplay 手机）；
+    21:26:54 会话以 **`kConnectionErr`（Dur=13 s）** 结束，结束前车机认证线程在连续 `i2c_read`，`[duer]Teardown` 未出现（非有序断开，发起方未知）。
+    **21:27:14（结束后约 20 s）重启后的进程 10255 同样 `_PerformPeriodTasks+640` 崩溃。** 即该崩溃在 noErr 与 kConnectionErr 两种结束后都会出现，固定约 20 s。
+  - 22:00:53 一个新 MAC（`a6:5e:…`）入网，抓包至 22:01:52 未见 AirPlay 会话；ADB 随即断开。
+- **中控重启后需在车机上点手机、偶发 pair-setup `bad setup code`（2026-11-02 22:02–22:17，UTC+8，车机 ADB logcat；APK `0e8378f5…`）：**
+  - 22:02 中控重启后手机蓝牙（通话/音乐）自动连上，但车机没有发起 CarPlay（无 `connectWirelessCarplay`、手机未入热点）；此前崩溃时车机已清空
+    `mAutoReConnectMacAddress`。22:15:28 用户在车机蓝牙设置点手机后车机才连 `…cafe`。
+  - 22:15:30 iAP2 认证通过、22:15:32 入网，22:15:40 pair-setup 只走到 M3：**`### Pair-setup server bad setup code`**，随后 pair-verify 报
+    `unknown peer`；车机此后未再收到配对请求，22:16:00 `WIRELESS_CONNECT_TIMEOUT` 收尾。此前所有抓包里同一固定码 `3939` 的 pair-setup 均成功，
+    22:16:49 第三次点选又一次通过（M1/M3/M5 + verify），会话开始并 `DisableBluetooth`。
+  - 判断：SRP 证明对 A、B、S 的补零/去零编码与车机约定不一致时，只在其中某值首字节为 0（各约 1/256）时暴露，与「偶发一次、重试即好」吻合；
+    车机具体用哪种编码无直接证据。
+- **对应修改（离线通过，未上车验证）：** SRP 客户端重选私钥，直到 A 与 S 均为满 384 字节（补零与否编码相同）；接收端 B 首字节为 0 时
+  在提交证明前重发 M1 换 B（最多 3 轮）。模拟接收端新增逐项反向的编码约定，40 轮全部通过；关闭重选时用例失败。
+- **用户反馈（22:19）：** 连上后手机走车机热点 Wi-Fi、无互联网。抓包中会话入网 MAC 一直是系统已保存热点的身份（`1e:9a:…`），即手机系统 Wi-Fi
+  连着该热点，而不是 mcarplay 的应用专属网络。
+- **崩溃前的「Idle」与 type-130（2026-11-02，同一车机，对照当日真 iPhone 抓包）：** mcarplay 每次会话结束（20:11、20:45、21:26、22:27、22:28，
+  `noErr` 与 `kConnectionErr` 都有）后，车机 +10 s 记 `### Idle for 10 seconds`，+20 s 在 dispatch 工作线程 `_PerformPeriodTasks+640` SIGSEGV
+  （22:28:51 一次直接记 `Idle for 20 seconds` 后同毫秒崩溃）。当日真 iPhone 三次会话结束（19:51 `noErr`；19:57、20:00 iPhone 先离热点、`kConnectionErr`）
+  都没有 `Idle` 也没有崩溃。会话开始时只有 mcarplay 触发车机 `### Unsupported stream type: 130`（20:03、20:11、22:16），iPhone 从不请求该流类型。
+  推断（未证实）：车机对不支持的 type-130 SETUP 留下了未清理的状态，会话结束后其空闲检查在 20 s 时访问已释放对象。
+- **对应修改（离线通过，未上车验证）：** CHERY 车机（规则 `chery.no-iap-tunnel`）不再 SETUP type-130 iAP 隧道；其它接收端不变。需验证会话开始不再出现
+  `Unsupported stream type`，结束后无 `Idle for` 与崩溃，触摸照常。
+- **不建 type-130 的修改包实车复测（2026-11-02 22:40–22:46，UTC+8；APK `ce466185…`，车机 ADB logcat + 调试桥手机日志）：** 中控 22:39 重启。
+  22:44:08 会话开始，手机记「不 SETUP iAP 隧道」，车机**未再报** `Unsupported stream type`，`DisableBluetooth` 生效，视频与音频启动。
+  22:45:03 用户断开：手机按 iPhone 顺序发 `0x4E0D`（本次经隧道送达）→ 屏幕流 `TEARDOWN` 200 → 会话 `TEARDOWN` 200，随后关闭控制连接；车机记 `noErr`。
+  **22:45:24（+21 s）仍 `_PerformPeriodTasks+640` SIGSEGV**（只在 crash 缓冲区，本次 main 缓冲区无 `Idle for` 行）。**type-130 假设被否定。**
+- **同一车机 iPhone 与 mcarplay 会话的车机 AirPlay 日志差异（行模板去数字后比对）：** 只有 iPhone 有：`session started: From=iPhone`（mcarplay 为
+  `From=`，空）、`MFi _requestProcessAuthSetup` / `MFiSAP_Exchange`（会话内 auth-setup）、`Alt audio setting up AAC-ELD`（辅音频流）、
+  modes 中 `speech n/a (none)`（mcarplay 为 `(?)`）。这些是剩余的可见差异，与崩溃的关系未知。
+- **其它观察：** 中控重启后车机立即回连手机 `…cafe`（22:40:20），手机 22:40:23 才开始监听，车机等满 60 s 超时；车机 CarPlay 进程崩溃后曾卡在
+  `mConnectStatus = 1`（22:29:38 起），之后点选一律 `return!`，需重启中控。
+- **来源名与 speechMode 修改包实车复测（2026-11-02 22:57–22:58，UTC+8；APK `5909a4db…`）：** 发现 mcarplay 的 bplist 把负整数写成 1 字节（`speechMode=-1` → 0xFF），
+  车机按无符号读成 255；改为负数一律 8 字节。CHERY 车机控制通道请求加 `X-Apple-Client-Name: iPhone`、`X-Apple-ProtocolVersion: 1`（车机 AirPlay 库含这两个头名）。
+  复测中车机记 **`session started: From=iPhone`** 与 **`speech n/a (none)`**，两项与真 iPhone 一致。22:58:15 有序断开、`noErr`；
+  **22:58:35（+20 s）仍 `_PerformPeriodTasks+640` SIGSEGV**。来源名与 speechMode 均非崩溃诱因。
+  会话结束统计中 `Time Sync` 的 max/avg offset 为 INT_MAX 在 iPhone 会话里同样出现，不是差异。
+  剩余可见差异只有：会话内 MFi `auth-setup`（`MFiSAP_Exchange`）与辅音频流（`Alt audio setting up AAC-ELD`）。
+- **配对类型与会话内 auth-setup 修改包实车复测（2026-11-02 23:04–23:12，UTC+8；APK `b18cc3db…`）：** CHERY 车机 pair-setup/pair-verify 改发 `X-Apple-HKP: 0`
+  （车机对 iPhone 记 `pair-setup HK, type 0`，对 mcarplay 原 `2` 记 `type 2`），pair-verify 后、SETUP 前发 `POST /auth-setup`（0x01 + X25519 公钥）。
+  23:04:58 第一次点选时车机 iAP2 认证停在 `Accessory_AuthenticationResponseMessage sem_wait` 两分钟以上，需重启中控。重启后 23:11:22 车机记
+  **`pair-setup HK, type 0`** 与 **`MFiSAP_Exchange start/end`（0.47 s，iPhone 为 0.44 s）**，会话正常。23:12:08 有序断开、`noErr`；
+  **23:12:29（+20 s）车机记 `### Idle for 20 seconds` 后同毫秒 `_PerformPeriodTasks+640` SIGSEGV**。配对类型与 auth-setup 均非诱因。
+  真 iPhone 会话结束后约 0.8 s 即离开热点、无崩溃；mcarplay 离开热点与否（20:11 立即离开、21:26 11 s 后离开）都崩溃，故「断开后手机需继续应答计时」不成立。
+  车机日志中与 iPhone 的可见差异只剩辅音频流（`Alt audio setting up AAC-ELD`）。
+- **MFi 挑战长度与车机芯片挂起（2026-11-02 全天车机日志 + 调试桥手机日志）：** 车机为 MFi Auth 3.0 芯片（iPhone auth-setup 时车机记
+  `Using MFi Auth v.3 chip`、`inDigestLen = 32`）。真 iPhone 每路认证一次、约 0.45 s 通过。mcarplay 的网络隧道按基线先发 20B
+  （`TUNNEL_MFI_BASELINE = 20/32/16`），车机认证线程 `Accessory_AuthenticationResponseMessage sem_wait` 约 35–37 s 才返回，其后 32B/16B 排队
+  （20:03、20:44、20:59、22:44、22:57、23:11）；蓝牙路径的长度记忆一度把 32B 记为「被拒」，23:20:50 蓝牙首发 20B 后车机认证线程挂死、dmesg 记
+  `i2c-rcar e66d8000.i2c: error -110`，车机 30 s 后超时。22:42、23:04 等「点了没反应 / 需重启中控」均在非 32B 挑战之后。
+- **对应修改（离线通过，隧道部分上车中）：** CHERY 车机（规则 `chery.mfi-32-only`）蓝牙与隧道两路 MFi 挑战都只发一次 32B、等 40 s、不读写长度记忆。
+- **崩溃与挂起认证无关（更正）：** 曾观察到 22:45、22:58、23:12 三次会话结束时都有未完成的隧道认证，但 20:11 与 21:26 两次崩溃前隧道认证早已通过
+  （20:04:48、20:59:37 `AUTHENTICATION_PASS`），会话结束时无挂起，仍在 +20 s 崩溃；故「挂起认证导致崩溃」不成立。
+- **断开后车机侧 TCP 与停止序列（2026-11-02 23:27–23:30，车机 `/proc/net/tcp*` 每秒采样）：** 会话中车机持有手机 3 条 TCP（`7000` 控制、事件、屏幕数据）。
+  23:29:23 会话 `noErr` 结束，两条流连接即刻关闭，控制连接 23:29:24 进入车机侧 `TIME_WAIT`；**会话结束 1 s 内已无任何到手机的 TCP 连接**，
+  但 23:29:33 仍记 `Idle for 10 seconds`、23:29:43 `Idle for 20 seconds` 并 SIGSEGV。车机停止序列（`StopWirelessCarPlay` → `DeactiveCarPlay` →
+  `carplayserver_stop` → `AirPlay servers stopped` → `CFRunLoopRun end` → `DeactiveWirelessCarPlay end`）与真 iPhone 19:51:40 逐行一致，
+  仅 `DeactiveWirelessCarPlay linkid` 为 1（iPhone 为 2）。同一会话车机记两次 `session started`（第二次 `C=AAC-LC`，对应补发 RECORD），
+  但 20:03、20:44、22:44、22:57 只记一次的会话同样崩溃；仅凭 started 日志条数不能排除重复 RECORD，见 11 月 3 日补充。
+- **当晚结论：** 已对齐并在车上验证的差异：蓝牙释放、有序断开、真实 MAC、type-130、来源名、speechMode、HKP、auth-setup、MFi 32B；
+  断开后 +20 s 的 `_PerformPeriodTasks` 崩溃仍在。车机 CarPlay 进程崩溃后约 5 s 自动重启并能回连。
+  **更正：** 按上文「真 iPhone 连接全过程」逐步对照，仍有三处行为差异未试：① iPhone 起步时屏幕与主音频都留给车机（`accessory`），约 1.5 s 后才接管；
+  ② 主音频只在媒体播放时建立、暂停即拆（会话结束时未必有主音频流），mcarplay 全程保持；③ iPhone 重连只走 pair-verify，mcarplay 每次完整 pair-setup。
+- **MFi 32B 固定修改包实车复测（2026-11-02 23:36–23:40，UTC+8；APK `a029717a…`，车机 ADB logcat + 调试桥手机日志）：** 23:36:25 车机点选，
+  蓝牙 0xAA02 32B（一次、窗口 40 s）0.55 s 收到 0xAA03，车机芯片读取约 0.43 s；auth-setup 511 ms；23:36:38 会话开始，隧道 0xAA02 32B 一次、0.48 s 收到签名，
+  车机记 `Option_WifiCarplay_Wifi AUTHENTICATION_PASS`。点选到出画约 12 s，全程无芯片挂起。会话 204 s（触摸 40 次），23:40:02 有序断开 `noErr`；
+  **23:40:22（+20 s）仍 `Idle for 20 seconds` 后 SIGSEGV**。本会话网络 iAP2 控制会话未建立（车机 SYN marker 达 #200、链路 DEAD），0x4E0D 未发；
+  而 22:45 等会话链路为 NORMAL、0x4E0D 已送达同样崩溃，二者无关。
+
+### 原厂断开崩溃的静态分析与单次 RECORD 候选（2026-11-03，未上车）
+
+对与上文车机一致的 ARM64 `libAirPlay_R14_vehicle.so`（SHA-256 `9e24ea4577c7eac52d0799bd88647a1a8bea561a179e54bafa7afe7c45b5438d`）
+做静态分析，并复核 13 份历史崩溃记录；未运行或修改原厂库，也未操作车机。
+
+- `_PerformPeriodTasks+640` 的 `0x3a420` 从 `[x8+0xac]` 读取字段；13 份崩溃的 `x8=0`。同一函数先从 `session+0x10` 取 server 引用，
+  Finalize 会清零该引用。server 的 `+0xac` 默认值为 20 秒，会话将其换算为空闲阈值；两份现场计时寄存器分别约 20.001 / 20.002 秒。
+  23:29 日志在 Finalize 后仍出现 Idle 10 / 20 秒并崩溃，说明周期回调未随会话彻底退役。
+- 原厂 SessionStart 每次成功都会新建定时器并覆盖 `session+0xd8`，TEARDOWN/Finalize 只能取消当前句柄；若同一 session 成功 Start 多次，
+  较早的定时器可能遗留。23:27 会话有两次 started 后崩溃；其他崩溃会话只见一次 started，缺少同一 session 的实际 Start 和定时器计数。
+  **更正上文：重复 RECORD 未被排除，是优先验证的触发候选；不能声称已证明全部现场均由它触发。**
+- 候选在 `manufacturer=CHERY`、`model=Tiggo`、AirPlay `srcvers=320.17.7` 同时匹配时，同一连接只发一次 RECORD；不同车机维持旧行为。
+  并发调用共享结果，超时/拒绝后不在原连接重发；首次 RECORD 未确认则终止本轮。`srcvers` 是栈版本，并非完整车机固件标识。
+- 有序停止时禁止新业务请求，终止本代心跳，屏幕推流停止接收新帧但数据 socket 暂留至 TEARDOWN；允许关闭所需的 iAP 通知。
+  音频初始化与资源声明按连接代次过滤迟到工作。候选同时包含这些收尾调整，若实车不再崩溃，仍需单变量对照才能归因于单次 RECORD。
+- **待实车验证：** 从干净的车机 CarPlay 进程起步，核对策略命中及单次 RECORD，检查画面、声音、触控；手动断开、动态开启声音与异常掉网后各观察至少 60 秒。
+  理想情况下记录同一 session 的 Start、timer 创建/取消与 Finalize。尚未验证此候选解决原厂崩溃或避免音频回归。
+
 ## 2026-11-03：VW4211 手动断开后的重连、配对窗口关闭与主屏回切
 
 - **环境与证据：** 用户提供的本地报告 `9acfb6ca…`，生成于 2026-11-03 22:14:15（Asia/Shanghai）；当前进程 `35328f0c`，
@@ -781,3 +1026,457 @@ APK SHA-256 `7bd1f9bee36e3b276fdf8565b778f0a21cd5957e7b5763fb716ed428ee047107`�
 remote/debug（`0.1.3-rd-debug`）为 `e693eb819783b05111bfa3516060660e0657a5a01cb2b1a65a0f2b91114323ac`；未安装、未发布。
 实车仍需连续断开重连至少四轮、确认手动停止后不抢连，
 并多次验证「原车主界面 → CarPlay」的实际画面/声音/触控；现有拒连残留状态能否恢复需单独复测。
+
+## HyperOS 3 AVD 与 CarLife 8.6.8 出流排查（2026-11-03）
+
+本轮仅操作 Mac 上的 `HyperOS_3` ARM64 模拟器，未操作同时在线的实体 Pad 或车机。目标是把 CarWith 的七路本地
+CarLife 源端从零帧推进到持续 H.264，并区分 AVD 系统集成问题与 mcarplay 协议问题；OS3 的结果不能直接外推为
+OS1 或 OS2 兼容性结论。
+
+| 项目 | 本轮最终环境 |
+| --- | --- |
+| 系统 | HyperOS `OS3.0.2.0.WMCCNXM`，Android 16 / SDK 36，`sdk_gphone64_arm64` |
+| 内存 | AVD 默认 2,531,864 KiB，另有约 1.9 GiB swap |
+| mcarplay | standard/debug `0.1.3-debug`，`com.mcarplay.app` |
+| CarWith | `4.0.4-20260522` / `104000004`，`com.miui.carlink`；通过普通系统应用模块变为 updated system app |
+| 小米 CarLife | `8.6.8` / `260`，`com.baidu.carlife.xiaomi`，用户应用 |
+| Root / 模块 | KernelSU `3.3.0`，`meta-overlayfs 1.3.1`，模块 `carwith-system` |
+| CarWith APK SHA-256 | `a20bd237534d82df08d561974365dc7da66e36899d3e64cc1b137cac0b084605` |
+| CarLife APK SHA-256 | `ab7b001a7b3eba95819da6808b29e2038629b30f2bbe3a363256e34ff7cbd4ee` |
+
+测试前已保存 AVD 快照 `before-carwith-system`。CarWith APK 通过 KernelSU 模块暂存到 `/system/app/CarWith`，没有放进
+`priv-app`；重启后 `dumpsys package com.miui.carlink` 同时列出 `/system/app/CarWith` 与数据版覆盖，实际包包含
+`SYSTEM HAS_CODE ALLOW_CLEAR_USER_DATA UPDATED_SYSTEM_APP`。数据版 `codePath` 仍位于 `/data/app` 是正常覆盖关系。
+
+### 阻塞一：Qualcomm 性能服务调用使应用启动 ANR
+
+- 11:25:09–11:25:34，mcarplay 前台自检记录 `entry=REQUESTED`、`background=false`，25 秒内连接尝试 63 次，
+  7240 始终 `ECONNREFUSED`，`allConnectedOnce=false`，视频、关键帧与字节数均为 0。
+  `REQUESTED` 仅表示启动请求已提交；摘要中的初始 `state=CONNECTED` 也不能替代七路连通或媒体证据。
+- 系统将跨应用启动转给安全中心的 `ConfirmStartActivity`，但安全中心自身启动 ANR。直接由 ADB 请求 CarWith 导出入口也启动 ANR；
+  11:41 在亮屏、解锁状态复测仍因 `failed to complete startup` 被终止，因此不能只归因于锁屏或后台启动限制。
+- 两份 ANR 都显示主线程等待 `ActivityThreadImpl.waitHandlerThread()`；`ActivityHelper` 线程则同步阻塞在
+  `IPerfManager$Stub$Proxy.setClientBinder()` → `Performance.connectPerfServiceLocked()` → `BoostFramework` 初始化。
+  对该镜像的 `QPerformance.jar` 做静态检查，确认调用的是 `vendor.perfservice`。
+- 利用模拟器已有 root 停止再启动性能服务后，CarWith 入口恢复。最终 `service list` 含
+  `vendor.perfservice: [com.qualcomm.qti.IPerfManager]`，`ps` 中 `perfservice` 存活；该服务与 CarWith 持续共存时完成了下述
+  142 秒出流。现有证据足以把它列为启动 ANR 的直接环境阻塞，但尚不足以断言原生服务内部的具体死锁原因。
+
+### 阻塞二：安全中心拒绝 CarWith 的 CTA 授权入口
+
+入口能够运行后，CarWith 原先仍是普通用户应用，11:43、11:51 及 11:58 均出现：
+
+```text
+CarlifeAdbActivity: onCreate CarlifeAdbActivity
+SystemAppPDA: can't launch this for out of whiteList, com.miui.carlink
+PermissionActivity: onActivityResult ...-2
+```
+
+对安全中心与 CarWith APK 的静态核对表明，CarWith `PermissionActivity` 请求
+`miui.intent.action.SYSTEM_PERMISSION_DECLARE_NEW`；安全中心最终接受的任一入口包括内置 CTA 名单、系统应用/系统 UID，
+或该 CTA 权限。普通安装身份未通过检查，`-2` 来自白名单拒绝，并非用户点击了拒绝。
+
+本轮的解决办法是让 CarWith 保持原 APK、原签名和用户数据，通过模块获得系统应用身份；没有修改安全中心白名单，
+也没有伪造 CTA 权限。重启后安全中心正常打开 CarWith 隐私授权页，用户点击同意后记录
+`SystemAppPDA: user agreed! com.miui.carlink` 与 `PermissionActivity: carlife adb connect`，下一轮自检的
+`CARLIFE-DIAG event=ENV` 也变为 `systemApp=true updatedSystemApp=true`、`mcarplay.backgroundStartAllowed=true`。
+
+AVD 只有约 2.5 GiB 物理内存。一次较慢的 CTA 操作期间，`lowmemorykiller` 曾以 `oom_score_adj=701` 杀死
+`com.miui.carlink`。这不是 CTA 逻辑失败；重新启动并尽快完成同意即可。成功轮中 CarWith 约占用 287–365 MiB，
+142 秒内未被 LMKD 杀死，但系统持续回收了天气、设置等低优先级进程。若要求重复冷启动稳定，建议给该 AVD 分配 6 GiB 内存。
+
+### 七路握手与 H.264 验证
+
+mcarplay 保持前台并点击「CarWith 出流自检」后，12:17:25.114 记录 `entry=REQUESTED background=false`；
+12:17:26.361 已在 4 次尝试、1,244 ms 内完成：
+
+```text
+openedThisAttempt=7240,8240,9240,9241,9242,9340,9440
+allConnectedOnce=true timedOut=false
+```
+
+随后完成协议握手与准入：
+
+1. 收到前台请求并回 `GO_TO_FOREGROUND`；
+2. 发送设备信息，完成 RSA 公钥请求与加密 AES 种子交换；
+3. 收到 `ENCRYPT_READY`，手机渠道准入结果为“通过”；
+4. 发送视频初始化请求，收到 `VIDEO_INIT_DONE 1280x720@30`；
+5. 首个访问单元为关键帧，随后帧数稳定增长。
+
+到 12:19:48.293 的最后一条周期统计，已连续运行约 142 秒：
+
+```text
+视频帧 #2001 1280x720 frames=2001 key=51 bytes=31378042 span=142s
+```
+
+同一时间 CarWith、小米 CarLife 与 mcarplay 进程都存活，七个监听端口仍在。该结果排除了：
+
+- Qualcomm 性能服务导致的入口 ANR；
+- 安全中心 CTA 白名单拒绝；
+- CarWith 七路监听未创建；
+- RSA/AES/手机渠道准入失败；
+- 1280×720@30 H.264 数据未到达 mcarplay。
+
+自检只统计访问单元，没有保存可直接交给 `ffprobe` 的连续 Annex-B 文件；也没有 CarPlay 接收端，因此本轮不能证明
+接收端解码、声音或触控通过。日志里 CarLife 的 VOICE 通道首先收到零字节数据，音频没有形成有效 PCM。
+
+测试结束时通过 `am force-stop com.mcarplay.app` 停止 mcarplay；随后设备侧七口全部消失。完整运行日志保存在本机
+git 忽略范围的下载文件中，以上为脱敏摘要。
+
+### 复现与排障顺序
+
+1. 在修改系统盘前保存 AVD 快照；启动 KernelSU 与 `meta-overlayfs`，确认 `service list` 可注册
+   `vendor.perfservice` 且进程存活。
+2. 把 CarWith 原 APK 放入普通 `/system/app/CarWith` 模块并重启，确认包标志包含 `SYSTEM` 与
+   `UPDATED_SYSTEM_APP`；再安装原版小米 CarLife 8.6.8。
+3. 保持 mcarplay 在前台，直接点「CarWith 出流自检」。CTA 页出现后迅速同意，避免 2.5 GiB 默认镜像在等待期间触发 LMKD。
+4. 用 `adb shell su -c "ss -lnt"` 核对七口。看到 `LISTEN` 后继续看
+   `adb shell run-as com.mcarplay.app tail -n 200 files/main_debug.log`，至少等到
+   `LISTENERS_CONNECTED allConnectedOnce=true`、`VIDEO_INIT_DONE`，以及 `frames`/`bytes` 持续增长。
+5. 若仅有 `REQUESTED` 且入口长时间无 `CarlifeAdbActivity.onCreate`，先查性能服务 ANR；若入口立即退出并出现
+   `SystemAppPDA ... whiteList` / `-2`，查 CarWith 系统应用身份与 CTA；若七口已监听但无媒体，才进入 mcarplay
+   协议层排查。
+
+### OS1/OS2 边界
+
+在上述 OS3 排查结束时，HyperOS-AVD 公开发布只提供 OS3 / Android 16 与 OS4 / Android 17，没有 OS1 或 Android 13 镜像。
+之后另建的 OS1 混合 AVD 排查见下一节。HyperOS 版本号也不能单独推出 Android API：
+同一大版本会因机型和固件落在不同 Android 基线，必须记录具体设备、HyperOS 版本、`ro.build.version.sdk`。
+
+普通 Android 13 AOSP AVD 只能验证 APK 的基础 API 兼容性，缺少小米安全中心、CTA、性能服务和对应系统权限，不能代替
+OS1 结论。要精确复现 OS1 + Android 13，需要一台对应机型的实机，或为该机型制作包含匹配 kernel/vendor 的可启动系统镜像；
+仅把 CarWith、CarLife 和安全中心 APK 推进通用模拟器不构成等价环境。OS2 同样需要对应设备固件实测，当前没有可引用的
+OS2 AVD 或视频流证据。该段是当时状态；后续 OS2 / Android 15 完整矩阵见文末的跨系统兼容矩阵。
+
+## HyperOS 1 / Android 13 混合 AVD 排查（2026-11-03）
+
+本轮没有操作在线实体设备或车机。单独构建 `HyperOS_1_Thyme_A13`、端口 `5582`，将小米 10S 固件的
+`system`、`system_ext`、`product` 和 `mi_ext` 与 Android 13 AVD 的 ranchu vendor/kernel 组合；为启动 framework
+修补了模拟器镜像中的灯光服务等兼容项。设备属性设置为 `thyme` / `M2102J2SC`，不表示硬件为真实小米 10S。
+启动后 `sys.boot_completed=1`，可 `adb root`；AVD 配置内存 6144 MiB，`MemTotal=6057224 kB`，SELinux 为 permissive。
+
+| 项目 | 本轮环境与 SHA-256 |
+| --- | --- |
+| ROM | `OS1.0.4.0.TGACNXM`，Android 13 / SDK 33；Fastboot 包 `5cf9f192f9eee191e5f74307af7785a8df27a0c6f0eb257dbd606688603c0ad7` |
+| 原厂 CarWith | `2.0.1-20231207` / `102000001`，系统应用；APK `a3d082b867d15a1a2303a791b9c2522e7298afc3e3c07a838a4a7f6e2a51515c` |
+| 小米 CarLife | `8.6.8` / `260`；APK `ab7b001a7b3eba95819da6808b29e2038629b30f2bbe3a363256e34ff7cbd4ee` |
+| mcarplay | standard/debug `0.1.3-debug`；APK `ab1517d7607197d3b29e84655aeb0b57aab6f8693c811db7f6ce4427fa00b0c8` |
+| 对照 CarWith 更新 | `4.0.4-20260522` / `104000004`，原系统应用上的同签名更新；APK `a20bd237534d82df08d561974365dc7da66e36899d3e64cc1b137cac0b084605` |
+
+### 原厂 2.0.1 入口及受控探针
+
+- mcarplay 前台自检立即报告 `ENTRY=MISSING`、`listeners=not_started`。检查 APK manifest 确认原厂 2.0.1
+  没有声明 mcarplay 所调用的 `com.miui.carlink.castfwk.usb.CarlifeAdbActivity`；这是一处已证实的入口差异，
+  不能单独推出协议不兼容。
+- 为继续观察底层链路，以 root / ADB 强制启动 CarWith 的非导出内部服务并指定 `Baidu_ap`，再使用仓库现有
+  Python CarLife 探针连接；这不是 mcarplay 无 root 的普通启动方式，也不是正常无线连接。七个端口 `7240`、
+  `8240`、`9240`、`9241`、`9242`、`9340`、`9440` 均连通，探针报告 RSA 验证、AES 和手机渠道准入成功，
+  收到视频初始化响应并发送启动消息，随后控制通道关闭；总计 `video packets=0 bytes=0`。
+- CarLife 创建了 `c2.android.avc.encoder`（1280×720、15 fps），两次周期统计均为 `DQoutput: 0 success out of
+  99 tries`。CarWith 的状态机记录 `MSG_CASTCONTROLLER_CAST_FAILURE`；现有日志未确定失败原因，不能仅据此认定
+  虚拟显示从未建立。独立 `screenrecord` 对模拟器主屏的短测产生了可由 `ffprobe` 识别的 H.264、720×1280、2 帧，
+  只说明基础屏幕编码能产出数据，不证明 CarLife 的虚拟显示链路或持续出流正常。
+- 混合镜像中的 Wi-Fi 和蓝牙服务出现崩溃；探针运行时为抑制 Wi-Fi 反复崩溃而关闭了模拟器 Wi-Fi。该环境缺少原机
+  Qualcomm vendor/kernel，且使用 permissive 与 root 强制入口，因此零帧不能归因于 OS1、旧版 CarWith 或 mcarplay
+  协议中的某一项，也不能作为实体手机不支持的证据。
+
+### 4.0.4 对照复测：持续收到视频
+
+覆盖安装后 CarWith 仍具有 `SYSTEM UPDATED_SYSTEM_APP` 标志；原厂 2.0.1 系统 APK 保留。首次用户须知等待期间的
+25 秒监听超时不能视为该版本无法出流的结论。用户处理须知后，通过 ADB 模拟点击 mcarplay 前台的「CarWith 出流自检」，
+16:04:26 的新会话由 mcarplay 自身的应用 Intent 请求 CarWith 4.0.4 公开入口；没有用 root 强制启动 CarWith 内部服务。
+
+- 约 1.2 秒内连通七路：`7240,8240,9240,9241,9242,9340,9440`，记录 `allConnectedOnce=true timedOut=false`。
+- 收到 RSA 公钥请求和加密 AES 种子、`ENCRYPT_READY`，手机渠道准入通过，随后记录 `VIDEO_INIT_DONE 1280x720@30`。
+- 16:04:27 收到首个视频访问单元并识别为关键帧；到 16:09:28 的周期记录为 `frames=4481 key=113 bytes=71549028
+  span=301s`。观察期间 CarWith、CarLife、mcarplay 进程存活，七个监听端口仍在。
+- 运行中 `dumpsys display` 记录 CarWith 自有的 1280×720 虚拟屏处于 `ON`。协议初始化返回 30 fps，而 CarLife 的
+  `c2.android.avc.encoder` 配置为 20 fps；按上述访问单元和时间粗算约 15 个/秒，不将返回值当作实测帧率。
+- 该自检未保存可供独立解码的连续视频文件，VOICE 通道只看到零字节记录，没有有效音频证据。没有 CarPlay 接收端，
+  因此不能证明车机解码、声音或触控通过；也不能将 4.0.4 的结果归给原厂 2.0.1。
+
+本轮没有修改 mcarplay 源码或协议代码；没有 CarPlay 接收端、有效音频、触控及真实手机验证。该轮没有 OS2 结果；
+后续 OS2 / Android 15 完整矩阵见文末的跨系统兼容矩阵。
+
+## CarWith 2.x / 3.x 版本矩阵（2026-11-03）
+
+在上述同一 OS1 / Android 13 混合 AVD、CarLife `8.6.8/260`、mcarplay `0.1.3-debug` 环境下，测试了 37 个
+2.x / 3.x 独立构建。来源为公开历史版本目录与用户从 Telegram 公开附件下载的 APK；逐个用 `apksigner verify`
+核对包名与版本，签名证书 SHA-256 均为小米 ROM 原厂 CarWith 的
+`c9009d01ebf9f5d0302bc71b2fe9aa9a47a432bba17308a3111b75d7b2149025`。相同版本号不同日期的构建单列。
+这些是本轮取得的构建，不代表小米发布过的全部内部版本。
+
+3.1.2 及之后的自检从用户已同意条款的干净 3.1.2 数据快照升级，旧版分别清理测试数据。早期复用 4.0.4 数据
+触发的 `SQLiteException: Can't downgrade database from version 6 to 3` 已排除，未计入结果。自检通过指当前实际
+日期下 mcarplay 调用公开入口，七路、RSA/AES、手机渠道准入与 `VIDEO_INIT_DONE 1280x720@30` 均成功，且视频
+访问单元与字节至少增长 20 秒；帧数是日志中的访问单元计数，不是独立解码或车机显示验收。
+
+| CarWith 构建 | 当前日期下 mcarplay 自检 | 补充对照 |
+| --- | --- | --- |
+| `2.0.0-20231103` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.0.1-20231129` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.0.1-20231207` | 缺当前入口 | root 探针：七路已连、0 视频包 |
+| `2.1.0-20240118` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.1.1-20240131` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.1.2-20240301` | 缺当前入口 | root 探针：七路已连、0 视频包 |
+| `2.2.0-20240322` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.2.1-20240401` | 缺当前入口 | root 探针：七路已连、0 视频包 |
+| `2.2.2-20240429` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.2.2-20240509` | 缺当前入口 | root 探针：七路已连、0 视频包 |
+| `2.3.0-20240606` | 缺当前入口 | root 探针：有效期内七路已连、0 视频包 |
+| `2.3.1-20240712` | 缺当前入口 | root 探针：有效期内收到 557 个视频包 |
+| `3.0.1-20240722` | 缺当前入口 | root 探针：当前日期下收到 515 个视频包 |
+| `3.0.2-20240801` | 缺当前入口 | root 探针：当前日期下收到 568 个视频包 |
+| `3.1.2-20240828` | 视频 257 个访问单元 / 21 秒 | — |
+| `3.1.4-20240904` | 视频 263 个访问单元 / 21 秒 | — |
+| `3.1.5-20240911` | 视频 218 个访问单元 / 20 秒 | — |
+| `3.2.0-20241009` | 视频 274 个访问单元 / 21 秒 | — |
+| `3.2.1-20241105` | 已过期，当前日期下退出 | 有效期内视频 279 / 21 秒 |
+| `3.3.0-20241114` | 视频 244 个访问单元 / 22 秒 | — |
+| `3.3.2-20241210` | 视频 343 个访问单元 / 24 秒 | — |
+| `3.4.0-20250120` | 视频 317 个访问单元 / 20 秒 | — |
+| `3.4.1-20250227` | 视频 368 个访问单元 / 20 秒 | — |
+| `3.4.2-20250319` | 已过期，当前日期下退出 | 有效期内视频 346 / 22 秒 |
+| `3.4.2-20250402` | 已过期，当前日期下退出 | 有效期内视频 304 / 20 秒 |
+| `3.5.0-20250407` | 视频 340 个访问单元 / 22 秒 | — |
+| `3.5.2-20250521` | 视频 336 个访问单元 / 24 秒 | — |
+| `3.5.3-20250528` | 已过期，当前日期下退出 | 有效期内视频 348 / 22 秒 |
+| `3.6.0-20250612` | 视频 330 个访问单元 / 21 秒 | — |
+| `3.6.2-20250815` | 已过期，当前日期下退出 | 有效期内视频 268 / 22 秒 |
+| `3.7.2-20250923` | 视频 334 个访问单元 / 22 秒 | — |
+| `3.8.0-20251113` | 视频 265 个访问单元 / 21 秒 | — |
+| `3.8.2-20260117` | 4 个访问单元后 CarWith 崩溃 | 同环境四次复现 |
+| `3.8.3-20260203` | 视频 285 个访问单元 / 23 秒 | — |
+| `3.8.4-20260302` | 已过期，当前日期下退出 | 有效期内视频 295 / 24 秒 |
+| `3.8.4-20260313` | 已过期，当前日期下退出 | 有效期内视频 289 / 24 秒 |
+| `3.8.4-20260320` | 已过期，当前日期下退出 | 有效期内视频 296 / 24 秒 |
+
+### 两类补充对照
+
+**过期构建。** 反编译 `UCarApplication` 后可见这些内测包内置了截止日期：到期后应用主动退出，
+较新的版本还会弹出「CarWith内测版本已到期，请卸载更新后使用」并跳到应用详情页。已确认的截止日期包括
+`2.0.0-20231103`（2023-12-10）、`3.2.1-20241105`（2024-11-22）、`3.4.2-20250319`（2025-04-11）、
+`3.4.2-20250402`（2025-04-20）、`3.5.3-20250528`（2025-06-18）、`3.6.2-20250815`（2025-08-24）、
+`3.8.4-20260302`（2026-03-17）、`3.8.4-20260313`（2026-03-31）、`3.8.4-20260320`（2026-04-09）。
+为区分过期与链路兼容性，只把隔离 AVD 的时钟临时调到构建有效期内，再运行同一自检；这八项在有效期内
+全部通过七路、认证、准入与视频初始化，之后恢复当前时间。对照不改变这些构建在真实当前日期下已过期的事实。
+
+**缺入口构建。** 另有 14 个 2.0–3.0 构建没有声明 mcarplay 目前调用的
+`com.miui.carlink.castfwk.usb.CarlifeAdbActivity`，自检报告 `ENTRY=MISSING`。为继续观察底层链路，另以
+root / ADB 强制启动非导出的 `CarlinkService` 并指定 `Baidu_ap`，用 Python 探针连接七路。这不是 mcarplay 的
+普通公开入口，也不是实体手机的正常无线连接，模拟器 Wi-Fi 期间关闭。
+
+- 当前日期下，`2.0.0-20231103`、`2.0.1-20231129`、`2.1.0-20240118`、`2.2.0-20240322`、
+  `2.2.2-20240429`、`2.3.0-20240606`、`2.3.1-20240712` 因过期直接退出，未观察到监听；
+  `2.0.1-20231207`、`2.1.1-20240131`、`2.1.2-20240301`、`2.2.1-20240401`、`2.2.2-20240509`
+  能监听七路并完成认证，但 0 视频包。
+- 把时钟调到各构建的有效期后，12 个 2.x 构建全部可以监听七路并完成认证；其中 `2.3.1-20240712`
+  收到 557 个视频包（37 秒），`2.3.0-20240606` 及更早的 11 项仍是 0 视频包。
+- `3.0.1-20240722` 与 `3.0.2-20240801` 在当前日期下即可收到视频，延长到 37 秒后分别收到 515 和 568 个
+  视频包并通过探针自身的完整视频判定。保存的 H.264 经 ffprobe 确认为 1280×720，ffmpeg 解码无错误。
+
+**旧版零视频的原因在设备侧。** 对 `2.2.2-20240509` 和 `2.3.0-20240606` 的 logcat 显示，CarLife 已创建
+`c2.android.avc.encoder`（1280×720），但周期统计始终是 `Render: 0, Drop: 0, DQoutput: 0 success out of ~95 tries`，
+即编码器从未拿到输入帧；`2.3.0` 的 logcat 中完全没有编码器创建记录。`2.3.1-20240712` 与之后的构建则
+编码器持续出帧（配置 15 fps）。分界点是 `2.3.1`。该现象发生在 CarLife 侧取帧阶段，与 mcarplay 的协议实现无关，
+但混合 AVD 的虚拟显示链路与实体机不同，仍不能据此断定实体机的旧版同样无画面。
+
+### mcarplay 自身协议在旧版 CarWith 上的验证
+
+前面所有旧版结果都来自仓库外的 Python 探针。为回答「不改 mcarplay 能否把旧版 CarWith 的流引出」，
+本轮临时把 `CarLifeDiagnostics` 的 `launchStrategy` 从 `EXPORTED_ENTRY` 改为已有的 `ATTACH_EXISTING`，
+重新构建并在模拟器上实测，随后已还原该文件（`git status` 中不再出现该文件）。
+
+在 CarWith `2.3.1-20240712`（时钟调到其有效期内）上，mcarplay 自己的代码完成了完整链路：
+
+```text
+[20:03:58.426] CARLIFE: 七路连接完成，开始协议握手        attempts=1 waitMs=4 allConnectedOnce=true
+[20:03:58.568] CARLIFE: 收到 RSA 公钥请求
+[20:03:58.571] CARLIFE: 收到 ENCRYPT_READY
+[20:03:58.572] CARLIFE: 手机渠道准入结果 通过
+[20:03:58.624] CARLIFE: VIDEO_INIT_DONE 1280x720@30
+[20:04:39.030] CARLIFE-DIAG event=FAILED ... video=1280x720 frames=613 key=41 bytes=1243998 span=40s
+```
+
+结束原因是 CarWith 自行退出投屏（`CastingActivity` 结束后 `System.exit`），不是 mcarplay 断开；
+mcarplay 侧状态为 `VIDEO_RUNNING`，40 秒内收到 613 个访问单元、41 个关键帧、1,243,998 字节。
+
+结论分层如下：
+
+- **协议层无需修改。** mcarplay 既有的认证、种子交换、渠道准入、视频解析与计数逻辑在旧版 CarWith 上原样工作，
+  没有为旧版写任何特例代码。
+- **入口层是唯一缺口。** 旧版没有 `CarlifeAdbActivity`，当前自检固定使用 `EXPORTED_ENTRY`，因此直接报
+  `ENTRY=MISSING`。`ATTACH_EXISTING` 策略在仓库里已定义但没有任何调用方；要支持旧版，需要给自检或正式会话
+  增加一个「先尝试公开入口，缺失则附着」的回退分支，属于入口策略改动，不是协议改动。
+- **2.3.0 及更早仍不可用。** 用 `ATTACH_EXISTING` 复测 `2.0.1-20231129`：CarWith 短暂监听了七路后自行退出，
+  与 root 探针的零视频结论一致。旧版的零视频是设备侧编码器拿不到输入帧，不是 mcarplay 的问题。
+
+### 3.8.2 崩溃定位
+
+`3.8.2-20260117` 四次均在完成七路、RSA/AES、渠道准入与 `VIDEO_INIT_DONE` 后，只收到 1–4 个访问单元，
+随后 CarWith 的 `CarlinkSM` 线程崩溃：
+
+```text
+FATAL EXCEPTION: CarlinkSM
+java.lang.NullPointerException: Attempt to invoke virtual method 'void android.view.Surface.setFrameRate(float, int)' on a null object reference
+    at com.miui.carlink.castfwk.CastController.displayConnectedInNormalCast(CastController.java:157)
+    at com.miui.carlink.castfwk.CarlinkStateMachine$i.c(CarlinkStateMachine.java:188)
+```
+
+对照反编译代码：`displayConnectedInNormalCast` 在 SDK<34 分支调用 `mSurface.setFrameRate(i14, 0)`，
+而调用方 `displayConnected` 中的 `mSurface = surface` 赋值发生在该方法返回之后，首次连接时 `mSurface` 仍为 null。
+`3.8.3` 把这一行改为使用传入的 `surface`，同环境自检有持续视频。该关联来自模拟器 logcat 与静态代码比较，
+仍需实机确认。
+
+### 边界
+
+本轮未修改 mcarplay 的 Kotlin 或协议源码。AVD 使用 ranchu vendor/kernel、root、SELinux permissive，Wi-Fi 因
+混合镜像问题关闭；没有真实手机和车机的画面、声音、触控或长时间连接证据，也没有 OS2 测试结果。
+过期对照使用修改过的模拟器时钟，root 探针使用非公开入口，两者都不能直接代表实体机的普通使用路径。
+第三方 APK、logcat 与 H.264 文件均留在仓库外。
+
+## CarWith 2.x / 3.x / 4.x 跨系统兼容矩阵（2026-11-04）
+
+本轮把同一批 50 个 CarWith 构建分别放入 OS1–OS3 的独立 AVD，并按用户要求让 OS4 只从该系统的初始 CarWith
+`4.0.16-20260907` 开始测，不再向上追测 2.x 或更早的 4.x。全部系统固定使用原签名 CarWith、小米 CarLife
+`8.6.8/260`。OS1–OS3 矩阵使用 mcarplay standard/debug `0.1.3-debug`，APK SHA-256 为
+`42a827a792ef843a92d9d10e7d58ae56b8b148a0c13750ae0dba8ce0d2908aba`；OS4 最后又在当前完整构建
+`dff6481f484e04ec6c9ba89c7209b91b7998fd0221f6a249cc89d148f2562b7c` 上重跑 5 项。CarLife APK SHA-256 为
+`ab7b001a7b3eba95819da6808b29e2038629b30f2bbe3a363256e34ff7cbd4ee`。
+
+| 系统 | Android / SDK | 固件 | 测试范围 | Root / SELinux |
+| --- | --- | --- | --- | --- |
+| OS1 | 13 / 33 | `OS1.0.4.0.TGACNXM`，thyme 系统分区 + Android 13 ranchu vendor/kernel | 50 个构建 | `adb root` / permissive |
+| OS2 | 15 / 35 | `OS2.0.215.0.VMCCNXM`，fuxi 系统分区 + Android 15 ranchu vendor/kernel | 50 个构建 | `adb root` / permissive |
+| OS3 | 16 / 36 | `OS3.0.2.0.WMCCNXM` | 50 个构建 | KernelSU `3.3.0` / permissive |
+| OS4 | 17 / 37 | `OS4.0.24.0.XFRCNXM`，6 GiB、4 核 | 从系统初始版开始的 5 个构建 | KernelSU `3.3.1` / enforcing |
+
+每个成功项均要求同时具备：公开入口/旧版 root 服务的 `ENTRY=REQUESTED`，或附着现有会话的 `ENTRY=ATTACHED`、七口
+`7240/8240/9240/9241/9242/9340/9440` 全连、RSA、AES `ENCRYPT_READY`、手机渠道准入通过、
+`VIDEO_INIT_DONE 1280x720@30`，并持续至少 20 秒收到 H.264 访问单元、关键帧和非零字节。下表“出流”只代表
+mcarplay 收到源端媒体，不代表 CarPlay 接收端已解码或有声音。
+
+| CarWith 构建 | OS1/A13 | OS2/A15 | OS3/A16 | OS4/A17 |
+| --- | --- | --- | --- | --- |
+| `2.0.0-20231103` | 0帧 | 0帧 | 0帧 | — |
+| `2.0.1-20231129` | 0帧 | 0帧 | 0帧 | — |
+| `2.0.1-20231207` | 0帧 | 0帧 | 0帧 | — |
+| `2.1.0-20240118` | 0帧 | 0帧 | 0帧 | — |
+| `2.1.1-20240131` | 0帧 | 0帧 | 0帧 | — |
+| `2.1.2-20240301` | 0帧 | 0帧 | 0帧 | — |
+| `2.2.0-20240322` | 0帧 | 0帧 | 0帧 | — |
+| `2.2.1-20240401` | 0帧 | 0帧 | 0帧 | — |
+| `2.2.2-20240429` | 0帧 | 0帧 | 0帧 | — |
+| `2.2.2-20240509` | 0帧 | 0帧 | 0帧 | — |
+| `2.3.0-20240606` | 0帧 | 0帧 | 0帧 | — |
+| `2.3.1-20240712` | 出流 | 出流 | 出流 | — |
+| `3.0.1-20240722` | 出流 | 出流 | 出流 | — |
+| `3.0.2-20240801` | 出流 | 出流 | 出流 | — |
+| `3.1.2-20240828` | 出流 | 出流 | 出流 | — |
+| `3.1.4-20240904` | 出流 | 出流 | 出流 | — |
+| `3.1.5-20240911` | 出流 | 出流 | 出流 | — |
+| `3.2.0-20241009` | 出流 | 出流 | 出流 | — |
+| `3.2.1-20241105` | 出流 | 出流 | 出流 | — |
+| `3.3.0-20241114` | 出流 | 出流 | 出流 | — |
+| `3.3.2-20241210` | 出流 | 出流 | 出流 | — |
+| `3.4.0-20250120` | 出流 | 出流 | 出流 | — |
+| `3.4.1-20250227` | 出流 | 出流 | 出流 | — |
+| `3.4.2-20250319` | 出流 | 出流 | 出流 | — |
+| `3.4.2-20250402` | 出流 | 出流 | 出流 | — |
+| `3.5.0-20250407` | 出流 | 出流 | 出流 | — |
+| `3.5.2-20250521` | 出流 | 出流 | 出流 | — |
+| `3.5.3-20250528` | 出流 | 出流 | 出流 | — |
+| `3.6.0-20250612` | 出流 | 出流 | 出流 | — |
+| `3.6.2-20250815` | 出流 | 出流 | 出流 | — |
+| `3.7.2-20250923` | 出流 | 出流 | 出流 | — |
+| `3.8.0-20251113` | 出流 | 出流 | 出流 | — |
+| `3.8.2-20260117` | CarWith 崩溃 | 出流 | 出流 | — |
+| `3.8.3-20260203` | 出流 | 出流 | 出流 | — |
+| `3.8.4-20260302` | 出流 | 出流 | 出流 | — |
+| `3.8.4-20260313` | 出流 | 出流 | 出流 | — |
+| `3.8.4-20260320` | 出流 | 出流 | 出流 | — |
+| `4.0.2-20260429` | 出流 | 出流 | 出流 | — |
+| `4.0.2-20260515` | 出流 | 出流 | 出流 | — |
+| `4.0.2-20260528` | 出流 | 出流 | 出流 | — |
+| `4.0.4-20260522` | 出流 | 出流 | 出流 | — |
+| `4.0.6-20260603` | 出流 | 出流 | 出流 | — |
+| `4.0.9-20260629` | 出流 | 出流 | 出流 | — |
+| `4.0.12-20260707` | 出流 | 出流 | 出流 | — |
+| `4.0.14-20260801` | 出流 | 出流 | 出流 | — |
+| `4.0.16-20260907` | 出流 | 出流 | 出流 | 出流 |
+| `4.0.20-20260929` | 出流 | 出流 | 出流 | 出流 |
+| `4.0.20-20261009` | OS3 门禁 | OS3 门禁 | 出流 | OS3 门禁 |
+| `4.0.21-20260929` | 出流 | 出流 | 出流 | 出流 |
+| `4.0.23-20261016` | 出流 | 出流 | 出流 | 出流 |
+
+汇总：OS1 为 37/50 出流，OS2 为 38/50，OS3 为 39/50；OS4 的指定 5 个测试点为 4/5。三个系统都复现了
+`2.3.0` 及更早 11 个构建的编码器 0 帧，说明该边界跨越 Android 13–16，且此前的 CarLife 编码器诊断不是 OS1
+混合镜像的一次性现象。`3.8.2-20260117` 只在 OS1 崩溃；OS2/OS3 同 APK 持续出流，因此不是 mcarplay 的解密或
+视频解析问题。OS2 / OS3 的 3.x、4.x 全部出流（OS2/OS4 的 OS3-only 构建除外）。
+
+### OS4 系统初始版本起点
+
+早期 OS4 的 4 条 `listener_timeout` 是在 mcarplay 首次免责声明尚未接受时产生，不能作为 CarWith 兼容结果。
+本轮在 1120×2436 模拟屏上将声明滑至底部并接受，确认主界面
+`com.mcarplay.app/.MainActivity` 正常前台后重建测试目录并重跑。有效结果为：
+
+| CarWith 构建 | frames | key | bytes | span |
+| --- | ---: | ---: | ---: | ---: |
+| `4.0.16-20260907` | 276 | 10 | 4,910,918 | 22 s |
+| `4.0.20-20260929` | 336 | 9 | 4,802,876 | 22 s |
+| `4.0.20-20261009` | 0 | 0 | 0 | 0 s |
+| `4.0.21-20260929` | 338 | 9 | 4,943,798 | 22 s |
+| `4.0.23-20261016` | 334 | 9 | 4,902,309 | 22 s |
+
+四个成功项的 `entry_result` 均为 `REQUESTED`，`all_channels/rsa/aes_ready/admitted` 均为 true，
+`video_init` 均为 `1280x720@30`。没有 `4.0.20-20261029` 这个测试项；本轮测试的是公开取得的
+`4.0.20-20260929` 与 `4.0.20-20261009`。
+
+### `4.0.20-20261009` 是 OS3-only 构建
+
+该 APK 在 OS1、OS2、OS4 均表现为入口请求成功但 CarWith 进程立即退出；OS3 / SDK 36 同一 APK 正常出流。
+reproducible 两次且 installed `base.apk` SHA-256 与测试 APK 一致，排除了安装未更新。
+
+反编译该 APK 的 `com.carwith.launcher.UCarApplication` 可见：
+
+```java
+public static boolean v() {
+    return Build.VERSION.SDK_INT == 36;
+}
+
+// onCreate()
+if (s(2026, 10, 24)) {
+    System.exit(0);
+    return;
+}
+```
+
+`s(...)` 在 `v()` 为 false 时显示“该CarWith测试版本只能用于OS3”并返回 true，随后进程主动 `System.exit(0)`。
+OS4 logcat 中对应进程在 `onCreate CarlifeAdbActivity` 之前以 status 0 退出，故 7240 始终
+`ECONNREFUSED`。这是 CarWith 自身设置的平台门禁。mcarplay 的协议与入口代码即使继续等待也无法解除；直接启动
+CarWith 内部服务仍会先执行同一个 `Application.onCreate`。把它当普通 OS4 CarWith 更新测试会得到假失败。
+
+### 边界与复现
+
+- 50 个构建是当前公开取得的集合，不代表小米发布过的全部内部版本。
+- OS1–OS3 使用 ranchu vendor/kernel 并与 Xiaomi system 混合，且 permissive；OS4 虽为 enforcing，仍是 AVD
+  vendor/kernel。结果证明相应软件栈可建立源端媒体链路，不证明实体 Qualcomm vendor、真实车机、接收端解码、声音或触控。
+- 2.x 旧版没有当前公开入口时，矩阵用 root 启动内部服务后由 mcarplay `ATTACH_EXISTING` 连接；这是受控探针，
+  不等价于无 root 的正常用户流程。
+- 测试脚本把隔离 AVD 时钟临时调到各内测构建有效期内，并在结束后恢复；这不改变构建在当前真实日期已到期的行为。
+- 复现入口为仓库外的 `run_carwith_matrix.py`。有效结果目录分别为：
+  `os1-thyme-a13/carwith-matrix/v-final`、`os2-fuxi-a15/carwith-matrix/v-final`、
+  `instances/HyperOS_3/carwith-matrix/v-final`、`instances/HyperOS_4/carwith-matrix/system-base-v3`。
+  OS4 的 `system-base-v1` 含未接受免责声明造成的无效失败，不作为兼容证据；`system-base-v2` 是较旧 mcarplay 构建，
+  已由 `system-base-v3` 的当前构建复测取代。
+
+## 入口兼容代码整理（2026-11-04）
+
+正式会话与独立自检统一使用 `COMPATIBLE`：先连接现有七口，第一次连接失败后请求公开入口；入口缺失或不可调用时，
+先确认 `su` 或已授权的 Shizuku 进程 UID 为 0，再启动原厂 `CarlinkService`，否则打开已导出的 CarWith 设置页，
+提示用户选择百度 CarLife 无线连接。普通 UID 2000 不会被当作 root；命令返回失败仍报告失败；用户停止后不再发起后续入口。
+入口过程在源连接线程中执行，不在 UI/媒体线程等待进程。不打开仅启动监听而不创建 CarWith 虚拟屏的百度 CarLife 首页。
+
+这些变更补齐旧版没有 `CarlifeAdbActivity` 的启动路径，不改变认证、AES、视频解析、第三方 APK、系统权限或内测截止日期。
+上述矩阵来自已记录的 AVD 和 APK 构建；本次整理还修正了 UID 检查与取消行为，最终提交构建尚未重新跑完整 AVD 矩阵或实体手机。
+回归覆盖已有七口不重启入口、首次连接失败后的重试、取消、入口层级选择、非 root 拒绝和 root/Shizuku 服务结果。

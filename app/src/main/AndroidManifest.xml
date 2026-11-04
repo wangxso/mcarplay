@@ -88,6 +88,20 @@
             android:name=".update.UpdateActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+        <!-- 蓝牙抓包分析：exported 只为接收系统错误报告的分享（SEND_MULTIPLE，zip + 截图）；
+             收到的文件只在本机流式解析，结果脱敏后写进诊断日志。 -->
+        <activity
+            android:name=".diagnostics.btsnoop.BtSnoopActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.android.bugreport" />
+                <data android:mimeType="application/zip" />
+            </intent-filter>
+        </activity>
         <provider
             android:name=".update.UpdateFileProvider"
             android:authorities="${applicationId}.updates"

@@ -3,6 +3,8 @@ package com.mcarplay.app.bridge
 import android.os.Handler
 import android.os.Looper
 import com.mcarplay.app.SenderApp
+import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
+import com.mcarplay.app.diagnostics.SupportReport
 import com.mcarplay.app.ui.ScreenDimmer
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
@@ -17,6 +19,7 @@ class BridgeApp : SenderApp() {
 
     override fun onCreate() {
         super.onCreate()
+        if (DiagnosticExportPolicy.unredacted) SupportReport.rawEnvironmentProvider = RemoteDiagnosticCollector::snapshot
         // 远程排障需要实时看手机屏幕：自动假息屏/暗幕（45s 无操作黑屏）在此变体
         // 一律禁用，只保留常亮；手动假息屏不受影响（2026-10-24 用户要求）。
         ScreenDimmer.autoDimAllowed = false

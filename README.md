@@ -90,7 +90,9 @@ with the phone, CarWith version, receiver and vehicle.
    Disconnect other CarLife receivers before starting the native session.
 
 CarWith's native video, audio and touch use ordinary application intents and local
-sockets without root or Shizuku. Some receivers, including WinPlay 1.2.4 and 1.2.5, also check
+sockets on versions with the public entry. Legacy builds without that entry require
+an already-started native session, verified root to launch the legacy service, or
+manual setup in CarWith; ordinary Shizuku shell identity cannot start the protected service. Some receivers, including WinPlay 1.2.4 and 1.2.5, also check
 the phone's real Bluetooth identity. Android does not let ordinary apps read it: with
 [Shizuku](https://shizuku.rikka.app/) running, mcarplay reads and remembers it; without
 Shizuku, enter the address from the phone's settings under **本机蓝牙地址** on the main
@@ -137,6 +139,10 @@ with reproduction steps, failure time and receiver model/firmware. Recent previo
 processes are included automatically; reopen and export after an unexpected exit,
 before reinstalling or clearing app data. No computer or Shizuku is needed, and
 there is no automatic upload. See [diagnostic contents and error codes](docs/DIAGNOSTICS.md).
+
+The `remote/debug` diagnostic build exports **full, unredacted reports** after an on-device notice.
+These can contain real device/network identities, original exceptions and retained session information;
+its configured debug bridge can also stream runtime logs. Standard builds and all release exports stay redacted.
 
 ## Detect and remember a receiver
 
