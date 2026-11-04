@@ -75,6 +75,34 @@ class OutboundProbePolicyTest {
         assertTrue(policy.shouldProbe(up(sessionEnd + 10 * 3_600_000L), sessionEnd + 10 * 3_600_000L + 1))
     }
 
+    /** PR #29 审查：DISCONNECT_PROFILES 主动断开引起的 ACL 断开，不能挡住后续 RFCOMM 重试。 */
+    @Test
+    fun selfInitiatedProfileDisconnectKeepsRetrying() {
+        val policy = OutboundProbePolicy()
+        policy.arm(0L, user)
+        policy.noteSelfLinkChange(1_000L) // 断配置文件前
+        policy.noteSelfLinkChange(2_500L) // 断配置文件后
+        policy.noteSelfLinkChange(2_600L) // RFCOMM 尝试前
+        policy.noteSelfLinkChange(2_700L) // RFCOMM 失败后
+        // ACL 断开广播晚到，落在最后一次记录后的尾巴里
+        val acl = down(2_700L + OutboundProbePolicy.SELF_LINK_TAIL_MILLIS - 1)
+        assertTrue(policy.shouldProbe(acl, 5_700L))
+        assertTrue(policy.shouldProbe(acl, user - 1))
+        // 窗口结束照常停
+        assertFalse(policy.shouldProbe(acl, user))
+    }
+
+    @Test
+    fun carDisconnectOutsideSelfRangeStillStops() {
+        val policy = OutboundProbePolicy()
+        policy.arm(0L, user)
+        policy.noteSelfLinkChange(1_000L)
+        assertFalse(policy.shouldProbe(down(1_000L + OutboundProbePolicy.SELF_LINK_TAIL_MILLIS + 1), 20_000L))
+        // 自己的操作开始之前就断开（且在窗口打开之后）：同样是车机离线
+        policy.noteSelfLinkChange(30_000L)
+        assertFalse(policy.shouldProbe(down(25_000L), 31_000L))
+    }
+
     @Test
     fun laterArmReplacesEarlierWindow() {
         val policy = OutboundProbePolicy()

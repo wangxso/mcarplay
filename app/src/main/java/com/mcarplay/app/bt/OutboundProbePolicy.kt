@@ -44,6 +44,9 @@ object BtAclTracker {
  * - 该设备 ACL 已连上（车机在线）；
  * - 刚刚 [arm] 过（用户点连接 / ACL 自动拉起 / 会话结束后的短暂宽限），且在那之后
  *   没有收到该设备的 ACL 断开；ACL 状态未知（本进程没见过广播）时只看窗口。
+ *   本应用自己引起的断开（[noteSelfLinkChange]：主动断 HFP/A2DP、出站 RFCOMM 尝试）
+ *   不算车机离线，窗口照常有效（PR #29 审查：DISCONNECT_PROFILES 后首次 RFCOMM 失败，
+ *   后续重试不能被自己触发的 ACL 断开挡掉）。
  * 其余情况暂停，不再发起任何连接（不耗电、不在车机侧刷连接记录）。
  */
 class OutboundProbePolicy {
@@ -53,10 +56,15 @@ class OutboundProbePolicy {
 
         /** CarPlay 会话结束后的短暂宽限（车上掉线时给自动重连留余地；车机已熄火则到点即停）。 */
         const val SESSION_END_GRACE_MILLIS = 120_000L
+
+        /** 本应用操作蓝牙链路后，其 ACL 断开广播可能晚到的时长（广播异步、断开有延迟）。 */
+        const val SELF_LINK_TAIL_MILLIS = 10_000L
     }
 
     private var armedAt = Long.MIN_VALUE
     private var armedUntil = Long.MIN_VALUE
+    private var selfLinkFrom = Long.MIN_VALUE
+    private var selfLinkUntil = Long.MIN_VALUE
 
     /** 打开一个探测窗口（替换此前的窗口）。 */
     @Synchronized
@@ -69,6 +77,18 @@ class OutboundProbePolicy {
     }
 
     /**
+     * 记录「本应用正在/刚刚改动蓝牙链路」（断配置文件前后、每次出站连接前后各调一次）。
+     * 连续操作合并为一段：从第一次记录起，到最后一次记录后 [SELF_LINK_TAIL_MILLIS] 止，
+     * 这段时间内的 ACL 断开视为自己引起。代价：这段时间里车机恰好真的离线，会继续探测到
+     * 窗口结束（最多 [USER_WINDOW_MILLIS]），仍然有界。
+     */
+    @Synchronized
+    fun noteSelfLinkChange(nowMillis: Long) {
+        if (nowMillis > selfLinkUntil) selfLinkFrom = nowMillis
+        selfLinkUntil = nowMillis + SELF_LINK_TAIL_MILLIS
+    }
+
+    /**
      * @param acl 该设备最近一次 ACL 广播；null = 未知
      */
     @Synchronized
@@ -78,7 +98,10 @@ class OutboundProbePolicy {
     ): Boolean {
         if (acl?.connected == true) return true
         if (nowMillis >= armedUntil) return false
-        // 窗口打开之后才断开的 ACL：车机已离线（熄火/下车），立即停
-        return acl == null || armedAt > acl.atMillis
+        if (acl == null || armedAt > acl.atMillis) return true
+        // 本应用自己断开配置文件 / 出站尝试引起的 ACL 断开：不是车机离线，继续重试
+        if (acl.atMillis in selfLinkFrom..selfLinkUntil) return true
+        // 窗口打开之后车机自己断开 ACL：已离线（熄火/下车），立即停
+        return false
     }
 }

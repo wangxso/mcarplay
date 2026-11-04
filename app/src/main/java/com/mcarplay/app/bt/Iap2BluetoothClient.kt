@@ -385,7 +385,10 @@ class Iap2BluetoothClient(
                     profileTrials.add(device.address)
                 ) {
                     val trialEpoch = ReceiverDetectionRuntime.profileTrialStarting(device.address)
+                    // 主动断 HFP/A2DP 可能连带 ACL 断开：标记为自己引起，不能据此停止重试
+                    probePolicy.noteSelfLinkChange(SystemClock.elapsedRealtime())
                     val result = BtProfiles.disconnectChecked(context, device)
+                    probePolicy.noteSelfLinkChange(SystemClock.elapsedRealtime())
                     ReceiverDetectionRuntime.profileTrialCompleted(
                         trialEpoch,
                         result.known,
@@ -403,7 +406,10 @@ class Iap2BluetoothClient(
                         }
                     }
                 }
+                // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起
+                probePolicy.noteSelfLinkChange(SystemClock.elapsedRealtime())
                 val socket = tryConnect(device)
+                probePolicy.noteSelfLinkChange(SystemClock.elapsedRealtime())
                 if (socket != null) {
                     log("BT-C: ✓ 已连入 $name 的无线 iAP2 服务（RFCOMM 建立）")
                     connected = socket
