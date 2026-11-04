@@ -27,7 +27,9 @@ Experimental. Source-side CarWith streaming has been tested across HyperOS OS1-O
 ARM64 AVDs as of November 4, 2026. Xiaomi-to-DiPlay and Xiaomi-to-WinPlay 1.2.5 test
 setups and one validated manual Xiaomi-to-Chery wireless path also have device or bench
 evidence as of October 31, 2026.
-The current formal release is `v0.1.3`; its scope remains the validated manual path.
+The current formal release is `v0.1.4`. It adds VW Passat 2025, Chery Arrizo 8 and Bluetooth
+auto-connect changes that have not been retested in those cars; the validated vehicle scope
+remains the manual Chery path.
 
 | Capability | Validation |
 | --- | --- |

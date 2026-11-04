@@ -15,7 +15,7 @@ plugins {
  * Optional signed build suffix: -Pmcarplay.buildNumber=N.
  * Tagged releases use the base version; update it before publishing a new tag.
  */
-val appVersionName = "0.1.3"
+val appVersionName = "0.1.4"
 // 可覆盖安装的 remote 诊断包；兼容第一版诊断包的构建参数。
 val diagnosticsBuild =
     providers
