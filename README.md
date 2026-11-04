@@ -298,6 +298,16 @@ under `dist/`. SDK settings, signing files, caches, logs, captures and reference
 APKs are excluded. When uploading through GitHub's website, include `.github/`
 and the root dotfiles.
 
+## Star history
+
+<a href="https://www.star-history.com/#wangxso/mcarplay&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=wangxso/mcarplay&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=wangxso/mcarplay&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=wangxso/mcarplay&type=Date" />
+  </picture>
+</a>
+
 ## Acknowledgements
 
 mcarplay builds upon [CarDeck](https://github.com/shaonialife/cardeck) by shaonialife

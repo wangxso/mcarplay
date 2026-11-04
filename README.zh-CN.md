@@ -266,6 +266,16 @@ python3 -m venv .venv
 排除本机 SDK 配置、签名文件、缓存、日志、抓包和参考 APK。
 使用 GitHub 网页上传时，需一并上传 `.github/` 和根目录的点文件。
 
+## Star 趋势
+
+<a href="https://www.star-history.com/#wangxso/mcarplay&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=wangxso/mcarplay&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=wangxso/mcarplay&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=wangxso/mcarplay&type=Date" />
+  </picture>
+</a>
+
 ## 开源致谢
 
 mcarplay 基于 shaonialife 及贡献者的
