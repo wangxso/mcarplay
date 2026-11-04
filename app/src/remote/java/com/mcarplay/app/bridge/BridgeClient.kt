@@ -7,7 +7,6 @@ import com.mcarplay.app.BuildConfig
 import com.mcarplay.app.diagnostics.DeviceEnvironment
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
@@ -86,14 +85,6 @@ object BridgeClient {
     @Volatile
     private var ws: WsClient? = null
 
-    /**
-     * 已通过 welcome、可以承载日志流的连接（null = 未配对/已断开）。配对完成前
-     * 不发实时日志：这段时间的行留在环形缓冲里，由 welcome 回补按序补上。
-     * 只在 [logSendLock] 内写。
-     */
-    @Volatile
-    private var streamClient: WsClient? = null
-
     /** 蜂窝互联网通道：车机会话期间进程网络被绑到车机热点，调试桥必须走它。 */
     @Volatile
     private var route: InternetRoute? = null
@@ -108,12 +99,14 @@ object BridgeClient {
     private val pendingLock = Any()
     private val pending = ArrayDeque<Pair<Long, String>>()
 
-    /**
-     * 日志发送锁：回补与实时冲刷共用，查账→发送→记账在锁内原子完成，
-     * 保证同一进程内一个 seq 至多成功发出一次、且回补先于后续实时行到达。
-     */
-    private val logSendLock = Any()
+    /** 本进程日志 seq 账本（回补、实时冲刷、缓冲淘汰共用）。 */
     private val sentLedger = LogSeqLedger()
+
+    /**
+     * 日志流闸门：已通过 welcome 的连接才承载日志；配对完成前的行留在环形缓冲里，
+     * 由 welcome 回补按序补上。
+     */
+    private val logStream = LogStreamGate<WsClient>(sentLedger, { client, text -> client.sendText(text) })
 
     /** 环形日志缓冲（断线重连后按 seq 回补）；淘汰的行记进账本。 */
     private const val RING_CAP = 5_000
@@ -204,7 +197,7 @@ object BridgeClient {
                         override fun onText(text: String) = onServerMessage(client, text)
 
                         override fun onClosed(reason: String) {
-                            endLogStream(client)
+                            logStream.end(client)
                             setState("连接断开：$reason")
                             lastDisconnectReason = reason.take(40)
                             debugLog("连接断开：$reason")
@@ -238,7 +231,7 @@ object BridgeClient {
                 lastDisconnectReason = (error.message ?: error.javaClass.simpleName).take(40)
                 route?.noteFailure(connUsedDefaultNetwork)
             }
-            endLogStream(client)
+            logStream.end(client)
             synchronized(lifecycleLock) {
                 // 只清自己的连接：已被新一轮 start 的循环替换时不能把它的 ws 置空
                 if (ws === client) ws = null
@@ -293,7 +286,7 @@ object BridgeClient {
                         runCatching { connectionEvents?.invoke(true) }
                     }
                     // 回补环形缓冲里本进程尚未成功发出的行，然后开放实时流
-                    beginLogStream(client)
+                    logStream.begin(client) { ring.since(0) }
                 } else {
                     setState("配对被拒：${msg.optString("error")}")
                     ws?.close(1008, "配对被拒")
@@ -301,7 +294,10 @@ object BridgeClient {
             }
 
             // 服务端要求的 since 只能收窄、不能让已发过的 seq 再发一遍
-            "log.sync" -> replayRing(client, since = msg.optLong("since"))
+            "log.sync" -> {
+                val since = msg.optLong("since")
+                logStream.replay(client) { ring.since(since) }
+            }
 
             "cmd" -> {
                 val id = msg.optString("id")
@@ -409,57 +405,6 @@ object BridgeClient {
         send(hello)
     }
 
-    /** welcome 通过：先回补，再把该连接登记为日志流（锁内完成，实时行不会插队）。 */
-    private fun beginLogStream(client: WsClient) {
-        synchronized(logSendLock) {
-            replayRing(client, since = 0)
-            streamClient = client
-        }
-    }
-
-    private fun endLogStream(client: WsClient) {
-        synchronized(logSendLock) {
-            if (streamClient === client) streamClient = null
-        }
-    }
-
-    /**
-     * 回补环形缓冲中 seq > since 且本进程尚未成功发出的日志。
-     * 无可发内容时仍发一个空 batch（服务端据此确认回补结束）。
-     */
-    private fun replayRing(
-        client: WsClient,
-        since: Long,
-    ) {
-        synchronized(logSendLock) {
-            val snapshot = ring.since(since)
-            val sent = sendLogLines(client, sentLedger.unsent(snapshot) { it.first })
-            if (sent == 0) {
-                client.sendText(JSONObject().put("t", "log.batch").put("lines", JSONArray()).toString())
-            }
-        }
-    }
-
-    /**
-     * 分片发送（单条 JSON 控制在 ~256KB 内，服务端 ws 消息上限友好），每片发送成功
-     * 才记账；某片失败即停——剩下的留给下次 welcome 回补。返回成功发出的行数。
-     * 调用方须持有 [logSendLock]。
-     */
-    private fun sendLogLines(
-        client: WsClient,
-        entries: List<Pair<Long, String>>,
-    ): Int {
-        var sent = 0
-        for (chunk in entries.chunked(200)) {
-            val lines = JSONArray()
-            chunk.forEach { (seq, line) -> lines.put(JSONObject().put("seq", seq).put("text", line)) }
-            if (!client.sendText(JSONObject().put("t", "log.batch").put("lines", lines).toString())) break
-            chunk.forEach { sentLedger.markSent(it.first) }
-            sent += chunk.size
-        }
-        return sent
-    }
-
     /**
      * 冲刷实时日志队列（冲刷线程周期调用）。日志流未就绪（未配对/断开）时直接
      * 丢弃队列：这些行仍在环形缓冲里，下次 welcome 回补会补发未发过的部分。
@@ -472,10 +417,7 @@ object BridgeClient {
                 while (pending.isNotEmpty()) taken.add(pending.removeFirst())
                 taken
             }
-        synchronized(logSendLock) {
-            val client = streamClient ?: return
-            sendLogLines(client, sentLedger.unsent(batch) { it.first })
-        }
+        logStream.flush(batch)
     }
 
     fun send(json: JSONObject) {

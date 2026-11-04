@@ -30,6 +30,14 @@ class WsClient(
     /** 显式联网通道（蜂窝）。车机会话期间进程默认路由被绑到无互联网的车机热点，
      *  必须从该网络建 socket + 解析 DNS 才能保持调试桥在线（见 [InternetRoute]）。 */
     private val network: android.net.Network? = null,
+    /** 读超时：死连接检测（见 [connect] 内心跳说明）。 */
+    private val readTimeoutMs: Int = 75_000,
+    /**
+     * 单帧写入期限：超时即关闭 socket。静默断链时发送缓冲写满，write 会无限期阻塞
+     * 并占住 writeLock——心跳、读线程回 pong、上层的发送锁都会跟着卡住，读超时
+     * 也就无从生效（PR #30 评审）。期限按蜂窝慢链路上 ~256KB 一批留足余量。
+     */
+    private val writeTimeoutMs: Long = 60_000,
 ) {
     interface Listener {
         fun onOpen()
@@ -40,7 +48,15 @@ class WsClient(
     }
 
     private val writeLock = Any()
+
+    @Volatile
     private var socket: Socket? = null
+
+    /** 最底层的 TCP socket（wss 叠在其上时与 [socket] 不同）；看门狗关它最可靠。 */
+    @Volatile
+    private var transport: Socket? = null
+
+    @Volatile
     private var output: BufferedOutputStream? = null
 
     @Volatile
@@ -95,6 +111,7 @@ class WsClient(
             } else {
                 plain
             }
+        transport = plain
         raw.tcpNoDelay = true
         val input = BufferedInputStream(raw.getInputStream())
         val out = BufferedOutputStream(raw.getOutputStream())
@@ -122,7 +139,7 @@ class WsClient(
         // 死连接检测：25s 心跳 + 75s 读超时。蜂窝/NAT 静默断链（无 FIN）时 read
         // 永远阻塞、重连循环跟着卡死——2026-10-21 实测断后 4 分钟不重连，桥侧
         // 设备长期「离线」。心跳周期远小于读超时，健康连接不会误杀。
-        socket?.soTimeout = 75_000
+        socket?.soTimeout = readTimeoutMs
         val heartbeat =
             HEARTBEAT.scheduleAtFixedRate(
                 {
@@ -266,43 +283,64 @@ class WsClient(
         val out = output ?: return false
         return try {
             synchronized(writeLock) {
-                val header = ByteArrayOutputStream()
-                header.write(0x80 or opcode)
-                val maskBit = if (mask) 0x80 else 0
-                when {
-                    payload.size < 126 -> header.write(maskBit or payload.size)
-                    payload.size < 65536 -> {
-                        header.write(maskBit or 126)
-                        header.write((payload.size shr 8) and 0xFF)
-                        header.write(payload.size and 0xFF)
-                    }
-
-                    else -> {
-                        header.write(maskBit or 127)
-                        var v = payload.size.toLong()
-                        val shiftOrder = (7 downTo 0).map { it * 8 }
-                        shiftOrder.forEach { shift -> header.write(((v shr shift) and 0xFF).toInt()) }
-                        @Suppress("UNUSED_EXPRESSION")
-                        v = 0
-                    }
+                val deadline = WATCHDOG.schedule({ abort() }, writeTimeoutMs, TimeUnit.MILLISECONDS)
+                try {
+                    writeFrameLocked(out, opcode, payload, mask)
+                } finally {
+                    deadline.cancel(false)
                 }
-                if (mask) {
-                    val key = ByteArray(4).also { random.nextBytes(it) }
-                    header.write(key)
-                    val masked = ByteArray(payload.size)
-                    payload.forEachIndexed { i, b -> masked[i] = (b.toInt() xor key[i % 4].toInt()).toByte() }
-                    out.write(header.toByteArray())
-                    out.write(masked)
-                } else {
-                    out.write(header.toByteArray())
-                    out.write(payload)
-                }
-                out.flush()
             }
             true
         } catch (_: IOException) {
             false
         }
+    }
+
+    /** 写入超时：关闭 socket 解除阻塞的 write（读循环随之以 IO 异常收尾）。 */
+    private fun abort() {
+        alive = false
+        runCatching { transport?.close() }
+        runCatching { socket?.close() }
+    }
+
+    private fun writeFrameLocked(
+        out: BufferedOutputStream,
+        opcode: Int,
+        payload: ByteArray,
+        mask: Boolean,
+    ) {
+        val header = ByteArrayOutputStream()
+        header.write(0x80 or opcode)
+        val maskBit = if (mask) 0x80 else 0
+        when {
+            payload.size < 126 -> header.write(maskBit or payload.size)
+            payload.size < 65536 -> {
+                header.write(maskBit or 126)
+                header.write((payload.size shr 8) and 0xFF)
+                header.write(payload.size and 0xFF)
+            }
+
+            else -> {
+                header.write(maskBit or 127)
+                var v = payload.size.toLong()
+                val shiftOrder = (7 downTo 0).map { it * 8 }
+                shiftOrder.forEach { shift -> header.write(((v shr shift) and 0xFF).toInt()) }
+                @Suppress("UNUSED_EXPRESSION")
+                v = 0
+            }
+        }
+        if (mask) {
+            val key = ByteArray(4).also { random.nextBytes(it) }
+            header.write(key)
+            val masked = ByteArray(payload.size)
+            payload.forEachIndexed { i, b -> masked[i] = (b.toInt() xor key[i % 4].toInt()).toByte() }
+            out.write(header.toByteArray())
+            out.write(masked)
+        } else {
+            out.write(header.toByteArray())
+            out.write(payload)
+        }
+        out.flush()
     }
 
     fun close(
@@ -331,6 +369,12 @@ class WsClient(
         val HEARTBEAT =
             Executors.newSingleThreadScheduledExecutor { r ->
                 Thread(r, "ws-heartbeat").apply { isDaemon = true }
+            }
+
+        /** 写入期限看门狗：必须独立于 [HEARTBEAT]——心跳任务自己可能卡在 writeLock 上。 */
+        val WATCHDOG =
+            Executors.newSingleThreadScheduledExecutor { r ->
+                Thread(r, "ws-write-watchdog").apply { isDaemon = true }
             }
     }
 }
