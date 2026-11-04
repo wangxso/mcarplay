@@ -134,8 +134,10 @@ internal class ModeArbiter {
                 }
                 TRANSFER_UNBORROW -> resource.owner = resource.permanent
             }
-            if (!initial && (request["resourceID"] as? Number)?.toLong() == SCREEN &&
-                previousOwner == Entity.CONTROLLER && resource.owner == Entity.ACCESSORY
+            if (!initial &&
+                (request["resourceID"] as? Number)?.toLong() == SCREEN &&
+                previousOwner == Entity.CONTROLLER &&
+                resource.owner == Entity.ACCESSORY
             ) {
                 screenRelinquished = true
             }
