@@ -32,6 +32,9 @@ const state = {
   level: 'all', tag: null, selected: null, loads: 0, followTimer: null, unseen: 0, updatedAt: null,
   // Bumped by every load that replaces the view; a response from an older generation is dropped.
   view: 0,
+  // The file list has its own generation: a log refresh must not make a device's pending list look stale.
+  // filesFor is the device whose files fill the file selector; filesPending is the device being listed.
+  filesView: 0, filesFor: null, filesPending: null,
 };
 
 class HttpError extends Error {
@@ -341,8 +344,15 @@ function jumpIssue(step) {
 }
 
 /* ---------- Loading ---------- */
+/** True once the file selector holds the current device's files; otherwise starts listing them unless already in flight. */
+function filesReady() {
+  if (state.filesFor === el.device.value) return true;
+  if (state.filesPending !== el.device.value) void loadFiles();
+  return false;
+}
+
 async function loadLatest() {
-  if (!el.device.value || !el.file.value) return;
+  if (!el.device.value || !filesReady() || !el.file.value) return;
   const q = query();
   const keepSeq = state.selected?.seq;
   const stick = state.pages === 0 || atBottom();
@@ -385,6 +395,7 @@ async function loadLatest() {
 
 /** Follow mode: append only records newer than the last one shown, keeping scroll position and selection. */
 async function appendLatest() {
+  if (!filesReady()) return;
   if (!state.rows.length) return loadLatest();
   const q = query();
   const view = state.view;
@@ -450,16 +461,20 @@ async function loadOlder() {
 async function loadFiles() {
   const deviceId = el.device.value;
   if (!deviceId) return;
-  const view = ++state.view;
+  const filesView = ++state.filesView;
+  state.filesFor = null;
+  state.filesPending = deviceId;
+  state.view++; // Log responses still in flight belong to the previous device or file.
   state.nextCursor = null;
   setLoading(1);
   try {
     const { files } = await getJson('/api/v1/files', { deviceId });
-    if (view !== state.view) return;
+    if (filesView !== state.filesView) return;
     el.file.replaceChildren(...files.map((f) => option(f.file,
       `${f.file === `${deviceId}.jsonl` ? '当前文件' : new Date(f.modifiedAt).toLocaleString()} · ${formatBytes(f.bytes)}`)));
     const current = files.find((f) => f.file === `${deviceId}.jsonl`);
     if (current) el.file.value = current.file;
+    state.filesFor = deviceId;
     state.pages = 0;
     if (!files.length) {
       state.rows = [];
@@ -471,8 +486,9 @@ async function loadFiles() {
     }
     await loadLatest();
   } catch (e) {
-    if (view === state.view) setStatus(`读取文件列表失败：${e.message}`, true);
+    if (filesView === state.filesView) setStatus(`读取文件列表失败：${e.message}`, true);
   } finally {
+    if (filesView === state.filesView) state.filesPending = null;
     setLoading(-1);
   }
 }
@@ -518,6 +534,7 @@ function disconnect(message = '已断开') {
   state.token = '';
   state.rows = [];
   state.devices = [];
+  state.filesFor = null;
   session((s) => s.removeItem(TOKEN_KEY));
   setFollow(false);
   el.toolbar.hidden = true;
@@ -542,6 +559,7 @@ function setFollow(on) {
 }
 
 async function exportFile(format) {
+  if (!filesReady()) return setStatus('文件列表尚未就绪，请稍候再导出');
   const q = query();
   if (!q.deviceId || !q.file) return;
   const buttons = [el.exportTxt, el.exportJsonl];
