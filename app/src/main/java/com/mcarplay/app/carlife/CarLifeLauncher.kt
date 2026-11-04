@@ -227,7 +227,8 @@ object CarLifeLauncher {
     ): CommandResult {
         val su = runSu(listOf("su", "-c", "id -u"))
         if (Thread.currentThread().isInterrupted) return CommandResult(-1, "cancelled")
-        if (su.ok && su.output
+        if (su.ok &&
+            su.output
                 .lineSequence()
                 .lastOrNull { it.isNotBlank() }
                 ?.trim() == "0"
