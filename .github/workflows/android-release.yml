@@ -79,7 +79,8 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           ./gradlew --no-daemon --console=plain -Pmcarplay.requireReleaseSigning=true \
-            spotlessCheck :app:testStandardDebugUnitTest :app:lintStandardRelease :app:assembleStandardRelease
+            spotlessCheck :app:testStandardDebugUnitTest :app:lintStandardRelease :app:assembleStandardRelease \
+            :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'
       - name: Verify and package signed APK
         run: |
           python - <<'PY'
@@ -128,6 +129,7 @@ jobs:
           name: check-reports-${{ github.run_number }}
           path: |
             app/build/reports/tests/testStandardDebugUnitTest/
+            app/build/reports/tests/testRemoteDebugUnitTest/
             app/build/reports/lint-results-standardRelease.*
           if-no-files-found: ignore
           retention-days: 14

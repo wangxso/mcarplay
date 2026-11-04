@@ -219,7 +219,8 @@ or set `sdk.dir=/path/to/Android/sdk` in an untracked `local.properties` file.
 
 ```bash
 ./gradlew spotlessCheck :app:testStandardDebugUnitTest \
-  :app:lintStandardDebug :app:assembleStandardDebug
+  :app:lintStandardDebug :app:assembleStandardDebug \
+  :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'
 ```
 
 Output: `app/build/outputs/apk/standard/debug/app-standard-debug.apk`.
