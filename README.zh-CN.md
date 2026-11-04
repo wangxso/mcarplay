@@ -159,7 +159,8 @@ Debug 包通常无法覆盖更新为正式签名包；未记录发行标签的�
 
 ```bash
 ./gradlew spotlessCheck :app:testStandardDebugUnitTest \
-  :app:lintStandardDebug :app:assembleStandardDebug
+  :app:lintStandardDebug :app:assembleStandardDebug \
+  :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'
 ```
 
 APK 路径：`app/build/outputs/apk/standard/debug/app-standard-debug.apk`。

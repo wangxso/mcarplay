@@ -241,7 +241,8 @@ python3 -m venv .venv
 
 ```bash
 ./gradlew spotlessCheck :app:testStandardDebugUnitTest \
-  :app:lintStandardDebug :app:assembleStandardDebug
+  :app:lintStandardDebug :app:assembleStandardDebug \
+  :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'
 ```
 
 当前网络修复基线：455 项 JVM 测试、Spotless、standard debug lint 和 standard debug 构建通过，其中新增 6 项网络生命周期回归。按用户要求暂不安装修复 APK，设备恢复出画仍未验证。
