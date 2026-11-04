@@ -221,7 +221,8 @@ class AirPlayPairingTest {
     /**
      * 按参考接收端算法实现的服务端。[padded] = false 时每项编码取反：A/B 去前导零参与哈希、B 不补零下发，
      * S 反而补零后求 K；
-     * [shortKeyRounds] 指定前几轮 M2 故意给首字节为 0 的 B；[badSetupSignature] 让 M6 签名失效。
+     * [shortKeyRounds] 指定前几轮 M2 故意给首字节为 0 的 B，其余轮次 B 恒满长（否则约 1/256 触发重发 M1，请求计数不稳）；
+     * [badSetupSignature] 让 M6 签名失效。
      */
     private class MockReceiver(
         private val padded: Boolean = true,
@@ -301,7 +302,7 @@ class AirPlayPairingTest {
                                 Srp6aClient.modulus(),
                             )
                     ).mod(Srp6aClient.modulus())
-            } while (wantShort && Srp6aClient.isFullLength(Srp6aClient.pad(publicKeyB)))
+            } while (Srp6aClient.isFullLength(Srp6aClient.pad(publicKeyB)) == wantShort)
             return Tlv8.encode(
                 listOf(
                     Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(2)),
