@@ -14,6 +14,8 @@
 
 [Changelog](CHANGELOG.md) · [Releases](https://github.com/wangxso/mcarplay/releases)
 
+QQ feedback group: **1128172672**
+
 Bridge Xiaomi CarWith to a wireless CarPlay receiver using an Android APK.
 mcarplay receives native CarWith video and audio on the phone, sends them to the
 receiver, and routes receiver touch events back to CarWith. The displayed
@@ -21,8 +23,10 @@ interface is CarWith, rather than the iOS CarPlay application interface.
 
 ## Status
 
-Experimental, with working Xiaomi-to-DiPlay and Xiaomi-to-WinPlay 1.2.5 test setups and
-one validated manual Xiaomi-to-Chery wireless path as of October 31, 2026.
+Experimental. Source-side CarWith streaming has been tested across HyperOS OS1-OS4 in
+ARM64 AVDs as of November 4, 2026. Xiaomi-to-DiPlay and Xiaomi-to-WinPlay 1.2.5 test
+setups and one validated manual Xiaomi-to-Chery wireless path also have device or bench
+evidence as of October 31, 2026.
 The current formal release is `v0.1.3`; its scope remains the validated manual path.
 
 | Capability | Validation |
@@ -46,6 +50,39 @@ The minimum SDK is Android 12 / API 31; this does not establish compatibility
 with every Android 12+ device. Upstream CarDeck vehicle results are not mcarplay
 vehicle compatibility claims.
 
+### CarWith compatibility matrix
+
+On 2026-11-04 we tested the available public CarWith builds with Xiaomi CarLife
+`8.6.8/260` across HyperOS OS1-OS4. A streaming result required all seven CarLife
+channels, RSA/AES setup, phone-channel admission, `VIDEO_INIT_DONE 1280x720@30`, and at
+least 20 seconds of nonzero H.264 video.
+
+| Phone / HyperOS | Android | Tested CarWith builds | Sustained streaming |
+| --- | ---: | ---: | ---: |
+| `OS1.0.4.0.TGACNXM`<br>Mi 10S / thyme system partitions | 13 | 50 | 37 |
+| `OS2.0.215.0.VMCCNXM`<br>Xiaomi 13 / fuxi system partitions | 15 | 50 | 38 |
+| `OS3.0.2.0.WMCCNXM`<br>HyperOS AVD | 16 | 50 | 39 |
+| `OS4.0.24.0.XFRCNXM`<br>HyperOS AVD | 17 | 5, starting at the system's initial `4.0.16-20260907` | 4 |
+
+Key boundaries:
+
+- `2.0.0-20231103` through `2.3.0-20240606` (11 builds) produced no video frames on
+  OS1-OS3. `2.3.1-20240712` is the first build with sustained streaming.
+- `3.8.2-20260117` crashed inside CarWith only on OS1; `3.8.3-20260203` fixed it.
+- `4.0.20-20261009` is gated internally to Android SDK 36 and exits on OS1, OS2 and
+  OS4. mcarplay cannot bypass that APK-level restriction.
+- The OS4 set was `4.0.16-20260907`, `4.0.20-20260929`, `4.0.20-20261009`,
+  `4.0.21-20260929`, and `4.0.23-20261016`; four streamed successfully.
+
+<a href="docs/screenshots/carwith-hyperos-carlife-matrix-2026-11-04.png"><img src="docs/screenshots/carwith-hyperos-carlife-matrix-2026-11-04.png" width="960" alt="CarWith 2.x through 4.x streaming matrix across HyperOS OS1 through OS4 with Xiaomi CarLife 8.6.8/260"></a>
+
+This is source-side AVD evidence, not a complete physical-device compatibility claim.
+OS1-OS3 combined Xiaomi system partitions with a ranchu vendor/kernel and ran permissive;
+OS4 ran enforcing but still used the emulator hardware base. Old builds without the
+current public entry used a root-assisted internal-service probe. The matrix does not
+establish physical Qualcomm vendor behavior, receiver decoding, audio, touch, or long-run
+stability.
+
 ### Validated output examples
 
 Each image documents the pictured session only. The Chery images are privacy-redacted
@@ -67,7 +104,7 @@ Select an image to open the full-size version.
 | Area | Known status | Next step | Priority |
 | --- | --- | --- | --- |
 | Vehicle coverage | The manual wireless path is validated on one recorded Chery head-unit firmware. Other vehicles and firmware remain unverified. | Record more vehicle/receiver combinations, including ignition and cold-start behavior. | High |
-| Phone brands and system versions | Verified on one Xiaomi 17 Pro Max configuration. The bridge depends on CarWith and Xiaomi CarLife components, so other Android brands are unverified and may not expose compatible services. | Build a phone/OS/CarWith compatibility matrix; explore other brands where a compatible CarWith service is available. | High |
+| Phone brands and system versions | A 2026-11-04 AVD matrix covers Xiaomi HyperOS OS1-OS4 with CarWith 2.x-4.x and Xiaomi CarLife 8.6.8/260; physical-device evidence remains limited to one Xiaomi 17 Pro Max configuration. Other Android brands are unverified and may not expose compatible services. | Reproduce representative matrix cases on physical Xiaomi devices, then explore other brands where a compatible CarWith service is available. | High |
 | Session stability | On the recorded Chery firmware, two sessions totaled about 107 minutes and the longest ran about 99 minutes. Manual locking can still end the session. | Keep the session alive across automatic screen-off and manual locking, then validate recovery across network, Bluetooth and media lifecycle changes. | High |
 | Automatic connection | The validated vehicle path starts in mcarplay and then selects the phone in the head-unit Bluetooth list. | Validate trigger deduplication, cancellation, cold start and failure recovery across more Bluetooth states. | High |
 | Steering-wheel controls | Receiver next/previous media keys are forwarded, but the full steering-wheel and focus matrix is not verified. | Complete media-key, pause/resume, navigation, call interruption and focus-state validation. | High |
@@ -188,7 +225,8 @@ or set `sdk.dir=/path/to/Android/sdk` in an untracked `local.properties` file.
 
 ```bash
 ./gradlew spotlessCheck :app:testStandardDebugUnitTest \
-  :app:lintStandardDebug :app:assembleStandardDebug
+  :app:lintStandardDebug :app:assembleStandardDebug \
+  :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'
 ```
 
 Output: `app/build/outputs/apk/standard/debug/app-standard-debug.apk`.

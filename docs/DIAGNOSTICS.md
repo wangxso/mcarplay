@@ -192,7 +192,9 @@ A capture shows only what was on the air during that run; it is not vehicle-comp
 python3 tools/analyze_diagnostics.py /path/to/mcarplay-log-...-diagnostics.txt
 ```
 
-The offline tool summarizes the last five retained attempts. Correlate `process`,
+The offline tool summarizes the last five retained attempts. The QQ bot in
+[`tools/logbot/`](../tools/logbot/README.md) builds a user-facing diagnosis on top of it;
+update its `rules.py` when adding a `DiagnosticCode`. Correlate `process`,
 `attempt`, `stage`, `elapsedMs`, `code` and counters with logs and user observations.
 `track` separates CarPlay attempts (`carplay`) from CarWith self-tests (`self_test`);
 the two never supersede each other. Showing a permission dialog is not recorded;
