@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.mcarplay.app.compat.BluetoothBringup
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
@@ -59,6 +60,12 @@ class Iap2BluetoothClient(
 
         /** 「蓝牙已连接→已断开」日志节流（车机可能反复自动重连，避免刷屏）。 */
         private const val PROFILE_LOG_THROTTLE_MILLIS = 15_000L
+
+        /** 出站探测暂停期间的复查间隔（只读内存状态，不发起蓝牙连接）。 */
+        private const val PROBE_IDLE_POLL_MILLIS = 5_000L
+
+        /** ACL 状态未知时用配置文件在线状态兜底的复查间隔（每设备）。 */
+        private const val PROFILE_ONLINE_RECHECK_MILLIS = 30_000L
 
         /** SDP 服务探测等待窗（fetchUuidsWithSdp → ACTION_UUID 广播）。 */
         private const val SDP_PROBE_TIMEOUT_MILLIS = 2_500L
@@ -219,6 +226,42 @@ class Iap2BluetoothClient(
         log("BT-C: 目标「$name」SDP ${describeServices(uuids, completed)}")
     }
 
+    /** 出站探测窗口（车机 ACL 离线且无会话时停止探测，见 [OutboundProbePolicy]）。 */
+    private val probePolicy = OutboundProbePolicy()
+
+    /** 当前是否处于「暂停探测」状态（只用于暂停/恢复日志去重）。 */
+    @Volatile
+    private var probePaused = false
+
+    /** ACL 未知时的配置文件在线结论缓存（地址 → (在线, 查询时间)）。 */
+    private val profileOnlineCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Boolean, Long>>()
+
+    /**
+     * CarPlay 会话结束（推流终止）后调用：给一个短暂的探测宽限窗口——车上掉线时还能自动重连，
+     * 车机已熄火（ACL 已断）时到点即停，不再整夜探测（2026-11-03/04 奇瑞日志）。
+     */
+    fun armAfterSessionEnd() {
+        probePolicy.arm(SystemClock.elapsedRealtime(), OutboundProbePolicy.SESSION_END_GRACE_MILLIS)
+    }
+
+    /**
+     * 该设备此刻是否值得主动连：ACL 在线、或处于探测窗口内；ACL 状态未知（进程启动晚于
+     * 车机连上）且窗口已过时，以 HFP/A2DP 是否在线兜底（节流，避免每轮都查）。
+     */
+    private fun probeAllowed(
+        device: BluetoothDevice,
+        nowMillis: Long,
+    ): Boolean {
+        val acl = BtAclTracker.observe(device.address)
+        if (probePolicy.shouldProbe(acl, nowMillis)) return true
+        if (acl != null) return false
+        val cached = profileOnlineCache[device.address]
+        if (cached != null && nowMillis - cached.second < PROFILE_ONLINE_RECHECK_MILLIS) return cached.first
+        val online = runCatching { BtProfiles.connectedNames(context, device.address).isNotEmpty() }.getOrDefault(false)
+        profileOnlineCache[device.address] = online to nowMillis
+        return online
+    }
+
     /** 「蓝牙已连接→已断开」日志节流时间戳。 */
     private var lastProfileLogAt = 0L
 
@@ -229,6 +272,8 @@ class Iap2BluetoothClient(
             PackageManager.PERMISSION_GRANTED
 
     fun start(): Boolean {
+        // 用户点连接 / ACL 自动拉起：都打开一次探测窗口（客户端可能正处于暂停探测状态）
+        probePolicy.arm(SystemClock.elapsedRealtime(), OutboundProbePolicy.USER_WINDOW_MILLIS)
         if (running) return true
         if (!hasPermission()) {
             log("BT-C: 缺少 BLUETOOTH_CONNECT 权限")
@@ -248,6 +293,8 @@ class Iap2BluetoothClient(
         iap2ServiceCache.clear()
         skippedNoService.clear()
         targetServicesReported.clear()
+        profileOnlineCache.clear()
+        probePaused = false
         running = true
         val myGeneration = generation.incrementAndGet()
         val target = targetProvider()
@@ -287,11 +334,27 @@ class Iap2BluetoothClient(
                 sleepQuietly(2_000)
                 continue
             }
-            val candidates = candidateDevices(adapter)
-            if (candidates.isEmpty()) {
+            val bonded = candidateDevices(adapter)
+            if (bonded.isEmpty()) {
                 log("BT-C: 没有已配对的蓝牙设备——请先在系统设置里与车机完成蓝牙配对")
                 sleepQuietly(RETRY_DELAY_MILLIS * 3)
                 continue
+            }
+            // 车机 ACL 已断开且没有会话时不再主动连（2026-11-03/04 奇瑞整夜每分钟探测一次）。
+            // 车机重新上电时 ACL 连上，CarBluetoothReceiver 会重新拉起会话。
+            val now = SystemClock.elapsedRealtime()
+            val candidates = bonded.filter { probeAllowed(it, now) }
+            if (candidates.isEmpty()) {
+                if (!probePaused) {
+                    probePaused = true
+                    log("BT-C: 车机蓝牙未连接且无会话——暂停主动探测（车机蓝牙连上或再次点「连接」后恢复）")
+                }
+                sleepQuietly(PROBE_IDLE_POLL_MILLIS)
+                continue
+            }
+            if (probePaused) {
+                probePaused = false
+                log("BT-C: 恢复主动探测")
             }
             var connected: BluetoothSocket? = null
             for (device in candidates) {
