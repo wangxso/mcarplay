@@ -59,27 +59,44 @@ class LogSeqLedgerTest {
     }
 
     @Test
-    fun advanceFloorDropsEvictedHolesAndNeverMovesBackwards() {
+    fun droppedSeqsCloseHolesButNeverSkipAnUnarrivedSeq() {
         val ledger = LogSeqLedger()
         ledger.markSent(50)
-        ledger.markSent(51)
+        ledger.markDropped(51)
         assertEquals(2, ledger.sparseCount)
-        ledger.advanceFloorTo(49)
+        // 1..49 尚未到达/处理：下界不能越过它们
+        assertEquals(0, ledger.floor)
+        assertFalse(ledger.isSent(1))
+        (1L..49L).forEach(ledger::markDropped)
         assertEquals(51, ledger.floor)
         assertEquals(0, ledger.sparseCount)
-        ledger.advanceFloorTo(10)
-        assertEquals(51, ledger.floor)
-        assertTrue(ledger.isSent(30))
     }
 
     @Test
-    fun permanentHoleDoesNotGrowTheSetBeyondTheCap() {
-        val ledger = LogSeqLedger(maxSparse = 8)
-        // seq 1 永远不出现：没有上限的话集合会随每条已发行增长
-        (2L..100L).forEach(ledger::markSent)
-        assertTrue(ledger.sparseCount <= 8)
+    fun permanentHoleIsBoundedBySpanCap() {
+        val ledger = LogSeqLedger(maxSpan = 8)
+        // seq 1 永远不出现：跨度超过上限后最老的空洞才被视为丢失
+        (2L..8L).forEach(ledger::markSent)
+        assertEquals(0, ledger.floor)
+        assertFalse(ledger.isSent(1))
+        (9L..100L).forEach(ledger::markSent)
         assertEquals(100, ledger.floor)
+        assertEquals(0, ledger.sparseCount)
         assertTrue((1L..100L).all(ledger::isSent))
+    }
+
+    @Test
+    fun spanCapKeepsYoungerHolesOpen() {
+        val ledger = LogSeqLedger(maxSpan = 8)
+        // 空洞 1 和 5；10 超出跨度只淘汰最老的空洞 1，5 仍可补发
+        listOf(2L, 3L, 4L, 6L, 7L, 8L).forEach(ledger::markSent)
+        ledger.markSent(10)
+        assertEquals(4, ledger.floor)
+        assertFalse(ledger.isSent(5))
+        assertFalse(ledger.isSent(9))
+        ledger.markSent(5)
+        ledger.markSent(9)
+        assertEquals(10, ledger.floor)
     }
 
     @Test

@@ -104,11 +104,6 @@ object BridgeClient {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** 环形日志缓冲（断线重连后按 seq 回补给服务端）。 */
-    private val ringLock = Any()
-    private val ring = ArrayDeque<Pair<Long, String>>()
-    private const val RING_CAP = 5_000
-
     /** 待实时发送的日志（tap 线程入队，连接线程按批冲刷）。 */
     private val pendingLock = Any()
     private val pending = ArrayDeque<Pair<Long, String>>()
@@ -119,6 +114,10 @@ object BridgeClient {
      */
     private val logSendLock = Any()
     private val sentLedger = LogSeqLedger()
+
+    /** 环形日志缓冲（断线重连后按 seq 回补）；淘汰的行记进账本。 */
+    private const val RING_CAP = 5_000
+    private val ring = LogRing(RING_CAP, sentLedger)
 
     private var tapInstalled = false
 
@@ -168,10 +167,7 @@ object BridgeClient {
         if (tapInstalled) return
         tapInstalled = true
         DebugFileLog.tap = { seq, line ->
-            synchronized(ringLock) {
-                ring.addLast(seq to line)
-                while (ring.size > RING_CAP) ring.removeFirst()
-            }
+            ring.add(seq, line)
             synchronized(pendingLock) { pending.addLast(seq to line) }
         }
     }
@@ -436,15 +432,7 @@ object BridgeClient {
         since: Long,
     ) {
         synchronized(logSendLock) {
-            val snapshot: List<Pair<Long, String>> =
-                synchronized(ringLock) {
-                    // 缓冲已满 = 发生过淘汰：比现存最小 seq 更早的行再也发不出去，
-                    // 下界跟上，账本不留它们的空洞。取最小值而非队头——tap 可能乱序到达
-                    if (ring.size >= RING_CAP) {
-                        sentLedger.advanceFloorTo(ring.minOf { it.first } - 1)
-                    }
-                    ring.filter { it.first > since }
-                }
+            val snapshot = ring.since(since)
             val sent = sendLogLines(client, sentLedger.unsent(snapshot) { it.first })
             if (sent == 0) {
                 client.sendText(JSONObject().put("t", "log.batch").put("lines", JSONArray()).toString())
