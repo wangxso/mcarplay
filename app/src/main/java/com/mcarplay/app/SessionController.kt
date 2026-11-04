@@ -54,6 +54,7 @@ import com.mcarplay.app.net.CarPlayCtrlAdvertiser
 import com.mcarplay.app.net.CarPlayServiceBrowser
 import com.mcarplay.app.net.CtrlInviteGate
 import com.mcarplay.app.net.EndpointHosts
+import com.mcarplay.app.net.StreamingInviteReconnect
 import com.mcarplay.app.net.WifiCarPlayConnector
 import com.mcarplay.app.net.WifiConnectCommand
 import com.mcarplay.app.net.WifiSavedNetworks
@@ -662,7 +663,7 @@ object SessionController {
                         uiHintSink?.invoke(t(R.string.sc_tap_phone_on_receiver_hint, name))
                     },
                 )
-            ctrlAdvertiser = CarPlayCtrlAdvertiser(context) { line -> appendLog(line) }
+            ctrlAdvertiser = CarPlayCtrlAdvertiser(context) { line -> appendLog(line) }.also { it.onInvite = ::onCtrlInvite }
             endpointBrowser =
                 CarPlayServiceBrowser(
                     context,
@@ -878,6 +879,7 @@ object SessionController {
         if (!alreadyRunning) {
             ctrlAdvertiser?.resetInviteCount()
             inviteRetryCount = 0
+            lastInviteReconnectAtMillis = 0L
             forceKeyFrameCount = 0
             requestUiCount = 0
             touchLogCount = 0
@@ -2766,6 +2768,71 @@ object SessionController {
         }
     }
 
+    /** 上次「推流中车机邀请 → 重建会话」的 uptime 时刻（0 = 本次连接尚无；startConnection 清零）。 */
+    @Volatile
+    private var lastInviteReconnectAtMillis = 0L
+
+    /** 当前推流会话的诊断轮次（邀请重连时在时间线上收口本轮）。 */
+    @Volatile
+    private var streamingDiagnosticAttempt: String? = null
+
+    /**
+     * 车机 ctrl 邀请回调（应答线程）。连接阶段的邀请由连接流程消费，这里只处理推流中的邀请：
+     * 已登记的车机（[ReceiverCompatibility.Policy.reconnectOnStreamingInvite]）退役当前会话并按邀请重连，
+     * 带 [StreamingInviteReconnect.DEBOUNCE_MS] 防抖；其余车机只记日志（原行为）。
+     */
+    private fun onCtrlInvite() {
+        val client = currentClient ?: return
+        val streaming = !connectCancelled && !sessionStarting.get() && videoSender?.isRunning == true
+        if (!streaming) return
+        val now = android.os.SystemClock.uptimeMillis()
+        val decision =
+            synchronized(inviteReconnectLock) {
+                StreamingInviteReconnect
+                    .decide(
+                        streaming = true,
+                        enabled = client.receiverCompatibility().reconnectOnStreamingInvite,
+                        nowMillis = now,
+                        lastReconnectAtMillis = lastInviteReconnectAtMillis,
+                    ).also { if (it == StreamingInviteReconnect.Decision.RECONNECT) lastInviteReconnectAtMillis = now }
+            }
+        when (decision) {
+            StreamingInviteReconnect.Decision.NOT_STREAMING -> Unit
+            StreamingInviteReconnect.Decision.NOT_ENABLED ->
+                appendLog("CTRL: 推流中收到车机邀请——该车机未登记邀请重连，保持当前会话")
+            StreamingInviteReconnect.Decision.DEBOUNCED ->
+                appendLog(
+                    "CTRL: 推流中收到车机邀请——距上次邀请重连 ${now - lastInviteReconnectAtMillis}ms，" +
+                        "不足 ${StreamingInviteReconnect.DEBOUNCE_MS / 1000}s，忽略",
+                )
+            StreamingInviteReconnect.Decision.RECONNECT ->
+                Bg.run("streaming-invite-reconnect") { reconnectOnStreamingInvite(client) }
+        }
+    }
+
+    private val inviteReconnectLock = Any()
+
+    private fun reconnectOnStreamingInvite(client: AirPlayClient) {
+        val endpoint = client.currentEndpoint
+        if (connectCancelled ||
+            currentClient !== client ||
+            sessionStarting.get() ||
+            videoSender?.isRunning != true ||
+            !ReceiverDetectionRuntime.isCurrent(endpoint.observation)
+        ) {
+            appendLog("CTRL: 推流中邀请重连——会话已更替或结束，放弃")
+            return
+        }
+        appendLog(">>> 推流中收到车机 ctrl 邀请（车机要求重建会话）——退役当前会话，按邀请重连")
+        streamingDiagnosticAttempt?.let { attempt ->
+            ConnectionDiagnostics.timeline.note(attempt, "CTRL invite while streaming: reconnect")
+            ConnectionDiagnostics.timeline.videoEnded(attempt)
+        }
+        streamingDiagnosticAttempt = null
+        retireSession()
+        onCarPlayEndpoint(endpoint, "推流中邀请重连")
+    }
+
     /** 本次连接内「SETUP 被车机关通道后等邀请重连」已用次数（startConnection 清零）。 */
     @Volatile
     private var inviteRetryCount = 0
@@ -3760,6 +3827,7 @@ object SessionController {
                                     val videoStarted = claimed && videoSender?.start {} == true
                                     // 入网已完成，此时才拿低延迟锁（持锁会让入网所需的 Wi‑Fi 扫描失败）
                                     if (videoStarted) StreamingWifiLock.acquire(context)
+                                    if (videoStarted) streamingDiagnosticAttempt = diagnosticAttempt
                                     // 锁屏/息屏/Doze 迁移写进日志与时间线（锁屏退出的定位依据，只读不改状态）
                                     if (videoStarted) {
                                         ScreenLockMonitor.start(

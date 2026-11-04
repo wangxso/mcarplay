@@ -92,6 +92,13 @@ class CarPlayCtrlAdvertiser(
     var lastInviteAtMillis: Long = 0L
         private set
 
+    /**
+     * 每次收到车机 ctrl 邀请后回调（在应答连接的线程上；回调方须自行转后台，不可阻塞）。
+     * 连接阶段的邀请仍由 [inviteCount] / [lastInviteAtMillis] 消费，回调只用于推流中的邀请。
+     */
+    @Volatile
+    var onInvite: (() -> Unit)? = null
+
     /** 新一轮连接开始时清零（避免把上一轮的邀请当成本轮信号）。 */
     fun resetInviteCount() {
         inviteCount = 0
@@ -312,6 +319,9 @@ class CarPlayCtrlAdvertiser(
                 inviteCount++
                 lastInviteAtMillis = android.os.SystemClock.uptimeMillis()
                 log("$TAG: ✓ 车机 ctrl 邀请（第 $inviteCount 次，receiver=${receiverId ?: "?"}）——AirPlay 窗口已开启")
+                onInvite?.let { callback ->
+                    runCatching(callback).onFailure { log("$TAG: 邀请回调异常 - ${it.message ?: it.javaClass.simpleName}") }
+                }
             }
 
             val output = client.getOutputStream()
