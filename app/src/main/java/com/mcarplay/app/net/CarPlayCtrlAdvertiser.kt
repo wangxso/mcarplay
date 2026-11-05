@@ -92,7 +92,10 @@ class CarPlayCtrlAdvertiser(
     var lastInviteAtMillis: Long = 0L
         private set
 
-    /** 每次收到 ctrl 邀请时回调（诊断里程碑用；在服务线程调用，不能阻塞）。 */
+    /**
+     * 每次收到 ctrl 邀请时回调（诊断里程碑与推流中邀请重连用；在服务线程调用，回调方须自行转后台，不能阻塞）。
+     * 连接阶段的邀请仍由 [inviteCount] / [lastInviteAtMillis] 消费。
+     */
     @Volatile
     var onInvite: (() -> Unit)? = null
 

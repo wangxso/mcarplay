@@ -236,4 +236,32 @@ class ReceiverCompatibilityTest {
             attemptedPairing = true,
             pairingUnsupported = unsupported,
         )
+
+    @Test
+    fun onlyVolkswagenModelsReconnectOnStreamingInvites() {
+        val id7 =
+            ReceiverCompatibility.resolve(
+                ReceiverProfile.Signals(model = "VW4131", manufacturer = "Volkswagen", srcvers = "320.17.7"),
+            )
+        assertTrue(id7.reconnectOnStreamingInvite)
+        assertTrue(id7.rules.contains("vw.streaming-invite-reconnect"))
+        val passat =
+            ReceiverCompatibility.resolve(
+                ReceiverProfile.Signals(model = "VW4211", manufacturer = "Toppower", srcvers = "320.17.3"),
+            )
+        assertTrue(passat.reconnectOnStreamingInvite)
+        for (other in listOf(
+            winPlay,
+            diPlay,
+            mib3,
+            ReceiverProfile.Signals(model = "Tiggo", manufacturer = "CHERY", srcvers = "320.17.7"),
+        )) {
+            val policy = ReceiverCompatibility.resolve(other)
+            assertFalse(policy.reconnectOnStreamingInvite)
+            assertFalse(policy.rules.contains("vw.streaming-invite-reconnect"))
+        }
+        assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals(model = "VW")).reconnectOnStreamingInvite)
+        assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals(model = "VW41310")).reconnectOnStreamingInvite)
+        assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals()).reconnectOnStreamingInvite)
+    }
 }
