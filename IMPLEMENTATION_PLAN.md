@@ -6,6 +6,20 @@
 
 ## 当前基线与结论
 
+- **11 月 5 日相关项目调研：** 对照 CarPToCarL `70db71e`、AuDiCar AMCar `ce35062`（均为 MIT）和 hypercar
+  `739c6b0`（GPL-3.0，只参考思路）。它们修过的 IDR 起流、晚到 `0x4301`、前台请求和音频 SETUP 字段，mcarplay 已覆盖。
+  同日已实现两项，单元测试通过，未上车验证：
+  - 有序断开时补发 `0xEA01` StopEASession（参数照抄 `0xEA00`，后台发送后等 200 ms 再关链路；`0xEA03` 日志记录参数形状）；
+  - 网关兜底在所有默认路由中优先选 IPv4，剔除未指定地址。
+
+  待跟进：
+  - 上述两项的实机回归（DiPlay、WinPlay、macplay、艾瑞泽 8），以及在奥迪 MIB3 上确认 `0xEA01` 的效果；
+  - 定位「返回车机」命令后，对比 phone→HU `requestUI` 与 `modesChanged`；
+  - 查 VW4131 报告中推流时的 ctrl 邀请；
+  - 60 fps / 大画布、语音键、GPS 与附着入口作为实验开关。
+
+  外部实车结果不作为本项目证据。详见 `docs/RELATED-PROJECTS-2026-11-05.md`。
+
 - **11 月 4 日远程版 CarWith 系统日志导出：** 调试页增加本机导出/分享与固定桥命令
   `export_carwith_system_logs`，采集最近的 CarWith/CarLife/CTA 与系统启动记录、服务及监听状态。
   支持 Shizuku，或用户通过电脑 ADB 授予 READ_LOGS / DUMP 后在前台确认系统日志访问；无需 root。
