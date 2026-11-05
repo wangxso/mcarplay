@@ -2439,9 +2439,11 @@ object SessionController {
                 // 兜底：热点场景车机 IP = 网关（Audi 实测 .1，但取网关更通用）。
                 // mDNS 在部分网络/机型上不稳定（2026-10-11 实测车机 mDNS 时有时无）；
                 // 网关地址 + 默认端口 7000 直接连，AirPlay 端口是固定约定。
-                val gateway = wifiConnector?.gatewayAddress()
-                if (gateway != null && EndpointHosts.candidates(listOf(gateway)).isNotEmpty()) {
-                    appendLog(">>> [$source] mDNS 未发现，兜底使用网关地址 $gateway:7000（车机热点网关=车机）")
+                val gateways = wifiConnector?.gatewayCandidates().orEmpty()
+                val gateway = gateways.firstOrNull()
+                if (gateway != null) {
+                    val others = if (gateways.size > 1) "；其余默认路由网关 ${gateways.drop(1).joinToString("、")}" else ""
+                    appendLog(">>> [$source] mDNS 未发现，兜底使用网关地址 $gateway:7000（车机热点网关=车机$others）")
                     return effective.copy(
                         ipAddresses = listOf(gateway) + effective.ipAddresses,
                         airPlayPort = if (needPort) 7000 else effective.airPlayPort,

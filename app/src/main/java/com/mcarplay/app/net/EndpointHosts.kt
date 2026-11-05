@@ -59,6 +59,23 @@ object EndpointHosts {
     }
 
     /**
+     * 默认路由网关的兜底候选（mDNS 失败时用网关当车机地址）：剔除未指定地址
+     * （`0.0.0.0` / `::`，即无网关的直连默认路由）后按 [candidates] 排序。
+     *
+     * 只取第一条默认路由会被路由顺序左右：CarPToCarL 1.2.20 在奥迪 4910 上看到排第一的是
+     * IPv6 链路本地网关，8 次重连都打在这个从没通过的地址上，而同一会话 mDNS 给过可用的
+     * IPv4（`docs/RELATED-PROJECTS-2026-11-05.md` 第 2 项）。
+     */
+    fun gatewayCandidates(defaultRouteGateways: List<String>): List<String> = candidates(defaultRouteGateways.filterNot(::isUnspecified))
+
+    /** `0.0.0.0` 或 `::`（任意写法、可带 scope）。 */
+    fun isUnspecified(host: String): Boolean {
+        val base = stripScope(host.trim())
+        if (isIpv4(base)) return base.split('.').let { parts -> parts.size == 4 && parts.all { it.toIntOrNull() == 0 } }
+        return expandIpv6(base)?.all { it == "0000" } == true
+    }
+
+    /**
      * 地址是否属于「本机所在的车机网段」。
      *
      * - IPv4：与本地 IPv4 的 /24 前缀一致（沿用旧过滤，防误连同一 WiFi 上的 Mac）；
