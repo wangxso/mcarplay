@@ -3,6 +3,23 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.5-test.3] - 2026-11-05
+
+> Experimental prerelease on top of v0.1.5-test.2: fixes the home-page vehicle profile dialog, which showed no choices in test.2. Everything else in test.2 is unchanged and still has not been tried in a vehicle; DiPlay, WinPlay, macplay and Chery Arrizo 8 regressions are still pending. This does not establish real-vehicle compatibility.
+> 在 v0.1.5-test.2 之上的实验性预发布：修复首页「车型适配」对话框（test.2 里不显示任何选项）。test.2 的其余改动不变，仍未上车验证；DiPlay、WinPlay、macplay、艾瑞泽 8 的回归尚未进行，不代表实车兼容。
+
+### English
+- **Fix:** the home-page "Vehicle profile" dialog (v0.1.5-test.2) showed only its title and the OK button, so no profile could be picked and the Passat experiments, which need the Volkswagen profile, could not be enabled. The hint text now sits in the dialog title and the list of profiles is shown again. Checked on an emulator (HyperOS_3): all seven options appear, choosing Volkswagen updates the home row and is stored.
+- Not covered: the Passat experiment row in Display settings and the strategies' effect at runtime were not exercised (no head unit on the emulator), and nothing here has been tried in a car. The test.2 notes on the manual vehicle profile, the Passat experiments and the CarWith "return to car" handler still apply.
+- Validation: 839 JVM tests and 24 remote bridge tests, plus `spotlessCheck`, `lintStandardDebug` and `assembleStandardDebug`, passed locally. Python and Node tests were not rerun for this entry. The signed tag workflow additionally runs `lintStandardRelease` and `assembleStandardRelease`.
+
+### 简体中文
+- **修复：** 首页「车型适配」对话框（v0.1.5-test.2）只显示标题和「确定」，无法选择车型，需要「大众」车型的帕萨特实验也就无法开启。现在说明文字放在对话框标题里，车型列表重新显示。已在模拟器（HyperOS_3）上检查：七个选项都显示，选「大众」后首页一行更新并已保存。
+- 未覆盖：显示设置里的帕萨特实验一行和各策略的实际效果没有测过（模拟器没有车机），也都没有上车验证。test.2 里关于手动车型适配、帕萨特实验和 CarWith「返回车机」的说明仍然适用。
+- 验证：839 项 JVM 测试、24 项 remote 调试桥测试，以及 `spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 在本地通过。本条目未重跑 Python 与 Node 测试。签名的 tag 工作流还会运行 `lintStandardRelease` 和 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.5-test.2...v0.1.5-test.3](https://github.com/wangxso/mcarplay/compare/v0.1.5-test.2...v0.1.5-test.3)
+
 ## [v0.1.5-test.2] - 2026-11-05
 
 > Experimental prerelease on top of v0.1.5-test.1: a manual vehicle profile, three Passat experiment strategies and a first "return to car" handler. None of it has been tried in a vehicle; DiPlay, WinPlay, macplay and Chery Arrizo 8 regressions are still pending. This does not establish real-vehicle compatibility.
