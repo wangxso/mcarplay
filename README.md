@@ -134,17 +134,35 @@ an already-started native session, verified root to launch the legacy service, o
 manual setup in CarWith; ordinary Shizuku shell identity cannot start the protected service. Some receivers, including WinPlay 1.2.4 and 1.2.5, also check
 the phone's real Bluetooth identity. Android does not let ordinary apps read it: with
 [Shizuku](https://shizuku.rikka.app/) running, mcarplay reads and remembers it; without
-Shizuku, enter the address from the phone's settings under **本机蓝牙地址** on the main
-screen. A live Shizuku read takes precedence over a typed address. Optional display/launcher
+Shizuku, enter the address from the phone's settings under **本机蓝牙地址** in the **Connect** tab's
+readiness list. A live Shizuku read takes precedence over a typed address. Optional
 utilities may also use Shizuku.
 Receiver capabilities, Bluetooth handoff, pairing fallback and audio memory follow
 the [receiver compatibility design](docs/RECEIVER-COMPATIBILITY.md). Its policy matrix
 describes implementation and evidence boundaries, not a device support list.
 If pairing stalls after reinstalling, restart the test receiver to clear its previous session.
 
+## Interface
+
+The phone UI has three tabs: **Connect** (status, the start button and a readiness checklist), **Settings** (screen
+behavior, car settings, language, updates, disclaimer) and **Diagnostics** (self-test, Bluetooth capture analysis, logs).
+It follows the system light/dark theme. Screenshots come from an Android emulator, not a vehicle, and say nothing about
+vehicle compatibility.
+
+<table>
+<tr>
+<td><img src="docs/screenshots/ui-connect-light.png" width="240" alt="Connect tab"></td>
+<td><img src="docs/screenshots/ui-settings-light.png" width="240" alt="Settings tab"></td>
+<td><img src="docs/screenshots/ui-diagnostics-light.png" width="240" alt="Diagnostics tab"></td>
+</tr>
+</table>
+
+Dark theme: [Connect](docs/screenshots/ui-connect-dark.png), [Settings](docs/screenshots/ui-settings-dark.png),
+[Diagnostics](docs/screenshots/ui-diagnostics-dark.png), [Car display settings](docs/screenshots/ui-display-dark.png).
+
 ## Check for updates
 
-Open **检查更新** on the main screen while parked and disconnected. The app checks
+Open **检查更新** in the Settings tab while parked and disconnected. The app checks
 [GitHub Releases](https://github.com/wangxso/mcarplay/releases), shows release notes,
 and lets you download an APK and open the Android installer. **Include previews**
 is enabled by default for this experimental project; disable it for stable releases only.
@@ -162,7 +180,7 @@ See [update behavior, limitations and acceptance checks](docs/UPDATES.md).
 ## Language and release notes
 
 The interface is available in Simplified Chinese (default) and English. Change it under
-**界面语言 / Language** on the main screen; on Android 13 and later it also appears in the
+**界面语言 / Language** in the **Settings** tab; on Android 13 and later it also appears in the
 system per-app language settings. Logs and diagnostic reports stay in Chinese so they can
 be compared with existing evidence.
 
@@ -195,8 +213,7 @@ Coordinate calibration and configuration import are future work. See [implementa
 ## Compatibility fallbacks
 
 Two fallbacks from earlier versions are off by default. They have no vehicle evidence;
-turn one on only for the symptom below, then reconnect. Open **车机设置 → 显示** on the
-main screen (the same panel is on the car screen) and find:
+turn one on only for the symptom below, then reconnect. Open **Settings → 车机设置 → 显示** and find:
 
 | Switch | Symptom it addresses | What it does | Risk |
 | --- | --- | --- | --- |
