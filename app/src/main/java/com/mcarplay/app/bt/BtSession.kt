@@ -7,6 +7,7 @@ import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.transport.Iap2LinkChannel
+import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DeviceIdentity
 
 /**
@@ -30,6 +31,8 @@ internal fun Iap2LinkChannel.runSenderSession(
     onGeneration: (ReceiverProfile.LinkGeneration) -> Unit = {},
     peerAddress: String? = null,
     observation: ReceiverObservation? = ReceiverDetectionRuntime.observation(peerAddress),
+    /** 会话对象建好、开始 bring-up 之前回调；供退役链路时发 0xEA01（见 [retireControlLink]）。 */
+    onSession: (Iap2SenderSession) -> Unit = {},
 ) {
     val session =
         Iap2SenderSession(
@@ -51,6 +54,7 @@ internal fun Iap2LinkChannel.runSenderSession(
                 if (ReceiverDetectionRuntime.isCurrent(observation)) ConnectionDiagnostics.milestoneCurrent(milestone)
             },
         )
+    onSession(session)
     val endpoint = session.run(timeoutMillis)
     onGeneration(session.linkGeneration)
     if (!ReceiverDetectionRuntime.isCurrent(observation)) return
@@ -60,6 +64,37 @@ internal fun Iap2LinkChannel.runSenderSession(
     // 链路断开（保活泵退出）：通知主控释放「会话处理中」——否则车机拆链后重连带来的
     // 新端点会被僵尸轮次堵门（2026-10-22 奥迪 3315 真机定谳，见 SessionController.onSenderLinkClosed）
     if (ReceiverDetectionRuntime.isCurrent(observation)) onLinkClosed()
+}
+
+/** 退役链路时，0xEA01 交给 socket 后到关闭 RFCOMM 之间的冲刷宽限。 */
+internal const val EA_STOP_FLUSH_MILLIS = 200L
+
+/**
+ * 退役一条 BT iAP2 控制链路。
+ *
+ * [eaStopReason] 非空、且 [session] 本轮开过 EA 会话时，在后台线程先发 `0xEA01`，
+ * 留 [EA_STOP_FLUSH_MILLIS] 让帧离开本机蓝牙栈，再执行 [closeLink]；
+ * 其余情况与原来一样在调用线程立即 [closeLink]。
+ * 写 socket 可能阻塞，所以发送不放在调用线程（用户断开可能在主线程收尾）。
+ */
+internal fun retireControlLink(
+    session: Iap2SenderSession?,
+    eaStopReason: String?,
+    closeLink: () -> Unit,
+) {
+    if (eaStopReason == null || session == null || !session.hasEaSessionsToStop()) {
+        closeLink()
+        return
+    }
+    Bg.run("iap2-ea-stop") {
+        try {
+            if (session.stopEaSessions(eaStopReason) > 0) Thread.sleep(EA_STOP_FLUSH_MILLIS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } finally {
+            closeLink()
+        }
+    }
 }
 
 /**

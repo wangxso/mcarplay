@@ -334,3 +334,38 @@ standard 和所有 release 保持脱敏；服务器只读日志 API 仍按原规
 再「提交错误报告」并分享给 mcarplay，或在页面里选择 zip / `btsnoop_hci.log`。文件只在本机流式解析，不复制、不保存、不上传；
 结果以 `BTSNOOP:` 写入诊断日志，只含时间、计数、CoD、服务 UUID 和结论（EIR 是否含 CarPlay、车机 SDP 是否收到 CarPlay 记录或中途停止续传），
 不含地址、设备名、服务名和链路密钥。错误报告原件含大量个人信息，不要转发。
+
+
+### CarWith system-log export (remote flavor only, 2026-11-04)
+
+The remote-debug settings page offers **导出 CarWith 系统日志** and a separate share button.
+Reproduce the failure first, then export promptly: this reads recent buffers rather than starting a continuous recording.
+The fixed bridge command `export_carwith_system_logs` performs the same local export and returns only its status/path;
+it does not upload the system-log body or append it to the bridge's runtime log. Share the file explicitly after review.
+There is no arbitrary remote shell or ADB command execution field.
+
+Choose either an already running, authorized Shizuku instance, or grant the remote package development permissions from a computer:
+
+```sh
+adb shell pm grant com.mcarplay.app.rd android.permission.READ_LOGS
+adb shell pm grant com.mcarplay.app.rd android.permission.DUMP
+```
+
+Root is not required for the ADB grant route. Keep the remote app in the foreground and allow the system's device-log prompt
+when shown (Android 13+). A ROM may reject grants or restrict logs; permission granted is not proof of complete visibility.
+Without Shizuku or READ_LOGS, export stops with these instructions rather than presenting this app's own log as system evidence.
+Without DUMP, the ADB route marks service sections unavailable. To revoke these development grants:
+
+```sh
+adb shell pm revoke com.mcarplay.app.rd android.permission.READ_LOGS
+adb shell pm revoke com.mcarplay.app.rd android.permission.DUMP
+```
+
+The report contains up to 2,000 recent logcat records for fixed CarWith/CarLife, CTA/security-center, activity-manager,
+crash and lifecycle tags; two package-scoped service dumps; TCP listener state; and read-only feature/app-op values.
+System activity-manager tags can also mention other apps. Each command retains at most 256 KB per output pipe, with
+concurrent draining and a deadline (5 seconds; 30 seconds for the ADB logcat consent prompt). Exit, timeout and truncation
+are reported independently; a saved file or missing event does not establish successful/failed component execution.
+Files are always passed through `DiagnosticRedactor`, including on raw remote-debug builds, and saved separately to
+`Download/mcarplay/mcarplay-carwith-system-*.txt`. Review before sharing; arbitrary third-party log text may contain private data.
+The permissions, UI, collector and bridge command are all in `src/remote`; standard builds do not include them.

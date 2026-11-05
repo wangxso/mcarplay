@@ -117,6 +117,34 @@ class CarLifeCommandRouterTest {
         assertEquals(CarLifeStateMachine.State.FAILED, stateMachine.state)
     }
 
+    /** 2026-11-04：CarWith「返回车机」无效，需要先看清按钮发出的未识别命令。 */
+    @Test
+    fun unknownCommandsAreLoggedSparselyWithoutPayloadContent() {
+        val (router, stateMachine) = router(keyPair())
+        stateMachine.onConnected()
+        val payload = CarLifeProtocol.pbInt(1, 2) + CarLifeProtocol.pbString(2, "secret") + CarLifeProtocol.pbInt(3, 70_000)
+
+        val logs = (1..9).map { router.route(command(0x10099, payload)).log }
+
+        assertEquals("CARLIFE: 未处理命令 kind=0x10099 len=${payload.size} fields=[1=2, 2:len6, 3:varint] 第1次", logs[0])
+        assertEquals(listOf(true, true, true, true, false, false, false, true, false), logs.map { it != null })
+        assertFalse(logs.filterNotNull().any { it.contains("secret") })
+        assertTrue(
+            router
+                .route(command(0x1009A))
+                .log
+                .orEmpty()
+                .contains("kind=0x1009A len=0 fields=[] 第1次"),
+        )
+        assertFalse(router.route(command(0x10099, payload)).failed)
+    }
+
+    @Test
+    fun protobufShapeToleratesGarbage() {
+        assertEquals("非protobuf", CarLifeCommandRouter.protobufShape(byteArrayOf(0x0A, 0x7F)))
+        assertEquals("非protobuf", CarLifeCommandRouter.protobufShape(byteArrayOf(0x0F)))
+    }
+
     private fun connectToInfo(router: CarLifeCommandRouter) {
         router.route(command(CarLifeProtocol.MD_PROTOCOL_MATCH))
         assertEquals(

@@ -6,6 +6,11 @@
     <!-- 重装闭环：PackageInstaller 发起安装（系统仍会弹确认） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Optional development permissions: granted only by user-run ADB; no permission means no system logs. -->
+    <uses-permission android:name="android.permission.READ_LOGS" />
+    <!-- DUMP is a development permission explicitly granted by user-run adb pm grant. -->
+    <uses-permission android:name="android.permission.DUMP" tools:ignore="ProtectedPermissions" />
+
     <application
         android:name=".bridge.BridgeApp"
         android:usesCleartextTraffic="true"
