@@ -38,6 +38,8 @@ class CarLifeSession(
     private val requestLegacyEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestLegacyCarWithService(application) },
     private val requestSettingsEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestCarWithSettings(application) },
     private val attachedFirstFrameWaitMs: Long = ATTACHED_FIRST_FRAME_WAIT_MS,
+    /** CarWith 发来「返回车机」时回调（命令读取线程）。 */
+    private val onReturnToCar: () -> Unit = {},
 ) {
     private val appContext: Application = application
     internal val lease = CarLifeSessionLease()
@@ -373,6 +375,7 @@ class CarLifeSession(
         val result = commandRouter.route(frame)
         result.log?.let { message -> log(message) }
         result.actions.forEach(::sendAction)
+        if (result.returnToCar) onReturnToCar()
         if (frame.kind == CarLifeProtocol.MD_PROTOCOL_MATCH && !result.failed) startHeartbeat()
         if (result.encryptionReady) {
             log("CARLIFE: AES 已就绪，请求视频初始化")
