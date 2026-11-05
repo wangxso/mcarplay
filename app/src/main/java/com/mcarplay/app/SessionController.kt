@@ -20,7 +20,6 @@ import com.mcarplay.app.bt.BtSessionGate
 import com.mcarplay.app.bt.Iap2BluetoothClient
 import com.mcarplay.app.bt.Iap2BluetoothServer
 import com.mcarplay.app.bt.TargetDevicePrefs
-import com.mcarplay.app.capture.HiddenDisplaySource
 import com.mcarplay.app.carlife.CarLifeAudioEvent
 import com.mcarplay.app.carlife.CarLifeJoinGate
 import com.mcarplay.app.carlife.CarLifeLaunchStrategy
@@ -46,10 +45,6 @@ import com.mcarplay.app.input.ConsumerKeys
 import com.mcarplay.app.input.HidNavigation
 import com.mcarplay.app.input.MediaKeyEdge
 import com.mcarplay.app.input.TouchReports
-import com.mcarplay.app.input.TouchRouter
-import com.mcarplay.app.launcher.VirtualLauncher
-import com.mcarplay.app.launcher.settings.AppOrientationCompat
-import com.mcarplay.app.launcher.settings.DisplayPrefs
 import com.mcarplay.app.net.AirPlayFeatures
 import com.mcarplay.app.net.CarPlayCtrlAdvertiser
 import com.mcarplay.app.net.CarPlayServiceBrowser
@@ -61,6 +56,7 @@ import com.mcarplay.app.net.WifiSavedNetworks
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
+import com.mcarplay.app.settings.DisplayPrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
@@ -209,9 +205,6 @@ object SessionController {
             }
         }
         ensureSessionObjects(context.applicationContext)
-        // 横屏兼容写入失败的原因（user build 限制 / Shizuku 故障）只有这里能落盘：
-        // 车机侧设置面板的 toast 只给用户看，排查需要日志。
-        AppOrientationCompat.diagSink = ::appendLog
         // 主线程调用 shell 的告警（历史上两次真机 ANR 都源于此；HKS 下 logcat 不可读）
         Shell.violationSink = ::appendLog
         // HID 原始日志开关（键位校准）：静态标志从偏好初始化，进程冷启动也要生效
@@ -279,23 +272,11 @@ object SessionController {
     }
 
     /**
-     * 旋钮/四向拨杆 → 方向键：注入**应用屏**虚拟显示（DPAD 需要焦点，不能全局分发）。
-     *
-     * 走 UserService 的 `injectInputEvent`（毫秒级）；失败回退 `input -d <id> keyevent`
-     * （多 ~30ms 但不会丢键）。dок 屏不参与——跨屏焦点需要 Launcher 侧改造，见
-     * docs/HID-KNOB.md。
+     * 旋钮/四向拨杆 → 方向键。CarWith 流没有可注入方向键的应用屏（原先的虚拟屏桌面已移除），
+     * 这里只记日志，便于看到车机确实发来了导航类 HID。
      */
     private fun injectNavigationKey(keyCode: Int) {
-        // 优先注入「当前可见的应用屏」（桌面网格 / 打开中的应用屏），否则退回主应用屏
-        val displayId =
-            VirtualLauncher.activeAppDisplayId().takeIf { it > 0 }
-                ?: VirtualLauncher.appDisplayId
-        if (displayId <= 0) {
-            appendLog("HID: 应用屏未就绪（displayId=$displayId）——导航键忽略")
-            return
-        }
-        if (CarInputClient.keyEvent(displayId, keyCode)) return
-        Shell.exec("input -d $displayId keyevent $keyCode", 3_000L)
+        appendLog("HID: 导航键 ${HidNavigation.nameOf(keyCode)} 无处注入（CarWith 流不承载方向键）——忽略")
     }
 
     /**
@@ -362,9 +343,6 @@ object SessionController {
 
     @Volatile
     var currentClient: AirPlayClient? = null
-
-    @Volatile
-    var currentHiddenSource: HiddenDisplaySource? = null
 
     private val carLifeSessions = CarLifeSessionRegistry()
 
@@ -949,9 +927,6 @@ object SessionController {
             CarPlayService
                 .stop(context)
             boundCarSsid = null
-            // 「强制应用横屏」覆盖的用户终态复原（原先在 retireSession 里——那里每轮
-            // 配对起步也执行，会杀掉新一轮刚拉起的应用，2026-10-23 移出到真实终态）。
-            appContext?.let { ctx -> AppOrientationCompat.resetAllAsync(ctx, ::appendLog) }
             // shell 兜底存下的系统网络（connect-network）自动 forget 还原：无互联网热点
             // 被系统当默认网会挤掉移动数据。失败只记日志（用户可到 WLAN 手动删）。
         } finally {
@@ -1130,11 +1105,7 @@ object SessionController {
         nativeAudioBridge = null
         currentSharedSecret = null
         currentAudioHost = null
-        currentHiddenSource?.release()
-        currentHiddenSource = null
         stopFormalCarLife()
-        TouchRouter
-            .reset()
         currentClient?.cancelled = true
         if (closeClient) currentClient?.close()
         currentClient = null
@@ -3128,12 +3099,6 @@ object SessionController {
                                 scheduleModesReclaim(created)
                             }
                         }
-                    // 「强制应用横屏」覆盖写入在配对起步就入队：`am compat enable` 会立即
-                    // 杀名单内应用，必须赶在 attach 拉起任何应用之前完成。配对阶段有几十秒
-                    // 空窗，写入在此期间自然排空，attach 只需 drain（~0ms）——原先在 attach
-                    // 里同步跑（1.6s，串行时 3.2s）会侵占「RECORD→屏幕口 keepAlive」的
-                    // ~10s 拆链预算（keepAlive 帧自 attach 返回后才起发，2026-10-23 定谳）。
-                    appContext?.let { ctx -> AppOrientationCompat.applyAllAsync(ctx, ::appendLog) }
                     if (ownsConnection()) retireSession()
                     // 会话静默降噪（2026-10-10）：从交接点起暂停其它接收端的出站连接探测
                     // （典型：连着 DiPlay 测试台时不再噪音式探测 Audi）。会话结束/断开时解除。
@@ -3400,13 +3365,6 @@ object SessionController {
                                                         ReceiverDetectionRuntime.touch(client.currentEndpoint.observation)
                                                     }
                                                 }
-                                            } else {
-                                                contacts.forEach {
-                                                    TouchRouter.onContact(
-                                                        context.applicationContext,
-                                                        it,
-                                                    )
-                                                }
                                             }
                                         } else if (report != null) {
                                             appendLog(
@@ -3538,7 +3496,6 @@ object SessionController {
                                 // openDataPort()，再协商音频，最后 RECORD + 启动编码器。
                                 var pendingVideoW = 0
                                 var pendingVideoH = 0
-                                var pendingVideoDensity = 0
                                 var carLife: CarLifeSession? = null
                                 lateinit var sessionVideoSender: VideoSender
                                 if (host != null) {
@@ -3566,30 +3523,12 @@ object SessionController {
                                             } ?: 30
                                     activeScalePercent = scalePct
                                     activeTargetFps = fps
-                                    // 车机触摸在通告视图坐标系（如 1160×540），流已按比例
-                                    // 缩放（如 1450×674）——注入前需映射，否则点击漂移
-                                    TouchRouter
-                                        .setCoordinateScale(
-                                            setup.displayWidth,
-                                            setup.displayHeight,
-                                            streamW,
-                                            streamH,
-                                        )
                                     appendLog(
                                         "DISPLAY: 流 ${setup.displayWidth}x${setup.displayHeight} → " +
                                             "${streamW}x$streamH（$scalePct%）@${fps}fps",
                                     )
                                     pendingVideoW = streamW
                                     pendingVideoH = streamH
-                                    // dock 屏密度随画布短边等比（设计基准 1160×540@420dpi，
-                                    // 见 design/launcher-proto.html：dock 48dp=126px）：高分辨率
-                                    // 车机（测试台 2320×1080=2×）下 dock 文字/图标与奥迪同比例
-                                    // 放大——此前固定 420dpi，dock 相对画布减半显小（2026-10-17）。
-                                    // 上限 4×（4K 级画布）。
-                                    pendingVideoDensity =
-                                        (420f * minOf(streamW, streamH) / 540f)
-                                            .toInt()
-                                            .coerceIn(120, 1680)
                                     val carLifeSource =
                                         object : ExternalVideoSource {
                                             override fun requestKeyFrame(): Boolean = currentCarLifeSession?.requestKeyFrame() == true
@@ -3655,11 +3594,6 @@ object SessionController {
                                                     // 车机侧断开：人在车外，让手机直接休眠（面板保持黑），
                                                     // 而不是先点亮再等 60s 超时
                                                     restorePhoneScreen(sleepIfCarSide = true)
-                                                    // 同样复原横屏覆盖。这里跑在推流收尾线程，不是连接
-                                                    // 关键路径，但统一走异步口以保持「串行、不重入」的语义。
-                                                    appContext?.let { ctx ->
-                                                        AppOrientationCompat.resetAllAsync(ctx, ::appendLog)
-                                                    }
                                                     // shell 兜底存的系统网络也要在这里还原：车机拆链是
                                                     // 最常见的离场方式（熄火），用户未必点「断开」——只挂
                                                     // disconnect 一端必遗留（2026-10-23 审阅定谳）。下一轮
@@ -3766,7 +3700,6 @@ object SessionController {
                                 if (host != null) {
                                     val videoW = pendingVideoW
                                     val videoH = pendingVideoH
-                                    val videoDensity = pendingVideoDensity
                                     val output = CarLifeOutput(diagnosticAttempt, sessionVideoSender)
                                     // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准
                                     val createdCarLife =

@@ -72,13 +72,10 @@
 - **设置页**沿用现有 Fragment 面板（`DesktopPanelFragment`、`DisplayPanelFragment` 等），只换宿主与外观。
 - 横屏：连接页左侧固定英雄卡、右侧滚动（保留现有 `applyContentLayout` 的意图）；平板/折叠屏用双栏。
 
-### 4.2 车机桌面（投屏侧）
+### 4.2 车机桌面（投屏侧）——已移除
 
-保留现有能力和入口，不改信息结构，只做：
-
-- 统一 Dock、Grid、设置双栏的令牌（颜色、圆角、字号），触控目标不小于 48dp（车机上按屏幕物理尺寸再核对）；
-- 把 `LetterboxHint*` 的提示样式并入通用「浮层提示」组件；
-- 设置双栏与手机设置共用同一组件库。
+原方案是统一 Dock、Grid、设置双栏的样式。阶段 5 查明：现行连接路径只转发 CarWith 的视频流，CarDeck 继承来的虚拟显示桌面
+（`VirtualLauncher`、Dock、Grid、`LetterboxHint*`）没有任何构造入口，是死代码，于是直接删除而不是重做样式。详见「阶段 5 进度」。
 
 ### 4.3 对话框与浮层
 
@@ -193,7 +190,7 @@
 | 2 | 拆分 `MainActivity`：连接 / 设置 / 诊断三屏，抽出 Controller；行为不变 | 是 | 手机端连接流程冒烟 |
 | 3 | 连接页改版：英雄卡 + 进度条 + 下一步提示 + 可折叠准备清单 | 是 | 否 |
 | 4 | 设置与诊断页改版：沿用共享面板，换宿主与外观 | 是 | 车机设置双栏需检查 |
-| 5 | 车机桌面样式统一：Dock / Grid / 设置 / 提示浮层 | 是 | **是**（四台接收端） |
+| 5 | ~~车机桌面样式统一~~ → 移除不可达的 CarDeck 虚拟显示桌面，保留「车机显示」设置面板 | 是 | **是**（四台接收端，尚未做） |
 | 6 | 文档：README 双语中的界面描述、`IMPLEMENTATION_PLAN.md` | 是 | 否 |
 
 阶段 0–1 不改变任何屏幕布局，可以最先合并，后面的阶段都建立在它们之上。
@@ -232,7 +229,24 @@
 - **子页迁移**：更新页、蓝牙抓包页去掉固定深色，随系统浅/深色；按钮改用 `ui_btn_*` 文字色（禁用态可读），
   更新说明为空时不再显示空卡片。开关改为 `ui_sw_thumb` / `ui_sw_track`。
 - **仍保持固定深色**：`PhoneSettingsActivity`（车机设置面板）以及与车机共用的 `SettingsFragments`、`fragment_panel_*`、
-  `bg_segment*` / `bg_checkbox*` / `bg_radio*` / `bg_menu_*`，要等阶段 5 在真车上回归后才能换主题。
+  `bg_segment*` / `bg_checkbox*` / `bg_radio*` / `bg_menu_*`，要等阶段 5 在真车上回归后才能换主题。（阶段 5 已随桌面一并删除或迁移，见下。）
 - 验证：门禁结果见提交说明；真机（Xiaomi 18 Pro）上用 root 注入点击走过连接 → 设置标签、语言弹窗，并截图核对了
   更新页、蓝牙抓包页、车机设置页。诊断标签的交互、目标选择器、日志导出/控制台、横屏、深色下的新页面
   **未在设备上走过**（后续 root 点击被自动模式拒绝）。
+
+### 阶段 5 进度（移除 CarDeck 桌面）
+
+- **方向调整**：原计划统一车机桌面样式。用户指出现在直接接 CarWith 的流，CarDeck 时代的桌面不需要，因此改为删除。
+- **可达性依据**：`VirtualLauncher.attach` 只由 `HiddenDisplaySource` 调用，而 `HiddenDisplaySource` 从未被构造；
+  实际会话走 `VideoSender` 的 `externalVideoSource` 与 `CarLifeSession`。所以删除对 CarWith 路径无行为影响。
+- **已删除**：`launcher/` 下的 `VirtualLauncher`、Dock、Grid、`LetterboxHint*`、桌面/Dock/应用横屏/超采样/默认地图等设置面板、
+  `PhoneSettingsActivity` 列表页、`WallpaperStore` 与默认壁纸、`AppOrientationCompat` 相关调用，以及约 120 个随之失效的
+  布局、图片、动画、颜色和字符串（用 `scratchpad/unused.py` 对照 HEAD 逐轮清理）。
+- **保留并迁移**：「车机显示」面板（流分辨率、帧率、息屏、兼容兜底、导航压低音量）仍在用，
+  迁到 `com.mcarplay.app.settings`，由 `SettingsContentActivity` 承载，改用 `ui_*` 令牌，随系统浅/深色。
+  设置标签里的「车机设置」行直接进入该页；车机壁纸行已删。
+- **行为变化**：HID 方向键/旋钮不再有注入处（CarWith 流不承载方向键），现在只记一行日志。
+- **未处理**：`CarInputServiceImpl`（Shizuku AIDL）里仍有虚拟显示相关方法，`MediaListenerService` / `NotificationAccess`
+  可能已无消费者，留待后续清理。
+- 验证：门禁通过（`spotlessCheck`、单元测试、lint、`assembleStandardDebug`、`remote` 桥接测试）。**未做**：
+  四台接收端（DiPlay、WinPlay、macplay、奇瑞艾瑞泽 8）的真车回归；设备当时未连 adb，阶段 5 的界面没有上机截图。

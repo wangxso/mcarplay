@@ -1,4 +1,4 @@
-package com.mcarplay.app.launcher.settings
+package com.mcarplay.app.settings
 
 import android.content.Context
 
@@ -21,10 +21,6 @@ object DisplayPrefs {
 
     const val FPS_DEFAULT = 30
 
-    /** 触摸 move 注入节流默认值（ms）：0=默认关闭，交互滞后时在「显示」面板调高试验。 */
-    const val MOVE_THROTTLE_DEFAULT = 0
-    const val MOVE_THROTTLE_MAX = 48
-
     /** 连接时真息屏（物理面板断电）默认值。 */
     // 默认**关**（2026-10-24 用户要求）：连接成功就断面板对多数人太激进，
     // 想要的人在 设置→显示 手动开启（开关保留，只改默认值）
@@ -36,7 +32,6 @@ object DisplayPrefs {
     private const val PREFS_NAME = "settings"
     private const val KEY_SCALE = "display_scale_percent"
     private const val KEY_FPS = "display_fps"
-    private const val KEY_MOVE_THROTTLE = "move_throttle_ms"
     private const val KEY_SCREEN_OFF = "screen_off_on_connect"
     private const val KEY_HID_RAW_LOG = "hid_raw_log"
 
@@ -114,24 +109,6 @@ object DisplayPrefs {
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putInt(KEY_FPS, if (fps >= 60) 60 else 30)
-            .apply()
-    }
-
-    /** 触摸 move 注入节流（ms；0=关闭）。 */
-    fun moveThrottleMs(context: Context): Int =
-        context
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getInt(KEY_MOVE_THROTTLE, MOVE_THROTTLE_DEFAULT)
-            .coerceIn(0, MOVE_THROTTLE_MAX)
-
-    fun setMoveThrottleMs(
-        context: Context,
-        ms: Int,
-    ) {
-        context
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putInt(KEY_MOVE_THROTTLE, ms.coerceIn(0, MOVE_THROTTLE_MAX))
             .apply()
     }
 }

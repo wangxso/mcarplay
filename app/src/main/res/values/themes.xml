@@ -17,28 +17,10 @@
 
     <!-- 车机桌面（dock/网格/设置）：窗口透明——壁纸由 GL 合成器画在最底层，
          Activity 不垫底色（否则壁纸被盖住） -->
-    <style name="Theme.CarPlaySender.Launcher" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:colorBackground">@android:color/transparent</item>
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:statusBarColor">#000000</item>
-        <item name="android:navigationBarColor">#000000</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
-    </style>
 
     <!-- 车机设置：进入/退出用滑动转场（windowAnimationStyle 全版本可用，
          不依赖 API 34 已废弃的 overridePendingTransition） -->
-    <style name="Theme.CarPlaySender.Settings" parent="Theme.CarPlaySender.Launcher">
-        <item name="android:windowAnimationStyle">@style/CarPlaySettingsAnimation</item>
-    </style>
 
-    <style name="CarPlaySettingsAnimation" parent="">
-        <item name="android:activityOpenEnterAnimation">@anim/settings_in</item>
-        <item name="android:activityOpenExitAnimation">@anim/stay</item>
-        <item name="android:activityCloseEnterAnimation">@anim/stay</item>
-        <item name="android:activityCloseExitAnimation">@anim/settings_out</item>
-    </style>
 
     <!-- 静默投屏跳板（audio/SilentProjectionActivity）：全透明、无动画、不抢焦点。
          该 Activity 继承 android.app.Activity（不是 AppCompat），所以父主题只能用平台主题。 -->

@@ -258,7 +258,7 @@ object ScreenDimmer {
                 dimShown = true
                 Log.i("CarPlaySender", "DIMMER: 暗幕已显示")
                 // 真·假息屏：暗幕上好后直接断物理屏电源。系统保持交互态（常亮超时已设
-                // 为永不，不会真睡下去），虚拟屏完全不受影响；触摸经探针唤醒。
+                // 为永不，不会真睡下去）；触摸经探针唤醒。
                 setPanelPower(false)
             }.onFailure { Log.w(TAG, "暗幕添加失败：${it.message}") }
     }

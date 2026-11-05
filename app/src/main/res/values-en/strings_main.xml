@@ -36,13 +36,8 @@
     <string name="cd_fake_off">Fake screen-off</string>
     <string name="main_dim_title">Fake screen-off now</string>
     <string name="main_dim_desc">Tap anywhere on the phone screen to restore</string>
-    <string name="cd_wallpaper">Wallpaper</string>
-    <string name="main_wallpaper_title">Car wallpaper</string>
-    <string name="main_wallpaper_desc">Full screen, aspect fill</string>
-    <string name="main_wallpaper_change">Change</string>
-    <string name="main_wallpaper_reset">Reset</string>
     <string name="cd_landscape">Landscape</string>
-    <string name="main_car_settings_desc">Home apps · landscape apps · supersampling · dock · default map</string>
+    <string name="main_car_settings_desc">Stream resolution · frame rate · screen off · fallbacks · nav ducking</string>
     <string name="cd_terminal">Terminal</string>
     <string name="main_shell_title">Shell global state</string>
     <string name="main_shell_desc">letterbox / virtual displays / wm overrides — for debugging</string>

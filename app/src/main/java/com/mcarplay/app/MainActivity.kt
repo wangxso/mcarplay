@@ -42,12 +42,10 @@ import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.diagnostics.DiagnosticRedactor
 import com.mcarplay.app.diagnostics.DiagnosticText
 import com.mcarplay.app.i18n.AppLanguage
-import com.mcarplay.app.input.TouchRouter
-import com.mcarplay.app.launcher.VirtualLauncher
-import com.mcarplay.app.launcher.settings.AppOrientationCompat
 import com.mcarplay.app.legal.DisclaimerDialog
 import com.mcarplay.app.legal.DisclaimerPrefs
 import com.mcarplay.app.legal.needsDisclaimerAtLaunch
+import com.mcarplay.app.media.MediaSessionsState
 import com.mcarplay.app.media.NotificationAccess
 import com.mcarplay.app.service.BatteryExemption
 import com.mcarplay.app.service.CarPlayService
@@ -64,7 +62,6 @@ import com.mcarplay.app.ui.ReceiverDetectionDialog
 import com.mcarplay.app.ui.ScreenDimmer
 import com.mcarplay.app.ui.SignalWavesView
 import com.mcarplay.app.ui.TargetPickerController
-import com.mcarplay.app.ui.WallpaperStore
 import com.mcarplay.app.ui.WhatsNewDialog
 import com.mcarplay.app.ui.kit.StepperView
 import com.mcarplay.app.update.WhatsNew
@@ -232,22 +229,6 @@ class MainActivity : AppCompatActivity() {
     private val pendingStartAfterBtPermission =
         java.util.concurrent.atomic
             .AtomicBoolean(false)
-
-    /** 车机壁纸选择（Photo Picker；无需存储权限）。选中即持久化并通知合成器换图。 */
-    private val wallpaperPicker =
-        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            if (uri == null) {
-                log("WALLPAPER: 未选择图片")
-                return@registerForActivityResult
-            }
-            val ok =
-                WallpaperStore
-                    .setFromUri(this, uri)
-            log(
-                "WALLPAPER: ${if (ok) "壁纸已更新（会话进行中约 1 秒内上车；下次连接自动生效）" else "保存失败"}",
-            )
-            snack(getString(if (ok) R.string.ma_wallpaper_updated else R.string.ma_save_failed))
-        }
 
     private val audioPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -859,9 +840,7 @@ class MainActivity : AppCompatActivity() {
         // 进程重启兜底：若上次会话未正常退役，「常亮」改过的屏幕超时需要恢复
         run {
             val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
-            if (prefs.contains("screen_off_timeout_backup") &&
-                VirtualLauncher.appDisplayId < 0
-            ) {
+            if (prefs.contains("screen_off_timeout_backup")) {
                 val backup = prefs.getInt("screen_off_timeout_backup", 60_000)
                 prefs.edit().remove("screen_off_timeout_backup").apply()
                 Bg.run("screen-timeout-restore") {
@@ -1100,14 +1079,8 @@ class MainActivity : AppCompatActivity() {
                         .attach(this)
                 }
             } else {
-                if (VirtualLauncher.appDisplayId >= 0) {
-                    // 会话中：仅关闭常亮/暗幕（投屏探针等资源留待会话结束统一释放）
-                    ScreenDimmer
-                        .disableDim()
-                } else {
-                    ScreenDimmer
-                        .detach()
-                }
+                ScreenDimmer
+                    .detach()
             }
             log("MODE: 常亮+暗幕 ${if (checked) "开启" else "关闭"}")
         }
@@ -1198,21 +1171,6 @@ class MainActivity : AppCompatActivity() {
             log("DIMMER: 手动假息屏（点击屏幕恢复）")
         }
 
-        findViewById<TextView>(R.id.btnWallpaperPick).setOnClickListener {
-            wallpaperPicker.launch(
-                androidx.activity.result.PickVisualMediaRequest(
-                    androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly,
-                ),
-            )
-        }
-        findViewById<TextView>(R.id.btnWallpaperReset).setOnClickListener {
-            val ok =
-                WallpaperStore
-                    .resetToDefault(this)
-            log("WALLPAPER: ${if (ok) "已恢复内置默认（CarPlay 官方深色壁纸）" else "恢复失败"}")
-            snack(getString(if (ok) R.string.ma_wallpaper_reset else R.string.ma_reset_failed))
-        }
-
         // ---- 折叠卡：高级 / 日志 ----
         bindExpandable(R.id.advHeader, advBody, advChevron)
         bindExpandable(R.id.logHeader, logBody, logChevron)
@@ -1267,9 +1225,9 @@ class MainActivity : AppCompatActivity() {
         // 所以 Shizuku 授权成功、连接建立等时机都会再调一次。
         ensureNotificationAccessAsync()
 
-        // ---- 车机设置（手机侧二级菜单：桌面/横屏/超采样/dock/默认地图） ----
+        // ---- 车机显示设置（流画布缩放 / 帧率 / 息屏 / 自动连接 / HID 日志） ----
         findViewById<LinearLayout>(R.id.btnCarSettings).setOnClickListener {
-            startActivity(android.content.Intent(this, PhoneSettingsActivity::class.java))
+            startActivity(android.content.Intent(this, SettingsContentActivity::class.java))
         }
 
         // 启动即检查：常亮开 + 无悬浮窗权限 → 主动请求
@@ -1285,9 +1243,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        TouchRouter.logSink = { line -> log(line) }
-        VirtualLauncher.logSink = { line -> log(line) }
         CarInputClient.logSink = { line -> log(line) }
+        MediaSessionsState.logSink = { line -> log(line) }
 
         log("mcarplay Phase 0 就绪")
         log("真车：与车机蓝牙配对 + 手机加入车机热点 -> 点「启动连接」（自动主动连入车机）")
@@ -1967,14 +1924,6 @@ class MainActivity : AppCompatActivity() {
                         "SHELL: 启动检测到 ${residual.size} 个残留虚拟屏: " +
                             residual.joinToString(", ") { "${it.second}(${it.first})" },
                     )
-                    // 残留屏 = 上次会话异常退出（进程被杀）：横屏覆盖的会话末复原
-                    // 也没执行——一并清理，避免应用在手机侧残留横屏状态
-                    runCatching {
-                        val reset =
-                            AppOrientationCompat
-                                .resetAll(applicationContext)
-                        if (reset > 0) log("ORIENTATION: 残留会话的横屏覆盖已复原 $reset 个")
-                    }
                     // 先自动清理一轮（含旧版本 UserService 进程回收——其持有的屏跨进程
                     // 无法 release，只有进程回收能释放；重装 APK 后 Shizuku 按版本复用的
                     // 旧进程正是「点清理释放 0/N」的根因，2026-10-16）。清不掉的再问用户。
@@ -2016,17 +1965,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 当前会话持有的虚拟屏（不参与残留清理）。 */
-    private fun currentSessionDisplayIds(): Set<Int> =
-        buildSet {
-            val launcher = VirtualLauncher
-            listOf(
-                launcher.dockDisplayId,
-                launcher.appDisplayId,
-                launcher.mapDisplayId,
-                launcher.gridDisplayId,
-            ).forEach { if (it >= 0) add(it) }
-        }
+    /** 当前会话持有的虚拟屏（不参与残留清理）。桌面已移除，本进程不再创建虚拟屏，所以恒为空。 */
+    private fun currentSessionDisplayIds(): Set<Int> = emptySet()
 
     /** 启动检测到残留 CarPlay 虚拟屏：询问是否立即清理（上次会话异常退出遗留）。 */
     private fun promptResidualDisplays(residual: List<Pair<Int, String>>) {
