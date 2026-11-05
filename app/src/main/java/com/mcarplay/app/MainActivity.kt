@@ -1,7 +1,6 @@
 package com.mcarplay.app
 
 import android.Manifest
-import android.animation.ObjectAnimator
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -60,7 +59,6 @@ import com.mcarplay.app.ui.LogExportController
 import com.mcarplay.app.ui.PanelWindow
 import com.mcarplay.app.ui.ReceiverDetectionDialog
 import com.mcarplay.app.ui.ScreenDimmer
-import com.mcarplay.app.ui.SignalWavesView
 import com.mcarplay.app.ui.TargetPickerController
 import com.mcarplay.app.ui.WhatsNewDialog
 import com.mcarplay.app.ui.kit.StepperView
@@ -91,10 +89,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 「本机蓝牙地址」行的后台实时读取是否在进行（Shizuku shell 最长 4 秒，不能压在 UI 线程）。 */
     @Volatile private var btIdentityProbeRunning = false
-    private lateinit var signalWaves: SignalWavesView
-    private lateinit var hubPlate: FrameLayout
-    private lateinit var hubCar: ImageView
-    private lateinit var hubCaption: TextView
+    private lateinit var heroDot: View
     private lateinit var heroStateText: TextView
     private lateinit var btnResidualCleanup: TextView
     private lateinit var heroSubline: TextView
@@ -135,7 +130,6 @@ class MainActivity : AppCompatActivity() {
     // ---- 英雄卡状态机（1s 轮询 SessionController 对账）----
     private var heroState: HeroState? = null
     private var connectedAt = 0L
-    private var hubBlink: ObjectAnimator? = null
 
     // 启动残留屏检查进行中（英雄卡显示「检查中」）；发现的残留暂缓清理时
     // 记在 pendingResidualDisplays，状态旁的「清理残留屏」按钮可再次发起
@@ -774,10 +768,7 @@ class MainActivity : AppCompatActivity() {
         shizukuBadge = findViewById(R.id.shizukuBadge)
         btIdentityDesc = findViewById(R.id.btIdentityDesc)
         btIdentityBadge = findViewById(R.id.btIdentityBadge)
-        signalWaves = findViewById(R.id.signalWaves)
-        hubPlate = findViewById(R.id.hubPlate)
-        hubCar = findViewById(R.id.hubCar)
-        hubCaption = findViewById(R.id.hubCaption)
+        heroDot = findViewById(R.id.heroDot)
         heroStateText = findViewById(R.id.heroStateText)
         btnResidualCleanup = findViewById(R.id.btnResidualCleanup)
         btnResidualCleanup.setOnClickListener {
@@ -1317,8 +1308,12 @@ class MainActivity : AppCompatActivity() {
     private fun tickHero() {
         val diagnosis = ConnectionDiagnostics.timeline.snapshot()
         val latest = ConnectionDiagnostics.latestSnapshot()
-        findViewById<TextView>(R.id.diagnosticStatus).text =
-            latest?.let { DiagnosticText.summary(this, it) } ?: getString(R.string.diagnostic_empty)
+        // 还没有连接记录时不占首页空间：提示语与导出入口都等有报告后再出现（诊断页另有导出入口）。
+        val diagnosticStatus = findViewById<TextView>(R.id.diagnosticStatus)
+        diagnosticStatus.text = latest?.let { DiagnosticText.summary(this, it) }.orEmpty()
+        val reportVisibility = if (latest == null) View.GONE else View.VISIBLE
+        diagnosticStatus.visibility = reportVisibility
+        findViewById<View>(R.id.btnExportDiagnostics).visibility = reportVisibility
         updateConnectionSteps(latest)
         val s =
             when {
@@ -1486,38 +1481,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyHeroState(s: HeroState) {
-        signalWaves.setState(
-            when (s) {
-                HeroState.IDLE -> SignalWavesView.State.IDLE
-                HeroState.CONNECTING -> SignalWavesView.State.CONNECTING
-                HeroState.CONNECTED -> SignalWavesView.State.CONNECTED
-            },
-        )
-        val (plateColor, carColor) =
-            when (s) {
-                HeroState.IDLE -> getColor(R.color.m3_surface_high) to getColor(R.color.m3_on_var)
-                HeroState.CONNECTING ->
-                    getColor(R.color.m3_pri_container) to getColor(R.color.m3_on_pri_container)
-                HeroState.CONNECTED -> getColor(R.color.m3_primary) to getColor(R.color.m3_on_primary)
-            }
-        hubPlate.background.mutate().setTint(plateColor)
-        hubCar.setColorFilter(carColor)
-        hubCaption.setTextColor(
-            if (s == HeroState.IDLE) getColor(R.color.m3_mono_dim) else 0xFF5C8B96.toInt(),
-        )
-
-        hubBlink?.cancel()
-        hubBlink = null
-        hubCar.alpha = 1f
-        if (s == HeroState.CONNECTING) {
-            hubBlink =
-                ObjectAnimator.ofFloat(hubCar, View.ALPHA, 1f, 0.45f).apply {
-                    duration = 1_200L
-                    repeatCount = ObjectAnimator.INFINITE
-                    repeatMode = ObjectAnimator.REVERSE
-                    start()
-                }
-        }
+        heroDot.backgroundTintList =
+            android.content.res.ColorStateList.valueOf(
+                when (s) {
+                    HeroState.IDLE -> getColor(R.color.ui_text_secondary)
+                    HeroState.CONNECTING -> getColor(R.color.m3_primary)
+                    HeroState.CONNECTED -> getColor(R.color.m3_ok_dot)
+                },
+            )
 
         heroStateText.text =
             getString(
@@ -2164,36 +2135,9 @@ class MainActivity : AppCompatActivity() {
         val detail = findViewById<android.widget.LinearLayout>(R.id.detailColumn)
         val density = resources.displayMetrics.density
         val gap = (12 * density).toInt()
-        // 横屏屏高只有 ~300dp：波形区 176→70dp、内边距 24/20→12dp，
-        // 让「状态 + 副标题 + 启动连接」全部留在首屏。
-        // 预算：顶部栏 ~60 + 波形 70 + 状态 40 + 副标题 20 + 18 间距 + 按钮 52 + 内边距 24 ≈ 284dp
-        val waveHeight = ((if (landscape) 70 else 176) * density).toInt()
-        for (id in intArrayOf(R.id.heroWaveFrame, R.id.signalWaves)) {
-            findViewById<View>(id).layoutParams =
-                findViewById<View>(id).layoutParams.apply { height = waveHeight }
-        }
-        val padTop = ((if (landscape) 12 else 24) * density).toInt()
-        val padBottom = ((if (landscape) 12 else 20) * density).toInt()
+        val padTop = ((if (landscape) 12 else 20) * density).toInt()
+        val padBottom = ((if (landscape) 12 else 16) * density).toInt()
         hero.setPadding(hero.paddingStart, padTop, hero.paddingEnd, padBottom)
-        // 横屏波形框只有 70dp：圆盘同步缩到 44dp，让外圈轨道与弧线仍有空间
-        // （圆盘 74dp 会把波形框撑满、弧线被完全挤出可视区，真机截图暴露）
-        val plateSize = ((if (landscape) 44 else 74) * density).toInt()
-        val carSize = ((if (landscape) 24 else 38) * density).toInt()
-        findViewById<View>(R.id.hubPlate).layoutParams =
-            findViewById<View>(R.id.hubPlate).layoutParams.apply {
-                width = plateSize
-                height = plateSize
-            }
-        findViewById<View>(R.id.hubCar).layoutParams =
-            findViewById<View>(R.id.hubCar).layoutParams.apply {
-                width = carSize
-                height = carSize
-            }
-        // 横屏波形框只有 70dp：装不下 CARPLAY 标签，标签让位
-        // （圆盘是视觉主体，品牌字在顶部标题里已有）
-        findViewById<View>(R.id.hubCaption).visibility =
-            if (landscape) View.GONE else View.VISIBLE
-
         row.orientation = android.widget.LinearLayout.VERTICAL
         if (landscape) {
             if (hero.parent === row) {

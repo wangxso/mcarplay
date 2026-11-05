@@ -2,7 +2,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
     <string name="main_device_detecting">设备检测中</string>
     <string name="main_shizuku_chip_online">车机服务在线</string>
-    <string name="cd_head_unit">车机</string>
     <string name="main_hero_idle">未连接</string>
     <string name="main_cleanup_residual">清理残留屏</string>
     <string name="main_hero_idle_hint">与车机蓝牙完成配对后，点击下方按钮发起无线连接</string>

@@ -7,7 +7,6 @@
          车机桌面不使用它们（grep m3_ 无 launcher 命中），仍是独立的深色体系。 -->
     <color name="m3_surface">@color/ui_bg</color>
     <color name="m3_surface_low">@color/ui_card</color>
-    <color name="m3_surface_high">@color/ui_field</color>
     <color name="m3_surface_highest">@color/ui_track</color>
     <color name="m3_on_surface">@color/ui_text</color>
     <color name="m3_on_var">@color/ui_text_secondary</color>
@@ -15,8 +14,6 @@
     <color name="m3_outline_var">@color/ui_track</color>
     <color name="m3_primary">@color/ui_accent_text</color>
     <color name="m3_on_primary">@color/ui_on_accent</color>
-    <color name="m3_pri_container">@color/ui_accent_tint</color>
-    <color name="m3_on_pri_container">@color/ui_accent_text</color>
     <color name="m3_sec_container">@color/ui_field</color>
     <color name="m3_on_sec_container">@color/ui_text</color>
     <color name="m3_error">@color/ui_error_text</color>
@@ -24,10 +21,6 @@
     <color name="m3_on_err_container">@color/ui_error_text</color>
     <color name="m3_inverse">@color/ui_text</color>
     <color name="m3_on_inverse">@color/ui_bg</color>
-    <color name="m3_wave_idle">@color/ui_track</color>
-    <color name="m3_wave_connecting">@color/ui_accent</color>
-    <color name="m3_wave_connected">@color/ui_accent</color>
-    <color name="m3_orbit">@color/ui_track</color>
     <color name="m3_ok">@color/ui_ok_text</color>
     <color name="m3_ok_dot">@color/ui_ok</color>
     <color name="m3_amber">@color/ui_warn</color>

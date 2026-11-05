@@ -115,58 +115,23 @@
                     android:gravity="center_horizontal"
                 android:orientation="vertical"
                 android:paddingStart="20dp"
-                android:paddingTop="24dp"
+                android:paddingTop="20dp"
                 android:paddingEnd="20dp"
-                android:paddingBottom="20dp">
-
-                <FrameLayout
-                    android:id="@+id/heroWaveFrame"
-                    android:layout_width="210dp"
-                    android:layout_height="176dp">
-
-                    <com.mcarplay.app.ui.SignalWavesView
-                        android:id="@+id/signalWaves"
-                        android:layout_width="210dp"
-                        android:layout_height="176dp" />
-
-                    <!-- 圆盘与标签：相对波形框**居中**定位（原固定 marginTop=51/134dp
-                         是按 176dp 高算死的，横屏把波形框压到 70dp 后圆盘被裁成半月） -->
-                    <FrameLayout
-                        android:id="@+id/hubPlate"
-                        android:layout_width="74dp"
-                        android:layout_height="74dp"
-                        android:layout_gravity="center"
-                        android:background="@drawable/bg_plate">
-
-                        <ImageView
-                            android:id="@+id/hubCar"
-                            android:layout_width="38dp"
-                            android:layout_height="38dp"
-                            android:layout_gravity="center"
-                            android:contentDescription="@string/cd_head_unit"
-                            android:src="@drawable/ic_car" />
-                    </FrameLayout>
-
-                    <TextView
-                        android:id="@+id/hubCaption"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_gravity="center_horizontal|bottom"
-                        android:layout_marginBottom="10dp"
-                        android:letterSpacing="0.22"
-                        android:text="@string/app_name"
-                        android:textColor="@color/ui_text_secondary"
-                        android:textSize="10sp"
-                        android:textStyle="bold" />
-                </FrameLayout>
+                android:paddingBottom="16dp">
 
                 <!-- 状态行：状态字 + 残留屏清理入口（检测到残留且用户暂缓时出现） -->
                 <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
+
+                    <View
+                        android:id="@+id/heroDot"
+                        android:layout_width="10dp"
+                        android:layout_height="10dp"
+                        android:layout_marginEnd="8dp"
+                        android:background="@drawable/bg_status_dot" />
 
                     <TextView
                         android:id="@+id/heroStateText"
@@ -299,6 +264,7 @@
                     android:layout_marginTop="12dp"
                     android:gravity="center"
                     android:text="@string/diagnostic_empty"
+                    android:visibility="gone"
                     android:textColor="@color/m3_on_var"
                     android:textSize="11sp" />
 
@@ -314,6 +280,7 @@
                     android:minHeight="44dp"
                     android:paddingHorizontal="16dp"
                     android:text="@string/export_diagnostics"
+                    android:visibility="gone"
                     android:textColor="@color/m3_primary"
                     android:textSize="12sp" />
             </LinearLayout>

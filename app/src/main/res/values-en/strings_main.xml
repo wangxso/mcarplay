@@ -2,7 +2,6 @@
 <resources>
     <string name="main_device_detecting">Detecting device</string>
     <string name="main_shizuku_chip_online">Car service online</string>
-    <string name="cd_head_unit">Head unit</string>
     <string name="main_hero_idle">Not connected</string>
     <string name="main_cleanup_residual">Clean up leftover displays</string>
     <string name="main_hero_idle_hint">After pairing with the head unit over Bluetooth, tap the button below to connect wirelessly</string>
