@@ -6,6 +6,13 @@
 
 ## 当前基线与结论
 
+- **11 月 4 日远程版 CarWith 系统日志导出：** 调试页增加本机导出/分享与固定桥命令
+  `export_carwith_system_logs`，采集最近的 CarWith/CarLife/CTA 与系统启动记录、服务及监听状态。
+  支持 Shizuku，或用户通过电脑 ADB 授予 READ_LOGS / DUMP 后在前台确认系统日志访问；无需 root。
+  未授权时显示操作命令；输出限量、超时和失败明确标记，独立脱敏保存到下载目录，内容不自动上传。
+  仅修改 remote 源集，不改变 CarWith 入口或媒体协议。用法与限制见 `docs/DIAGNOSTICS.md`。
+
+
 - **11 月 4 日待解决：CarWith「返回车机」无效。** 投屏中点 CarWith 界面上的「返回车机」按钮，车机屏幕没有切回车机原生界面，
   仍停在 CarPlay 画面（用户反馈，车型与版本待补）。原因尚未确认。此前 `CarLifeCommandRouter` 对未识别的 7240 命令走
   `else -> Result()`，既不处理也不记日志，所以现有报告看不出这个按钮发了哪条 CarLife 命令；AirPlay 侧 `releaseScreen` 只在车机点 CarPlay 图标后

@@ -40,6 +40,12 @@ object BridgeCommands {
                     .put("ok", true)
                     .put("detail", CarLifeDiagnostics.reportSummary())
 
+            "export_carwith_system_logs" -> {
+                val result = CarWithSystemLogExporter.export(ctx)
+                // Only the local file status leaves the phone; system log content is shared by the user.
+                JSONObject().put("ok", result.ok).put("detail", result.detail)
+            }
+
             "start_connection" -> {
                 // 与手机上点「启动连接」等价：前置（Shizuku/蓝牙）不满足时日志会说明
                 SessionController.ensure(ctx)
