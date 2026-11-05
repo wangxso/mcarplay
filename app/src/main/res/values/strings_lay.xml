@@ -32,4 +32,14 @@
     <string name="lay_no_paired">暂无已配对设备——请在下方扫描并点击配对</string>
     <string name="lay_nearby">附近的设备</string>
     <string name="lay_rescan">重新扫描</string>
+    <string name="lay_passat_return">实验：帕萨特回主界面再进 CarPlay</string>
+    <string name="lay_passat_off">关闭</string>
+    <string name="lay_passat_retry">失败重建</string>
+    <string name="lay_passat_disconnect">失败断开</string>
+    <string name="lay_passat_norebuild">不重建</string>
+    <string name="lay_passat_return_desc">默认关。需先在主页「车型适配」选「大众」才会执行；每次只选一个来试。失败重建：拿回主屏 3 秒内车机无触控也无要帧时，自动重建一次主屏流。失败断开：连续两次无反应就结束本轮，请重新连接。不重建：点图标时不重建主屏流，只重申归属并补参数集。均无实车证据，下次点图标起效。</string>
+    <string name="sf_passat_off">已关闭帕萨特实验策略</string>
+    <string name="sf_passat_retry">已选：失败后重建一次</string>
+    <string name="sf_passat_disconnect">已选：连续失败后断开</string>
+    <string name="sf_passat_norebuild">已选：点图标不重建主屏流</string>
 </resources>

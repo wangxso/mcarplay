@@ -69,4 +69,17 @@
     <string name="main_tab_settings">设置</string>
     <string name="main_tab_diagnostics">诊断</string>
     <string name="main_diag_checks_title">自检与模拟</string>
+    <string name="main_vehicle_title">车型适配</string>
+    <string name="main_vehicle_auto">自动（按车机自报信息判断）</string>
+    <string name="main_vehicle_manual">手动：%1$s</string>
+    <string name="main_vehicle_dialog_title">选择车型适配</string>
+    <string name="main_vehicle_dialog_hint">仅在自动判断不准时使用。选择只套用已有的车型适配开关，不代表该车型已验证。下次连接生效。</string>
+    <string name="main_vehicle_busy">连接进行中，下次连接生效</string>
+    <string name="vehicle_preset_auto">自动（推荐）</string>
+    <string name="vehicle_preset_generic">通用（关闭所有车型例外）</string>
+    <string name="vehicle_preset_chery">奇瑞 / 艾瑞泽 8</string>
+    <string name="vehicle_preset_volkswagen">大众（ID 系列 / 帕萨特）</string>
+    <string name="vehicle_preset_winplay">WinPlay 接收端</string>
+    <string name="vehicle_preset_diplay">DiPlay 接收端（比亚迪等）</string>
+    <string name="vehicle_preset_classic_mib3">奥迪经典 MIB3</string>
 </resources>

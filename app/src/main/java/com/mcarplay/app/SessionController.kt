@@ -29,9 +29,13 @@ import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
 import com.mcarplay.app.carlife.mapCarLifeTouch
 import com.mcarplay.app.compat.CompatibilityPrefs
+import com.mcarplay.app.compat.PassatReturnPolicy
+import com.mcarplay.app.compat.PassatReturnStrategy
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverProbePlan
+import com.mcarplay.app.compat.VehiclePreset
+import com.mcarplay.app.compat.VehiclePresetRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.diagnostics.ConnectionStage
@@ -194,6 +198,7 @@ object SessionController {
         val app = context.applicationContext
         appContext = app
         ReceiverDetectionRuntime.initialize(app)
+        VehiclePresetRuntime.load(app)
         ReceiverDetectionRuntime.onBudgetExpired = { epoch ->
             Bg.run("detection-budget") {
                 synchronized(this) {
@@ -867,6 +872,7 @@ object SessionController {
             lastInviteReconnectAtMillis = 0L
             forceKeyFrameCount = 0
             requestUiCount = 0
+            takeBackFailures = 0
             touchLogCount = 0
         } else {
             appendLog("SESSION: 会话已在运行——沿用当前会话，不清零邀请与要帧计数")
@@ -2657,6 +2663,7 @@ object SessionController {
     private fun scheduleTakeBackCheck(
         client: AirPlayClient,
         reason: String,
+        alreadyRetried: Boolean,
     ) {
         val touchesBefore = touchLogCount
         val keyFramesBefore = forceKeyFrameCount
@@ -2671,6 +2678,58 @@ object SessionController {
                 "SESSION: 拿回主屏 ${TAKE_BACK_CHECK_MS}ms 后：车机触控 +${touchLogCount - touchesBefore} 条、" +
                     "要关键帧 +${forceKeyFrameCount - keyFramesBefore} 次（${client.modes.describe()}；起因 $reason）",
             )
+            applyPassatReturnStrategy(
+                client,
+                PassatReturnPolicy.takeBackFailed(touchLogCount - touchesBefore, forceKeyFrameCount - keyFramesBefore),
+                alreadyRetried,
+            )
+        }
+    }
+
+    /** 实验策略只在主页「车型适配」手动选了大众时生效，其他车型选择或自动判定一律视为关闭。 */
+    private fun passatReturnStrategy(): PassatReturnStrategy =
+        if (VehiclePresetRuntime.current == VehiclePreset.VOLKSWAGEN) {
+            appContext?.let(CompatibilityPrefs::passatReturnStrategy) ?: PassatReturnStrategy.OFF
+        } else {
+            PassatReturnStrategy.OFF
+        }
+
+    /** 连续「拿回主屏车机没反应」次数；车机有反应或新一轮连接时清零。 */
+    @Volatile
+    private var takeBackFailures = 0
+
+    /** 帕萨特「回主界面再进」实验策略的失败后续动作；用户未选择策略时什么都不做。 */
+    private fun applyPassatReturnStrategy(
+        client: AirPlayClient,
+        failed: Boolean,
+        alreadyRetried: Boolean,
+    ) {
+        val strategy = passatReturnStrategy()
+        if (strategy == PassatReturnStrategy.OFF) return
+        if (!failed) {
+            takeBackFailures = 0
+            return
+        }
+        val failures = ++takeBackFailures
+        if (PassatReturnPolicy.retryRebuild(strategy, failed, alreadyRetried)) {
+            appendLog("PASSAT: 策略「失败后重建一次」——拿回主屏车机没反应，重建主屏流重试")
+            enqueueModesAssert(
+                client,
+                "帕萨特策略：拿回主屏无反应，重建重试",
+                requestKeyFrame = true,
+                retakeScreen = true,
+                rebuildStream = true,
+                takeBackRetried = true,
+            )
+        } else if (PassatReturnPolicy.disconnect(strategy, failures)) {
+            appendLog("PASSAT: 策略「连续失败后断开」——连续 $failures 次拿回主屏车机没反应，结束本轮，请重新连接")
+            synchronized(this) {
+                if (!connectCancelled && !client.cancelled && currentClient === client) {
+                    appContext?.let { disconnect(it, DiagnosticCode.VIDEO_CLOSED) }
+                }
+            }
+        } else {
+            appendLog("PASSAT: 策略 ${strategy.key}：拿回主屏车机没反应（连续 $failures 次）")
         }
     }
 
@@ -2680,6 +2739,7 @@ object SessionController {
         requestKeyFrame: Boolean,
         retakeScreen: Boolean = false,
         rebuildStream: Boolean = false,
+        takeBackRetried: Boolean = false,
     ) {
         val connectionGeneration = client.connectionGeneration
         val action =
@@ -2744,7 +2804,7 @@ object SessionController {
             }
             if (restoreScreen && client.modes.phoneOwnsScreen) {
                 videoSender?.reprimeOnNextKeyFrame()
-                scheduleTakeBackCheck(client, reason)
+                scheduleTakeBackCheck(client, reason, takeBackRetried)
             }
             // 自己补的 I 帧不计入车机要帧风暴（用户连点图标不能被当成解码失败）
             val keyFrame = restoreScreen && client.modes.phoneOwnsScreen && videoSender?.requestKeyFrame(fromReceiver = false) == true
@@ -3508,7 +3568,7 @@ object SessionController {
                                             "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；${request.note}）",
                                             requestKeyFrame = request.allowed,
                                             retakeScreen = request.retake,
-                                            rebuildStream = request.rebuildStream,
+                                            rebuildStream = PassatReturnPolicy.rebuildStream(passatReturnStrategy(), request.rebuildStream),
                                         )
                                     }
 

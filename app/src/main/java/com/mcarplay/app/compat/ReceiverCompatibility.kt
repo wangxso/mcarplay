@@ -75,6 +75,65 @@ object ReceiverCompatibility {
         signals: ReceiverProfile.Signals,
         mediaCapabilities: String = "",
         receiverInstance: String? = null,
+        preset: VehiclePreset = VehiclePresetRuntime.current,
+    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset)
+
+    /** 用户在主页手动选择车型后，在自动判定结果之上叠加该车型的适配开关（[VehiclePreset.AUTO] 不改动）。 */
+    fun applyPreset(
+        policy: Policy,
+        preset: VehiclePreset,
+    ): Policy =
+        when (preset) {
+            VehiclePreset.AUTO -> policy
+            // 通用：关闭所有按车机登记的例外，走协议基线
+            VehiclePreset.GENERIC ->
+                policy.copy(
+                    bluetoothRole = BluetoothRole.KEEP_DURING_BRINGUP,
+                    allowBluetoothRetireRetry = false,
+                    requiresRealBluetoothIdentity = false,
+                    releaseBluetoothAfterSetup = false,
+                    reportWifiMacInSetup = false,
+                    skipIapTunnel = false,
+                    sendAppleClientHeaders = false,
+                    iphoneAuthSequence = false,
+                    pinnedMfiChallengeLength = null,
+                    singleRecordPerSession = false,
+                    reconnectOnStreamingInvite = false,
+                    rules = policy.rules + "manual.generic",
+                )
+            VehiclePreset.CHERY ->
+                policy.copy(
+                    releaseBluetoothAfterSetup = true,
+                    reportWifiMacInSetup = true,
+                    skipIapTunnel = true,
+                    sendAppleClientHeaders = true,
+                    iphoneAuthSequence = true,
+                    pinnedMfiChallengeLength = 32,
+                    rules = policy.rules + "manual.chery",
+                )
+            VehiclePreset.VOLKSWAGEN ->
+                policy.copy(reconnectOnStreamingInvite = true, rules = policy.rules + "manual.volkswagen")
+            VehiclePreset.WINPLAY ->
+                policy.copy(
+                    family = Family.WINPLAY,
+                    bluetoothRole = BluetoothRole.NETWORK_HANDOFF,
+                    requiresRealBluetoothIdentity = true,
+                    rules = policy.rules + "manual.winplay",
+                )
+            VehiclePreset.DIPLAY ->
+                policy.copy(family = Family.DIPLAY, allowBluetoothRetireRetry = true, rules = policy.rules + "manual.diplay")
+            VehiclePreset.CLASSIC_MIB3 ->
+                policy.copy(
+                    family = Family.CLASSIC_MIB3,
+                    linkGeneration = ReceiverProfile.LinkGeneration.CLASSIC_MIB3,
+                    rules = policy.rules + "manual.classic-mib3",
+                )
+        }
+
+    private fun resolveDetected(
+        signals: ReceiverProfile.Signals,
+        mediaCapabilities: String,
+        receiverInstance: String?,
     ): Policy {
         val profile = ReceiverProfile.classify(signals)
         val generation = ReceiverProfile.linkGenerationOf(signals)

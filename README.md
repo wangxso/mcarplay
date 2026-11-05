@@ -219,6 +219,7 @@ turn one on only for the symptom below, then reconnect. Open **Settings → 车�
 | --- | --- | --- | --- |
 | **兼容兜底：配对失败后尝试明文** | Pairing fails every time on an older receiver that you know accepts only unencrypted sessions | After an ordinary pairing failure on a reachable receiver, retries once with an unencrypted (`et=NONE`) session. A 403 reply never falls back. | Uses the receiver's reconnect window; the session may be rejected |
 | **兼容兜底：音频格式未声明时仍尝试** | Video works but the app always streams video only, while the receiver can play sound | When the receiver lists no usable media audio format, still tries PCM 48 kHz (and non-media audio types) | No sound, or the receiver may disconnect shortly after audio starts |
+| **Experimental: Passat return to CarPlay** (pick one, off by default; requires Vehicle profile = Volkswagen on the home page) | Passat 2025 (VW4211) only sometimes re-enters CarPlay after returning to the native UI | Rebuild on fail: rebuild the screen stream once if the car shows no touch and asks for no key frame within 3 s; Disconnect on fail: end the session after two such failures in a row; No rebuild: tapping the icon only re-asserts ownership and resends parameter sets | No vehicle evidence for any of them; try one at a time; Disconnect on fail may misfire if you do not touch the screen |
 
 Turn the switch off again if it does not help. When reporting a problem, mention which
 switches were on; the diagnostic log records a `COMPAT:` line or an audio fallback line.
