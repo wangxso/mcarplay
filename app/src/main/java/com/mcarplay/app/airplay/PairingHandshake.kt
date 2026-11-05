@@ -6,7 +6,7 @@ internal class PairingRejectedException(
     val path: String,
     val state: Int,
     val errorCode: Int,
-) : IOException("$path state=$state TLV error=$errorCode")
+) : IOException("$path state=$state TLV error=$errorCode(${PairingErrorCode.of(errorCode).label})")
 
 internal fun decodePairingResponse(
     path: String,
