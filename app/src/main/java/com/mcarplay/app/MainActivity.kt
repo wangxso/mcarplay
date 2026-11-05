@@ -54,6 +54,7 @@ import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.ui.BtIdentityDialog
 import com.mcarplay.app.ui.DarkMessageDialog
+import com.mcarplay.app.ui.EdgeToEdge
 import com.mcarplay.app.ui.LogConsoleController
 import com.mcarplay.app.ui.LogExportController
 import com.mcarplay.app.ui.PanelWindow
@@ -757,6 +758,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        // 沉浸：顶部让给状态栏，底部手势条的高度加到标签栏上，让标签栏底色一直铺到屏幕底缘
+        EdgeToEdge.enable(this)
+        val pageColumn = findViewById<View>(R.id.pageColumn)
+        val tabBar = findViewById<View>(R.id.tabBar)
+        EdgeToEdge.onInsets(findViewById(android.R.id.content)) {
+            pageColumn.setPadding(it.left, it.top, it.right, 0)
+            tabBar.setPadding(0, 0, 0, it.bottom)
+        }
         // 旋转/重建：沿用原倒计时截止时刻（onResume 据此续弹）
         disclaimerDeadlineAt = savedInstanceState?.getLong(KEY_DISCLAIMER_DEADLINE, 0L) ?: 0L
 

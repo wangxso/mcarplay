@@ -6,6 +6,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.mcarplay.app.settings.DisplayPanelFragment
 import com.mcarplay.app.settings.SettingsToastHost
+import com.mcarplay.app.ui.EdgeToEdge
 
 /**
  * 车机显示设置页：承载 [DisplayPanelFragment]（流画布缩放、帧率、息屏、自动连接、兼容兜底、HID 日志等）。
@@ -17,6 +18,7 @@ class SettingsContentActivity :
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings_content)
+        EdgeToEdge.padContent(this)
         findViewById<ImageView>(R.id.btnBack).setOnClickListener { finish() }
         findViewById<TextView>(R.id.contentTitle).setText(R.string.lay_display)
 
