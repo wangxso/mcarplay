@@ -2,13 +2,10 @@ package com.mcarplay.app
 
 import android.Manifest
 import android.animation.ObjectAnimator
-import android.bluetooth.BluetoothDevice
-import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.net.Uri
@@ -42,7 +39,6 @@ import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionProgress
 import com.mcarplay.app.diagnostics.ConnectionTimeline
 import com.mcarplay.app.diagnostics.DiagnosticCode
-import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
 import com.mcarplay.app.diagnostics.DiagnosticRedactor
 import com.mcarplay.app.diagnostics.DiagnosticText
 import com.mcarplay.app.i18n.AppLanguage
@@ -61,17 +57,19 @@ import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.ui.BtIdentityDialog
 import com.mcarplay.app.ui.DarkMessageDialog
+import com.mcarplay.app.ui.LogConsoleController
+import com.mcarplay.app.ui.LogExportController
 import com.mcarplay.app.ui.PanelWindow
 import com.mcarplay.app.ui.ReceiverDetectionDialog
 import com.mcarplay.app.ui.ScreenDimmer
 import com.mcarplay.app.ui.SignalWavesView
+import com.mcarplay.app.ui.TargetPickerController
 import com.mcarplay.app.ui.WallpaperStore
 import com.mcarplay.app.ui.WhatsNewDialog
 import com.mcarplay.app.update.WhatsNew
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DeviceIdentity
 import com.mcarplay.app.util.LogExporter
-import java.util.Locale
 
 /**
  * 手机侧界面（Material 3 暗色重构，设计稿 design/phone-ui-proto.html）：
@@ -127,6 +125,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logChevron: ImageView
     private lateinit var switchLog: androidx.appcompat.widget.SwitchCompat
     private lateinit var logText: TextView
+    private lateinit var console: LogConsoleController
     private lateinit var snackbar: TextView
     private lateinit var appVersionFooter: TextView
 
@@ -154,6 +153,35 @@ class MainActivity : AppCompatActivity() {
         rikka.shizuku.Shizuku.OnRequestPermissionResultListener? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 日志导出流程（确认 → 写文件 → 完成弹窗）。 */
+    private val logExporter =
+        LogExportController(
+            this,
+            object : LogExportController.Host {
+                override fun log(message: String) = this@MainActivity.log(message)
+
+                override fun snack(
+                    message: String,
+                    durationMs: Long,
+                ) = this@MainActivity.snack(message, durationMs)
+
+                override fun diagnosticNames() = this@MainActivity.diagnosticNames()
+            },
+        )
+
+    /** 目标车机选择弹窗（含蓝牙扫描/配对）；须在此处构造，内部注册了 ActivityResult 回调。 */
+    private val targetPickerController =
+        TargetPickerController(
+            this,
+            object : TargetPickerController.Host {
+                override fun log(message: String) = this@MainActivity.log(message)
+
+                override fun snack(message: String) = this@MainActivity.snack(message)
+
+                override fun onTargetChanged() = updateReadyRow()
+            },
+        )
     private val heroTick: Runnable =
         object : Runnable {
             override fun run() {
@@ -177,7 +205,7 @@ class MainActivity : AppCompatActivity() {
 
     private val logListener: (String) -> Unit = { line ->
         runOnUiThread {
-            if (!isFinishing && !isDestroyed) appendConsole(line)
+            if (!isFinishing && !isDestroyed) console.append(line)
         }
     }
 
@@ -329,7 +357,7 @@ class MainActivity : AppCompatActivity() {
                 message = getString(R.string.ma_carwith_missing_body),
                 actions =
                     listOf(
-                        DarkMessageDialog.Action(getString(R.string.ma_export_report)) { exportLogFile() },
+                        DarkMessageDialog.Action(getString(R.string.ma_export_report)) { logExporter.export() },
                         DarkMessageDialog.Action(getString(R.string.action_close)) {},
                     ),
             )
@@ -723,7 +751,7 @@ class MainActivity : AppCompatActivity() {
                 onStart = {
                     val target = TargetDevicePrefs.get(this)
                     if (target == null) {
-                        showTargetPicker()
+                        targetPickerController.show()
                     } else if (SessionController.isSessionRunning() ||
                         SessionController.sessionStarting.get() ||
                         SessionController.runningDiagnosticCarLifeSession != null
@@ -741,7 +769,7 @@ class MainActivity : AppCompatActivity() {
                     wifiJoinDialog?.cancel()
                     SessionController.cancelConnecting(this)
                 },
-                onPickTarget = ::showTargetPicker,
+                onPickTarget = { targetPickerController.show() },
             )
     }
 
@@ -794,6 +822,7 @@ class MainActivity : AppCompatActivity() {
         logChevron = findViewById(R.id.logChevron)
         switchLog = findViewById(R.id.switchLog)
         logText = findViewById(R.id.logText)
+        console = LogConsoleController(this, logText)
         snackbar = findViewById(R.id.snackbar)
 
         deviceSubtitle.text = deviceName()
@@ -805,13 +834,13 @@ class MainActivity : AppCompatActivity() {
                     v.parent.requestDisallowInterceptTouchEvent(true)
                 android.view.MotionEvent.ACTION_MOVE,
                 android.view.MotionEvent.ACTION_UP,
-                -> updateLogBottomButton()
+                -> console.updateBottomButton()
             }
             false
         }
         findViewById<ImageView>(R.id.btnLogBottom).setOnClickListener {
             // 跳到底部：滚动后自动跟底也随之恢复
-            scrollConsoleToBottom()
+            console.scrollToBottom()
         }
 
         // 进程重启兜底：若上次会话未正常退役，「常亮」改过的屏幕超时需要恢复
@@ -899,7 +928,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         SessionController.ssidSink = ssidSink
-        renderConsole(SessionController.logText())
+        console.render(SessionController.logText())
 
         setUpUiControls()
         // 以横屏启动时不会触发 onConfigurationChanged，这里按当前方向定一次排布。
@@ -1123,7 +1152,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 目标车机选择：配对了多台车机时指定唯一目标（只向它发请求/只接受它连入）
-        btnPickTarget.setOnClickListener { showTargetPicker() }
+        btnPickTarget.setOnClickListener { targetPickerController.show() }
 
         // 车机侧声音授权（原「申请投屏权限」）：RECORD_AUDIO + MediaProjection 一起请求
         btnAudio.setOnClickListener {
@@ -1188,13 +1217,13 @@ class MainActivity : AppCompatActivity() {
             logEnabled = checked
             SessionController.logEnabled = checked
             preferences.edit().putBoolean("logEnabled", checked).apply()
-            renderConsole(SessionController.logText())
+            console.render(SessionController.logText())
         }
         findViewById<ImageView>(R.id.btnClearLog).setOnClickListener {
             // 清除缓冲后必须显式重渲染：日志回调是增量追加语义，clearLog 的通知
             // 无法清 UI（见 SessionController.clearLog 注释，「点了没反应」根因）
             SessionController.clearLog()
-            renderConsole(SessionController.logText())
+            console.render(SessionController.logText())
         }
         findViewById<ImageView>(R.id.btnCopyLog).setOnClickListener {
             val text = DiagnosticRedactor(diagnosticNames()).redact(SessionController.logText())
@@ -1206,11 +1235,11 @@ class MainActivity : AppCompatActivity() {
             clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.ma_log_clip_label), text))
             snack(getString(R.string.ma_log_copied, text.length))
         }
-        findViewById<ImageView>(R.id.btnExportLog).setOnClickListener { exportLogFile() }
-        findViewById<View>(R.id.btnExportDiagnostics).setOnClickListener { exportLogFile() }
+        findViewById<ImageView>(R.id.btnExportLog).setOnClickListener { logExporter.export() }
+        findViewById<View>(R.id.btnExportDiagnostics).setOnClickListener { logExporter.export() }
         // Long-press includes the larger retained history; every export still applies redaction.
         findViewById<ImageView>(R.id.btnExportLog).setOnLongClickListener {
-            exportLogFile(LogExporter.Scope.ALL)
+            logExporter.export(LogExporter.Scope.ALL)
             true
         }
 
@@ -1737,491 +1766,6 @@ class MainActivity : AppCompatActivity() {
             )
     }
 
-    // ---- 目标车机选择弹窗（扫描/配对状态）----
-
-    /** 当前打开的弹窗（扫描回调要往里加行；关闭时统一收尾）。 */
-    private var targetPicker: androidx.appcompat.app.AlertDialog? = null
-
-    private var targetPickerReceiver: BroadcastReceiver? = null
-
-    /** 弹窗内已展示的扫描结果（按地址去重；已配对的单独进上组，不进这里）。 */
-    private val scannedTargets = LinkedHashMap<String, TargetPickerEntry>()
-
-    /** 扫描期间点过「配对」的设备地址（配对完成后自动选中为目标）。 */
-    private var pendingBondAddress: String? = null
-
-    private data class TargetPickerEntry(
-        val address: String,
-        val name: String,
-        val rssi: Int,
-        val bonded: Boolean,
-    )
-
-    /** 扫描权限被拒后置位：授权回调里继续（弹窗可能已关，则忽略）。 */
-    private var pendingTargetScan = false
-
-    private val targetScanPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            log("BT-SCAN: BLUETOOTH_SCAN 授权: $granted")
-            if (granted && pendingTargetScan) {
-                pendingTargetScan = false
-                targetPicker?.let { startTargetScan(it) }
-            } else if (!granted) {
-                pendingTargetScan = false
-                targetPicker?.let { _ ->
-                    updatePickerStatus(getString(R.string.ma_scan_denied_status), warn = true)
-                    pickerToast(getString(R.string.ma_scan_denied_toast))
-                }
-            }
-        }
-
-    /**
-     * 目标车机选择弹窗（2026-10-18 改版）：
-     *  组 1「已配对」——直接选用（车机无线 CarPlay 的前置是系统级蓝牙配对）；
-     *  组 2「附近的设备」——实时扫描（经典蓝牙 discovery），点击未配对设备即发起
-     *  系统配对，配对成功后自动设为目标。
-     *
-     * 首行「自动（不指定）」保留原有语义：出站逐个尝试、入站来者不拒；
-     * 选定后出站只连目标、入站拒绝非目标（防误连家里另一台车机）。
-     * 选择立即生效（链路动态读取目标，无需重连）。
-     */
-    private fun showTargetPicker() {
-        if (ReceiverDetectionRuntime.detection.snapshot()?.state == ReceiverDetection.State.COLLECTING) {
-            snack(getString(R.string.ma_cancel_detection_first))
-            return
-        }
-        val adapter =
-            try {
-                (getSystemService(Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager)
-                    .adapter
-            } catch (_: Exception) {
-                null
-            }
-        if (adapter == null || !adapter.isEnabled) {
-            snack(getString(R.string.ma_bt_off_snack))
-            return
-        }
-        val view = layoutInflater.inflate(R.layout.dialog_target_picker, null)
-        val dialog =
-            androidx.appcompat.app.AlertDialog
-                .Builder(this)
-                .setView(view)
-                .create()
-        targetPicker = dialog
-        scannedTargets.clear()
-        pendingBondAddress = null
-        view.findViewById<TextView>(R.id.btnCancelPicker).setOnClickListener { dialog.dismiss() }
-        view.findViewById<TextView>(R.id.btnRescan).setOnClickListener { startTargetScan(dialog) }
-        renderBondedGroup(view)
-        dialog.setOnDismissListener {
-            stopTargetScan()
-            targetPicker = null
-            pendingBondAddress = null
-            updateReadyRow()
-        }
-        dialog.setOnShowListener {
-            // 面板自带圆角：窗口底色必须透明，否则四角露出方角
-            dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-            val width = (resources.displayMetrics.widthPixels * PanelWindow.WIDTH_FRACTION).toInt()
-            dialog.window?.setLayout(width, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-        dialog.show()
-        startTargetScan(dialog)
-    }
-
-    /** 渲染「已配对」组：自动行 + 每个已配对设备。 */
-    private fun renderBondedGroup(view: View) {
-        val list = view.findViewById<LinearLayout>(R.id.bondedList)
-        val empty = view.findViewById<TextView>(R.id.bondedEmpty)
-        list.removeAllViews()
-        val current = TargetDevicePrefs.get(this)
-        // 「自动（不指定）」是模式而非设备：单独放在两组之上，不混进「已配对」组
-        view.findViewById<LinearLayout>(R.id.autoRowContainer).apply {
-            removeAllViews()
-            addView(
-                inflateTargetRow(
-                    name = getString(R.string.ma_target_auto),
-                    address = getString(R.string.ma_target_auto_desc),
-                    action = getString(if (current == null) R.string.ma_target_current else R.string.ma_target_select),
-                    highlighted = current == null,
-                    iconTint = R.color.m3_outline,
-                ) {
-                    TargetDevicePrefs.set(this@MainActivity, null)
-                    log("TARGET: 已取消目标指定——出站逐个尝试已配对设备，入站接受任一设备")
-                    // 先关弹窗再提示（snackbar 在 Activity 窗口内，会被弹窗盖住）
-                    targetPicker?.dismiss()
-                    snack(getString(R.string.ma_target_auto_set))
-                },
-            )
-        }
-        val bonded = bondedDevices()
-        empty.visibility = if (bonded.isEmpty()) View.VISIBLE else View.GONE
-        bonded.forEach { device ->
-            val address = device.address
-            val name = deviceDisplayName(device)
-            val isCurrent = current != null && TargetDevicePrefs.matches(current, address)
-            list.addView(
-                inflateTargetRow(
-                    name = name,
-                    address = address,
-                    action = getString(if (isCurrent) R.string.ma_target_current else R.string.ma_target_select),
-                    highlighted = isCurrent,
-                    iconTint = R.color.m3_primary,
-                ) {
-                    setTarget(device, name, closePicker = true)
-                },
-            )
-        }
-    }
-
-    /** 单个设备行（两组共用；highlighted 时名称用主色）。 */
-    private fun inflateTargetRow(
-        name: String,
-        address: String,
-        action: String,
-        highlighted: Boolean,
-        iconTint: Int,
-        onClick: () -> Unit,
-    ): View {
-        val row = layoutInflater.inflate(R.layout.item_target_device, null)
-        row.background =
-            ContextCompat.getDrawable(
-                this@MainActivity,
-                if (highlighted) R.drawable.bg_bt_device_row_current else R.drawable.bg_bt_device_row,
-            )
-        row.findViewById<TextView>(R.id.devName).apply {
-            text = name
-            setTextColor(getColor(if (highlighted) R.color.m3_primary else R.color.m3_on_surface))
-        }
-        row.findViewById<TextView>(R.id.devAddr).text = address
-        row.findViewById<TextView>(R.id.devAction).apply {
-            // 「当前」= 实心绿胶囊 + 对勾 + 深色字；「选择/配对」= 描边胶囊 + 青色字。
-            // 只靠色相区分不够（青 #7EDCE6 vs 绿 #7BD8A5 小字号下难辨），改用形态差异。
-            if (highlighted) {
-                text = "✓ $action"
-                setTextColor(getColor(R.color.m3_surface))
-                background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_pill_current)
-            } else {
-                text = action
-                setTextColor(getColor(R.color.m3_primary))
-                background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_tbtn)
-            }
-            // 实心/描边切换后 padding 由 drawable 决定，不需要重设
-            setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom)
-        }
-        row.findViewById<ImageView>(R.id.devIcon).setColorFilter(getColor(iconTint))
-        row.setOnClickListener { onClick() }
-        return row
-    }
-
-    /**
-     * 开始扫描附近设备：注册 ACTION_FOUND / ACTION_BOND_STATE_CHANGED 后 startDiscovery。
-     * 发现结果按地址去重、排除已配对设备（它们在上一组）；点「配对」调 createBond()。
-     */
-    private fun startTargetScan(dialog: androidx.appcompat.app.AlertDialog) {
-        val adapter =
-            try {
-                (getSystemService(Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager)
-                    .adapter
-            } catch (_: Exception) {
-                null
-            } ?: return
-        val granted =
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) ==
-                PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            pendingTargetScan = true
-            updatePickerStatus(getString(R.string.ma_scan_needs_permission), warn = true)
-            targetScanPermissionLauncher.launch(Manifest.permission.BLUETOOTH_SCAN)
-            return
-        }
-        val scannedList = dialog.findViewById<LinearLayout>(R.id.scannedList) ?: return
-        // 已配对的地址集合：扫描结果里剔掉（避免同一设备在两处出现）
-        val bondedAddresses =
-            bondedDevices()
-                .map { it.address }
-                .toSet()
-        scannedTargets.clear()
-        scannedList.removeAllViews()
-        updatePickerStatus(getString(R.string.ma_scanning))
-        stopTargetScan()
-        val receiver =
-            object : BroadcastReceiver() {
-                override fun onReceive(
-                    context: Context,
-                    intent: Intent,
-                ) {
-                    when (intent.action) {
-                        BluetoothDevice.ACTION_FOUND -> {
-                            @Suppress("DEPRECATION")
-                            val device =
-                                intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
-                                    ?: return
-                            val rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, 0).toInt()
-                            onTargetFound(dialog, device, rssi, bondedAddresses)
-                        }
-
-                        BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
-                            val device =
-                                intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
-                                    ?: return
-                            val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
-                            onBondStateChanged(dialog, device, state)
-                        }
-                    }
-                }
-            }
-        targetPickerReceiver = receiver
-        val filter =
-            IntentFilter().apply {
-                addAction(BluetoothDevice.ACTION_FOUND)
-                addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
-            }
-        // 系统（蓝牙栈）发出的广播：必须用 EXPORTED 才能在部分 ROM 上收到
-        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
-        val started =
-            try {
-                adapter.startDiscovery()
-            } catch (_: SecurityException) {
-                false
-            }
-        if (!started) {
-            updatePickerStatus(getString(R.string.ma_scan_failed), warn = true)
-        } else {
-            log("BT-SCAN: 开始扫描附近蓝牙设备")
-        }
-    }
-
-    /** 扫描到一台设备：已配对→忽略；新设备→加一行（点「配对」发起系统配对）。 */
-    private fun onTargetFound(
-        dialog: androidx.appcompat.app.AlertDialog,
-        device: BluetoothDevice,
-        rssi: Int,
-        bondedAddresses: Set<String>,
-    ) {
-        val address =
-            try {
-                device.address
-            } catch (_: SecurityException) {
-                return
-            }
-        if (address in bondedAddresses || scannedTargets.containsKey(address)) return
-        val name = deviceDisplayName(device)
-        scannedTargets[address] = TargetPickerEntry(address, name, rssi, bonded = false)
-        val list = dialog.findViewById<LinearLayout>(R.id.scannedList) ?: return
-        // 扫描仍在继续：状态行保留并计数，用户知道还可以继续等其它设备。
-        // 刻意不走 updatePickerStatus——它会把列表滚到状态行，发现新设备时抢滚动位置。
-        dialog.findViewById<TextView>(R.id.scanStatus)?.apply {
-            text = getString(R.string.ma_scan_progress, scannedTargets.size)
-            setTextColor(getColor(R.color.m3_mono_dim))
-            visibility = View.VISIBLE
-        }
-        list.addView(
-            inflateTargetRow(
-                name = name,
-                address = "$address · ${rssi}dBm",
-                action = getString(R.string.ma_target_pair),
-                highlighted = false,
-                iconTint = R.color.m3_amber,
-            ) {
-                beginBond(device)
-            },
-        )
-    }
-
-    /** 点击未配对设备：先停扫描（扫描期间配对易失败），再 createBond()。 */
-    private fun beginBond(device: BluetoothDevice) {
-        val address =
-            try {
-                device.address
-            } catch (_: SecurityException) {
-                return
-            }
-        stopDiscoveryOnly()
-        pendingBondAddress = address
-        val name = deviceDisplayName(device)
-        val ok =
-            try {
-                device.createBond()
-            } catch (error: SecurityException) {
-                log("BT-PAIR: 配对「$name」失败 - 缺少权限：${error.message}")
-                false
-            }
-        if (ok) {
-            log("BT-PAIR: 已发起与「$name」($address) 的配对——请在系统弹窗确认")
-            pickerNotice(getString(R.string.ma_pairing, name))
-        } else {
-            pendingBondAddress = null
-            log("BT-PAIR: 配对「$name」($address) 发起失败（设备可能已配对或蓝牙忙）")
-            pickerNotice(getString(R.string.ma_pair_start_failed))
-        }
-    }
-
-    /**
-     * 弹窗打开期间的提示。
-     *
-     * 弹窗是**独立窗口**（更高层级 + 全屏遮罩），Activity 里的 snackbar 必然被它盖住
-     * ——用户只能看到底部一条被压暗的色块（2026-10-18 反馈）。系统 Toast 属更高窗口层，
-     * 能浮在弹窗之上；同时更新弹窗内的状态行（滚动到可见位置）作为长期可见的说明。
-     */
-    private fun pickerNotice(message: String) {
-        pickerToast(message)
-        updatePickerStatus(message, warn = true)
-    }
-
-    /**
-     * 弹窗打开期间的系统 Toast。系统 Toast 属更高窗口层，能浮在弹窗之上；
-     * Activity 内的 snackbar 会被弹窗（独立窗口 + 遮罩）完全盖住。
-     */
-    private fun pickerToast(message: String) {
-        android.widget.Toast
-            .makeText(this, message, android.widget.Toast.LENGTH_SHORT)
-            .show()
-    }
-
-    /** 更新弹窗内的状态行并滚动到可见位置（`scanStatus` 在「附近的设备」标题下）。 */
-    private fun updatePickerStatus(
-        message: String,
-        warn: Boolean = false,
-    ) {
-        val dialog = targetPicker ?: return
-        val status = dialog.findViewById<TextView>(R.id.scanStatus) ?: return
-        status.text = message
-        status.setTextColor(getColor(if (warn) R.color.m3_amber else R.color.m3_mono_dim))
-        status.visibility = View.VISIBLE
-        // 状态行在视口外才滚动（用户在浏览上面的已配对列表时不该被抢走位置）。
-        status.post {
-            val scroll = dialog.findViewById<android.widget.ScrollView>(R.id.pickerScroll) ?: return@post
-            val content = scroll.getChildAt(0) ?: return@post
-            val top = offsetWithin(status, content)
-            val bottom = top + status.height
-            val visibleTop = scroll.scrollY
-            val visibleBottom = visibleTop + scroll.height
-            if (top < visibleTop || bottom > visibleBottom) {
-                val y = top - (12 * resources.displayMetrics.density).toInt()
-                scroll.smoothScrollTo(0, y.coerceAtLeast(0))
-            }
-        }
-    }
-
-    /** view 相对 ancestor 的内容偏移（沿父链累加 top；ancestor 必须是其祖先）。 */
-    private fun offsetWithin(
-        view: View,
-        ancestor: View,
-    ): Int {
-        var current: View? = view
-        var y = 0
-        while (current != null && current !== ancestor) {
-            y += current.top
-            current = current.parent as? View
-        }
-        return y
-    }
-
-    /** 配对状态变化：成功后设为目标并关弹窗；失败给出提示。 */
-    private fun onBondStateChanged(
-        dialog: androidx.appcompat.app.AlertDialog,
-        device: BluetoothDevice,
-        state: Int,
-    ) {
-        val address =
-            try {
-                device.address
-            } catch (_: SecurityException) {
-                return
-            }
-        if (address != pendingBondAddress) return
-        when (state) {
-            BluetoothDevice.BOND_BONDED -> {
-                pendingBondAddress = null
-                val name = deviceDisplayName(device)
-                log("BT-PAIR: ✓ 已与「$name」($address) 完成配对——自动设为目标")
-                // 先关弹窗再提示：snackbar 在 Activity 窗口内，弹窗未关时会被盖住
-                dialog.dismiss()
-                setTarget(device, name)
-                // 保留系统配对后的连接；是否断开由本地适配策略或用户发起的检测决定。
-            }
-
-            BluetoothDevice.BOND_NONE -> {
-                pendingBondAddress = null
-                log("BT-PAIR: 与 $address 配对未完成（用户取消或失败）")
-                // 弹窗仍开着：用 Toast（浮在弹窗之上）+ 弹窗内状态行，不用被遮挡的 snackbar
-                pickerNotice(getString(R.string.ma_pair_incomplete))
-            }
-            // BOND_BONDING：继续等（系统确认框未应答）
-        }
-    }
-
-    /**
-     * 设为出站目标；正在进行的连接在下一轮尝试/下一次连入时切换。
-     *
-     * @param closePicker true = 先关闭设备选择弹窗再提示（snackbar 属 Activity 窗口，
-     *   弹窗开着时必被盖住——见 pickerNotice 注释）。
-     */
-    private fun setTarget(
-        device: BluetoothDevice,
-        name: String,
-        closePicker: Boolean = false,
-    ) {
-        if (closePicker) targetPicker?.dismiss()
-        val previous = TargetDevicePrefs.get(this)
-        TargetDevicePrefs.set(this, TargetDevicePrefs.Target(device.address, name))
-        log(
-            "TARGET: 目标车机已设为「$name」(${device.address})" +
-                "——出站只连该设备、入站拒绝其它设备" +
-                if (previous != null && previous.address != device.address) {
-                    "（原目标「${previous.name}」）"
-                } else {
-                    ""
-                },
-        )
-        snack(getString(R.string.ma_target_set, name))
-        updateReadyRow()
-    }
-
-    /** 停掉扫描并注销监听（弹窗关闭/重扫时调用）。 */
-    private fun stopTargetScan() {
-        stopDiscoveryOnly()
-        targetPickerReceiver?.let {
-            runCatching { unregisterReceiver(it) }
-            targetPickerReceiver = null
-        }
-    }
-
-    @android.annotation.SuppressLint("MissingPermission")
-    private fun stopDiscoveryOnly() {
-        // 调用点均已先确认 BLUETOOTH_SCAN 已授予（扫描流程入口），且此处整体捕获异常
-        try {
-            (getSystemService(Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager)
-                .adapter
-                ?.cancelDiscovery()
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun bondedDevices(): List<BluetoothDevice> =
-        try {
-            (getSystemService(Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager)
-                .adapter
-                ?.bondedDevices
-                ?.toList()
-                .orEmpty()
-        } catch (_: SecurityException) {
-            emptyList()
-        }
-
-    /** 设备展示名（无名称时退回地址）；读名需要 BLUETOOTH_CONNECT，异常时用地址。 */
-    private fun deviceDisplayName(device: BluetoothDevice): String =
-        try {
-            device.name?.takeIf { it.isNotBlank() } ?: device.address
-        } catch (_: SecurityException) {
-            try {
-                device.address
-            } catch (_: SecurityException) {
-                getString(R.string.ma_unknown_device)
-            }
-        }
-
     /** 设备营销名（ro.product.marketname），取不到时退回 Build.MODEL。 */
     private fun deviceName(): String =
         try {
@@ -2272,237 +1816,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun sh(cmd: String): String = shExec(cmd).output
 
-    /**
-     * 导出日志到「下载/mcarplay/」并弹窗告知位置。
-     *
-     * 默认导出诊断摘要与最近历史；进程重启后仍能反馈前一轮问题。
-     * 长按导出按钮包含更大的最近运行日志（[LogExporter.Scope.ALL]）；仅 remote/debug 明文导出。
-     * 为什么必须弹窗而不是 snack：snack 只在页面底部浮 2.4s，用户点了导出后
-     * 往往正在看日志区、根本注意不到；且失败时也必须有明确反馈（写文件可能因
-     * 存储满/媒体库异常失败）。
-     */
-    private fun exportLogFile(scope: LogExporter.Scope = LogExporter.Scope.SUPPORT) {
-        if (DiagnosticExportPolicy.unredacted) {
-            DarkMessageDialog.show(
-                this,
-                title = getString(R.string.raw_diagnostics_title),
-                message = getString(R.string.raw_diagnostics_notice),
-                actions =
-                    listOf(
-                        DarkMessageDialog.Action(getString(android.R.string.cancel), onClick = {}),
-                        DarkMessageDialog.Action(
-                            getString(R.string.raw_diagnostics_export_confirm),
-                            DarkMessageDialog.Emphasis.PRIMARY,
-                        ) { performLogExport(scope) },
-                    ),
-            )
-        } else {
-            performLogExport(scope)
-        }
-    }
-
-    private fun performLogExport(scope: LogExporter.Scope) {
-        snack(getString(R.string.ma_exporting))
-        val fallback = SessionController.logText()
-        val knownNames = diagnosticNames()
-        Bg.run("export-log") {
-            val result = LogExporter.export(applicationContext, fallback, scope, knownNames)
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                if (result == null) {
-                    snack(getString(R.string.ma_export_failed), 4_000L)
-                    return@runOnUiThread
-                }
-                log("日志已导出（${scope.label}）: ${result.displayPath}（${result.bytes} 字节）")
-                val scopeNote =
-                    getString(
-                        if (scope == LogExporter.Scope.SUPPORT) {
-                            R.string.ma_scope_support
-                        } else if (scope == LogExporter.Scope.CURRENT_SESSION) {
-                            R.string.ma_scope_current
-                        } else {
-                            R.string.ma_scope_all
-                        },
-                    )
-                DarkMessageDialog.show(
-                    this,
-                    title = getString(R.string.ma_export_done_title),
-                    message =
-                        getString(
-                            R.string.ma_export_done_body,
-                            result.displayPath,
-                            result.reportId.take(8),
-                            formatBytes(result.bytes),
-                            scopeNote,
-                        ),
-                    actions =
-                        listOf(
-                            DarkMessageDialog.Action(getString(R.string.ma_open_file), DarkMessageDialog.Emphasis.PRIMARY) {
-                                openExportedFile(result.uri, result.displayPath)
-                            },
-                            DarkMessageDialog.Action(getString(R.string.ma_open_folder)) {
-                                openExportFolder(result.displayPath)
-                            },
-                            DarkMessageDialog.Action(getString(R.string.ma_share_file)) {
-                                shareExportedFile(result.uri)
-                            },
-                            DarkMessageDialog.Action(getString(R.string.action_close), onClick = {}),
-                        ),
-                )
-            }
-        }
-    }
-
     private fun diagnosticNames(): List<String> =
         listOfNotNull(
             ssidInput.text?.toString()?.takeIf { it.isNotBlank() },
             SessionController.lastCarWifiSsid,
             TargetDevicePrefs.get(this)?.name,
         )
-
-    /** 人类可读大小：<1KB 显示字节（整数除法会显示成误导性的「0 KB」）。 */
-    private fun formatBytes(bytes: Long): String =
-        when {
-            bytes < 1024 -> getString(R.string.ma_bytes, bytes.toInt())
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-            else -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
-        }
-
-    /**
-     * 打开系统文件管理器并定位到导出目录（DocumentsUI 的 document URI 可直达子目录）。
-     *
-     * 为什么优先**显式组件**：荣耀 ROM 的隐式 ACTION_VIEW + directory 会被 resolver
-     * 乱匹配（2026-10-18 实测弹出了「网易云音乐」默认项）；同一条 intent 用
-     * `am start` 却正确落到 DocumentsUI。显式指定 FilesActivity 可跳过 resolver，
-     * 失败再逐级回退（别的 ROM 组件名可能不同 → 隐式 → 外部存储根 → 文字指引）。
-     */
-    private fun openExportFolder(displayPath: String) {
-        val folder = displayPath.substringBeforeLast('/')
-        val relative = folder.removePrefix("/storage/emulated/0/")
-        val dirUri =
-            Uri.parse(
-                "content://com.android.externalstorage.documents/document/" +
-                    "primary%3A" + Uri.encode(relative).replace("/", "%2F"),
-            )
-        val explicit =
-            Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(dirUri, "vnd.android.document/directory")
-                component =
-                    android.content.ComponentName(
-                        "com.android.documentsui",
-                        "com.android.documentsui.files.FilesActivity",
-                    )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-        val implicit =
-            Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(dirUri, "vnd.android.document/directory")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-        val storageRoot =
-            Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(
-                    Uri.parse("content://com.android.externalstorage.documents/root/primary"),
-                    "vnd.android.document/directory",
-                )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-        for (intent in listOf(explicit, implicit, storageRoot)) {
-            if (runCatching { startActivity(intent) }.isSuccess) {
-                if (intent !== explicit) snack(getString(R.string.ma_open_by_path, folder), 5_000L)
-                return
-            }
-        }
-        snack(getString(R.string.ma_open_downloads), 5_000L)
-    }
-
-    /** 用系统默认应用打开（多数 ROM 会落到文件管理器 / 文本查看器预览）。 */
-    private fun openExportedFile(
-        uri: Uri,
-        displayPath: String,
-    ) {
-        val view =
-            Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "text/plain")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-        if (runCatching { startActivity(view) }.isSuccess) return
-        // 无文本查看器时退到「文件管理器」：DocumentsUI 的内部存储根（用户按路径进 下载/mcarplay）
-        val storageRoot =
-            Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(
-                    Uri.parse("content://com.android.externalstorage.documents/root/primary"),
-                    "vnd.android.document/root",
-                )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-        if (runCatching { startActivity(storageRoot) }.isSuccess) {
-            snack(getString(R.string.ma_open_by_path, displayPath), 5_000L)
-            return
-        }
-        snack(getString(R.string.ma_no_viewer), 5_000L)
-    }
-
-    /** 分享日志文件（微信/QQ/邮件等），内容 URI 带临时读权限。 */
-    private fun shareExportedFile(uri: Uri) {
-        val send =
-            Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-        runCatching { startActivity(Intent.createChooser(send, getString(R.string.ma_share_chooser))) }
-            .onFailure { snack(getString(R.string.ma_no_share_app)) }
-    }
-
-    private fun updateLogBottomButton() {
-        findViewById<ImageView>(R.id.btnLogBottom)?.visibility =
-            if (consoleAtBottom()) View.INVISIBLE else View.VISIBLE
-    }
-
-    /** 日志内容最大滚动偏移。 */
-    private fun consoleMaxScroll(): Int {
-        val layout = logText.layout ?: return 0
-        return (
-            layout.getLineBottom(layout.lineCount - 1) +
-                logText.paddingBottom - logText.height
-        ).coerceAtLeast(0)
-    }
-
-    /** 是否已在底部（40px 容差：吸收行高舍入，避免永远差几像素判不到底）。 */
-    private fun consoleAtBottom(): Boolean = consoleMaxScroll() - logText.scrollY <= 40
-
-    private fun scrollConsoleToBottom() {
-        // +16px 过冲补齐舍入差（控制台深色底，过冲不可见；View 不钳制但视觉无感）
-        logText.scrollTo(0, consoleMaxScroll() + 16)
-        logText.post { updateLogBottomButton() }
-    }
-
-    private fun renderConsole(text: String) {
-        // 改文本前已在底部（或用户上翻阅读中）：决定本次是否自动跟底
-        val follow = consoleAtBottom()
-        logText.text =
-            if (SessionController.logEnabled) text else getString(R.string.ma_log_hidden)
-        logText.post {
-            if (follow) scrollConsoleToBottom() else updateLogBottomButton()
-        }
-    }
-
-    /**
-     * 增量追加一行日志（SessionController 逐行直送；此前每行全量 toString + setText
-     * 整段文本，高频日志下 UI/GC 双重放大）。超限时从进程缓冲全量对账一次完成裁剪。
-     */
-    private fun appendConsole(line: String) {
-        val follow = consoleAtBottom()
-        if (logText.text.length > 44_000) {
-            renderConsole(SessionController.logText())
-            return
-        }
-        logText.append(line)
-        logText.post {
-            if (follow) scrollConsoleToBottom() else updateLogBottomButton()
-        }
-    }
 
     private var snackRunnable: Runnable? = null
 
@@ -2830,7 +2149,7 @@ class MainActivity : AppCompatActivity() {
         applyContentLayout(landscape = newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE)
         PanelWindow.resizeShowing(this)
         // 目标车机弹窗不走 DarkMessageDialog，单独重算
-        targetPicker?.window?.let {
+        targetPickerController.dialog?.window?.let {
             val width = (resources.displayMetrics.widthPixels * PanelWindow.WIDTH_FRACTION).toInt()
             it.setLayout(width, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
         }
@@ -2963,8 +2282,7 @@ class MainActivity : AppCompatActivity() {
         }
         shizukuPermissionListener = null
         // 蓝牙扫描/配对监听随界面销毁收尾：Activity 退出后不再需要（也避免广播泄漏）
-        runCatching { stopTargetScan() }
-        targetPicker = null
+        targetPickerController.release()
         // 只解绑"挂屏"，不动会话——连接由前台服务保活、对象归 SessionController 持有；
         // 显式断开请用「断开连接」按钮（任意实例都能断到真管线）。
         if (SessionController.logListener === logListener) SessionController.logListener = null

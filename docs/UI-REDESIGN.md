@@ -199,3 +199,15 @@
 阶段 0–1 不改变任何屏幕布局，可以最先合并，后面的阶段都建立在它们之上。
 
 阶段 1 已落地（`ui/kit/`，均为 Views，没有接入任何现有屏幕）：`StepperView`（分层进度条）、`StatusCard`（状态卡片）、`SettingRow` / `SettingGroup`（设置行与分组卡片）、`UiButtons`（三档按钮）、`UiDialog`（统一确认框，接口对应 `DarkMessageDialog`）、`UiBottomSheet`（底部面板）。旧的 `DarkMessageDialog` 等暂不改动：现有界面是全深色，直接换成新令牌会出现浅色弹窗压在深色页面上；调用方在阶段 3、4 随各自屏幕一起迁移，迁完再删旧实现。
+
+### 阶段 2 进度（进行中）
+
+行为不变的机械拆分：把 `MainActivity` 中自成一体的簇抽到 `ui/` 下的控制器，通过 Host 接口回调
+（`log` / `snack` 等），在 Activity 属性初始化处构造（`registerForActivityResult` 须在 STARTED 前注册）。
+
+- `TargetPickerController`：目标蓝牙设备选择器（扫描、配对、`BLUETOOTH_SCAN` 权限）。
+- `LogExportController`：日志/诊断报告导出、打开目录与分享。
+- `LogConsoleController`：日志控制台的渲染、追加与「回到底部」按钮。
+
+`MainActivity.kt` 2975 → 2293 行。尚未抽取：连接启动与权限预检流程、shell 状态/残留虚拟屏、hero 卡片状态机。
+验证：门禁通过；设备上仅验证了安装、启动与主界面渲染（adb 注入点击被系统拒绝，选择器与导出的交互路径未在设备上走过）。
