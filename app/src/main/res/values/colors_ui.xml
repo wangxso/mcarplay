@@ -25,5 +25,10 @@
     <color name="ui_error_text">#C4001A</color>
     <!-- 危险按钮底：error 12% -->
     <color name="ui_error_tint">#1FFF3B30</color>
+    <!-- 提示/待办（橙）：warn 作色块与图标，warn_text 作文字；ok_tint / warn_tint 是徽标底 -->
+    <color name="ui_warn">#FF9500</color>
+    <color name="ui_warn_text">#8F5200</color>
+    <color name="ui_warn_tint">#1FFF9500</color>
+    <color name="ui_ok_tint">#1F34C759</color>
     <color name="ui_ripple">#14000000</color>
 </resources>

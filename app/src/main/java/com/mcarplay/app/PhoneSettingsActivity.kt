@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.mcarplay.app.launcher.settings.SettingsMenus
@@ -19,6 +20,8 @@ import com.mcarplay.app.launcher.settings.SettingsToastHost
  */
 class PhoneSettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 设置/更新/抓包页尚未迁到新令牌（阶段 4），暂时固定深色，避免浅色下与旧样式混搭
+        delegate.localNightMode = AppCompatDelegate.MODE_NIGHT_YES
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_phone_settings)
         findViewById<ImageView>(R.id.btnBack).setOnClickListener { finish() }
@@ -69,6 +72,8 @@ class SettingsContentActivity :
     AppCompatActivity(),
     SettingsToastHost {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 设置/更新/抓包页尚未迁到新令牌（阶段 4），暂时固定深色，避免浅色下与旧样式混搭
+        delegate.localNightMode = AppCompatDelegate.MODE_NIGHT_YES
         super.onCreate(savedInstanceState)
         val menuId = intent.getIntExtra(EXTRA_MENU, SettingsMenus.DESKTOP)
         setContentView(R.layout.activity_settings_content)

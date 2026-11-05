@@ -66,6 +66,7 @@ import com.mcarplay.app.ui.SignalWavesView
 import com.mcarplay.app.ui.TargetPickerController
 import com.mcarplay.app.ui.WallpaperStore
 import com.mcarplay.app.ui.WhatsNewDialog
+import com.mcarplay.app.ui.kit.StepperView
 import com.mcarplay.app.update.WhatsNew
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DeviceIdentity
@@ -107,6 +108,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var ctaLabel: TextView
     private lateinit var audioTag: TextView
     private lateinit var readyCount: TextView
+    private lateinit var readyBody: View
+    private lateinit var readyChevron: ImageView
+
+    /** 连接准备清单：就绪 4/4 时自动折叠一次；用户点过标题后不再自动改变。 */
+    private var readyAutoCollapsed = false
     private lateinit var ssidInput: EditText
     private lateinit var btDesc: TextView
     private lateinit var btBadge: TextView
@@ -804,6 +810,12 @@ class MainActivity : AppCompatActivity() {
         ctaLabel = findViewById(R.id.ctaLabel)
         audioTag = findViewById(R.id.audioTag)
         readyCount = findViewById(R.id.readyCount)
+        readyBody = findViewById(R.id.readyBody)
+        readyChevron = findViewById(R.id.readyChevron)
+        findViewById<View>(R.id.readyHeader).setOnClickListener {
+            readyAutoCollapsed = true
+            setReadyExpanded(readyBody.visibility != View.VISIBLE)
+        }
         ssidInput = findViewById(R.id.ssidInput)
         btDesc = findViewById(R.id.btDesc)
         btBadge = findViewById(R.id.btBadge)
@@ -1284,11 +1296,15 @@ class MainActivity : AppCompatActivity() {
     /** 英雄卡分层进度：已过的层着主色，当前层加粗，失败层标红，未到的层置灰。自检轨不显示。 */
     private fun updateConnectionSteps(snapshot: ConnectionTimeline.Snapshot?) {
         val view = findViewById<TextView>(R.id.connectionSteps)
+        val stepper = findViewById<StepperView>(R.id.connectionStepper)
         val progress = snapshot?.let(ConnectionProgress::of)
         if (progress == null) {
             view.visibility = View.GONE
+            stepper.visibility = View.GONE
             return
         }
+        stepper.setSteps(progress.steps)
+        stepper.visibility = View.VISIBLE
         val dim = getColor(R.color.m3_outline)
         val text = SpannableStringBuilder()
         DiagnosticText.progressSegments(this, progress).forEachIndexed { index, (label, state) ->
@@ -1717,6 +1733,19 @@ class MainActivity : AppCompatActivity() {
             audioDesc.text = getString(R.string.main_audio_desc_needs)
         }
         readyCount.text = "$ready/4"
+        if (ready >= 4 && !readyAutoCollapsed) {
+            readyAutoCollapsed = true
+            setReadyExpanded(false)
+        }
+    }
+
+    private fun setReadyExpanded(expanded: Boolean) {
+        readyBody.visibility = if (expanded) View.VISIBLE else View.GONE
+        readyChevron
+            .animate()
+            .rotation(if (expanded) 180f else 0f)
+            .setDuration(250L)
+            .start()
     }
 
     /** 「本机蓝牙地址」行：只读缓存/本地记录；Shizuku 就绪但尚未读取时在后台读一次再刷新。 */

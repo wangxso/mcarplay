@@ -14,6 +14,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.IntentCompat
 import com.mcarplay.app.R
 import com.mcarplay.app.util.Bg
@@ -38,6 +39,8 @@ class BtSnoopActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 设置/更新/抓包页尚未迁到新令牌（阶段 4），暂时固定深色，避免浅色下与旧样式混搭
+        delegate.localNightMode = AppCompatDelegate.MODE_NIGHT_YES
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_btsnoop)
         status = findViewById(R.id.btsnoopStatus)

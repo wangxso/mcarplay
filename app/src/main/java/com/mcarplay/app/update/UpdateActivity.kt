@@ -13,6 +13,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.FileProvider
 import com.mcarplay.app.BuildConfig
 import com.mcarplay.app.R
@@ -53,6 +54,8 @@ class UpdateActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 设置/更新/抓包页尚未迁到新令牌（阶段 4），暂时固定深色，避免浅色下与旧样式混搭
+        delegate.localNightMode = AppCompatDelegate.MODE_NIGHT_YES
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_update)
         status = findViewById(R.id.updateStatus)

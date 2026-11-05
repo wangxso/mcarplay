@@ -19,5 +19,9 @@
     <color name="ui_error">#FF453A</color>
     <color name="ui_error_text">#FF453A</color>
     <color name="ui_error_tint">#2EFF453A</color>
+    <color name="ui_warn">#FF9F0A</color>
+    <color name="ui_warn_text">#FF9F0A</color>
+    <color name="ui_warn_tint">#2EFF9F0A</color>
+    <color name="ui_ok_tint">#2E30D158</color>
     <color name="ui_ripple">#1FFFFFFF</color>
 </resources>

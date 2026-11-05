@@ -90,6 +90,11 @@ class UiTokenContrastTest {
                 // 次按钮 / 危险按钮：字压在半透明底与页面底混合后的颜色上
                 "accent_text/accent_tint" to contrast(color("ui_accent_text"), color("ui_accent_tint", bg)),
                 "error_text/error_tint" to contrast(color("ui_error_text"), color("ui_error_tint", bg)),
+                // 徽标：状态文字压在状态色淡底（再叠在卡片上）
+                "ok_text/ok_tint" to contrast(color("ui_ok_text"), color("ui_ok_tint", card)),
+                "warn_text/card" to contrast(color("ui_warn_text"), card),
+                "warn_text/warn_tint" to contrast(color("ui_warn_text"), color("ui_warn_tint", card)),
+                "text_secondary/field" to contrast(color("ui_text_secondary"), color("ui_field")),
             )
         val failed = pairs.filter { it.second < 4.5 }
         assertTrue(
