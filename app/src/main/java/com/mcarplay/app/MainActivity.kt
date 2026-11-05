@@ -810,6 +810,7 @@ class MainActivity : AppCompatActivity() {
         ctaLabel = findViewById(R.id.ctaLabel)
         audioTag = findViewById(R.id.audioTag)
         readyCount = findViewById(R.id.readyCount)
+        setupTabs()
         readyBody = findViewById(R.id.readyBody)
         readyChevron = findViewById(R.id.readyChevron)
         findViewById<View>(R.id.readyHeader).setOnClickListener {
@@ -1737,6 +1738,26 @@ class MainActivity : AppCompatActivity() {
             readyAutoCollapsed = true
             setReadyExpanded(false)
         }
+    }
+
+    /** 底部标签：0 连接、1 设置、2 诊断。三页是同一个 Activity 里的三个 ScrollView，切换只改可见性。 */
+    private var currentTab = 0
+
+    private fun setupTabs() {
+        val tabs = intArrayOf(R.id.tabConnect, R.id.tabSettings, R.id.tabDiagnostics)
+        tabs.forEachIndexed { index, id -> findViewById<View>(id).setOnClickListener { setTab(index) } }
+        setTab(currentTab)
+    }
+
+    private fun setTab(index: Int) {
+        currentTab = index
+        val pages = intArrayOf(R.id.mainScroll, R.id.settingsScroll, R.id.diagnosticsScroll)
+        pages.forEachIndexed { i, id -> findViewById<View>(id).visibility = if (i == index) View.VISIBLE else View.GONE }
+        listOf(R.id.tabConnect, R.id.tabSettings, R.id.tabDiagnostics).forEachIndexed { i, id ->
+            findViewById<View>(id).isSelected = i == index
+        }
+        // 横屏时英雄卡是 contentArea 里的固定层（见 applyContentLayout），只属于连接页
+        findViewById<View>(R.id.heroCard).visibility = if (index == 0) View.VISIBLE else View.GONE
     }
 
     private fun setReadyExpanded(expanded: Boolean) {

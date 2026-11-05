@@ -71,4 +71,8 @@
     <string name="whats_new_title">更新内容 · %1$s</string>
     <string name="whats_new_title_unreleased">更新内容（开发构建）</string>
     <string name="whats_new_ok">知道了</string>
+    <string name="main_tab_connect">连接</string>
+    <string name="main_tab_settings">设置</string>
+    <string name="main_tab_diagnostics">诊断</string>
+    <string name="main_diag_checks_title">自检与模拟</string>
 </resources>

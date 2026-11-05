@@ -20,7 +20,7 @@ import com.mcarplay.app.launcher.settings.SettingsToastHost
  */
 class PhoneSettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        // 设置/更新/抓包页尚未迁到新令牌（阶段 4），暂时固定深色，避免浅色下与旧样式混搭
+        // 车机桌面设置面板与车机端共用（深色、颜色写死在面板里），阶段 5 带真车回归后再统一；在此之前固定深色
         delegate.localNightMode = AppCompatDelegate.MODE_NIGHT_YES
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_phone_settings)
@@ -72,7 +72,7 @@ class SettingsContentActivity :
     AppCompatActivity(),
     SettingsToastHost {
     override fun onCreate(savedInstanceState: Bundle?) {
-        // 设置/更新/抓包页尚未迁到新令牌（阶段 4），暂时固定深色，避免浅色下与旧样式混搭
+        // 车机桌面设置面板与车机端共用（深色、颜色写死在面板里），阶段 5 带真车回归后再统一；在此之前固定深色
         delegate.localNightMode = AppCompatDelegate.MODE_NIGHT_YES
         super.onCreate(savedInstanceState)
         val menuId = intent.getIntExtra(EXTRA_MENU, SettingsMenus.DESKTOP)
