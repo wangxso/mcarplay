@@ -11,6 +11,7 @@ import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.AudioDuckingPrefs
 import com.mcarplay.app.bt.AutoConnectPrefs
 import com.mcarplay.app.compat.CompatibilityPrefs
+import com.mcarplay.app.compat.PassatReturnStrategy
 
 /**
  * 「显示」面板：流分辨率缩放（30%–160%，下次连接起效）+ 目标帧率（30/60，
@@ -136,6 +137,44 @@ class DisplayPanelFragment : SettingsPanelFragment() {
         ) { enabled ->
             CompatibilityPrefs.setAudioBaseline(ctx, enabled)
             hostToast(getString(if (enabled) R.string.sf_audio_fallback_on else R.string.sf_audio_fallback_off))
+        }
+
+        // 帕萨特「回主界面再进」实验策略：四选一，默认关；仅主页「车型适配」选了大众时才执行
+        val passatButtons =
+            listOf(
+                PassatReturnStrategy.OFF to view.findViewById<TextView>(R.id.btnPassat0),
+                PassatReturnStrategy.REBUILD_RETRY to view.findViewById<TextView>(R.id.btnPassat1),
+                PassatReturnStrategy.DISCONNECT_AFTER_FAILURES to view.findViewById<TextView>(R.id.btnPassat2),
+                PassatReturnStrategy.NO_REBUILD to view.findViewById<TextView>(R.id.btnPassat3),
+            )
+
+        fun refreshPassat(selected: PassatReturnStrategy) {
+            passatButtons.forEach { (strategy, button) ->
+                val on = strategy == selected
+                button.setBackgroundResource(if (on) R.drawable.bg_segment_sel else R.drawable.bg_segment)
+                button.setTextColor(if (on) selectedText else idleText)
+            }
+        }
+
+        var passatCurrent = CompatibilityPrefs.passatReturnStrategy(ctx)
+        refreshPassat(passatCurrent)
+        passatButtons.forEach { (strategy, button) ->
+            button.setOnClickListener {
+                if (strategy == passatCurrent) return@setOnClickListener
+                passatCurrent = strategy
+                CompatibilityPrefs.setPassatReturnStrategy(ctx, strategy)
+                refreshPassat(strategy)
+                hostToast(
+                    getString(
+                        when (strategy) {
+                            PassatReturnStrategy.OFF -> R.string.sf_passat_off
+                            PassatReturnStrategy.REBUILD_RETRY -> R.string.sf_passat_retry
+                            PassatReturnStrategy.DISCONNECT_AFTER_FAILURES -> R.string.sf_passat_disconnect
+                            PassatReturnStrategy.NO_REBUILD -> R.string.sf_passat_norebuild
+                        },
+                    ),
+                )
+            }
         }
 
         // 导航时音乐音量（ducking 幅度）：滑条 0..30 → 0..-30dB；会话中调整立即生效

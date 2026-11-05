@@ -32,4 +32,14 @@
     <string name="lay_no_paired">No paired devices yet; scan below and tap one to pair</string>
     <string name="lay_nearby">Nearby devices</string>
     <string name="lay_rescan">Scan again</string>
+    <string name="lay_passat_return">Experimental: Passat return to CarPlay</string>
+    <string name="lay_passat_off">Off</string>
+    <string name="lay_passat_retry">Rebuild on fail</string>
+    <string name="lay_passat_disconnect">Disconnect on fail</string>
+    <string name="lay_passat_norebuild">No rebuild</string>
+    <string name="lay_passat_return_desc">Off by default. Runs only when the home-page "Vehicle profile" is set to Volkswagen. Try one at a time. Rebuild on fail: if the car shows no touch and asks for no key frame within 3 s of taking the screen back, rebuild the screen stream once. Disconnect on fail: end the session after two such failures in a row so you can reconnect. No rebuild: tapping the icon does not rebuild the screen stream, it only re-asserts ownership and resends parameter sets. No vehicle evidence for any of them; applies from the next icon tap.</string>
+    <string name="sf_passat_off">Passat experiment off</string>
+    <string name="sf_passat_retry">Selected: rebuild once on failure</string>
+    <string name="sf_passat_disconnect">Selected: disconnect after repeated failures</string>
+    <string name="sf_passat_norebuild">Selected: no stream rebuild on icon tap</string>
 </resources>

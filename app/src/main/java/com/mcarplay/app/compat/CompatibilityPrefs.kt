@@ -12,6 +12,8 @@ object CompatibilityPrefs {
     private const val KEY_VEHICLE_PRESET = "compat_vehicle_preset"
     private const val KEY_AUDIO_BASELINE = "compat_audio_baseline"
 
+    private const val KEY_PASSAT_RETURN = "compat_passat_return_strategy"
+
     const val PLAIN_FALLBACK_DEFAULT = false
     const val AUDIO_BASELINE_DEFAULT = false
 
@@ -57,6 +59,21 @@ object CompatibilityPrefs {
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_AUDIO_BASELINE, enabled)
+            .apply()
+    }
+
+    /** 帕萨特「回主界面再进」实验策略；默认关，仅用户手动选择时生效。 */
+    fun passatReturnStrategy(context: Context): PassatReturnStrategy =
+        PassatReturnStrategy.fromKey(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PASSAT_RETURN, null))
+
+    fun setPassatReturnStrategy(
+        context: Context,
+        strategy: PassatReturnStrategy,
+    ) {
+        context
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PASSAT_RETURN, strategy.key)
             .apply()
     }
 }
