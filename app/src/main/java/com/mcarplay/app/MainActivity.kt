@@ -749,14 +749,38 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
+    private fun vehiclePresetDialogTitle(): View {
+        val density = resources.displayMetrics.density
+        val pad = (24 * density).toInt()
+        val title =
+            TextView(this).apply {
+                setText(R.string.main_vehicle_dialog_title)
+                textSize = 20f
+                setTextColor(getColor(R.color.m3_on_surface))
+            }
+        val hint =
+            TextView(this).apply {
+                setText(R.string.main_vehicle_dialog_hint)
+                textSize = 13f
+                setTextColor(getColor(R.color.m3_on_var))
+                setPadding(0, (8 * density).toInt(), 0, 0)
+            }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, (8 * density).toInt())
+            addView(title)
+            addView(hint)
+        }
+    }
+
     private fun showVehiclePresetDialog() {
         val presets = VehiclePreset.entries
         val labels = presets.map(::vehiclePresetLabel).toTypedArray()
         var checked = presets.indexOf(VehiclePresetRuntime.current)
         androidx.appcompat.app.AlertDialog
             .Builder(this)
-            .setTitle(R.string.main_vehicle_dialog_title)
-            .setMessage(R.string.main_vehicle_dialog_hint)
+            // 有 setMessage 时 AlertDialog 不显示单选列表，说明文字放进自定义标题
+            .setCustomTitle(vehiclePresetDialogTitle())
             .setSingleChoiceItems(labels, checked) { _, which -> checked = which }
             .setPositiveButton(android.R.string.ok) { _, _ ->
                 val chosen = presets[checked]
