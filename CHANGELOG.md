@@ -3,6 +3,25 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.5-test.2] - 2026-11-05
+
+> Experimental prerelease on top of v0.1.5-test.1: a manual vehicle profile, three Passat experiment strategies and a first "return to car" handler. None of it has been tried in a vehicle; DiPlay, WinPlay, macplay and Chery Arrizo 8 regressions are still pending. This does not establish real-vehicle compatibility.
+> 在 v0.1.5-test.1 之上的实验性预发布：手动车型适配、三个帕萨特实验策略和首版「返回车机」处理。均未上车验证；DiPlay、WinPlay、macplay、艾瑞泽 8 的回归尚未进行，不代表实车兼容。
+
+### English
+- **Manual vehicle profile:** the home page has a "Vehicle profile" row (Auto by default, Generic, Chery Arrizo 8, Volkswagen, WinPlay, DiPlay, Audi classic MIB3). The choice layers existing registered exceptions on top of the detected policy and shows as `manual.*` tags in the `COMPAT:` log; it applies from the next connection. Manual WinPlay and DiPlay skip the firmware checks of automatic detection. The choice persists, so set it back to Auto when you change receiver.
+- **Passat "return to CarPlay" experiments:** Passat 2025 (`VW4211`) only sometimes re-enters CarPlay after returning to the native UI. Display settings gain a pick-one experiment (off by default) that runs only when the vehicle profile is set to Volkswagen: rebuild the screen stream once if the car shows no touch and asks for no key frame within 3 s; end the session after two such failures in a row; or never rebuild the screen stream on an icon tap. Logs use the `PASSAT:` prefix. The no-reaction check also holds when the user does not touch the screen, so it can misfire, "disconnect on fail" most of all. Try one at a time and record successes per attempts.
+- **CarWith "return to car":** CarLife command `0x10021`, seen about 110 ms after tapping the button in a DiPlay (BYD) report, now hands the main screen and main audio back to the head unit via `modesChanged`; tapping the CarPlay icon can still retake them. The command's meaning is inferred from timing only. Do not treat the button as working until confirmed in a car.
+- Validation: 839 JVM tests and 24 remote bridge tests, plus `spotlessCheck`, `lintStandardDebug` and `assembleStandardDebug`, passed locally. Python and Node tests were not rerun for this entry. The signed tag workflow additionally runs `lintStandardRelease` and `assembleStandardRelease`.
+
+### 简体中文
+- **手动车型适配：** 首页新增「车型适配」一行（默认自动，另有通用、奇瑞艾瑞泽 8、大众、WinPlay、DiPlay、奥迪经典 MIB3）。所选项在自动判定结果上叠加已登记的例外规则，`COMPAT:` 日志里显示为 `manual.*` 标签，下次连接生效。手动选 WinPlay、DiPlay 会跳过自动判定的固件核对。选择会保留，换接收端时请改回自动。
+- **帕萨特「回主界面再进 CarPlay」实验：** 帕萨特 2025（`VW4211`）回原车主界面后再进 CarPlay 只是有概率成功。显示设置新增四选一实验（默认关），仅当车型适配选了「大众」时执行：拿回主屏 3 秒内车机无触控也无要帧则重建一次主屏流；连续两次无反应就结束本轮；或点图标时不重建主屏流。日志前缀 `PASSAT:`。「无反应」判据在用户没碰屏时也成立，可能误判，「失败断开」尤甚。请每次只选一个，记录成功次数/总次数。
+- **CarWith「返回车机」：** DiPlay（比亚迪）报告里点按钮约 110 ms 后出现的 CarLife 命令 `0x10021`，现在会经 `modesChanged` 把主屏和主音频交还车机；之后点 CarPlay 图标仍可拿回。该命令含义仅凭时序推断。上车确认前不要认为按钮已可用。
+- 验证：839 项 JVM 测试、24 项 remote 调试桥测试，以及 `spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 在本地通过。本条目未重跑 Python 与 Node 测试。签名的 tag 工作流还会运行 `lintStandardRelease` 和 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.5-test.1...v0.1.5-test.2](https://github.com/wangxso/mcarplay/compare/v0.1.5-test.1...v0.1.5-test.2)
+
 ## [v0.1.5-test.1] - 2026-11-05
 
 > Experimental prerelease collecting the phone UI redesign, layered connection progress and three connection fixes since v0.1.4. Checked only by unit tests, an emulator and one Xiaomi phone; DiPlay, WinPlay, macplay and Chery Arrizo 8 regressions are still pending. This does not establish real-vehicle compatibility.
