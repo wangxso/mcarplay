@@ -3,6 +3,37 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.5-test.1] - 2026-11-05
+
+> Experimental prerelease collecting the phone UI redesign, layered connection progress and three connection fixes since v0.1.4. Checked only by unit tests, an emulator and one Xiaomi phone; DiPlay, WinPlay, macplay and Chery Arrizo 8 regressions are still pending. This does not establish real-vehicle compatibility.
+> 实验性预发布，汇总 v0.1.4 以来的手机端界面重构、分层连接进度和三项连接修复。只做过单元测试、模拟器和一台小米手机检查；DiPlay、WinPlay、macplay、艾瑞泽 8 的回归尚未进行，不代表实车兼容。
+
+### English
+- **Phone UI redesign:** three tabs (Connect, Settings, Diagnostics), Apple-style tokens that follow the system light/dark mode, a status dot instead of the large car illustration on the home page, and transparent status and gesture bars. The diagnostics hint and export button appear only once a connection record exists.
+- **Removed the CarDeck virtual-display desktop** (Dock, Grid, wallpaper and their settings), which the CarWith path never reached. The car display settings panel stays. HID arrow and knob keys are now only logged, because the CarWith stream carries no arrow keys.
+- **Layered connection progress:** the main card shows a stepper over 16 phone-side milestones (iAP2, Wi-Fi, ctrl invite, AirPlay pairing, SETUP/RECORD, first frames) with the first missing step of the current layer. Support reports gain `STAGE_DURATIONS`, `MILESTONES` and `BLOCKED_AT` lines.
+- Pairing: `MaxPeers` and `MaxTries` rejections, and an Authentication rejection of the re-registration pair-setup after the saved trust was refused, now end the 120 s pairing window at once with a hint instead of repeating the same failure. TLV `Backoff` waits 5 s.
+- VW head units (model `VWxxxx`, such as ID7 `VW4131` and Passat 2025 `VW4211`): a ctrl invite while streaming now retires the session and reconnects to the same endpoint; invites within 15 s after a reconnect are ignored. Other receivers keep logging only. Not yet tested in a car.
+- On an orderly disconnect, send one `0xEA01` StopEASession per started protocol (same parameters as `0xEA00`) before closing the Bluetooth link, so the head unit no longer has to time the EA sessions out. Not yet tested in a car.
+- mDNS fallback: when no receiver is found, the head unit's hotspot gateway now prefers IPv4 default routes, drops unspecified addresses, and lists the other candidates in the log. Not yet tested in a car.
+- Diagnostics: unhandled CarLife commands are logged with kind, length and field shape, to trace CarWith's "return to car" button. That button still does not hand the head-unit screen back.
+- `remote` debug build only: export recent CarWith/CarLife system logs, service dumps and listener state, through Shizuku or `READ_LOGS`/`DUMP` granted over ADB; no root.
+- Validation: 827 JVM tests, 24 remote bridge tests, 56 Python tests and 20 Node tests, plus `spotlessCheck`, `lintStandardDebug` and `assembleStandardDebug`, passed locally. The signed tag workflow additionally runs `lintStandardRelease` and `assembleStandardRelease`.
+
+### 简体中文
+- **手机端界面重构：** 改为「连接 / 设置 / 诊断」三标签，Apple 风格令牌并跟随系统浅/深色；首页用状态圆点取代大车图；状态栏与手势栏透明。诊断提示与导出按钮只在已有连接记录时出现。
+- **移除 CarDeck 虚拟屏桌面**（Dock、Grid、壁纸及相关设置），现行 CarWith 路径无法到达它；「车机显示」设置面板保留。因 CarWith 码流不带方向键，HID 方向键/旋钮现在只记日志。
+- **分层连接进度：** 主卡片用步骤条展示手机侧 16 个里程碑（iAP2、Wi-Fi、ctrl 邀请、AirPlay 配对、SETUP/RECORD、首帧），并标出当前层缺失的第一步。诊断报告新增 `STAGE_DURATIONS`、`MILESTONES`、`BLOCKED_AT` 行。
+- 配对：`MaxPeers`、`MaxTries` 拒绝，以及已保存信任被拒后重新注册 pair-setup 收到的 Authentication 拒绝，现在会立即结束 120 秒配对窗口并给出提示，不再重复同一失败；TLV `Backoff` 等待 5 秒。
+- 大众车机（型号 `VWxxxx`，如 ID7 `VW4131`、帕萨特 2025 `VW4211`）：推流中收到 ctrl 邀请时，退役当前会话并重连同一地址；重连后 15 秒内的邀请忽略。其他车机仍只记日志。尚未上车验证。
+- 有序断开时，在关闭蓝牙链路前对每个已启动协议发送一次 `0xEA01` StopEASession（参数同 `0xEA00`），车机不必再等 EA 会话超时。尚未上车验证。
+- mDNS 兜底：找不到接收端时，车机热点网关优先选 IPv4 默认路由，剔除未指定地址，并在日志里列出其余候选。尚未上车验证。
+- 诊断：未识别的 CarLife 命令会记录 kind、长度和字段形状，用于追查 CarWith 的「返回车机」按钮；该按钮仍然无法把车机屏幕交还车机。
+- 仅 `remote` 调试版：导出最近的 CarWith/CarLife 系统日志、服务转储和监听状态，通过 Shizuku 或 ADB 授予的 `READ_LOGS`/`DUMP`，无需 root。
+- 验证：827 项 JVM 测试、24 项 remote 调试桥测试、56 项 Python 测试、20 项 Node 测试，以及 `spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 在本地通过。签名的 tag 工作流还会运行 `lintStandardRelease` 和 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.4...v0.1.5-test.1](https://github.com/wangxso/mcarplay/compare/v0.1.4...v0.1.5-test.1)
+
 ## [v0.1.4] - 2026-11-04
 
 > Stable release collecting the VW Passat 2025, Chery Arrizo 8, steering-key and Bluetooth auto-connect work since v0.1.3. Only WinPlay was regressed on the final build. The latest Passat and Arrizo 8 candidates, DiPlay and macplay were not retested on it, and the validated vehicle scope is still the manual Chery Arrizo 8 path of v0.1.3.

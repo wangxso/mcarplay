@@ -6,6 +6,8 @@
 
 ## 当前基线与结论
 
+- **11 月 5 日 v0.1.5-test.1 测试版（待发布）：** 汇总界面重构（PR #35）与 PR #31、#33、#34 的修复，仅通过单元测试、模拟器和一台小米手机检查，DiPlay、WinPlay、macplay、艾瑞泽 8 的实车回归尚未进行。测试通过后计划升到 1.0.0。
+
 - **11 月 5 日手机端界面重构（`feat/ui-redesign`，仅界面与死代码清理，未做真车回归）：** 手机端改为「连接 / 设置 / 诊断」三标签，Apple 风格令牌并跟随系统浅/深色；首页英雄卡去掉大车图。移除了从 CarDeck 继承、现行 CarWith 路径无法到达的虚拟屏桌面（`launcher/`、Dock、Grid、壁纸等），保留「车机显示」设置面板；HID 方向键因此只记日志不再注入。截图来自 Android 模拟器（HyperOS_3 AVD），门禁通过；DiPlay、WinPlay、macplay、艾瑞泽 8 的回归尚未进行，合并前必须补做。详见 `docs/UI-REDESIGN.md`。
 
 - **11 月 5 日相关项目调研：** 对照 CarPToCarL `70db71e`、AuDiCar AMCar `ce35062`（均为 MIT）和 hypercar
