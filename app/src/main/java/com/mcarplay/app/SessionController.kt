@@ -32,6 +32,7 @@ import com.mcarplay.app.compat.CompatibilityPrefs
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverProbePlan
+import com.mcarplay.app.compat.VehiclePresetRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.diagnostics.ConnectionStage
@@ -194,6 +195,7 @@ object SessionController {
         val app = context.applicationContext
         appContext = app
         ReceiverDetectionRuntime.initialize(app)
+        VehiclePresetRuntime.load(app)
         ReceiverDetectionRuntime.onBudgetExpired = { epoch ->
             Bg.run("detection-budget") {
                 synchronized(this) {

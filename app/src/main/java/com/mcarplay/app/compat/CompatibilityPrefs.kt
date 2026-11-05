@@ -9,6 +9,7 @@ import android.content.Context
 object CompatibilityPrefs {
     private const val PREFS = "settings"
     private const val KEY_PLAIN_FALLBACK = "compat_plain_fallback"
+    private const val KEY_VEHICLE_PRESET = "compat_vehicle_preset"
     private const val KEY_AUDIO_BASELINE = "compat_audio_baseline"
 
     const val PLAIN_FALLBACK_DEFAULT = false
@@ -26,6 +27,21 @@ object CompatibilityPrefs {
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_PLAIN_FALLBACK, enabled)
+            .apply()
+    }
+
+    /** 主页手动选择的车型适配；默认 [VehiclePreset.AUTO]。 */
+    fun vehiclePreset(context: Context): VehiclePreset =
+        VehiclePreset.parse(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_VEHICLE_PRESET, null))
+
+    fun setVehiclePreset(
+        context: Context,
+        preset: VehiclePreset,
+    ) {
+        context
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_VEHICLE_PRESET, preset.name)
             .apply()
     }
 

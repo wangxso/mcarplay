@@ -34,6 +34,8 @@ import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.ExternalHuController
 import com.mcarplay.app.compat.ReceiverDetection
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
+import com.mcarplay.app.compat.VehiclePreset
+import com.mcarplay.app.compat.VehiclePresetRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionProgress
 import com.mcarplay.app.diagnostics.ConnectionTimeline
@@ -724,6 +726,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun vehiclePresetLabel(preset: VehiclePreset): String =
+        getString(
+            when (preset) {
+                VehiclePreset.AUTO -> R.string.vehicle_preset_auto
+                VehiclePreset.GENERIC -> R.string.vehicle_preset_generic
+                VehiclePreset.CHERY -> R.string.vehicle_preset_chery
+                VehiclePreset.VOLKSWAGEN -> R.string.vehicle_preset_volkswagen
+                VehiclePreset.WINPLAY -> R.string.vehicle_preset_winplay
+                VehiclePreset.DIPLAY -> R.string.vehicle_preset_diplay
+                VehiclePreset.CLASSIC_MIB3 -> R.string.vehicle_preset_classic_mib3
+            },
+        )
+
+    private fun updateVehiclePresetRow() {
+        val preset = VehiclePresetRuntime.current
+        findViewById<TextView>(R.id.vehiclePresetDesc).text =
+            if (preset == VehiclePreset.AUTO) {
+                getString(R.string.main_vehicle_auto)
+            } else {
+                getString(R.string.main_vehicle_manual, vehiclePresetLabel(preset))
+            }
+    }
+
+    private fun showVehiclePresetDialog() {
+        val presets = VehiclePreset.entries
+        val labels = presets.map(::vehiclePresetLabel).toTypedArray()
+        var checked = presets.indexOf(VehiclePresetRuntime.current)
+        androidx.appcompat.app.AlertDialog
+            .Builder(this)
+            .setTitle(R.string.main_vehicle_dialog_title)
+            .setMessage(R.string.main_vehicle_dialog_hint)
+            .setSingleChoiceItems(labels, checked) { _, which -> checked = which }
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val chosen = presets[checked]
+                if (chosen != VehiclePresetRuntime.current) {
+                    VehiclePresetRuntime.set(this, chosen)
+                    SessionController.appendLog("COMPAT: 手动车型适配 → ${chosen.name}")
+                    if (SessionController.isSessionRunning() || SessionController.sessionStarting.get()) {
+                        android.widget.Toast
+                            .makeText(this, R.string.main_vehicle_busy, android.widget.Toast.LENGTH_SHORT)
+                            .show()
+                    }
+                }
+                updateVehiclePresetRow()
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
     private fun showReceiverDetection() {
         receiverDetectionDialog?.dismiss()
         receiverDetectionDialog =
@@ -1102,6 +1152,8 @@ class MainActivity : AppCompatActivity() {
 
         // ---- 连接准备 ----
         findViewById<View>(R.id.rowReceiverDetection).setOnClickListener { showReceiverDetection() }
+        findViewById<View>(R.id.rowVehiclePreset).setOnClickListener { showVehiclePresetDialog() }
+        updateVehiclePresetRow()
         findViewById<LinearLayout>(R.id.rowCarLifeSelfTest).setOnClickListener {
             toggleCarLifeSelfTest()
         }
