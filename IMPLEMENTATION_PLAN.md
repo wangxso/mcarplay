@@ -31,6 +31,9 @@
   仅修改 remote 源集，不改变 CarWith 入口或媒体协议。用法与限制见 `docs/DIAGNOSTICS.md`。
 
 
+- **11 月 5 日新增：主页「车型适配」手动选择（离线通过，未上车验证）。** 选项：自动（默认）/ 通用 / 奇瑞艾瑞泽 8 / 大众 / WinPlay / DiPlay / 奥迪经典 MIB3，
+  存 `settings` 的 `compat_vehicle_preset`，经 `VehiclePresetRuntime` 在 `ReceiverCompatibility.resolve` 的自动结果上叠加已有适配开关
+  （规则标签 `manual.*` 进 `COMPAT:` 日志）。只复用已登记的例外规则，不新增未验证的车型行为；下次连接生效。
 - **11 月 4 日待解决：CarWith「返回车机」无效。** 投屏中点 CarWith 界面上的「返回车机」按钮，车机屏幕没有切回车机原生界面，
   仍停在 CarPlay 画面（用户反馈，车型与版本待补）。原因尚未确认。此前 `CarLifeCommandRouter` 对未识别的 7240 命令走
   `else -> Result()`，既不处理也不记日志，所以现有报告看不出这个按钮发了哪条 CarLife 命令；AirPlay 侧 `releaseScreen` 只在车机点 CarPlay 图标后

@@ -69,4 +69,17 @@
     <string name="main_tab_settings">Settings</string>
     <string name="main_tab_diagnostics">Diagnostics</string>
     <string name="main_diag_checks_title">Self-test &amp; simulation</string>
+    <string name="main_vehicle_title">Vehicle profile</string>
+    <string name="main_vehicle_auto">Automatic (from what the head unit reports)</string>
+    <string name="main_vehicle_manual">Manual: %1$s</string>
+    <string name="main_vehicle_dialog_title">Choose vehicle profile</string>
+    <string name="main_vehicle_dialog_hint">Use only when automatic detection is wrong. This applies existing per-vehicle compatibility switches and does not mean the vehicle is verified. Takes effect on the next connection.</string>
+    <string name="main_vehicle_busy">Connection in progress; takes effect next time</string>
+    <string name="vehicle_preset_auto">Automatic (recommended)</string>
+    <string name="vehicle_preset_generic">Generic (no vehicle-specific exceptions)</string>
+    <string name="vehicle_preset_chery">Chery / Arrizo 8</string>
+    <string name="vehicle_preset_volkswagen">Volkswagen (ID series / Passat)</string>
+    <string name="vehicle_preset_winplay">WinPlay receiver</string>
+    <string name="vehicle_preset_diplay">DiPlay receiver (BYD etc.)</string>
+    <string name="vehicle_preset_classic_mib3">Audi classic MIB3</string>
 </resources>
