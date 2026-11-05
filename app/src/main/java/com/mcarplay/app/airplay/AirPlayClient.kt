@@ -11,6 +11,7 @@ import com.mcarplay.app.compat.ReceiverCapabilities
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverProbePlan
+import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.iap2.Iap2Csm
 import com.mcarplay.app.iap2.Iap2MessageIds
 import com.mcarplay.app.iap2.Iap2SenderSession
@@ -377,14 +378,17 @@ class AirPlayClient(
                             pairingForbidden = true
                         },
                         onTrustInvalidated = { pairings.remove(pairingEndpoint, identity.pairingId) },
+                        onSetupComplete = { milestone(ConnectionMilestone.PAIR_SETUP) },
                     )
-                val result = handshake.run(pairings.load(pairingEndpoint, identity.pairingId), pairingEndpoint.publicKey?.let(::hexToBytes))
+                val remembered = pairings.load(pairingEndpoint, identity.pairingId)
+                val result = handshake.run(remembered, pairingEndpoint.publicKey?.let(::hexToBytes))
                 if (cancelled) return null
                 result.receiver?.let { pairings.save(pairingEndpoint, identity.pairingId, it) }
                 val keys = result.keys
                 // pair-verify 之后双方立即启用加密（接收端在 M4 应答后开启）
                 cipher = ControlCipher(keys.phoneReadKey, keys.phoneWriteKey)
                 log("AIRPLAY: 控制通道加密已启用")
+                milestone(ConnectionMilestone.PAIR_VERIFY, "savedTrust=${remembered != null}")
                 return keys
             } catch (error: IOException) {
                 if (cancelled) {
@@ -440,6 +444,7 @@ class AirPlayClient(
                 request("POST", "/auth-setup", body, timeoutMillis = AUTH_SETUP_TIMEOUT_MILLIS)
             val elapsed = SystemClock.uptimeMillis() - startedAt
             log("AIRPLAY: auth-setup [$statusLine] ${response.size}B ${elapsed}ms ${describeAuthSetupResponse(response)}")
+            if (statusLine.contains(" 200")) milestone(ConnectionMilestone.AUTH_SETUP, "elapsedMs=$elapsed")
         } catch (error: IOException) {
             log("AIRPLAY: auth-setup 失败（${SystemClock.uptimeMillis() - startedAt}ms）- ${error.message}——继续 SETUP")
         }
@@ -1028,6 +1033,7 @@ class AirPlayClient(
             return null
         }
         sessionSetupAccepted = true
+        milestone(ConnectionMilestone.SESSION_SETUP)
         val root =
             try {
                 BinaryPlist.parse(responseBody)
@@ -1681,6 +1687,20 @@ class AirPlayClient(
      * 话车机全程健康却永不切到 CarPlay 画面。
      */
     var onTunnelControlSessionComplete: (() -> Unit)? = null
+
+    /**
+     * 连接里程碑（TCP 连通、pair-setup/verify、auth-setup、SETUP、RECORD）回调，由宿主记到本轮诊断；
+     * 每项只看首次，重复到达由时间线忽略。detail 只放固定描述，不放地址。
+     */
+    @Volatile
+    var onMilestone: ((ConnectionMilestone, String) -> Unit)? = null
+
+    private fun milestone(
+        reached: ConnectionMilestone,
+        detail: String = "",
+    ) {
+        runCatching { onMilestone?.invoke(reached, detail) }
+    }
 
     /** MIB3 虚拟链路是否已布防（armMib3 成功）——拆链归因用：布防了但控制会话没完成就被拆 = 链路看门狗，与音频档位无关。 */
     @Volatile
@@ -2625,6 +2645,7 @@ class AirPlayClient(
                     }
                 }
             log(if (accepted) "AIRPLAY: ✓ RECORD 完成——会话已激活" else "AIRPLAY: RECORD 未激活当前会话 [$statusLine]")
+            if (accepted) milestone(ConnectionMilestone.RECORD)
         } catch (error: IOException) {
             log("AIRPLAY: RECORD 失败 - ${error.message}")
         } finally {
@@ -2912,6 +2933,7 @@ class AirPlayClient(
                     }
                     if (port != target.airPlayPort) endpoint = endpoint.copy(airPlayPort = port)
                     log("AIRPLAY: TCP 已连通 $activeHost:$port（本机 ${newSocket.localAddress.hostAddress}）")
+                    milestone(ConnectionMilestone.AIRPLAY_CONNECTED, if (port == target.airPlayPort) "port=advertised" else "port=fallback")
                     return true
                 } catch (error: IOException) {
                     runCatching { newSocket.close() }

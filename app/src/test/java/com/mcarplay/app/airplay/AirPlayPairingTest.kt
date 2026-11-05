@@ -119,6 +119,30 @@ class AirPlayPairingTest {
     }
 
     @Test
+    fun setupCallbackFiresOnlyWhenPairSetupCompletes() {
+        val receiver = MockReceiver()
+        val transport = TlvTransport { path, body -> receiver.handle(path, body) }
+        var setups = 0
+        val handshake =
+            PairingHandshake(newIdentity(), { transport }, { error("unexpected reconnect") }, {}, onSetupComplete = { setups++ })
+        val first = handshake.run(null, null)
+        assertEquals(1, setups)
+        handshake.run(first.receiver, null)
+        handshake.run(first.receiver, null)
+        assertEquals(1, setups)
+    }
+
+    @Test
+    fun repairedTrustReportsTheFreshSetupOnce() {
+        val receiver = MockReceiver()
+        val transport = TlvTransport { path, body -> receiver.handle(path, body) }
+        var setups = 0
+        val handshake = PairingHandshake(newIdentity(), { transport }, {}, {}, onSetupComplete = { setups++ })
+        handshake.run(PairSetupClient.ReceiverIdentity(receiver.pairingId, receiver.staticKey.publicKey), null)
+        assertEquals(1, setups)
+    }
+
+    @Test
     fun forgottenControllerRepairsTrustOnceOnFreshConnection() {
         val receiver = MockReceiver()
         val requests = ArrayList<String>()

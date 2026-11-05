@@ -34,6 +34,24 @@ still-redacted recent runtime history.
 - Random process/attempt IDs correlate stage transitions, warnings, terminal
   reasons, elapsed time, media counts and coarse memory/thread samples. Critical
   events use JSONL schema 1, independently of verbose protocol logs.
+- `MILESTONE` events (with a `milestone` field) record the first time an attempt
+  reaches each phone-side step: `BT_LINK`, `IAP2_IDENTIFIED`, `IAP2_AUTHENTICATED`,
+  `WIFI_CREDENTIALS`, `WIFI_JOINED`, `CTRL_INVITED`, `RECEIVER_RESOLVED`,
+  `AIRPLAY_CONNECTED`, `PAIR_SETUP`, `PAIR_VERIFY`, `AUTH_SETUP`, `SESSION_SETUP`,
+  `RECORD`; `FIRST_CARWITH_VIDEO`, `FIRST_VIDEO` and `FIRST_AUDIO_PACKET` carry
+  `CARWITH_FRAME`, `FIRST_VIDEO` and `FIRST_AUDIO`. Repeats are not journaled and
+  details hold only fixed tokens (`source=0x5703`, `port=fallback`, `savedTrust=true`).
+  `PAIR_SETUP` is absent when saved trust was reused. The layers are independent:
+  `IAP2_AUTHENTICATED` (the head unit's iAP `AUTHENTICATION_PASS`) does not imply
+  `PAIR_VERIFY`. Bluetooth milestones belong to the attempt that was current when
+  they arrived, so an attempt that a receiver restart began at Wi-Fi may lack them.
+- After `EXPORT_SNAPSHOT` the report adds `STAGE_DURATIONS` (accumulated milliseconds
+  per stage, `*` on the current one), `MILESTONES` (offset from the attempt start, or
+  `none`) and, while waiting or after a failure, `BLOCKED_AT <STAGE>:<STEP>` naming the
+  missing step (for example `PAIRING:HOMEKIT_PAIRING` after TCP connected but before
+  pair-verify). The main card shows the same layers as a stepper; once 30 s pass after
+  `BT_LINK` without `RECORD` it notes that the Chery Arrizo 8 resets and retries at
+  that point. That window was observed only on that head unit.
 - Source H.264 frames, video transport writes, native PCM chunks and sent audio
   packets are separate evidence. Writes do not prove receiver display or sound.
 - `RECEIVER_DETECTION` and `DETECT` notes contain the local wizard's fixed state,
@@ -280,6 +298,11 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 
 推流时运行日志还会记录 CarWith 与手机编码器的 SPS/PPS 特征、透传/转码码流统计（含车机要关键帧距上个 IDR 的时间）、
 车机时钟漂移、车机命令统计与结构、屏幕数据口回传或关闭，以及每分钟的 Wi-Fi 信号/速率、温控与电量（不含 SSID/BSSID）。
+
+首页卡片按「蓝牙 › 入网 › 发现 › 配对 › 会话 › CarWith › 画面」显示每层状态与耗时、最近到达的里程碑和当前层还缺的那一步；
+报告里对应 `STAGE_DURATIONS`、`MILESTONES` 和 `BLOCKED_AT` 三行，日志里是带 `milestone` 字段的 `MILESTONE` 事件。
+各层相互独立：iAP2 认证通过不代表 AirPlay 配对成功。自蓝牙链路起 30 s 仍未激活会话时，卡片会提示艾瑞泽 8 车机此时会自行重置重连；
+该窗口只在这台车机上观察到。
 
 手机日志能确定已记录的阶段和事实，但不能保证还原所有车机内部故障，必要时仍需接收端日志。
 “收到源数据”“已发送”“接收端显示/有声”是不同证据层级；分享前仍需检查自由文本中的隐私。

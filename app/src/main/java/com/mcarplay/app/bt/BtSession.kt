@@ -3,6 +3,7 @@ package com.mcarplay.app.bt
 import android.content.Context
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverObservation
+import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.transport.Iap2LinkChannel
@@ -46,6 +47,9 @@ internal fun Iap2LinkChannel.runSenderSession(
             context.applicationContext,
             receiverBinding = observation?.binding,
             rememberMfi = !ReceiverDetectionRuntime.collecting(observation),
+            onMilestone = { milestone ->
+                if (ReceiverDetectionRuntime.isCurrent(observation)) ConnectionDiagnostics.milestoneCurrent(milestone)
+            },
         )
     val endpoint = session.run(timeoutMillis)
     onGeneration(session.linkGeneration)

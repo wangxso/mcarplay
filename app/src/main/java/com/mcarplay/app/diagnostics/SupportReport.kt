@@ -72,7 +72,8 @@ object SupportReport {
 
     private fun exportSummary(state: ConnectionTimeline.Snapshot): String =
         state.summary() + "\nEXPORT_SNAPSHOT sourceVideoFrames=${state.sourceFrames} videoFramesSent=${state.videoFrames} " +
-            "nativeAudioChunks=${state.audioChunks} audioPacketsSent=${state.audioPackets} lastVideoMsAgo=${state.lastVideoMsAgo}"
+            "nativeAudioChunks=${state.audioChunks} audioPacketsSent=${state.audioPackets} lastVideoMsAgo=${state.lastVideoMsAgo}\n" +
+            ConnectionProgress.reportLines(state)
 
     internal fun render(
         reportId: String,

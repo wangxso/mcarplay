@@ -28,6 +28,8 @@ internal class PairingHandshake(
     private val log: (String) -> Unit,
     private val onSetupForbidden: () -> Unit = {},
     private val onTrustInvalidated: () -> Unit = {},
+    /** pair-setup 完成（M6 通过）；复用已保存信任或 403 后直接 verify 时不调用。 */
+    private val onSetupComplete: () -> Unit = {},
 ) {
     data class Result(
         val keys: PairVerifyClient.ControlKeys,
@@ -52,7 +54,7 @@ internal class PairingHandshake(
         log("PAIRING: stage=SETUP reuse=false")
         val receiver =
             try {
-                PairSetupClient(identity, transport(), log).run()
+                PairSetupClient(identity, transport(), log).run().also { onSetupComplete() }
             } catch (error: IOException) {
                 if (!error.message.orEmpty().contains("403")) throw error
                 onSetupForbidden()

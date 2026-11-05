@@ -1,5 +1,6 @@
 package com.mcarplay.app.iap2
 
+import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.transport.InMemoryStreamPair
 import org.junit.Assert.assertEquals
@@ -27,14 +28,20 @@ class Iap2SenderSessionTest {
         accessoryThread.isDaemon = true
         accessoryThread.start()
 
+        val milestones = mutableListOf<ConnectionMilestone>()
         val endpoint =
             Iap2SenderSession(
                 phoneChannel,
                 log = { line -> println("PHONE $line") },
                 bluetoothMac = "34:86:DA:86:BB:96",
                 deviceName = "test-device",
+                onMilestone = { synchronized(milestones) { milestones.add(it) } },
             ).run(timeoutMillis = 10_000L)
 
+        assertEquals(
+            listOf(ConnectionMilestone.BT_LINK, ConnectionMilestone.IAP2_IDENTIFIED, ConnectionMilestone.IAP2_AUTHENTICATED),
+            synchronized(milestones) { milestones.toList() },
+        )
         assertEquals("MockAP", endpoint.ssid)
         assertEquals("secret-passphrase", endpoint.passphrase)
         assertEquals(36, endpoint.channel)

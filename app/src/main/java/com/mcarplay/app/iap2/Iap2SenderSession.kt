@@ -3,6 +3,7 @@ package com.mcarplay.app.iap2
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverFingerprint
 import com.mcarplay.app.compat.ReceiverObservation
+import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.transport.Iap2LinkChannel
 import java.io.IOException
 import java.security.SecureRandom
@@ -69,6 +70,8 @@ class Iap2SenderSession(
     private val receiverBinding: String? = null,
     /** 检测草稿不修改自动兼容记忆。 */
     private val rememberMfi: Boolean = true,
+    /** 链路就绪、识别接受、认证完成三个里程碑（诊断用，不影响协议流程）。 */
+    private val onMilestone: (ConnectionMilestone) -> Unit = {},
 ) {
     /** 从 0x5703 + 0x4301 解析出的接收端信息。 */
     data class CarPlayEndpoint(
@@ -221,12 +224,17 @@ class Iap2SenderSession(
         ).joinToString(" ").lowercase()
     }
 
+    private fun reached(milestone: ConnectionMilestone) {
+        runCatching { onMilestone(milestone) }
+    }
+
     fun run(timeoutMillis: Long = 60_000L): CarPlayEndpoint {
         val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
         if (!channel.awaitReady(remainingMillis(deadline))) {
             throw IOException("iAP2 链路协商超时")
         }
         log("iap2 link ready peerMaxControl=${channel.peerMaxControlPayload()}")
+        reached(ConnectionMilestone.BT_LINK)
 
         // ---- 识别 ----
         send(Iap2MessageIds.START_IDENTIFICATION)
@@ -234,6 +242,7 @@ class Iap2SenderSession(
         logIdentification(identification)
         send(Iap2MessageIds.IDENTIFICATION_ACCEPTED)
         log("iap2 tx=0x1d02 identification-accepted")
+        reached(ConnectionMilestone.IAP2_IDENTIFIED)
 
         // EA 协议解析（启动时机见下方 MFi 完成后——2026-10-11 DiPlay 实测：
         // 认证前发 0xEA00 会让测试台状态机停摆，不再回 0xAA01；奥迪对此不敏感）
@@ -273,6 +282,7 @@ class Iap2SenderSession(
         )
         send(Iap2MessageIds.MFI_AUTHENTICATION_SUCCEEDED)
         log("iap2 tx=0xaa05 authentication-succeeded（自报）")
+        reached(ConnectionMilestone.IAP2_AUTHENTICATED)
 
         // ---- 设备状态问候（须紧跟 0xAA05：车机据此判定 accessory 就绪）----
         sendDeviceStateGreetings()

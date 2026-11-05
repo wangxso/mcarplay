@@ -34,6 +34,7 @@ import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverProbePlan
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
+import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.diagnostics.ConnectionStage
 import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.diagnostics.StreamEnvironment
@@ -662,7 +663,10 @@ object SessionController {
                         uiHintSink?.invoke(t(R.string.sc_tap_phone_on_receiver_hint, name))
                     },
                 )
-            ctrlAdvertiser = CarPlayCtrlAdvertiser(context) { line -> appendLog(line) }
+            ctrlAdvertiser =
+                CarPlayCtrlAdvertiser(context) { line -> appendLog(line) }.also { advertiser ->
+                    advertiser.onInvite = { ConnectionDiagnostics.milestoneCurrent(ConnectionMilestone.CTRL_INVITED) }
+                }
             endpointBrowser =
                 CarPlayServiceBrowser(
                     context,
@@ -1197,6 +1201,7 @@ object SessionController {
         ssidSink?.invoke(wifi.ssid)
         lastWifiPsk = wifi.passphrase
         lastCarWifiSsid = wifi.ssid
+        ConnectionDiagnostics.milestoneCurrent(ConnectionMilestone.WIFI_CREDENTIALS, "source=0x5703")
         phaseHint = t(R.string.sc_got_credentials)
         appendLog(">>> 拿到车机热点凭据（0x5703）——立即绑定 WiFi + 广播 _carplay-ctrl")
         // ctrl 广播已在 startConnection 时发布（catplay：连接前保持发布能力在线）。
@@ -2964,6 +2969,9 @@ object SessionController {
             watchForPendingStartSession(endpoint, source)
             return
         }
+        if (endpoint.ssid != INVITED_WIFI_LABEL) {
+            ConnectionDiagnostics.timeline.milestone(diagnosticAttempt, ConnectionMilestone.WIFI_CREDENTIALS, "source=endpoint")
+        }
         appendLog(
             ">>> [$source] 拿到接收端热点：SSID=${endpoint.ssid}；" +
                 "密码=${if (endpoint.passphrase.isEmpty()) "(空)" else "已获取"}",
@@ -3023,6 +3031,7 @@ object SessionController {
                 if (ownsConnection()) sessionStarting.set(false)
                 return@proceed
             }
+            ConnectionDiagnostics.timeline.milestone(diagnosticAttempt, ConnectionMilestone.WIFI_JOINED)
             ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.DISCOVERY)
             // 网络绑定完成：ctrl 广播重新注册（落到车机所在网络），同时开始后台 mDNS 发现。
             // 两者都发生在等邀请期间，不额外占用时间。
@@ -3061,6 +3070,13 @@ object SessionController {
                                 "${effectiveEndpoint.ipAddresses.firstOrNull()}:${effectiveEndpoint.airPlayPort}",
                         )
                     }
+                    if (effectiveEndpoint.airPlayPort > 0 && EndpointHosts.hasUsable(effectiveEndpoint.ipAddresses)) {
+                        ConnectionDiagnostics.timeline.milestone(
+                            diagnosticAttempt,
+                            ConnectionMilestone.RECEIVER_RESOLVED,
+                            if (effectiveEndpoint.portIsFallback) "port=fallback" else "port=advertised",
+                        )
+                    }
                     if (wasCancelled()) {
                         appendLog("AIRPLAY: 用户已取消——中止配对")
                         if (ownsConnection()) sessionStarting.set(false)
@@ -3097,6 +3113,9 @@ object SessionController {
                                 )
                             },
                         ).also { created ->
+                            created.onMilestone = { reached, detail ->
+                                ConnectionDiagnostics.timeline.milestone(diagnosticAttempt, reached, detail)
+                            }
                             // 车机媒体键（iAP2 0x6802 通路）：方向盘/面板的上一曲、下一曲。
                             // 放在这里而不是调用点，保证重连重建 client 时也挂得上。
                             created.onMediaKey = { keyCode -> routeCarMediaKey(keyCode, "iAP2 0x6802") }

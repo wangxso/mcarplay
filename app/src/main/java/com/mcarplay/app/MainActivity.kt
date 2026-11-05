@@ -10,13 +10,18 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.SpannableStringBuilder
+import android.text.Spanned
 import android.text.method.ScrollingMovementMethod
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -34,6 +39,8 @@ import com.mcarplay.app.carlife.ExternalHuController
 import com.mcarplay.app.compat.ReceiverDetection
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
+import com.mcarplay.app.diagnostics.ConnectionProgress
+import com.mcarplay.app.diagnostics.ConnectionTimeline
 import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
 import com.mcarplay.app.diagnostics.DiagnosticRedactor
@@ -1245,6 +1252,47 @@ class MainActivity : AppCompatActivity() {
         log("测试台：两台手机蓝牙配对 -> 备用机跑 xcertplay 无线模式 -> 点「启动连接」等待回连")
     }
 
+    /** 英雄卡分层进度：已过的层着主色，当前层加粗，失败层标红，未到的层置灰。自检轨不显示。 */
+    private fun updateConnectionSteps(snapshot: ConnectionTimeline.Snapshot?) {
+        val view = findViewById<TextView>(R.id.connectionSteps)
+        val progress = snapshot?.let(ConnectionProgress::of)
+        if (progress == null) {
+            view.visibility = View.GONE
+            return
+        }
+        val dim = getColor(R.color.m3_outline)
+        val text = SpannableStringBuilder()
+        DiagnosticText.progressSegments(this, progress).forEachIndexed { index, (label, state) ->
+            if (index > 0) {
+                val separatorStart = text.length
+                text.append(" › ")
+                text.setSpan(
+                    ForegroundColorSpan(getColor(R.color.m3_outline_var)),
+                    separatorStart,
+                    text.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+            val start = text.length
+            text.append(label)
+            val color =
+                when (state) {
+                    ConnectionProgress.StepState.DONE -> getColor(R.color.m3_primary)
+                    ConnectionProgress.StepState.ACTIVE -> getColor(R.color.m3_on_surface)
+                    ConnectionProgress.StepState.FAILED -> getColor(R.color.m3_error)
+                    ConnectionProgress.StepState.STOPPED -> getColor(R.color.m3_on_var)
+                    ConnectionProgress.StepState.PENDING -> dim
+                }
+            text.setSpan(ForegroundColorSpan(color), start, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (state == ConnectionProgress.StepState.ACTIVE || state == ConnectionProgress.StepState.FAILED) {
+                text.setSpan(StyleSpan(Typeface.BOLD), start, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        DiagnosticText.progressDetail(this, progress).takeIf { it.isNotEmpty() }?.let { text.append("\n").append(it) }
+        view.text = text
+        view.visibility = View.VISIBLE
+    }
+
     private fun bindExpandable(
         headerId: Int,
         body: View,
@@ -1265,8 +1313,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun tickHero() {
         val diagnosis = ConnectionDiagnostics.timeline.snapshot()
+        val latest = ConnectionDiagnostics.latestSnapshot()
         findViewById<TextView>(R.id.diagnosticStatus).text =
-            ConnectionDiagnostics.latestSnapshot()?.let { DiagnosticText.summary(this, it) } ?: getString(R.string.diagnostic_empty)
+            latest?.let { DiagnosticText.summary(this, it) } ?: getString(R.string.diagnostic_empty)
+        updateConnectionSteps(latest)
         val s =
             when {
                 SessionController.videoSender?.let { it.isRunning && it.framesSentTotal > 0 } == true -> HeroState.CONNECTED

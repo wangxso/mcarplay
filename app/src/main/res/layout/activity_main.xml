@@ -270,6 +270,18 @@
                     android:textSize="11.5sp"
                     android:textStyle="bold"
                     android:visibility="gone" />
+                <!-- 分层进度：蓝牙 › 入网 › 发现 › 配对 › 会话 › CarWith › 画面，加最近里程碑与当前缺的一步 -->
+                <TextView
+                    android:id="@+id/connectionSteps"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center"
+                    android:lineSpacingExtra="3dp"
+                    android:textColor="@color/m3_on_var"
+                    android:textSize="11.5sp"
+                    android:visibility="gone" />
+
                 <TextView
                     android:id="@+id/diagnosticStatus"
                     android:layout_width="match_parent"
