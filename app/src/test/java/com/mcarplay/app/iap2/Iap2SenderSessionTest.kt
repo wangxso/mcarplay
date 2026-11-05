@@ -3,7 +3,9 @@ package com.mcarplay.app.iap2
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.transport.InMemoryStreamPair
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -422,6 +424,190 @@ class Iap2SenderSessionTest {
     }
 
     /** 按 DiPlay Iap2WirelessControlClient 的时序脚本化应答。 */
+
+    /**
+     * 断开时的 0xEA01：为本轮每个已开的 EA 协议各发一条，参数与对应的 0xEA00 相同，
+     * 且每轮至多一次（奥迪 3315 形态的可收清单含 0xEA01）。
+     */
+    @Test
+    fun stopEaSessionsMirrorsStartParamsOnce() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory")
+        val accessory =
+            MockAccessory(
+                accessoryChannel,
+                shape = MockAccessory.Shape.AUDI_3315,
+                eaProtocols = listOf(1 to "com.audi.cpp.eadata0", 2 to "com.audi.cpp.eadata1"),
+            )
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+
+        val session =
+            Iap2SenderSession(
+                phoneChannel,
+                log = { line -> println("PHONE $line") },
+                bluetoothMac = "34:86:DA:86:BB:96",
+                deviceName = "test-device",
+            )
+        session.run(timeoutMillis = 10_000L)
+        accessoryThread.join(5_000)
+        assertEquals(2, accessory.eaOpenBodies.size)
+
+        assertTrue(session.hasEaSessionsToStop())
+        assertEquals(2, session.stopEaSessions("test"))
+        val stops = List(2) { accessory.awaitFrame(2_000) }
+        stops.forEach { assertEquals(Iap2MessageIds.EA_CLOSE_SESSION, it?.messageId) }
+        assertEquals(accessory.eaOpenBodies.toList(), stops.map { it!!.body.toList() })
+
+        assertFalse(session.hasEaSessionsToStop())
+        assertEquals(0, session.stopEaSessions("again"))
+        assertNull("同一轮不能发第二次 0xEA01", accessory.awaitFrame(300))
+
+        phoneChannel.close()
+        accessoryChannel.close()
+    }
+
+    /** 车机可收清单明确不含 0xEA01（凯迪拉克 CT5 形态）：开过 EA 会话也不发。 */
+    @Test
+    fun stopEaSessionsSkipsWhenReceiverOmitsEa01() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory")
+        val accessory =
+            MockAccessory(
+                accessoryChannel,
+                shape = MockAccessory.Shape.CT5_NEW_PROTOCOL,
+                eaProtocols = listOf(1 to "com.example.ea"),
+            )
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+
+        val session =
+            Iap2SenderSession(
+                phoneChannel,
+                log = { line -> println("PHONE $line") },
+                bluetoothMac = "34:86:DA:86:BB:96",
+                deviceName = "test-device",
+            )
+        session.run(timeoutMillis = 10_000L)
+        accessoryThread.join(5_000)
+        assertEquals(1, accessory.eaOpenBodies.size)
+
+        assertFalse(session.hasEaSessionsToStop())
+        assertEquals(0, session.stopEaSessions("test"))
+        assertNull(accessory.awaitFrame(300))
+
+        phoneChannel.close()
+        accessoryChannel.close()
+    }
+
+    /** 没有可收清单（奥迪 9310 形态）照发；链路关闭后不再尝试。 */
+    @Test
+    fun stopEaSessionsWithoutReceiveListStopsOnlyWhileLinkAlive() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory")
+        val accessory =
+            MockAccessory(
+                accessoryChannel,
+                shape = MockAccessory.Shape.AUDI_9310,
+                eaProtocols = listOf(1 to "com.audi.cpp.eadata0"),
+            )
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+
+        val session =
+            Iap2SenderSession(
+                phoneChannel,
+                log = { line -> println("PHONE $line") },
+                bluetoothMac = "34:86:DA:86:BB:96",
+                deviceName = "test-device",
+            )
+        session.run(timeoutMillis = 10_000L)
+        accessoryThread.join(5_000)
+
+        assertTrue("无清单不能反证不支持", session.hasEaSessionsToStop())
+        phoneChannel.close()
+        assertFalse(session.hasEaSessionsToStop())
+        assertEquals(0, session.stopEaSessions("closed"))
+
+        accessoryChannel.close()
+    }
+
+    /** 未声明 EA 协议的车机：从未发 0xEA00，断开时也没有 0xEA01。 */
+    @Test
+    fun noEaProtocolsMeansNothingToStop() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory")
+        val accessory = MockAccessory(accessoryChannel)
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+
+        val session =
+            Iap2SenderSession(
+                phoneChannel,
+                log = { line -> println("PHONE $line") },
+                bluetoothMac = "34:86:DA:86:BB:96",
+                deviceName = "test-device",
+            )
+        session.run(timeoutMillis = 10_000L)
+        accessoryThread.join(5_000)
+
+        assertFalse(session.hasEaSessionsToStop())
+        assertEquals(0, session.stopEaSessions("test"))
+
+        phoneChannel.close()
+        accessoryChannel.close()
+    }
+
+    /**
+     * 保活线程被中断而链路仍开（BT 客户端 stop 落在 0xEA01 冲刷宽限期内）：
+     * 旧实现每次 recv 立即返回、无限空转；现在等链路关闭（有界）后退出。
+     */
+    @Test
+    fun interruptedPumpExitsInsteadOfSpinning() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory")
+        assertTrue(phoneChannel.awaitReady(5_000))
+        val session = Iap2SenderSession(phoneChannel, log = { line -> println("PHONE $line") })
+
+        val pump = Thread({ session.pumpIncomingForever() }, "phone-pump")
+        pump.isDaemon = true
+        pump.start()
+        Thread.sleep(100)
+        pump.interrupt()
+        Thread.sleep(100)
+        phoneChannel.close()
+        pump.join(2_000)
+        assertFalse("中断后保活线程应在链路关闭时退出", pump.isAlive)
+
+        // 链路一直不关：等满上限后也必须退出
+        val pair2 = InMemoryStreamPair()
+        val stuckChannel = Iap2LinkChannel(pair2.sideA, name = "phone2")
+        val stuckPeer = Iap2LinkChannel(pair2.sideB, name = "accessory2")
+        assertTrue(stuckChannel.awaitReady(5_000))
+        val stuckSession = Iap2SenderSession(stuckChannel, log = { line -> println("PHONE2 $line") })
+        val stuckPump = Thread({ stuckSession.pumpIncomingForever() }, "phone-pump2")
+        stuckPump.isDaemon = true
+        stuckPump.start()
+        Thread.sleep(100)
+        stuckPump.interrupt()
+        stuckPump.join(3_000)
+        assertFalse("链路未关闭时中断也不能无限空转", stuckPump.isAlive)
+        assertTrue(stuckChannel.isAlive)
+
+        accessoryChannel.close()
+        stuckChannel.close()
+        stuckPeer.close()
+    }
+
     private class MockAccessory(
         private val channel: Iap2LinkChannel,
         /**
@@ -446,6 +632,8 @@ class Iap2SenderSessionTest {
         private val padAddresses: Boolean = false,
         /** 0x5703 迟迟不答：发送端应重发问候、再重发 0x5702（而不是干等到车机拆链）。 */
         private val slowWifi: Boolean = false,
+        /** 0x1D01 声明的 EA 协议（协议号、名称），依次放在参数 10、11、12。 */
+        private val eaProtocols: List<Pair<Int, String>> = emptyList(),
     ) {
         private val parser = Iap2Csm.Parser()
         private val pending = ArrayDeque<Iap2Csm.Frame>()
@@ -454,6 +642,12 @@ class Iap2SenderSessionTest {
         @Volatile
         var sawWifiRequest: Boolean = false
             private set
+
+        /** 收到的 0xEA00 载荷（与 0xEA01 逐条比对）。 */
+        val eaOpenBodies = java.util.Collections.synchronizedList(ArrayList<List<Byte>>())
+
+        /** bring-up 之后读下一帧（断开阶段断言用）；须在 [run] 结束后调用。 */
+        fun awaitFrame(timeoutMillis: Long): Iap2Csm.Frame? = recvFrame(timeoutMillis)
 
         /** 车机形态。 */
         enum class Shape {
@@ -488,6 +682,9 @@ class Iap2SenderSessionTest {
                 Iap2Csm.string(2, "Mock Manufacturer"),
                 Iap2Csm.string(4, "test-1.0"),
                 *declarationParams(),
+                *eaProtocols
+                    .mapIndexed { index, (id, name) -> Iap2Csm.group(10 + index, Iap2Csm.u8(0, id), Iap2Csm.string(1, name)) }
+                    .toTypedArray(),
             )
             expect(Iap2MessageIds.IDENTIFICATION_ACCEPTED)
 
@@ -499,6 +696,14 @@ class Iap2SenderSessionTest {
 
             // 设备状态问候紧跟 0xAA05（真机次序，早于订阅与 0x5702；PR17 分段等待也靠它）
             expectDeviceStateGreetings()
+
+            // EA 会话：每个声明的协议一条 0xEA00；声明会发 0xEA03 的奥迪形态回一条状态
+            repeat(eaProtocols.size) {
+                eaOpenBodies += expectFrame(Iap2MessageIds.EA_OPEN_SESSION).body.toList()
+            }
+            if (eaProtocols.isNotEmpty() && (shape == Shape.AUDI_9310 || shape == Shape.AUDI_3315)) {
+                send(Iap2MessageIds.EA_SESSION_STATUS, Iap2Csm.u16(0, 1), Iap2Csm.u8(1, 0))
+            }
 
             // 订阅 + StartHID（奥迪/宝马/CT5 形态不发，发送端应直接跳过等待）
             if (!legacyHid) {
@@ -682,6 +887,10 @@ class Iap2SenderSessionTest {
         }
 
         private fun expect(messageId: Int) {
+            expectFrame(messageId)
+        }
+
+        private fun expectFrame(messageId: Int): Iap2Csm.Frame {
             println("MOCK expect 0x${messageId.toString(16)}")
             val frame =
                 recvFrame(10_000)
@@ -690,6 +899,7 @@ class Iap2SenderSessionTest {
                 "mock expected 0x${messageId.toString(16)} got 0x${frame.messageId.toString(16)}"
             }
             println("MOCK got 0x${frame.messageId.toString(16)}")
+            return frame
         }
 
         private fun recvFrame(timeoutMillis: Long): Iap2Csm.Frame? {

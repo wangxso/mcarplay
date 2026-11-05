@@ -61,6 +61,9 @@ class Iap2BluetoothServer(
 
     @Volatile
     private var activeChannel: Iap2LinkChannel? = null
+
+    /** [activeChannel] 上的会话对象（与之同锁维护），退役时据此发 0xEA01。 */
+    private var activeSession: Iap2SenderSession? = null
     private val channelLock = Any()
 
     @Volatile
@@ -255,6 +258,9 @@ class Iap2BluetoothServer(
                 onGeneration,
                 peerAddress = socket.remoteDevice?.address,
                 observation = observation,
+                onSession = { session ->
+                    synchronized(channelLock) { if (activeChannel === channel) activeSession = session }
+                },
             )
         } catch (error: IOException) {
             log("SESSION 失败: ${error.message}")
@@ -262,6 +268,7 @@ class Iap2BluetoothServer(
             synchronized(channelLock) {
                 if (activeChannel === channel) {
                     activeChannel = null
+                    activeSession = null
                     BtSessionGate.inboundActive = false
                 }
             }
@@ -270,19 +277,30 @@ class Iap2BluetoothServer(
         }
     }
 
-    /** 主动结束当前 BT 控制会话（不影响监听）。用于 AirPlay 配对前复现控制通道退役状态。 */
-    fun detachCurrentSession() {
-        val current =
+    /**
+     * 主动结束当前 BT 控制会话（不影响监听）。
+     *
+     * [eaStopReason] 非空时先结束本轮 EA 会话（0xEA01，见 [retireControlLink]）；
+     * 为 null 时立即关闭，用于 AirPlay 配对前复现控制通道退役状态。
+     */
+    fun detachCurrentSession(eaStopReason: String? = null) {
+        val (channel, session) =
             synchronized(channelLock) {
-                activeChannel.also {
+                (activeChannel to activeSession).also {
                     activeChannel = null
+                    activeSession = null
                     BtSessionGate.inboundActive = false
                 }
             }
-        current?.let { channel ->
-            channel.close()
-            log("BT: 已主动断开当前控制会话（模拟 tunnel handoff 后的退役）")
-        }
+        channel ?: return
+        retireControlLink(session, eaStopReason) { channel.close() }
+        log(
+            if (eaStopReason == null) {
+                "BT: 已主动断开当前控制会话（模拟 tunnel handoff 后的退役）"
+            } else {
+                "BT: 已主动断开当前控制会话（$eaStopReason）"
+            },
+        )
     }
 
     @Synchronized

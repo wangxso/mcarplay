@@ -210,6 +210,9 @@ class Iap2BluetoothClient(
 
     private val activeChannel = AtomicReference<Iap2LinkChannel?>(null)
 
+    /** 链路及其会话对象（成对保存，退役时只取属于当前链路的会话发 0xEA01）。 */
+    private val activeSession = AtomicReference<Pair<Iap2LinkChannel, Iap2SenderSession>?>(null)
+
     @Volatile
     private var running = false
 
@@ -748,11 +751,13 @@ class Iap2BluetoothClient(
                 receiverInvited,
                 onGeneration,
                 peerAddress = socket.remoteDevice?.address,
+                onSession = { session -> if (activeChannel.get() === channel) activeSession.set(channel to session) },
             )
         } catch (error: IOException) {
             log("BT-C: SESSION 失败 - ${error.message}")
         } finally {
             activeChannel.compareAndSet(channel, null)
+            activeSession.get()?.takeIf { it.first === channel }?.let { activeSession.compareAndSet(it, null) }
             currentSocket.compareAndSet(socket, null)
             runCatching { socket.close() }
             channel.close()
@@ -760,13 +765,25 @@ class Iap2BluetoothClient(
         }
     }
 
-    /** 主动结束当前 BT 控制会话（不影响重连循环）。供 AirPlay 配对前复现控制通道退役状态。 */
-    fun detachCurrentSession() {
-        activeChannel.getAndSet(null)?.let { channel ->
-            channel.close()
-            log("BT-C: 已主动断开当前控制会话")
+    /**
+     * 主动结束当前 BT 控制会话（不影响重连循环）。
+     *
+     * [eaStopReason] 非空时先结束本轮 EA 会话（0xEA01，见 [retireControlLink]）；
+     * 为 null 时立即关闭，供 AirPlay 配对前复现控制通道退役状态。
+     */
+    fun detachCurrentSession(eaStopReason: String? = null) {
+        val channel = activeChannel.getAndSet(null)
+        val session = activeSession.getAndSet(null)?.takeIf { it.first === channel }?.second
+        val socket = currentSocket.getAndSet(null)
+        if (channel == null) {
+            socket?.let { runCatching { it.close() } }
+            return
         }
-        currentSocket.getAndSet(null)?.let { runCatching { it.close() } }
+        retireControlLink(session, eaStopReason) {
+            channel.close()
+            socket?.let { runCatching { it.close() } }
+        }
+        log("BT-C: 已主动断开当前控制会话")
     }
 
     fun stop() {
@@ -777,6 +794,7 @@ class Iap2BluetoothClient(
         diagnostics.client(diagnosticsEpoch, started = false)
         currentSocket.getAndSet(null)?.let { runCatching { it.close() } }
         activeChannel.getAndSet(null)?.let { runCatching { it.close() } }
+        activeSession.set(null)
         thread?.interrupt()
         thread = null
         log("BT-C: 已停止")

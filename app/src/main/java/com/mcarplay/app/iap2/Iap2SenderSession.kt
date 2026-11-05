@@ -6,6 +6,7 @@ import com.mcarplay.app.compat.ReceiverObservation
 import com.mcarplay.app.transport.Iap2LinkChannel
 import java.io.IOException
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * iAP2 发送端（iPhone 角色）控制会话：完整走通无线 CarPlay 的 bring-up 序列，
@@ -161,6 +162,19 @@ class Iap2SenderSession(
     var linkGeneration: ReceiverProfile.LinkGeneration = ReceiverProfile.LinkGeneration.EVENT_LINK
         private set
 
+    /**
+     * 本轮已发出的 `0xEA00`（协议号、协议名）及车机可收清单是否含 `0xEA01`。
+     * 在会话线程写、在断开线程读（[stopEaSessions]），所以打包成一个 volatile 快照。
+     */
+    private class EaStart(
+        val protocols: List<Pair<Int, String>>,
+        val declaresStop: Boolean?,
+    )
+
+    @Volatile
+    private var eaStart: EaStart? = null
+    private val eaStopped = AtomicBoolean(false)
+
     /** 车机是否声明会发某消息；null = 未提供清单（未知，按保守策略等待）。 */
     private fun accessoryDeclaresSend(messageId: Int): Boolean? = if (accessorySendIds.isEmpty()) null else messageId in accessorySendIds
 
@@ -170,6 +184,9 @@ class Iap2SenderSession(
     private companion object {
         /** 等 StartHID 的窗口：xcertplay 会发（订阅后立即到），DiPlay 不发。 */
         const val HID_WAIT_NANOS = 2_000_000_000L
+
+        /** 保活线程被中断后等链路关闭的上限（需大于 BT 退役时 0xEA01 的冲刷宽限）。 */
+        const val INTERRUPTED_PUMP_GRACE_MILLIS = 1_000L
 
         /** 等 0x5703 期间检查车机 ctrl 邀请的间隔。 */
         const val INVITE_POLL_MILLIS = 500L
@@ -280,12 +297,14 @@ class Iap2SenderSession(
         // ---- EA 会话启动（MFi 认证完成后）----
         // 奥迪 0x1D01 声明 de.audi.mmicconnectdatatransfer / com.audi.cpp.eadata0/1
         // 三个 EA 协议；触摸 HID 相关数据经 EA 会话。认证前发送会噎死 DiPlay（见上）。
+        val startedEa = ArrayList<Pair<Int, String>>(eaProtocols.size)
         for ((protocolId, name) in eaProtocols) {
             sendFireAndForget(
                 Iap2MessageIds.EA_OPEN_SESSION,
-                // param 1 = EA 协议名（UTF-8 字符串）；发成协议号时车机不回 0xEA03
-                Iap2Csm.u8(0, protocolId) + Iap2Csm.string(1, name),
+                eaSessionParams(protocolId, name),
             )
+            startedEa += protocolId to name
+            eaStart = EaStart(startedEa.toList(), accessoryDeclaresReceive(Iap2MessageIds.EA_CLOSE_SESSION))
             log("iap2 tx=0xea00 startEASession protocol=$protocolId name=$name")
         }
         // EA 会话状态（0xEA03）：短窗口确认，避免挤占后续 0x5703 的等待时间。
@@ -298,7 +317,8 @@ class Iap2SenderSession(
                     wifiRescueDeadline(deadline, 500L),
                 )
             if (status != null) {
-                log("iap2 rx=0xea03 EA 会话已打开（${status.body.size}B）")
+                // 参数形状（参数号与短整数值）用于核对 0xEA01 应带的会话标识
+                log("iap2 rx=0xea03 EA 会话已打开（${status.body.size}B params=${paramShape(status.body)}）")
             } else {
                 log("iap2 0xea03 未到（EA 会话未确认）——继续 WiFi 交换")
             }
@@ -575,6 +595,20 @@ class Iap2SenderSession(
             val frame = recvFrame(30_000L)
             if (frame == null) {
                 if (!channel.isAlive) break
+                if (Thread.currentThread().isInterrupted) {
+                    // 线程被叫停（BT 客户端 stop）而链路仍开：通常是断开时 0xEA01 的冲刷宽限期。
+                    // 中断状态下每次 recv 都立即返回，继续循环会空转；等链路关闭（有界）后退出。
+                    Thread.interrupted()
+                    val closed =
+                        try {
+                            channel.awaitTerminated(INTERRUPTED_PUMP_GRACE_MILLIS)
+                        } catch (_: InterruptedException) {
+                            false
+                        }
+                    Thread.currentThread().interrupt()
+                    log("SESSION 保活线程被中断——${if (closed) "链路已关闭" else "链路仍开，放弃保活"}")
+                    break
+                }
                 continue
             }
             // 生命周期消息必须先于日志限流处理：0x4301 可能作为「车机刚打开 CarPlay
@@ -815,6 +849,73 @@ class Iap2SenderSession(
         }
         log("iap2 tx=0x${messageId.toString(16).padStart(4, '0')}")
     }
+
+    /**
+     * `0xEA00` / `0xEA01` 的参数：0 = 协议号，1 = EA 协议名（UTF-8 字符串）。
+     * 0xEA00 发成协议号时车机不回 0xEA03；0xEA01 沿用与 0xEA00 相同的参数，
+     * 让车机拿到与开会话时一致的标识（车机是否据此关闭会话尚待实车确认）。
+     */
+    private fun eaSessionParams(
+        protocolId: Int,
+        name: String,
+    ): ByteArray = Iap2Csm.u8(0, protocolId) + Iap2Csm.string(1, name)
+
+    /** 本轮是否有待关闭的 EA 会话（廉价判断，不做 I/O；调用方据此决定是否走后台退役）。 */
+    fun hasEaSessionsToStop(): Boolean = decideEaStop() == EaSessionStop.Decision.SEND
+
+    private fun decideEaStop(): EaSessionStop.Decision {
+        val start = eaStart
+        return EaSessionStop.decide(
+            startedProtocols = start?.protocols?.size ?: 0,
+            alreadyStopped = eaStopped.get(),
+            declaresStop = start?.declaresStop,
+            linkAlive = channel.isAlive,
+        )
+    }
+
+    /**
+     * 断开前为本轮每个已开的 EA 协议发 `0xEA01` StopEASession（发后不管，每轮至多一次）。
+     *
+     * 写 socket 可能阻塞，调用方应在后台线程调用，并在关闭链路前留出冲刷时间。
+     * 判据见 [EaSessionStop]。
+     *
+     * @return 实际交给链路的条数；0 = 未发（原因已写日志）
+     */
+    fun stopEaSessions(reason: String): Int {
+        val decision = decideEaStop()
+        if (decision != EaSessionStop.Decision.SEND) {
+            if (decision != EaSessionStop.Decision.NOT_STARTED) {
+                log("iap2 不发 0xea01：${decision.label}（$reason）")
+            }
+            return 0
+        }
+        if (!eaStopped.compareAndSet(false, true)) return 0
+        val protocols = eaStart?.protocols.orEmpty()
+        val idle = channel.millisSinceLastPeerFrame()?.let { "${it}ms" } ?: "未收到过"
+        var sent = 0
+        for ((protocolId, name) in protocols) {
+            try {
+                sendFireAndForget(Iap2MessageIds.EA_CLOSE_SESSION, eaSessionParams(protocolId, name))
+                sent++
+            } catch (error: IOException) {
+                log("iap2 0xea01 未发出（protocol=$protocolId）：${error.message}")
+                break
+            }
+        }
+        log("iap2 tx=0xea01 stopEASession $sent/${protocols.size} 条（$reason；对端上一帧距今 $idle）")
+        return sent
+    }
+
+    /** CSM 参数形状：`号:值`（1/2 字节按无符号整数）或 `号:长度B`；不展开字符串等内容。 */
+    private fun paramShape(body: ByteArray): String =
+        Iap2Csm.parseParams(body).joinToString(" ") { param ->
+            val value = param.value
+            when (value.size) {
+                1 -> "${param.id}:${value[0].toInt() and 0xFF}"
+                2 -> "${param.id}:${((value[0].toInt() and 0xFF) shl 8) or (value[1].toInt() and 0xFF)}"
+                else -> "${param.id}:${value.size}B"
+            }
+        }
 
     /** [send] 的发后不管变体：链路不因对端不 ACK 此消息而重传/死亡（见 0x4E0E）。 */
     private fun sendFireAndForget(

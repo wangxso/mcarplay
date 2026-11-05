@@ -965,7 +965,8 @@ object SessionController {
                 } finally {
                     runCatching { retiringVideo?.stop() }
                     runCatching { retiringClient?.close() }
-                    runCatching { detachActiveBtSessions() }
+                    // 连接到此结束：先发 0xEA01 收掉本轮 EA 会话，免得车机挡住下一次（奥迪 EAP 泄漏保护）。
+                    runCatching { detachActiveBtSessions(eaStopReason = "连接结束 ${reason.name}") }
                     runCatching { bluetoothServer?.stop() }
                     runCatching { bluetoothClient?.stop() }
                     runCatching { bluetoothDiagnostics.finish() }
@@ -2006,10 +2007,15 @@ object SessionController {
     /** 单引号包裹的 POSIX shell 字面量（SSID/密码可能含空格与特殊字符）。 */
     private fun shellQuote(s: String): String = "'" + s.replace("'", "'\''") + "'"
 
-    /** 复现「BT 控制已结束」状态：断开当前任一路径的 iAP2 控制会话（DiPlay 只在此状态应答 RTSP）。 */
-    private fun detachActiveBtSessions() {
-        bluetoothServer?.detachCurrentSession()
-        bluetoothClient?.detachCurrentSession()
+    /**
+     * 断开当前任一路径的 iAP2 控制会话。
+     *
+     * [eaStopReason] 非空 = 本轮控制会话到此结束，先发 0xEA01 收掉 EA 会话再关；
+     * null = 复现「BT 控制已结束」状态（DiPlay 只在此状态应答 RTSP），保持原有立即关闭。
+     */
+    private fun detachActiveBtSessions(eaStopReason: String?) {
+        bluetoothServer?.detachCurrentSession(eaStopReason)
+        bluetoothClient?.detachCurrentSession(eaStopReason)
     }
 
     /**
@@ -2607,7 +2613,7 @@ object SessionController {
                     ">>> [$source] 空端点等待 ${PENDING_START_SESSION_WAIT_MS / 60_000} 分钟超时——" +
                         "车机未下发 0x4301。拆掉保活链路让重连循环接管，请导出日志反馈",
                 )
-                detachActiveBtSessions()
+                detachActiveBtSessions(eaStopReason = "空端点等待超时")
             }
         }
     }
@@ -3174,7 +3180,8 @@ object SessionController {
                         // 门槛：仅当本轮真的连上过接收端 RTSP（attemptedPairing）才用此 hack；
                         // 端点未解析（无 IP）/端口未开时绝不值得断 BT（2026-10-11 踩过：
                         // mDNS 失败也触发 detach，白白拆掉车机窗口）。
-                        detachActiveBtSessions()
+                        // 这里只模拟交接后的退役状态，不结束 EA 会话。
+                        detachActiveBtSessions(eaStopReason = null)
                         client = newClient()
                         if (wasCancelled()) {
                             client.close()
