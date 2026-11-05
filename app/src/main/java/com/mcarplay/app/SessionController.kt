@@ -791,6 +791,12 @@ object SessionController {
                 log = { line -> appendLog(line) },
                 requestedVideoSize = requestedVideoSize,
                 launchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
+                onReturnToCar = onReturnToCar@{
+                    if (currentCarLifeSession !== session) return@onReturnToCar
+                    val client = currentClient ?: return@onReturnToCar
+                    val note = client.modes.onUserReturnedToCar()
+                    enqueueModesAssert(client, "CarWith 返回车机（→ $note）", requestKeyFrame = false)
+                },
             )
         return session
     }

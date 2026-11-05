@@ -41,6 +41,9 @@ object CarLifeProtocol {
     const val MD_PROTOCOL_MATCH = 0x10002
     const val MD_INFO = 0x10004
     const val MD_FOREGROUND = 0x1001B
+
+    /** 用户在 CarWith 点「返回车机」后车机侧发来的无载荷命令（2026-11-05 DiPlay 日志按时序推断，协议未公开）。 */
+    const val MD_RETURN_TO_CAR = 0x10021
     const val MD_AUTH_RESPONSE = 0x10049
     const val MD_AUTH_RESULT = 0x1004B
     const val MD_FEATURE_REQUEST = 0x10051

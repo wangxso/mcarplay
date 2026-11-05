@@ -14,6 +14,8 @@ class CarLifeCommandRouter(
         val log: String? = null,
         val failed: Boolean = false,
         val encryptionReady: Boolean = false,
+        /** 用户点了「返回车机」：应把主屏与主音频交还车机。 */
+        val returnToCar: Boolean = false,
     )
 
     /** 只在命令读取线程上访问。 */
@@ -47,6 +49,9 @@ class CarLifeCommandRouter(
                     failed = stateMachine.state == CarLifeStateMachine.State.FAILED,
                 )
             }
+
+            CarLifeProtocol.MD_RETURN_TO_CAR ->
+                Result(log = "CARLIFE: 收到返回车机命令 kind=0x10021，交还主屏与主音频", returnToCar = true)
 
             CarLifeProtocol.MD_INFO -> {
                 val actions = stateMachine.onInfo(frame.payload)

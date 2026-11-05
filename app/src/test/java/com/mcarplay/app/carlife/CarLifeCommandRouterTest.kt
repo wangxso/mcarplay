@@ -14,6 +14,19 @@ import javax.crypto.Cipher
 
 class CarLifeCommandRouterTest {
     @Test
+    fun returnToCarCommandRequestsHandBackWithoutFailing() {
+        val (router, _) = router(keyPair())
+
+        val result = router.route(command(CarLifeProtocol.MD_RETURN_TO_CAR))
+
+        assertTrue(result.returnToCar)
+        assertFalse(result.failed)
+        assertTrue(result.actions.isEmpty())
+        assertTrue(result.log.orEmpty().contains("0x10021"))
+        assertFalse(router.route(command(0x10099)).returnToCar)
+    }
+
+    @Test
     fun routesForegroundAndInfoWithoutSendingChallengeEarly() {
         val pair = keyPair()
         val (router, stateMachine) = router(pair)
