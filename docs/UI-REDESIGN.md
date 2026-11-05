@@ -197,3 +197,5 @@
 | 6 | 文档：README 双语中的界面描述、`IMPLEMENTATION_PLAN.md` | 是 | 否 |
 
 阶段 0–1 不改变任何屏幕布局，可以最先合并，后面的阶段都建立在它们之上。
+
+阶段 1 已落地（`ui/kit/`，均为 Views，没有接入任何现有屏幕）：`StepperView`（分层进度条）、`StatusCard`（状态卡片）、`SettingRow` / `SettingGroup`（设置行与分组卡片）、`UiButtons`（三档按钮）、`UiDialog`（统一确认框，接口对应 `DarkMessageDialog`）、`UiBottomSheet`（底部面板）。旧的 `DarkMessageDialog` 等暂不改动：现有界面是全深色，直接换成新令牌会出现浅色弹窗压在深色页面上；调用方在阶段 3、4 随各自屏幕一起迁移，迁完再删旧实现。

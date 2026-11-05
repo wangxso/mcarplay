@@ -80,4 +80,10 @@
         <item name="android:textColor">@color/ui_text</item>
         <item name="android:textColorHint">@color/ui_text_secondary</item>
     </style>
+
+    <!-- 底部面板的进出：自下滑入，不回弹 -->
+    <style name="Animation.Ui.BottomSheet" parent="">
+        <item name="android:windowEnterAnimation">@anim/ui_sheet_in</item>
+        <item name="android:windowExitAnimation">@anim/ui_sheet_out</item>
+    </style>
 </resources>
