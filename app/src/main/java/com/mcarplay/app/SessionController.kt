@@ -2222,11 +2222,19 @@ object SessionController {
             var streamInfo: AirPlayClient.AudioStreamInfo? = null
             for (candidate in ordered) {
                 if (!client.isConnectionCurrent(connectionGeneration)) return false
+                if (!client.modes.phoneOwnsAudio) {
+                    appendLog("AUDIO: 主音频资源在协商期间转为车机占用——停止候选轮换，不记为格式失败")
+                    return false
+                }
                 val result = client.runAudioStream(sharedSecret, candidate, tuning, expectedEpoch = connectionGeneration)
                 if (result != null) {
                     chosen = candidate
                     streamInfo = result
                     break
+                }
+                if (!client.modes.phoneOwnsAudio) {
+                    appendLog("AUDIO: 主音频 SETUP 被拒时资源已归车机——不记为格式失败")
+                    return false
                 }
                 // SETUP 被拒不等于「车机不兼容」：可能只是资源仲裁/网络抖动，
                 // 不能据此把整台车机的音频判死（置 disabled 只认「拆链」证据）。
@@ -3743,6 +3751,11 @@ object SessionController {
                                                 keepAliveWithStats = setup.keepAliveSendStatsAsBody,
                                                 externalVideoSource = carLifeSource,
                                                 receiverMaxFps = setup.maxFps,
+                                                // 车机拿走主屏（原车界面、倒车影像等）时暂停屏幕视频，归还后从新的 IDR 恢复
+                                                phoneOwnsScreen = { client.modes.phoneOwnsScreen },
+                                                onScreenOutputSuspended = { suspended ->
+                                                    ConnectionDiagnostics.timeline.screenOutput(diagnosticAttempt, suspended)
+                                                },
                                                 onExternalFrameSent = { bytes ->
                                                     ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
                                                     val now = android.os.SystemClock.uptimeMillis()

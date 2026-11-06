@@ -2,6 +2,7 @@ package com.mcarplay.app.diagnostics
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -107,6 +108,32 @@ class ConnectionTimelineTest {
         now = 6000
         assertTrue(timeline.snapshot()!!.summary().contains("6s 未发出新视频帧"))
         assertNull(timeline.snapshot()!!.code)
+    }
+
+    @Test
+    fun screenSuspensionSuppressesStallUntilANewIdrResumesOutput() {
+        val id = timeline.begin("receiver")
+        timeline.media(id, true, 100)
+        now = 6_000
+        assertTrue(timeline.snapshot()!!.summary().contains("6s 未发出新视频帧"))
+
+        timeline.screenOutput(id, suspended = true)
+        val paused = timeline.snapshot()!!
+        assertTrue(paused.screenSuspended)
+        assertTrue(paused.summary().contains("屏幕视频已暂停"))
+        assertFalse(paused.summary().contains("未发出新视频帧"))
+
+        now = 10_000
+        timeline.media(id, true, 100)
+        timeline.screenOutput(id, suspended = false)
+        now = 12_000
+        assertFalse(timeline.snapshot()!!.screenSuspended)
+        assertFalse(timeline.snapshot()!!.summary().contains("未发出新视频帧"))
+
+        val screenEvents = records.map(::JSONObject).filter { it.optString("event") == "SCREEN_OUTPUT" }
+        assertEquals(2, screenEvents.size)
+        assertTrue(screenEvents[0].getBoolean("screenSuspended"))
+        assertFalse(screenEvents[1].getBoolean("screenSuspended"))
     }
 
     @Test

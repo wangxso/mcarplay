@@ -257,6 +257,120 @@ class ModeArbiterTest {
             ),
         )
         assertTrue(arbiter.describe(), arbiter.describe().contains("主屏=车机借用(约束 1000)"))
+        assertFalse(arbiter.describe(), arbiter.describe().contains("主屏=车机(约束 100)"))
+    }
+
+    @Test
+    fun vw4131ReverseBorrowCannotBeRetakenUntilUnborrowed() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(
+            mapOf(
+                "reasonStr" to "0",
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "borrowID" to "4",
+                            "transferPriority" to 500,
+                            "resourceID" to 1,
+                            "transferType" to 3,
+                            "unborrowConstraint" to 1000,
+                        ),
+                    ),
+            ),
+        )
+        assertFalse(arbiter.phoneOwnsScreen)
+        assertFalse("A requestUI must not steal the reversing-camera screen", arbiter.onUserRequestedUi().allowed)
+
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "resourceID" to 1,
+                            "transferType" to 4,
+                        ),
+                    ),
+            ),
+        )
+        assertTrue(arbiter.phoneOwnsScreen)
+    }
+
+    @Test
+    fun borrowConstraintAppliesEvenWhenAccessoryAlreadyOwnsScreenPermanently() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 500))))
+        assertFalse(arbiter.phoneOwnsScreen)
+
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "borrowID" to "4",
+                            "transferPriority" to 500,
+                            "resourceID" to 1,
+                            "transferType" to 3,
+                            "unborrowConstraint" to 1000,
+                        ),
+                    ),
+            ),
+        )
+        assertFalse("A permanent TAKE must not bypass a later BORROW constraint", arbiter.onUserRequestedUi().allowed)
+        assertFalse(arbiter.phoneOwnsScreen)
+
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "resourceID" to 1,
+                            "transferType" to 4,
+                        ),
+                    ),
+            ),
+        )
+        assertFalse("UNBORROW restores the prior accessory ownership", arbiter.phoneOwnsScreen)
+    }
+
+    @Test
+    fun vw4131AudioBorrowIsNotTreatedAsPhoneAudioOwnership() {
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "transferPriority" to 100,
+                            "takeConstraint" to 100,
+                            "resourceID" to 1,
+                            "transferType" to 1,
+                            "borrowConstraint" to 100,
+                        ),
+                        mapOf(
+                            "borrowID" to null,
+                            "transferPriority" to 500,
+                            "resourceID" to 2,
+                            "transferType" to 3,
+                            "unborrowConstraint" to 1000,
+                        ),
+                    ),
+            ),
+        )
+        assertTrue(arbiter.phoneOwnsScreen)
+        assertFalse(arbiter.phoneOwnsAudio)
+
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "resourceID" to 2,
+                            "transferType" to 4,
+                        ),
+                    ),
+            ),
+        )
+        assertTrue(arbiter.phoneOwnsAudio)
     }
 
     @Test

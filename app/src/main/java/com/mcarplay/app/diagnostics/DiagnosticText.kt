@@ -174,6 +174,8 @@ object DiagnosticText {
             }
         val detail =
             snapshot.code?.let { "${it.name}: ${advice(context, it)}" } ?: when {
+                snapshot.screenSuspended ->
+                    context.getString(R.string.summary_video_paused)
                 snapshot.status == "streaming" && (snapshot.lastVideoMsAgo ?: 0) >= 5000 ->
                     context.getString(R.string.summary_video_stalled, ((snapshot.lastVideoMsAgo ?: 0) / 1000).toInt())
                 snapshot.sourceFrames > 0 && snapshot.videoFrames == 0L && snapshot.stage != ConnectionStage.SELF_TEST ->

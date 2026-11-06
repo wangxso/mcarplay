@@ -39,6 +39,7 @@
     <string name="status_failed">失败</string>
     <string name="status_stopped">已结束</string>
     <string name="summary_header">会话 %1$s · %2$s · %3$s · %4$ds</string>
+    <string name="summary_video_paused">主屏由车机持有，屏幕视频已暂停；等待主屏归还并收到新的关键帧</string>
     <string name="summary_video_stalled">最近 %1$ds 未发出新视频帧；请确认接收端画面，并导出报告</string>
     <string name="summary_source_only">已收到 CarWith 视频，尚未向接收端发出视频帧</string>
     <string name="summary_waiting_carwith">仍在等待 CarWith 首帧，请检查原厂授权并导出报告</string>

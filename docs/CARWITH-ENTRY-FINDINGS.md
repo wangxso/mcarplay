@@ -1662,3 +1662,29 @@ Spotless、standard lint/debug 构建通过。
 
 APK 指纹、完整矩阵、截图/日志的证据边界及同车换手机步骤见 [HyperOS 手机兼容记录](HYPEROS-PHONE-COMPATIBILITY.md)。
 没有操作当前连接的真实手机、车机或接收端，没有新增车机发现、iAP2 回连、媒体、触控或断开后原厂稳定性验收。
+
+## 2026-11-06 帕萨特 2025 车机持有主屏时仍持续发送视频（通用修复）
+
+- **来源：** 帕萨特 2025 车主反馈，mcarplay `0.1.5` 支持报告 `53afaae1-7c74-402f-9f6d-0cf023fa1d9e`。
+  接收端 `VW4211` / `firmwareRevision=5739` / AirPlay `320.17.3`；会话 `0266d30e` 本身已稳定推流 191 秒、发送 6141 帧。
+- **现象：** 车主报告「倒车应该断开连接」。日志中 `17:02:22.565` 与 `17:04:34.497` 两次主屏被车机拿走
+  （`changeModes`，`transferType=1` TAKE，约束 500），此后仍出现
+  `VIDEO: CarWith 帧 ... 已发送`；两段分别持续约 10.3 秒和 14.3 秒。导出时 `sourceVideoFrames=6141`、
+  `videoFramesSent=6141`，确认不是只收到 CarWith 帧，而是实际写入了屏幕流。
+- **归因边界：** 这份日志没有倒挡事件，只有主屏资源从手机转给车机。报告的 `changeModes` 全是 TAKE，没有 BORROW，
+  因此不能据此把倒车和「返回原车主界面」区分开。修复不按品牌或倒挡识别，而以 CarPlay 资源归属为准：
+  主屏不归手机时，屏幕视频没有输出意义。
+- **对应修改（本提交，未在车上验证）：** `VideoSender` 每帧检查 `ModeArbiter.phoneOwnsScreen`。主屏归车机时
+  丢弃全部视频帧，包括 IDR；屏幕流 socket、CarWith、iAP2 与音频不关闭，keepAlive 继续发送。主屏归还后等待新的
+  IDR，重发参数集，并每秒重试关键帧请求直到 IDR 到达，之后才恢复全帧率。若暂停期间车机重新拿走主屏，门控重新进入暂停。
+  诊断层收到 `SCREEN_OUTPUT` 暂停/恢复事件；主屏让出期间不再把 `lastVideoMsAgo` 增长误报成视频停滞。
+- **验证范围：** JVM 状态机测试与本地 TCP 传输测试覆盖「暂停时零视频帧」「归还后 P 帧仍被拦住」「首次关键帧请求失败后重试」
+  「新 IDR 后恢复」。
+  **未在帕萨特或其他车型上实车验证**；仍需确认倒车影像、恢复延迟、触控以及不同车机归还主屏时的 `requestUI`/`UNTAKE` 时序。
+- **VW4131 倒车复核（2026-11-06 18:53，旧构建）：** 大众 ID.7（`VW4131`，AirPlay `320.17.7`）日志在
+  `18:53:10.197` 收到主屏 `changeModes`：`transferType=3`（BORROW）、`borrowID=4`、
+  `unborrowConstraint=1000`；`18:53:38.382` 自动归还主屏。借用持续约 28.2 秒，期间旧版 `0.1.5` 仍从
+  `VIDEO: CarWith 帧 #3721` 持续发到 `#5100`（约 1,379 帧），且没有 `SCREEN_OUTPUT`/`screenSuspended` 字段，
+  说明该 APK 尚未包含本修复。该载荷也确认：借用状态下 `requestUI` 必须遵守 `unborrowConstraint`，不能把倒车画面抢回；
+  本提交已解析该字段并加入精确载荷回归。同一报告的主音频也以 `transferType=3` 归车机，三档音频 SETUP 均回
+  `400 Bad Request`；音频候选现在会先检查 `phoneOwnsAudio`，资源被车机占用时不再轮换格式或写入“格式不兼容”记忆。
