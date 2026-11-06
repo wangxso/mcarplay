@@ -885,18 +885,25 @@ class AirPlayClient(
         }
     }
 
+    /** 主音频 claim 结果：[claimed] = 仲裁允许手机持有；[announced] = modesChanged 是否得到 200。 */
+    class MainAudioClaim(
+        val note: String,
+        val claimed: Boolean,
+        val announced: Boolean,
+    )
+
     /**
      * 音频流 SETUP 前把主音频资源报归手机。
      *
      * 与 [assertModes] 分开是因为屏幕可以归车机，而音频仍必须由手机持有；两者不能共用同一个
-     * `releaseScreen` 语义。返回 `modesChanged` 是否得到 200，失败时调用方仍可尝试 SETUP，
-     * 但日志会保留资源切换未确认的证据。
+     * `releaseScreen` 语义。[claimed]=false 表示车机约束不允许抢占，调用方不应发送 SETUP，
+     * 等车机归还主音频后重试；[announced]=false 只表示切换未被确认，仍可尝试 SETUP。
      */
-    fun claimMainAudioForStreaming(expectedEpoch: Long = connectionEpoch): Boolean {
+    fun claimMainAudioForStreaming(expectedEpoch: Long = connectionEpoch): MainAudioClaim {
         val claim = modes.onAudioStreamStarting()
         log("AIRPLAY: 主音频资源 → ${claim.note}")
-        if (!claim.claimed) return false
-        return assertModes(expectedEpoch = expectedEpoch)
+        val announced = claim.claimed && assertModes(expectedEpoch = expectedEpoch)
+        return MainAudioClaim(claim.note, claim.claimed, announced)
     }
 
     /**

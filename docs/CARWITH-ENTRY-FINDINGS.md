@@ -1610,6 +1610,8 @@ Pixel 5 的 AOSP 私有窗口崩溃，也不能仅归因于后台启动限制。
   接收端未返回 400 错误体，不能据此声称已取得完整协议解释。
 - **对应修改（离线通过，未上车验证）：** 音频 SETUP 前新增一次 `modesChanged`，只把主音频报归手机，屏幕归属保持不变；
   车机以高于 userInitiated 的 take/unborrow 约束持有或借用主音频时不抢占、保持原归属，避免截断倒车提示音等。
-  `ModeArbiterTest` 覆盖低约束接管、`unborrowConstraint`/`takeConstraint=1000` 拒绝抢占，以及“车机持有屏幕并借用主音频”的
-  报告形态。定向单测与 Spotless 通过。需在同一台 VW4131 上复测 `AUDIO: 音频流建立前主音频资源已报归手机`、SETUP 状态和
-  实际声音，才能确认修复有效。
+  此时本次不发送 SETUP，等 `changeModes` 的 UNBORROW/UNTAKE 归还主音频后重试；claim 未被确认时不把 SETUP 400 写成
+  该车机的格式失败记忆。
+  `ModeArbiterTest` 覆盖低约束接管、`unborrowConstraint`/`takeConstraint=1000` 拒绝抢占、归还后只重试一次，以及
+  “车机持有屏幕并借用主音频”的报告形态。定向单测与 Spotless 通过。需在同一台 VW4131 上复测
+  `AUDIO: 音频流建立前主音频资源已报归手机`、SETUP 状态和实际声音，才能确认修复有效。

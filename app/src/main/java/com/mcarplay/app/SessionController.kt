@@ -1171,6 +1171,23 @@ object SessionController {
     }
 
     /**
+     * claim 因车机约束被拒后，`changeModes` 归还主音频时重试一次音频通道。
+     * 只由 [ModeArbiter.consumeAudioClaimRetry] 触发；仍受音频开关、会话代次和发送器状态约束。
+     */
+    @Synchronized
+    private fun retryAudioAfterClaimReturned(client: AirPlayClient) {
+        if (client !== currentClient || client.sessionStopping || !audioEnabledForSession) return
+        if (audioSender?.isRunning == true) return
+        val context = appContext ?: return
+        val secret = currentSharedSecret ?: return
+        val host = currentAudioHost ?: return
+        if (startAudioChannel(context, client, secret, host)) {
+            appendLog("AUDIO: 车机归还主音频后音频流已建立——检查会话激活")
+            client.record()
+        }
+    }
+
+    /**
      * 0x5703 到达（拿到车机热点凭据）立即执行——真车 0x4301 的前置条件：
      * 车机在 WiFi 网络上发现手机的 `_carplay-ctrl._tcp`（TXT id=真实蓝牙 MAC）后
      * 主动发 `GET /ctrl-int/1/connect` 邀请，邀请被接受才发 0x4301。
@@ -2172,10 +2189,16 @@ object SessionController {
             )
             // 真 iPhone 在 Main audio setting up 之前先报 mainAudio controller；车机持有
             // 或借用主音频时直接 SETUP 会被 VW4131 以 400 拒绝，不能误判成三档格式都不兼容。
-            val audioOwnershipConfirmed = client.claimMainAudioForStreaming(connectionGeneration)
+            val audioClaim = client.claimMainAudioForStreaming(connectionGeneration)
+            if (!audioClaim.claimed) {
+                // 车机以高于 userInitiated 的约束持有/借用主音频（如倒车提示音）：不抢、不发 SETUP，
+                // 否则三档 400 会被写成格式失败记忆；等 changeModes 归还后再重试。
+                appendLog("AUDIO: 主音频资源未接管（${audioClaim.note}）——本次不发送 SETUP，等车机归还主音频后重试")
+                return false
+            }
             appendLog(
                 "AUDIO: 音频流建立前主音频资源" +
-                    if (audioOwnershipConfirmed) "已报归手机" else "切换未确认（继续尝试 SETUP）",
+                    if (audioClaim.announced) "已报归手机" else "切换未确认（继续尝试 SETUP）",
             )
             // SETUP 失败不会扰动会话（车机只是不接这条流的请求），所以本会话内就把候选
             // 试完，不必等下一次连接。这一点对当前场景很关键：102/AAC-LC 与 100/PCM 是
@@ -2192,7 +2215,8 @@ object SessionController {
                 }
                 // SETUP 被拒不等于「车机不兼容」：可能只是资源仲裁/网络抖动，
                 // 不能据此把整台车机的音频判死（置 disabled 只认「拆链」证据）。
-                if (identity.isNotBlank()) {
+                // 只有 modesChanged 已确认手机持有主音频时，失败才可作为格式证据。
+                if (audioClaim.announced && identity.isNotBlank()) {
                     AudioProfileMemory.recordRejected(
                         context.applicationContext,
                         identity,
@@ -3567,6 +3591,10 @@ object SessionController {
                                         // 旧实现一律回「手机持有」，帕萨特回主界面后再点图标就切不回 CarPlay（2026-11-01 22:47）
                                         val note = client.modes.onChangeModes(command["params"] as? Map<*, *>)
                                         enqueueModesAssert(client, "车机请求 changeModes（→ $note）", requestKeyFrame = false)
+                                        if (client.modes.consumeAudioClaimRetry()) {
+                                            appendLog("AUDIO: 车机已归还主音频——后台重试建立音频流")
+                                            Bg.run("audio-claim-retry") { retryAudioAfterClaimReturned(client) }
+                                        }
                                     }
 
                                     "requestUI" -> {

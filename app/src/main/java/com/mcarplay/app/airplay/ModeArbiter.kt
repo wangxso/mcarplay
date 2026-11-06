@@ -36,6 +36,7 @@ internal class ModeArbiter {
 
     private val resources = linkedMapOf(SCREEN to Resource(), MAIN_AUDIO to Resource())
     private var screenRelinquished = false
+    private var audioClaimPending = false
 
     /** 屏幕当前是否归手机（诊断与是否值得补关键帧）。 */
     @get:Synchronized
@@ -91,15 +92,32 @@ internal class ModeArbiter {
     @Synchronized
     fun onAudioStreamStarting(): AudioClaim {
         val audio = resources.getValue(MAIN_AUDIO)
-        if (audio.owner == Entity.CONTROLLER) return AudioClaim("主音频本就归手机", claimed = true)
+        if (audio.owner == Entity.CONTROLLER) {
+            audioClaimPending = false
+            return AudioClaim("主音频本就归手机", claimed = true)
+        }
         val constraint = if (audio.permanent == Entity.CONTROLLER) audio.unborrowConstraint else audio.takeConstraint
         if (constraint > PRIORITY_USER_INITIATED) {
+            audioClaimPending = true
             return AudioClaim("车机持有主音频的约束 $constraint 高于 userInitiated，不抢占", claimed = false)
         }
         audio.owner = Entity.CONTROLLER
         audio.permanent = Entity.CONTROLLER
         audio.takeConstraint = CONSTRAINT_ANYTIME
+        audioClaimPending = false
         return AudioClaim("音频流建立前接管主音频（车机约束 $constraint ≤ userInitiated）", claimed = true)
+    }
+
+    /**
+     * claim 因约束被拒后，车机已归还主音频时返回 true，调用方应重试建立音频流。
+     * 只消费一次；主音频仍归车机时保持待重试状态。
+     */
+    @Synchronized
+    fun consumeAudioClaimRetry(): Boolean {
+        if (!audioClaimPending) return false
+        if (resources.getValue(MAIN_AUDIO).owner != Entity.CONTROLLER) return false
+        audioClaimPending = false
+        return true
     }
 
     /**

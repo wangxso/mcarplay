@@ -166,6 +166,33 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun refusedAudioClaimRetriesOnlyAfterTheHeadUnitReturnsTheResource() {
+        // 借用高约束被拒：归还（unborrow）前不得重试，归还后只消费一次。
+        val borrowed = ModeArbiter()
+        borrowed.applyInitial(
+            mapOf("resources" to listOf(resource(2, 3, 500, 100) + ("unborrowConstraint" to 1000L))),
+        )
+        assertFalse(borrowed.onAudioStreamStarting().claimed)
+        assertFalse(borrowed.consumeAudioClaimRetry())
+        borrowed.onChangeModes(mapOf("resources" to listOf(resource(2, 4, 500, 100))))
+        assertTrue(borrowed.consumeAudioClaimRetry())
+        assertFalse(borrowed.consumeAudioClaimRetry())
+        assertTrue(borrowed.onAudioStreamStarting().claimed)
+
+        // take 高约束同理：untake 后允许一次重试。
+        val taken = ModeArbiter()
+        taken.applyInitial(mapOf("resources" to listOf(resource(2, 1, 500, 1000))))
+        assertFalse(taken.onAudioStreamStarting().claimed)
+        taken.onChangeModes(mapOf("resources" to listOf(resource(2, 2, 500, 100))))
+        assertTrue(taken.consumeAudioClaimRetry())
+
+        // 正常接管成功时不留下待重试状态。
+        val ready = ModeArbiter()
+        assertTrue(ready.onAudioStreamStarting().claimed)
+        assertFalse(ready.consumeAudioClaimRetry())
+    }
+
+    @Test
     fun userRequestRespectsBorrowAndHigherTakeConstraints() {
         for (constraint in listOf(501L, 1000L)) {
             val taken = ModeArbiter()
