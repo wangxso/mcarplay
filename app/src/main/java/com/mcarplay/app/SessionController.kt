@@ -1165,27 +1165,41 @@ object SessionController {
         }
         if (audioSender?.isRunning == true) return
         appendLog("MODE: 会话进行中，动态补启音频通道…")
-        if (startAudioChannel(context, client, secret, currentAudioHost)) {
-            appendLog("AUDIO: 动态加入音频流——检查会话激活")
+        startAudioAndRecord(context, client, secret, currentAudioHost, "AUDIO: 动态加入音频流——检查会话激活")
+    }
+
+    /** 启动音频并在成功后补 RECORD；连接、动态补启和仲裁重试三条入口共用。 */
+    private fun startAudioAndRecord(
+        context: Context,
+        client: AirPlayClient,
+        secret: ByteArray?,
+        host: String?,
+        logLine: String,
+    ): Boolean {
+        val started = startAudioChannel(context, client, secret, host)
+        if (started) {
+            appendLog(logLine)
             client.record()
         }
+        return started
     }
 
     /**
      * claim 因车机约束被拒后，`changeModes` 归还主音频时重试一次音频通道。
      * 只由 [ModeArbiter.consumeAudioClaimRetry] 触发；仍受音频开关、会话代次和发送器状态约束。
      */
-    @Synchronized
     private fun retryAudioAfterClaimReturned(client: AirPlayClient) {
-        if (client !== currentClient || client.sessionStopping || !audioEnabledForSession) return
-        if (audioSender?.isRunning == true) return
-        val context = appContext ?: return
-        val secret = currentSharedSecret ?: return
-        val host = currentAudioHost ?: return
-        if (startAudioChannel(context, client, secret, host)) {
-            appendLog("AUDIO: 车机归还主音频后音频流已建立——检查会话激活")
-            client.record()
-        }
+        // 只把状态检查放在短临界区里；SETUP 最长数秒，不能占着会话锁（disconnect 是
+        // @Synchronized，UI 线程点“断开”会跟着卡住）。
+        val ready =
+            synchronized(this) {
+                if (client !== currentClient || client.sessionStopping || !audioEnabledForSession) return
+                if (audioSender?.isRunning == true) return
+                val context = appContext ?: return
+                val secret = currentSharedSecret ?: return
+                Triple(context, secret, currentAudioHost)
+            }
+        startAudioAndRecord(ready.first, client, ready.second, ready.third, "AUDIO: 车机归还主音频后音频流已建立——检查会话激活")
     }
 
     /**
@@ -3922,14 +3936,23 @@ object SessionController {
                                 }
                                 // 音频通道（可选）：SETUP type=100 → UDP RTP 推流。
                                 // 会话已激活（RECORD 完成）后再协商；失败不影响视频主链路。
-                                val audioStarted = startAudioChannel(context, client, sessionKey, host)
-                                if (audioEnabledForSession && !audioStarted) {
+                                val audioStarted =
+                                    startAudioAndRecord(
+                                        context,
+                                        client,
+                                        sessionKey,
+                                        host,
+                                        // 奥迪曾需流后补发；受影响车机由客户端策略跳过重复 RECORD。
+                                        "AUDIO: 音频流已加入——检查会话激活",
+                                    )
+                                // 主音频被车机约束占用时的“未启动”不是音频故障：不写结论码，
+                                // 否则它会长期盖住后续真正需要的诊断（如屏幕暂停）。
+                                if (audioEnabledForSession &&
+                                    !audioStarted &&
+                                    !client.modes.audioClaimAwaitingReturn &&
+                                    client.modes.phoneOwnsAudio
+                                ) {
                                     ConnectionDiagnostics.timeline.issue(diagnosticAttempt, DiagnosticCode.AUDIO_UNAVAILABLE)
-                                }
-                                if (audioStarted) {
-                                    // 奥迪曾需流后补发；受影响车机由客户端策略跳过重复 RECORD。
-                                    appendLog("AUDIO: 音频流已加入——检查会话激活")
-                                    client.record()
                                 }
                             }
                         } else {

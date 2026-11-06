@@ -29,6 +29,7 @@ internal class ModeArbiter {
     private class Resource(
         var owner: Entity = Entity.CONTROLLER,
         var permanent: Entity = Entity.CONTROLLER,
+        var borrowed: Boolean = false,
         var takeConstraint: Int = CONSTRAINT_ANYTIME,
         var borrowConstraint: Int = CONSTRAINT_ANYTIME,
         var unborrowConstraint: Int = CONSTRAINT_ANYTIME,
@@ -41,6 +42,14 @@ internal class ModeArbiter {
     /** 屏幕当前是否归手机（诊断与是否值得补关键帧）。 */
     @get:Synchronized
     val phoneOwnsScreen: Boolean get() = resources.getValue(SCREEN).owner == Entity.CONTROLLER
+
+    /** 主音频资源当前是否归手机；车机占用/借用时音频 SETUP 拒绝不是格式不兼容。 */
+    @get:Synchronized
+    val phoneOwnsAudio: Boolean get() = resources.getValue(MAIN_AUDIO).owner == Entity.CONTROLLER
+
+    /** 音频 claim 曾因约束被拒、仍在等车机归还：调用方不应把本次未启动记成音频故障。 */
+    @get:Synchronized
+    val audioClaimAwaitingReturn: Boolean get() = audioClaimPending
 
     /** `/info` 的 `modes`：车机开场的资源请求。返回一行说明。 */
     @Synchronized
@@ -65,12 +74,13 @@ internal class ModeArbiter {
         if (screen.owner == Entity.CONTROLLER) {
             return UiRequest("主屏本就归手机，先报让出再拿回", retake = true, rebuildStream = screenRelinquished)
         }
-        val constraint = if (screen.permanent == Entity.CONTROLLER) screen.unborrowConstraint else screen.takeConstraint
+        val constraint = if (screen.borrowed) screen.unborrowConstraint else screen.takeConstraint
         if (constraint > PRIORITY_USER_INITIATED) {
             return UiRequest("车机持有主屏的约束高于 userInitiated，不抢", retake = false, allowed = false)
         }
         screen.owner = Entity.CONTROLLER
         screen.permanent = Entity.CONTROLLER
+        screen.borrowed = false
         val rebuild = screenRelinquished
         return UiRequest("用户点图标，拿回主屏（车机约束 $constraint ≤ userInitiated）", retake = false, rebuildStream = rebuild)
     }
@@ -96,26 +106,31 @@ internal class ModeArbiter {
             audioClaimPending = false
             return AudioClaim("主音频本就归手机", claimed = true)
         }
-        val constraint = if (audio.permanent == Entity.CONTROLLER) audio.unborrowConstraint else audio.takeConstraint
+        val constraint = if (audio.borrowed) audio.unborrowConstraint else audio.takeConstraint
         if (constraint > PRIORITY_USER_INITIATED) {
             audioClaimPending = true
             return AudioClaim("车机持有主音频的约束 $constraint 高于 userInitiated，不抢占", claimed = false)
         }
         audio.owner = Entity.CONTROLLER
         audio.permanent = Entity.CONTROLLER
+        audio.borrowed = false
         audio.takeConstraint = CONSTRAINT_ANYTIME
         audioClaimPending = false
         return AudioClaim("音频流建立前接管主音频（车机约束 $constraint ≤ userInitiated）", claimed = true)
     }
 
     /**
-     * claim 因约束被拒后，车机已归还主音频时返回 true，调用方应重试建立音频流。
-     * 只消费一次；主音频仍归车机时保持待重试状态。
+     * claim 因约束被拒后，约束已解除或主音频已归还时返回 true，调用方应重试建立音频流。
+     * 只消费一次；主音频仍被高约束占用时保持待重试状态。
      */
     @Synchronized
     fun consumeAudioClaimRetry(): Boolean {
         if (!audioClaimPending) return false
-        if (resources.getValue(MAIN_AUDIO).owner != Entity.CONTROLLER) return false
+        val audio = resources.getValue(MAIN_AUDIO)
+        val constraint = if (audio.borrowed) audio.unborrowConstraint else audio.takeConstraint
+        // 归还（owner=phone）或约束降到 userInitiated 及以下都值得重试；两者都不满足时
+        // 继续等待，避免每次 changeModes 都白跑一次 SETUP。
+        if (audio.owner != Entity.CONTROLLER && constraint > PRIORITY_USER_INITIATED) return false
         audioClaimPending = false
         return true
     }
@@ -129,6 +144,7 @@ internal class ModeArbiter {
         for (resource in resources.values) {
             resource.owner = Entity.ACCESSORY
             resource.permanent = Entity.ACCESSORY
+            resource.borrowed = false
             resource.takeConstraint = CONSTRAINT_ANYTIME
         }
         screenRelinquished = true
@@ -155,8 +171,16 @@ internal class ModeArbiter {
     @Synchronized
     fun describe(): String =
         resources.entries.joinToString(" ") { (id, resource) ->
-            "${if (id == SCREEN) "主屏" else "主音频"}=${if (resource.owner == Entity.CONTROLLER) "手机" else "车机"}" +
-                "(约束 ${resource.takeConstraint})"
+            val name = if (id == SCREEN) "主屏" else "主音频"
+            val owner =
+                when {
+                    resource.owner == Entity.CONTROLLER -> "手机"
+                    resource.borrowed -> "车机借用"
+                    else -> "车机"
+                }
+            // 借用期间真正约束 requestUI / 音频 claim 的是 unborrowConstraint。
+            val constraint = if (resource.borrowed) resource.unborrowConstraint else resource.takeConstraint
+            "$name=$owner(约束 $constraint)"
         }
 
     private fun applyRequests(
@@ -180,24 +204,31 @@ internal class ModeArbiter {
                     if (initial && priority < PRIORITY_USER_INITIATED) {
                         resource.owner = Entity.CONTROLLER
                         resource.permanent = Entity.CONTROLLER
+                        resource.borrowed = false
                         resource.takeConstraint = CONSTRAINT_ANYTIME
                     } else {
                         resource.owner = Entity.ACCESSORY
                         resource.permanent = Entity.ACCESSORY
+                        resource.borrowed = false
                         resource.takeConstraint = takeConstraint
                         resource.borrowConstraint = borrowConstraint
                     }
                 TRANSFER_UNTAKE -> {
                     resource.owner = Entity.CONTROLLER
                     resource.permanent = Entity.CONTROLLER
+                    resource.borrowed = false
                     resource.takeConstraint = CONSTRAINT_ANYTIME
                 }
                 TRANSFER_BORROW -> {
                     resource.owner = Entity.ACCESSORY
+                    resource.borrowed = true
                     resource.borrowConstraint = borrowConstraint
                     resource.unborrowConstraint = unborrowConstraint
                 }
-                TRANSFER_UNBORROW -> resource.owner = resource.permanent
+                TRANSFER_UNBORROW -> {
+                    resource.owner = resource.permanent
+                    resource.borrowed = false
+                }
             }
             if (!initial &&
                 (request["resourceID"] as? Number)?.toLong() == SCREEN &&

@@ -208,6 +208,58 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun requestUiRespectsUnborrowWhenAccessoryAlreadyOwnsScreen() {
+        // 车机永久持有主屏后再 BORROW（倒车影像）：约束必须看 unborrowConstraint，
+        // 不能回退到旧的 takeConstraint=100 把倒车画面抢走。
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(mapOf("resources" to listOf(resource(1, 1, 500, 100))))
+        assertFalse(arbiter.phoneOwnsScreen)
+        arbiter.onChangeModes(
+            mapOf("resources" to listOf(resource(1, 3, 500, 100) + ("unborrowConstraint" to 1000L))),
+        )
+        assertFalse(arbiter.onUserRequestedUi().allowed)
+        assertFalse(arbiter.phoneOwnsScreen)
+    }
+
+    @Test
+    fun audioClaimRespectsUnborrowWhenAccessoryAlreadyOwnsMainAudio() {
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(mapOf("resources" to listOf(resource(2, 1, 500, 100))))
+        arbiter.onChangeModes(
+            mapOf("resources" to listOf(resource(2, 3, 500, 100) + ("unborrowConstraint" to 1000L))),
+        )
+        assertFalse(arbiter.onAudioStreamStarting().claimed)
+        assertTrue(arbiter.audioClaimAwaitingReturn)
+        assertFalse(arbiter.consumeAudioClaimRetry())
+
+        // UNBORROW 后主音频仍永久归车机，但 takeConstraint=100 已允许手机接管。
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(2, 4, 500, 100))))
+        assertTrue(arbiter.consumeAudioClaimRetry())
+        assertFalse(arbiter.audioClaimAwaitingReturn)
+        assertTrue(arbiter.onAudioStreamStarting().claimed)
+        assertTrue(arbiter.phoneOwnsAudio)
+    }
+
+    @Test
+    fun describeReportsBorrowStateAndUnborrowConstraint() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "resourceID" to 1,
+                            "transferType" to 3,
+                            "borrowConstraint" to 100,
+                            "unborrowConstraint" to 1000,
+                        ),
+                    ),
+            ),
+        )
+        assertTrue(arbiter.describe(), arbiter.describe().contains("主屏=车机借用(约束 1000)"))
+    }
+
+    @Test
     fun returningHomeDuringRecoveryKeepsNextRebuildPending() {
         val arbiter = ModeArbiter()
         arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 500))))
