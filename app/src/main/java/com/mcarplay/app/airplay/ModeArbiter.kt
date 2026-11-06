@@ -31,6 +31,7 @@ internal class ModeArbiter {
         var permanent: Entity = Entity.CONTROLLER,
         var takeConstraint: Int = CONSTRAINT_ANYTIME,
         var borrowConstraint: Int = CONSTRAINT_ANYTIME,
+        var unborrowConstraint: Int = CONSTRAINT_ANYTIME,
     )
 
     private val resources = linkedMapOf(SCREEN to Resource(), MAIN_AUDIO to Resource())
@@ -63,7 +64,7 @@ internal class ModeArbiter {
         if (screen.owner == Entity.CONTROLLER) {
             return UiRequest("主屏本就归手机，先报让出再拿回", retake = true, rebuildStream = screenRelinquished)
         }
-        val constraint = if (screen.permanent == Entity.CONTROLLER) screen.borrowConstraint else screen.takeConstraint
+        val constraint = if (screen.permanent == Entity.CONTROLLER) screen.unborrowConstraint else screen.takeConstraint
         if (constraint > PRIORITY_USER_INITIATED) {
             return UiRequest("车机持有主屏的约束高于 userInitiated，不抢", retake = false, allowed = false)
         }
@@ -71,6 +72,34 @@ internal class ModeArbiter {
         screen.permanent = Entity.CONTROLLER
         val rebuild = screenRelinquished
         return UiRequest("用户点图标，拿回主屏（车机约束 $constraint ≤ userInitiated）", retake = false, rebuildStream = rebuild)
+    }
+
+    /** [claimed] = 是否真的改成手机持有；车机约束高于 userInitiated 时保持原归属。 */
+    class AudioClaim(
+        val note: String,
+        val claimed: Boolean,
+    )
+
+    /**
+     * 建立主音频流前由手机接管主音频。
+     *
+     * 真 iPhone 的顺序是先报 `mainAudio controller`，约 2.5 s 后才 `Main audio setting up`。
+     * 若 `/info` 里主音频仍归车机（take）或被车机借用（borrow），直接发音频 `SETUP` 时
+     * VW4131 会以 `400 Bad Request` 拒绝三档候选；先报归手机可避免把资源仲裁失败误判成编码或格式问题。
+     * 但车机以高于 userInitiated 的约束持有或借用（例如倒车提示音）时不能抢占，如实保持原归属。
+     */
+    @Synchronized
+    fun onAudioStreamStarting(): AudioClaim {
+        val audio = resources.getValue(MAIN_AUDIO)
+        if (audio.owner == Entity.CONTROLLER) return AudioClaim("主音频本就归手机", claimed = true)
+        val constraint = if (audio.permanent == Entity.CONTROLLER) audio.unborrowConstraint else audio.takeConstraint
+        if (constraint > PRIORITY_USER_INITIATED) {
+            return AudioClaim("车机持有主音频的约束 $constraint 高于 userInitiated，不抢占", claimed = false)
+        }
+        audio.owner = Entity.CONTROLLER
+        audio.permanent = Entity.CONTROLLER
+        audio.takeConstraint = CONSTRAINT_ANYTIME
+        return AudioClaim("音频流建立前接管主音频（车机约束 $constraint ≤ userInitiated）", claimed = true)
     }
 
     /**
@@ -125,6 +154,8 @@ internal class ModeArbiter {
             val priority = (request["transferPriority"] as? Number)?.toInt() ?: PRIORITY_NICE_TO_HAVE
             val takeConstraint = (request["takeConstraint"] as? Number)?.toInt() ?: CONSTRAINT_ANYTIME
             val borrowConstraint = (request["borrowConstraint"] as? Number)?.toInt() ?: CONSTRAINT_ANYTIME
+            val unborrowConstraint =
+                (request["unborrowConstraint"] as? Number)?.toInt() ?: borrowConstraint
             when (type) {
                 TRANSFER_TAKE ->
                     // 开场 niceToHave 的 take = 「没人要就先放车机」：手机要，就归手机（旧行为，22:46 一轮实测可出画）
@@ -146,6 +177,7 @@ internal class ModeArbiter {
                 TRANSFER_BORROW -> {
                     resource.owner = Entity.ACCESSORY
                     resource.borrowConstraint = borrowConstraint
+                    resource.unborrowConstraint = unborrowConstraint
                 }
                 TRANSFER_UNBORROW -> resource.owner = resource.permanent
             }

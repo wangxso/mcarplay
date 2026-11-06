@@ -117,6 +117,55 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun audioStreamStartTakesMainAudioBackWithoutTakingTheScreen() {
+        // VW4131 报告：主屏归车机、主音频被车机借用后，音频 SETUP 三档全部 400。
+        // 真 iPhone 在 Main audio setting up 前先报 mainAudio controller。
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(
+            mapOf(
+                "resources" to
+                    listOf(
+                        resource(1, 1, 500, 500),
+                        resource(2, 3, 500, 100),
+                    ),
+            ),
+        )
+        assertEquals(mapOf(1L to 2L, 2L to 2L), entities(arbiter))
+
+        val claim = arbiter.onAudioStreamStarting()
+
+        assertTrue(claim.claimed)
+        assertTrue(claim.note.contains("接管主音频"))
+        assertEquals(mapOf(1L to 2L, 2L to 1L), entities(arbiter))
+        assertEquals(1L, arbiter.resourcesPayload().first { it["resourceID"] == 2L }["permanentEntity"])
+        assertFalse(arbiter.phoneOwnsScreen)
+    }
+
+    @Test
+    fun audioStreamStartRespectsUnborrowAndTakeConstraints() {
+        // 车机借用主音频且 unborrowConstraint=1000（如倒车提示音）时不抢占，保持车机归属。
+        val borrowed = ModeArbiter()
+        borrowed.applyInitial(
+            mapOf(
+                "resources" to
+                    listOf(
+                        resource(1, 1, 500, 500),
+                        resource(2, 3, 500, 100) + ("unborrowConstraint" to 1000L),
+                    ),
+            ),
+        )
+        val refused = borrowed.onAudioStreamStarting()
+        assertFalse(refused.claimed)
+        assertEquals(mapOf(1L to 2L, 2L to 2L), entities(borrowed))
+
+        // 车机以 takeConstraint=1000 持有主音频时同样不抢占。
+        val taken = ModeArbiter()
+        taken.applyInitial(mapOf("resources" to listOf(resource(2, 1, 500, 1000))))
+        assertFalse(taken.onAudioStreamStarting().claimed)
+        assertEquals(2L, entities(taken)[2L])
+    }
+
+    @Test
     fun userRequestRespectsBorrowAndHigherTakeConstraints() {
         for (constraint in listOf(501L, 1000L)) {
             val taken = ModeArbiter()

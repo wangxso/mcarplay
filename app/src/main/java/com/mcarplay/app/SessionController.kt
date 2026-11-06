@@ -2170,6 +2170,13 @@ object SessionController {
                     "（本车机记忆：${AudioProfileMemory.describe(entry)}；" +
                     "封装=${tuning.detail}）",
             )
+            // 真 iPhone 在 Main audio setting up 之前先报 mainAudio controller；车机持有
+            // 或借用主音频时直接 SETUP 会被 VW4131 以 400 拒绝，不能误判成三档格式都不兼容。
+            val audioOwnershipConfirmed = client.claimMainAudioForStreaming(connectionGeneration)
+            appendLog(
+                "AUDIO: 音频流建立前主音频资源" +
+                    if (audioOwnershipConfirmed) "已报归手机" else "切换未确认（继续尝试 SETUP）",
+            )
             // SETUP 失败不会扰动会话（车机只是不接这条流的请求），所以本会话内就把候选
             // 试完，不必等下一次连接。这一点对当前场景很关键：102/AAC-LC 与 100/PCM 是
             // 两条完全不同的通路，前者不被接受时应当立刻退到后者，而不是让用户白连一次。

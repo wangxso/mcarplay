@@ -886,6 +886,20 @@ class AirPlayClient(
     }
 
     /**
+     * 音频流 SETUP 前把主音频资源报归手机。
+     *
+     * 与 [assertModes] 分开是因为屏幕可以归车机，而音频仍必须由手机持有；两者不能共用同一个
+     * `releaseScreen` 语义。返回 `modesChanged` 是否得到 200，失败时调用方仍可尝试 SETUP，
+     * 但日志会保留资源切换未确认的证据。
+     */
+    fun claimMainAudioForStreaming(expectedEpoch: Long = connectionEpoch): Boolean {
+        val claim = modes.onAudioStreamStarting()
+        log("AIRPLAY: 主音频资源 → ${claim.note}")
+        if (!claim.claimed) return false
+        return assertModes(expectedEpoch = expectedEpoch)
+    }
+
+    /**
      * 请车机关闭自身蓝牙（控制通道 POST /command `disableBluetooth`，参数 `deviceID`=本机蓝牙地址）。
      *
      * 2026-11-02 艾瑞泽 8 车机日志：真 iPhone 每次会话开始约 0.1–0.6 s 发出，车机
