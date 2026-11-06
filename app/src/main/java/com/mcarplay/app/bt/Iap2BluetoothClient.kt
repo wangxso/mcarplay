@@ -49,6 +49,8 @@ class Iap2BluetoothClient(
     /** 目标车机（动态读取：选择后无需重启链路，下一轮尝试即生效）。 */
     private val targetProvider: () -> TargetDevicePrefs.Target? = { null },
     private val diagnostics: BluetoothDiagnostics = BluetoothDiagnostics({}),
+    /** 将系统蓝牙开关变化交给手机 SDP 监听，以恢复本轮仍需发布的服务。 */
+    private val onAdapterStateChanged: (Int) -> Unit = {},
     /** 车机拒绝主动连入、改为等它回连时调用一次（参数为设备名），界面据此提示「在车机上点本机」。 */
     private val onAwaitingReceiverTap: (String) -> Unit = {},
 ) {
@@ -422,7 +424,13 @@ class Iap2BluetoothClient(
         diagnostics.client(diagnosticEpoch, started = true)
         stateMonitor
             .getAndSet(
-                BluetoothStateMonitor(context, diagnostics, diagnosticEpoch, targetProvider) {
+                BluetoothStateMonitor(
+                    context,
+                    diagnostics,
+                    diagnosticEpoch,
+                    targetProvider,
+                    onAdapterStateChanged = onAdapterStateChanged,
+                ) {
                     running && generation.get() == myGeneration
                 }.also { it.start() },
             )?.stop()

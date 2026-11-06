@@ -648,6 +648,7 @@ object SessionController {
                     },
                     targetProvider = targetProvider,
                     diagnostics = bluetoothDiagnostics,
+                    onAdapterStateChanged = { state -> bluetoothServer?.onAdapterStateChanged(state) },
                     onAwaitingReceiverTap = { name ->
                         // 艾瑞泽 8 这类车机只能由车机端发起，需要用户在车机上操作（2026-11-02）
                         phaseHint = t(R.string.sc_tap_phone_on_receiver, name)

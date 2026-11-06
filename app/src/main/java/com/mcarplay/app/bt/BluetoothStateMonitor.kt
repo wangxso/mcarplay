@@ -17,6 +17,7 @@ internal class BluetoothStateMonitor(
     private val diagnostics: BluetoothDiagnostics,
     private val epoch: Long,
     private val targetProvider: () -> TargetDevicePrefs.Target?,
+    private val onAdapterStateChanged: (Int) -> Unit = {},
     private val isCurrent: () -> Boolean,
 ) {
     private var registered = false
@@ -28,7 +29,12 @@ internal class BluetoothStateMonitor(
                 intent: Intent,
             ) {
                 if (!isCurrent()) return
-                if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED || intent.action == BluetoothAdapter.ACTION_SCAN_MODE_CHANGED) {
+                if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                    adapterSnapshot()
+                    onAdapterStateChanged(intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR))
+                    return
+                }
+                if (intent.action == BluetoothAdapter.ACTION_SCAN_MODE_CHANGED) {
                     adapterSnapshot()
                     return
                 }

@@ -13,9 +13,10 @@ object DisclaimerPrefs {
      * 当前免责声明版本。**修改 disclaimer_content 文案时必须同步 +1**——
      * 用户接受的是「当时那一版」内容，条款变了就该重新确认。
      *
+     * v4（2026-11-06）：通知使用权增加 CarWith 入口阶段存在性诊断。
      * v3（2026-10-26）：统一 mcarplay 名称，更新小米 CarWith 测试范围与权限说明。
      */
-    const val CURRENT_VERSION = 3
+    const val CURRENT_VERSION = 4
 
     private const val PREFS = "disclaimer"
     private const val KEY_ACCEPTED_VERSION = "accepted_version"
