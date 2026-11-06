@@ -103,6 +103,19 @@ class AudioProfileMemoryTest {
     }
 
     @Test
+    fun resourceBlockedSetupFailureIsNotRemembered() {
+        val id = "test receiver audio-resource-blocked"
+        AudioProfileMemory.recordSetupFailure(
+            context = null,
+            identityText = id,
+            profileKey = "media|2048",
+            allCandidates = setOf("media|2048", "compatibility|32768"),
+            resourceOwned = false,
+        )
+        assertTrue(AudioProfileMemory.load(null, id).isEmpty)
+    }
+
+    @Test
     fun teardownOfEveryProfileDisablesAudio() {
         // 只有「起流后整链被拆」这种确定性证据才允许把车机音频判死
         val id = "test receive teardown-all"

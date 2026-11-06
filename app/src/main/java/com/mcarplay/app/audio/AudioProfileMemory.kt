@@ -103,6 +103,18 @@ object AudioProfileMemory {
         }
     }
 
+    /** SETUP 失败只有在主音频仍归手机时才算格式失败；资源被车机占用时保持记忆不变。 */
+    fun recordSetupFailure(
+        context: Context?,
+        identityText: String,
+        profileKey: String,
+        allCandidates: Set<String>,
+        resourceOwned: Boolean,
+    ) {
+        if (!resourceOwned) return
+        recordRejected(context, identityText, profileKey, allCandidates, markExhausted = false)
+    }
+
     /** 手动恢复（换车机后复位，或车机固件升级后重新试探）。 */
     fun reset(
         context: Context?,

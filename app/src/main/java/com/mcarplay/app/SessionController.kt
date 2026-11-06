@@ -2198,12 +2198,12 @@ object SessionController {
                 // SETUP 被拒不等于「车机不兼容」：可能只是资源仲裁/网络抖动，
                 // 不能据此把整台车机的音频判死（置 disabled 只认「拆链」证据）。
                 if (identity.isNotBlank()) {
-                    AudioProfileMemory.recordRejected(
+                    AudioProfileMemory.recordSetupFailure(
                         context.applicationContext,
                         identity,
                         candidate.key,
                         ordered.map { it.key }.toSet(),
-                        markExhausted = false,
+                        resourceOwned = client.modes.phoneOwnsAudio,
                     )
                 }
                 appendLog("AUDIO: 档位 ${candidate.label} 协商失败——本会话继续试下一档")

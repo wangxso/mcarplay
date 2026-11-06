@@ -167,6 +167,43 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun borrowConstraintAppliesEvenWhenAccessoryAlreadyOwnsScreenPermanently() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 500))))
+        assertFalse(arbiter.phoneOwnsScreen)
+
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "borrowID" to "4",
+                            "transferPriority" to 500,
+                            "resourceID" to 1,
+                            "transferType" to 3,
+                            "unborrowConstraint" to 1000,
+                        ),
+                    ),
+            ),
+        )
+        assertFalse("A permanent TAKE must not bypass a later BORROW constraint", arbiter.onUserRequestedUi().allowed)
+        assertFalse(arbiter.phoneOwnsScreen)
+
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "resourceID" to 1,
+                            "transferType" to 4,
+                        ),
+                    ),
+            ),
+        )
+        assertFalse("UNBORROW restores the prior accessory ownership", arbiter.phoneOwnsScreen)
+    }
+
+    @Test
     fun vw4131AudioBorrowIsNotTreatedAsPhoneAudioOwnership() {
         val arbiter = ModeArbiter()
         arbiter.applyInitial(

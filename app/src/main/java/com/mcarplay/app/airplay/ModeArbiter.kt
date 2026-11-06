@@ -29,6 +29,7 @@ internal class ModeArbiter {
     private class Resource(
         var owner: Entity = Entity.CONTROLLER,
         var permanent: Entity = Entity.CONTROLLER,
+        var borrowed: Boolean = false,
         var takeConstraint: Int = CONSTRAINT_ANYTIME,
         var borrowConstraint: Int = CONSTRAINT_ANYTIME,
         var unborrowConstraint: Int = CONSTRAINT_ANYTIME,
@@ -68,12 +69,13 @@ internal class ModeArbiter {
         if (screen.owner == Entity.CONTROLLER) {
             return UiRequest("主屏本就归手机，先报让出再拿回", retake = true, rebuildStream = screenRelinquished)
         }
-        val constraint = if (screen.permanent == Entity.CONTROLLER) screen.unborrowConstraint else screen.takeConstraint
+        val constraint = if (screen.borrowed) screen.unborrowConstraint else screen.takeConstraint
         if (constraint > PRIORITY_USER_INITIATED) {
             return UiRequest("车机持有主屏的约束高于 userInitiated，不抢", retake = false, allowed = false)
         }
         screen.owner = Entity.CONTROLLER
         screen.permanent = Entity.CONTROLLER
+        screen.borrowed = false
         val rebuild = screenRelinquished
         return UiRequest("用户点图标，拿回主屏（车机约束 $constraint ≤ userInitiated）", retake = false, rebuildStream = rebuild)
     }
@@ -87,6 +89,7 @@ internal class ModeArbiter {
         for (resource in resources.values) {
             resource.owner = Entity.ACCESSORY
             resource.permanent = Entity.ACCESSORY
+            resource.borrowed = false
             resource.takeConstraint = CONSTRAINT_ANYTIME
         }
         screenRelinquished = true
@@ -138,24 +141,31 @@ internal class ModeArbiter {
                     if (initial && priority < PRIORITY_USER_INITIATED) {
                         resource.owner = Entity.CONTROLLER
                         resource.permanent = Entity.CONTROLLER
+                        resource.borrowed = false
                         resource.takeConstraint = CONSTRAINT_ANYTIME
                     } else {
                         resource.owner = Entity.ACCESSORY
                         resource.permanent = Entity.ACCESSORY
+                        resource.borrowed = false
                         resource.takeConstraint = takeConstraint
                         resource.borrowConstraint = borrowConstraint
                     }
                 TRANSFER_UNTAKE -> {
                     resource.owner = Entity.CONTROLLER
                     resource.permanent = Entity.CONTROLLER
+                    resource.borrowed = false
                     resource.takeConstraint = CONSTRAINT_ANYTIME
                 }
                 TRANSFER_BORROW -> {
                     resource.owner = Entity.ACCESSORY
+                    resource.borrowed = true
                     resource.borrowConstraint = borrowConstraint
                     resource.unborrowConstraint = unborrowConstraint
                 }
-                TRANSFER_UNBORROW -> resource.owner = resource.permanent
+                TRANSFER_UNBORROW -> {
+                    resource.owner = resource.permanent
+                    resource.borrowed = false
+                }
             }
             if (!initial &&
                 (request["resourceID"] as? Number)?.toLong() == SCREEN &&
