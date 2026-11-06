@@ -37,14 +37,19 @@ internal class ModeArbiter {
 
     private val resources = linkedMapOf(SCREEN to Resource(), MAIN_AUDIO to Resource())
     private var screenRelinquished = false
+    private var audioClaimPending = false
 
     /** 屏幕当前是否归手机（诊断与是否值得补关键帧）。 */
     @get:Synchronized
     val phoneOwnsScreen: Boolean get() = resources.getValue(SCREEN).owner == Entity.CONTROLLER
 
-    /** 主音频资源当前是否归手机。车机占用/借用时，音频 SETUP 拒绝不是格式不兼容。 */
+    /** 主音频资源当前是否归手机；车机占用/借用时音频 SETUP 拒绝不是格式不兼容。 */
     @get:Synchronized
     val phoneOwnsAudio: Boolean get() = resources.getValue(MAIN_AUDIO).owner == Entity.CONTROLLER
+
+    /** 音频 claim 曾因约束被拒、仍在等车机归还：调用方不应把本次未启动记成音频故障。 */
+    @get:Synchronized
+    val audioClaimAwaitingReturn: Boolean get() = audioClaimPending
 
     /** `/info` 的 `modes`：车机开场的资源请求。返回一行说明。 */
     @Synchronized
@@ -78,6 +83,56 @@ internal class ModeArbiter {
         screen.borrowed = false
         val rebuild = screenRelinquished
         return UiRequest("用户点图标，拿回主屏（车机约束 $constraint ≤ userInitiated）", retake = false, rebuildStream = rebuild)
+    }
+
+    /** [claimed] = 是否真的改成手机持有；车机约束高于 userInitiated 时保持原归属。 */
+    class AudioClaim(
+        val note: String,
+        val claimed: Boolean,
+    )
+
+    /**
+     * 建立主音频流前由手机接管主音频。
+     *
+     * 真 iPhone 的顺序是先报 `mainAudio controller`，约 2.5 s 后才 `Main audio setting up`。
+     * 若 `/info` 里主音频仍归车机（take）或被车机借用（borrow），直接发音频 `SETUP` 时
+     * VW4131 会以 `400 Bad Request` 拒绝三档候选；先报归手机可避免把资源仲裁失败误判成编码或格式问题。
+     * 但车机以高于 userInitiated 的约束持有或借用（例如倒车提示音）时不能抢占，如实保持原归属。
+     */
+    @Synchronized
+    fun onAudioStreamStarting(): AudioClaim {
+        val audio = resources.getValue(MAIN_AUDIO)
+        if (audio.owner == Entity.CONTROLLER) {
+            audioClaimPending = false
+            return AudioClaim("主音频本就归手机", claimed = true)
+        }
+        val constraint = if (audio.borrowed) audio.unborrowConstraint else audio.takeConstraint
+        if (constraint > PRIORITY_USER_INITIATED) {
+            audioClaimPending = true
+            return AudioClaim("车机持有主音频的约束 $constraint 高于 userInitiated，不抢占", claimed = false)
+        }
+        audio.owner = Entity.CONTROLLER
+        audio.permanent = Entity.CONTROLLER
+        audio.borrowed = false
+        audio.takeConstraint = CONSTRAINT_ANYTIME
+        audioClaimPending = false
+        return AudioClaim("音频流建立前接管主音频（车机约束 $constraint ≤ userInitiated）", claimed = true)
+    }
+
+    /**
+     * claim 因约束被拒后，约束已解除或主音频已归还时返回 true，调用方应重试建立音频流。
+     * 只消费一次；主音频仍被高约束占用时保持待重试状态。
+     */
+    @Synchronized
+    fun consumeAudioClaimRetry(): Boolean {
+        if (!audioClaimPending) return false
+        val audio = resources.getValue(MAIN_AUDIO)
+        val constraint = if (audio.borrowed) audio.unborrowConstraint else audio.takeConstraint
+        // 归还（owner=phone）或约束降到 userInitiated 及以下都值得重试；两者都不满足时
+        // 继续等待，避免每次 changeModes 都白跑一次 SETUP。
+        if (audio.owner != Entity.CONTROLLER && constraint > PRIORITY_USER_INITIATED) return false
+        audioClaimPending = false
+        return true
     }
 
     /**
@@ -123,8 +178,7 @@ internal class ModeArbiter {
                     resource.borrowed -> "车机借用"
                     else -> "车机"
                 }
-            // 借用期间真正约束 requestUI 的是 unborrowConstraint；日志里必须报它，
-            // 否则导出报告会写成“约束 100”，与“点图标拿不回主屏”的现场行为矛盾。
+            // 借用期间真正约束 requestUI / 音频 claim 的是 unborrowConstraint。
             val constraint = if (resource.borrowed) resource.unborrowConstraint else resource.takeConstraint
             "$name=$owner(约束 $constraint)"
         }

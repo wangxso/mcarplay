@@ -1554,6 +1554,67 @@ WinPlay 与 Windows 版本未记录。
 也会成立，可能误判，策略 2 尤其如此。请每次只选一个，上车反复「回主界面再进」，导出日志看 `PASSAT:` 与 `SESSION: 拿回主屏` 两类行，
 把结果（成功次数/总次数）补记到本节后再下结论。
 
+## Pixel 5 / AOSP 七口恢复（2026-11-06，台架临时方案）
+
+Pixel 5（LineageOS/AOSP Android 16）上，CarWith `3.0.1-20240722` 的七个 CarLife 端口一直没有出现，
+mcarplay 反复得到 `7240 ECONNREFUSED`。根因不在 mcarplay 的 TCP 或协议实现，而是三层源端阻塞叠加：
+
+1. CarWith 创建 MIUI 私有窗口类型 `2998`、`2006`，AOSP 以 `permission denied for window type 2998`
+   拒绝，CarWith 在监听七口前退出；
+2. 绕过正常 UI 直接启动服务时，`ConnectTypeUtil` 仍为 `none`，`CarlinkService.prepareCast()` 不进入
+   CarLife Wi-Fi AP 准备路径；
+3. mcarplay 切到前台后，`CastingActivity.onStop()` 调用 `e1()`，将连接重置为 `none`、结束投屏并清理任务。
+
+台架上用 Frida 最小 hook 补齐 `wifi_ap_carlife_connect`、跳过两个私有窗口辅助调用，并在 CarLife 会话期间
+阻止 `e1()` 和 `q.k("none")` 清链；再由 root 以 `startType=4`、`carlife_wireless_type=Baidu_ap` 启动
+`CarlinkService`。处理后七口持续监听，mcarplay 建立七路并持续发送视频。截至 10:54（Asia/Shanghai），源端累计约
+`43,821` 帧、`729 MB`、观察约 `4,361` 秒；没有据此声明接收端长时间动态画面、音频、触控或真车兼容通过。
+
+Frida/root 仅为 bench 手段，不是产品修复或无 root 方案；它不是完整的 OS1 移植。完整原因、最小 hook、启动顺序和
+验证命令见 [CARWITH-PIXEL5-PORT-RECOVERY-2026-11-06.md](CARWITH-PIXEL5-PORT-RECOVERY-2026-11-06.md)。
+
+## 正常小米：CarWith 入口已请求但七口未出现（2026-11-06 复核 2026-11-04 报告）
+
+复核一份 Xiaomi `M2102J2SC` / Android 13 / CarWith `4.0.4-20260522` / CarLife `8.6.8` /
+mcarplay `0.1.4` 的脱敏报告。16:21–17:02 的多轮自检中，除 16:57:44 的一次成功附着外，其余各次都在 25 秒内轮询 `7240` 62 次，均为
+`ECONNREFUSED`，状态为 `entry=REQUESTED background=false entryBlockedSuspected=false`。导出时
+「后台弹出界面」已允许，CarWith 入口 exported/enabled、功能开关和关键权限也正常，因此不能归因于
+Pixel 5 的 AOSP 私有窗口崩溃，也不能仅归因于后台启动限制。
+
+`entry=REQUESTED` 只表示 `startActivity()` 返回，不表示 `CarlifeAdbActivity` 被创建或成功启动
+`CarlinkService`；CarWith 4.0.4 的入口还可能因无线开关、非 `none` 的遗留连接状态、CTA/权限页或内部服务失败
+而静默结束。报告没有 CarWith 私有偏好、Activity/进程状态、logcat 和入口页面证据，无法进一步定因。
+
+同一报告中 16:57:44 曾附着已有的七口（13 ms、`allConnectedOnce=true`），但发送 `0x18001` 后 8 秒无视频帧，
+至 16:59:07 七路全部断开，`frames=0`。这证明七口存在不等于 CarWith 已创建有效的投屏会话。完整分析和下一步
+取证命令见 [CARWITH-PIXEL5-PORT-RECOVERY-2026-11-06.md](CARWITH-PIXEL5-PORT-RECOVERY-2026-11-06.md)。
+
+## 大众 VW4131：主音频归车机时三档音频 SETUP 全部 400（2026-11-06）
+
+- **来源：** 用户反馈“无声音”的脱敏报告 `56b663a8-6973-4ba9-88ee-213162a99143`，mcarplay `0.1.5`（standard/release）。
+  手机 Xiaomi `2509FPN0BC`，Android 17（SDK 37，build `CP2A.260605.016`），CarWith `4.0.23-20261016`（104000023），
+  小米 CarLife `8.6.6`（258）。接收端 `/info` 自报 Volkswagen、model `VW4131`、`sourceVersion=320.17.7`；
+  复现步骤、HyperOS 版本和接收端固件版本未提供。
+- **画面与触摸：** 18:46 一轮视频持续约 29 秒、发出 1081 帧；18:46:17–18:46:27 收到多条 `hidSendReport`，
+  因此本轮不是视频链路整体断开。CarLife 源端只记录到 `TTS`（16 kHz 单声道），未见 `MEDIA` INIT；
+  报告中的 `audioChunks` 是 CarLife 输入计数，`audioPacketsSent=0` 表示没有任何音频包写到车机。
+- **音频时序：**
+  - 18:41:09 与 18:41:19 两轮 `/info` 把主音频报为手机持有；`t102/media/AAC-LC/48k` 的 SETUP 均返回 200，
+    但接收端随即关闭控制通道，音频发送器在首包前停止。
+  - 18:42:19 起重连后，`/info` 的主屏为主车机持有、主音频为车机借用；18:42:22、18:42:24、18:42:26
+    对 `t102/media AAC-LC`、`t100/media PCM`、`t100/compatibility PCM` 的 SETUP 全部返回 `400 Bad Request`。
+    18:45:42 一轮只有在主屏被 `requestUI` 拿回后画面正常，主音频仍归车机，三档 SETUP 同样全部 400。
+  - 因而本次“无声音”的直接原因是没有建立 AirPlay 音频流，不是包已发送但接收端静音；音频包计数为 0。
+- **相关性：** 同一份报告内，主音频归手机的两次 SETUP 为 200，归车机的十次为 400。仓库已记录的真 iPhone 时序也在
+  `Main audio setting up` 前先报 `mainAudio controller`。因此高置信度指向主音频资源归属，而不是 AAC/PCM 编码器；
+  接收端未返回 400 错误体，不能据此声称已取得完整协议解释。
+- **对应修改（离线通过，未上车验证）：** 音频 SETUP 前新增一次 `modesChanged`，只把主音频报归手机，屏幕归属保持不变；
+  车机以高于 userInitiated 的 take/unborrow 约束持有或借用主音频时不抢占、保持原归属，避免截断倒车提示音等。
+  此时本次不发送 SETUP，等 `changeModes` 的 UNBORROW/UNTAKE 归还主音频后重试；claim 未被确认时不把 SETUP 400 写成
+  该车机的格式失败记忆。
+  `ModeArbiterTest` 覆盖低约束接管、`unborrowConstraint`/`takeConstraint=1000` 拒绝抢占、归还后只重试一次，以及
+  “车机持有屏幕并借用主音频”的报告形态。定向单测与 Spotless 通过。需在同一台 VW4131 上复测
+  `AUDIO: 音频流建立前主音频资源已报归手机`、SETUP 状态和实际声音，才能确认修复有效。
 ## 2026-11-06：艾瑞泽 8 固件/协议报告转为回归矩阵（源码对照，无新增设备验收）
 
 输入为用户提供的 `FIRMWARE_PACKAGE_ANALYSIS.md`、`CARPLAY_PROTOCOL_ANALYSIS.md`、`FIRMWARE_CARPLAY_CHAIN.md`

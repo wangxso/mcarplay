@@ -1,6 +1,7 @@
 # Local IDE and build state
 *.iml
 .idea/
+.claude/
 .DS_Store
 /.gradle/
 /.kotlin/
