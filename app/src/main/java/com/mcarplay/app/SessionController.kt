@@ -1165,10 +1165,41 @@ object SessionController {
         }
         if (audioSender?.isRunning == true) return
         appendLog("MODE: 会话进行中，动态补启音频通道…")
-        if (startAudioChannel(context, client, secret, currentAudioHost)) {
-            appendLog("AUDIO: 动态加入音频流——检查会话激活")
+        startAudioAndRecord(context, client, secret, currentAudioHost, "AUDIO: 动态加入音频流——检查会话激活")
+    }
+
+    /** 启动音频并在成功后补 RECORD；连接、动态补启和仲裁重试三条入口共用。 */
+    private fun startAudioAndRecord(
+        context: Context,
+        client: AirPlayClient,
+        secret: ByteArray?,
+        host: String?,
+        logLine: String,
+    ): Boolean {
+        val started = startAudioChannel(context, client, secret, host)
+        if (started) {
+            appendLog(logLine)
             client.record()
         }
+        return started
+    }
+
+    /**
+     * claim 因车机约束被拒后，`changeModes` 归还主音频时重试一次音频通道。
+     * 只由 [ModeArbiter.consumeAudioClaimRetry] 触发；仍受音频开关、会话代次和发送器状态约束。
+     */
+    private fun retryAudioAfterClaimReturned(client: AirPlayClient) {
+        // 只把状态检查放在短临界区里；SETUP 最长数秒，不能占着会话锁（disconnect 是
+        // @Synchronized，UI 线程点“断开”会跟着卡住）。
+        val ready =
+            synchronized(this) {
+                if (client !== currentClient || client.sessionStopping || !audioEnabledForSession) return
+                if (audioSender?.isRunning == true) return
+                val context = appContext ?: return
+                val secret = currentSharedSecret ?: return
+                Triple(context, secret, currentAudioHost)
+            }
+        startAudioAndRecord(ready.first, client, ready.second, ready.third, "AUDIO: 车机归还主音频后音频流已建立——检查会话激活")
     }
 
     /**
@@ -2171,6 +2202,19 @@ object SessionController {
                     "（本车机记忆：${AudioProfileMemory.describe(entry)}；" +
                     "封装=${tuning.detail}）",
             )
+            // 真 iPhone 在 Main audio setting up 之前先报 mainAudio controller；车机持有
+            // 或借用主音频时直接 SETUP 会被 VW4131 以 400 拒绝，不能误判成三档格式都不兼容。
+            val audioClaim = client.claimMainAudioForStreaming(connectionGeneration)
+            if (!audioClaim.claimed) {
+                // 车机以高于 userInitiated 的约束持有/借用主音频（如倒车提示音）：不抢、不发 SETUP，
+                // 否则三档 400 会被写成格式失败记忆；等 changeModes 归还后再重试。
+                appendLog("AUDIO: 主音频资源未接管（${audioClaim.note}）——本次不发送 SETUP，等车机归还主音频后重试")
+                return false
+            }
+            appendLog(
+                "AUDIO: 音频流建立前主音频资源" +
+                    if (audioClaim.announced) "已报归手机" else "切换未确认（继续尝试 SETUP）",
+            )
             // SETUP 失败不会扰动会话（车机只是不接这条流的请求），所以本会话内就把候选
             // 试完，不必等下一次连接。这一点对当前场景很关键：102/AAC-LC 与 100/PCM 是
             // 两条完全不同的通路，前者不被接受时应当立刻退到后者，而不是让用户白连一次。
@@ -2186,7 +2230,8 @@ object SessionController {
                 }
                 // SETUP 被拒不等于「车机不兼容」：可能只是资源仲裁/网络抖动，
                 // 不能据此把整台车机的音频判死（置 disabled 只认「拆链」证据）。
-                if (identity.isNotBlank()) {
+                // 只有 modesChanged 已确认手机持有主音频时，失败才可作为格式证据。
+                if (audioClaim.announced && identity.isNotBlank()) {
                     AudioProfileMemory.recordRejected(
                         context.applicationContext,
                         identity,
@@ -3561,6 +3606,10 @@ object SessionController {
                                         // 旧实现一律回「手机持有」，帕萨特回主界面后再点图标就切不回 CarPlay（2026-11-01 22:47）
                                         val note = client.modes.onChangeModes(command["params"] as? Map<*, *>)
                                         enqueueModesAssert(client, "车机请求 changeModes（→ $note）", requestKeyFrame = false)
+                                        if (client.modes.consumeAudioClaimRetry()) {
+                                            appendLog("AUDIO: 车机已归还主音频——后台重试建立音频流")
+                                            Bg.run("audio-claim-retry") { retryAudioAfterClaimReturned(client) }
+                                        }
                                     }
 
                                     "requestUI" -> {
@@ -3887,14 +3936,23 @@ object SessionController {
                                 }
                                 // 音频通道（可选）：SETUP type=100 → UDP RTP 推流。
                                 // 会话已激活（RECORD 完成）后再协商；失败不影响视频主链路。
-                                val audioStarted = startAudioChannel(context, client, sessionKey, host)
-                                if (audioEnabledForSession && !audioStarted) {
+                                val audioStarted =
+                                    startAudioAndRecord(
+                                        context,
+                                        client,
+                                        sessionKey,
+                                        host,
+                                        // 奥迪曾需流后补发；受影响车机由客户端策略跳过重复 RECORD。
+                                        "AUDIO: 音频流已加入——检查会话激活",
+                                    )
+                                // 主音频被车机约束占用时的“未启动”不是音频故障：不写结论码，
+                                // 否则它会长期盖住后续真正需要的诊断（如屏幕暂停）。
+                                if (audioEnabledForSession &&
+                                    !audioStarted &&
+                                    !client.modes.audioClaimAwaitingReturn &&
+                                    client.modes.phoneOwnsAudio
+                                ) {
                                     ConnectionDiagnostics.timeline.issue(diagnosticAttempt, DiagnosticCode.AUDIO_UNAVAILABLE)
-                                }
-                                if (audioStarted) {
-                                    // 奥迪曾需流后补发；受影响车机由客户端策略跳过重复 RECORD。
-                                    appendLog("AUDIO: 音频流已加入——检查会话激活")
-                                    client.record()
                                 }
                             }
                         } else {

@@ -117,6 +117,82 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun audioStreamStartTakesMainAudioBackWithoutTakingTheScreen() {
+        // VW4131 报告：主屏归车机、主音频被车机借用后，音频 SETUP 三档全部 400。
+        // 真 iPhone 在 Main audio setting up 前先报 mainAudio controller。
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(
+            mapOf(
+                "resources" to
+                    listOf(
+                        resource(1, 1, 500, 500),
+                        resource(2, 3, 500, 100),
+                    ),
+            ),
+        )
+        assertEquals(mapOf(1L to 2L, 2L to 2L), entities(arbiter))
+
+        val claim = arbiter.onAudioStreamStarting()
+
+        assertTrue(claim.claimed)
+        assertTrue(claim.note.contains("接管主音频"))
+        assertEquals(mapOf(1L to 2L, 2L to 1L), entities(arbiter))
+        assertEquals(1L, arbiter.resourcesPayload().first { it["resourceID"] == 2L }["permanentEntity"])
+        assertFalse(arbiter.phoneOwnsScreen)
+    }
+
+    @Test
+    fun audioStreamStartRespectsUnborrowAndTakeConstraints() {
+        // 车机借用主音频且 unborrowConstraint=1000（如倒车提示音）时不抢占，保持车机归属。
+        val borrowed = ModeArbiter()
+        borrowed.applyInitial(
+            mapOf(
+                "resources" to
+                    listOf(
+                        resource(1, 1, 500, 500),
+                        resource(2, 3, 500, 100) + ("unborrowConstraint" to 1000L),
+                    ),
+            ),
+        )
+        val refused = borrowed.onAudioStreamStarting()
+        assertFalse(refused.claimed)
+        assertEquals(mapOf(1L to 2L, 2L to 2L), entities(borrowed))
+
+        // 车机以 takeConstraint=1000 持有主音频时同样不抢占。
+        val taken = ModeArbiter()
+        taken.applyInitial(mapOf("resources" to listOf(resource(2, 1, 500, 1000))))
+        assertFalse(taken.onAudioStreamStarting().claimed)
+        assertEquals(2L, entities(taken)[2L])
+    }
+
+    @Test
+    fun refusedAudioClaimRetriesOnlyAfterTheHeadUnitReturnsTheResource() {
+        // 借用高约束被拒：归还（unborrow）前不得重试，归还后只消费一次。
+        val borrowed = ModeArbiter()
+        borrowed.applyInitial(
+            mapOf("resources" to listOf(resource(2, 3, 500, 100) + ("unborrowConstraint" to 1000L))),
+        )
+        assertFalse(borrowed.onAudioStreamStarting().claimed)
+        assertFalse(borrowed.consumeAudioClaimRetry())
+        borrowed.onChangeModes(mapOf("resources" to listOf(resource(2, 4, 500, 100))))
+        assertTrue(borrowed.consumeAudioClaimRetry())
+        assertFalse(borrowed.consumeAudioClaimRetry())
+        assertTrue(borrowed.onAudioStreamStarting().claimed)
+
+        // take 高约束同理：untake 后允许一次重试。
+        val taken = ModeArbiter()
+        taken.applyInitial(mapOf("resources" to listOf(resource(2, 1, 500, 1000))))
+        assertFalse(taken.onAudioStreamStarting().claimed)
+        taken.onChangeModes(mapOf("resources" to listOf(resource(2, 2, 500, 100))))
+        assertTrue(taken.consumeAudioClaimRetry())
+
+        // 正常接管成功时不留下待重试状态。
+        val ready = ModeArbiter()
+        assertTrue(ready.onAudioStreamStarting().claimed)
+        assertFalse(ready.consumeAudioClaimRetry())
+    }
+
+    @Test
     fun userRequestRespectsBorrowAndHigherTakeConstraints() {
         for (constraint in listOf(501L, 1000L)) {
             val taken = ModeArbiter()
@@ -129,6 +205,58 @@ class ModeArbiterTest {
             assertFalse(borrowed.onUserRequestedUi().allowed)
             assertFalse(borrowed.phoneOwnsScreen)
         }
+    }
+
+    @Test
+    fun requestUiRespectsUnborrowWhenAccessoryAlreadyOwnsScreen() {
+        // 车机永久持有主屏后再 BORROW（倒车影像）：约束必须看 unborrowConstraint，
+        // 不能回退到旧的 takeConstraint=100 把倒车画面抢走。
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(mapOf("resources" to listOf(resource(1, 1, 500, 100))))
+        assertFalse(arbiter.phoneOwnsScreen)
+        arbiter.onChangeModes(
+            mapOf("resources" to listOf(resource(1, 3, 500, 100) + ("unborrowConstraint" to 1000L))),
+        )
+        assertFalse(arbiter.onUserRequestedUi().allowed)
+        assertFalse(arbiter.phoneOwnsScreen)
+    }
+
+    @Test
+    fun audioClaimRespectsUnborrowWhenAccessoryAlreadyOwnsMainAudio() {
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(mapOf("resources" to listOf(resource(2, 1, 500, 100))))
+        arbiter.onChangeModes(
+            mapOf("resources" to listOf(resource(2, 3, 500, 100) + ("unborrowConstraint" to 1000L))),
+        )
+        assertFalse(arbiter.onAudioStreamStarting().claimed)
+        assertTrue(arbiter.audioClaimAwaitingReturn)
+        assertFalse(arbiter.consumeAudioClaimRetry())
+
+        // UNBORROW 后主音频仍永久归车机，但 takeConstraint=100 已允许手机接管。
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(2, 4, 500, 100))))
+        assertTrue(arbiter.consumeAudioClaimRetry())
+        assertFalse(arbiter.audioClaimAwaitingReturn)
+        assertTrue(arbiter.onAudioStreamStarting().claimed)
+        assertTrue(arbiter.phoneOwnsAudio)
+    }
+
+    @Test
+    fun describeReportsBorrowStateAndUnborrowConstraint() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "resourceID" to 1,
+                            "transferType" to 3,
+                            "borrowConstraint" to 100,
+                            "unborrowConstraint" to 1000,
+                        ),
+                    ),
+            ),
+        )
+        assertTrue(arbiter.describe(), arbiter.describe().contains("主屏=车机借用(约束 1000)"))
     }
 
     @Test
