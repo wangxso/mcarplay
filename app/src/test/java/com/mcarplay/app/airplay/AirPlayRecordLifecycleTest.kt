@@ -252,26 +252,41 @@ class AirPlayRecordLifecycleTest {
         return AirPlayClient(endpoint, log = {})
     }
 
-    private class Request(
+    internal class Connection(
+        val socket: Socket,
+    ) {
+        @Volatile
+        var cipher: ControlCipher? = null
+    }
+
+    internal class Request(
         val method: String,
         val path: String,
         val cseq: String,
-        val connection: Socket,
+        val connection: Connection,
+        val headers: Map<String, String>,
+        val body: ByteArray,
     ) {
-        fun respond(status: Int) {
+        fun respond(
+            status: Int,
+            body: ByteArray = ByteArray(0),
+        ) {
             synchronized(connection) {
-                connection.getOutputStream().apply {
-                    write("RTSP/1.0 $status response\r\nCSeq: $cseq\r\nContent-Length: 0\r\n\r\n".toByteArray())
+                val plaintext =
+                    "RTSP/1.0 $status response\r\nCSeq: $cseq\r\nContent-Length: ${body.size}\r\n\r\n".toByteArray() + body
+                connection.socket.getOutputStream().apply {
+                    write(connection.cipher?.encrypt(plaintext) ?: plaintext)
                     flush()
                 }
             }
         }
     }
 
-    private class Peer : Closeable {
+    /** RECORD、配对及媒体协商共用的真实 TCP 回环；加密方向由接收端派生密钥配置。 */
+    internal class Peer : Closeable {
         private val server = ServerSocket(0, 10, InetAddress.getByName("127.0.0.1"))
         private val executor = Executors.newCachedThreadPool()
-        private val connections = CopyOnWriteArrayList<Socket>()
+        private val connections = CopyOnWriteArrayList<Connection>()
         private val received = LinkedBlockingQueue<Request>()
         val port: Int get() = server.localPort
 
@@ -282,9 +297,9 @@ class AirPlayRecordLifecycleTest {
             executor.execute {
                 try {
                     while (!server.isClosed) {
-                        val socket = server.accept()
-                        connections += socket
-                        executor.execute { readRequests(socket) }
+                        val connection = Connection(server.accept())
+                        connections += connection
+                        executor.execute { readRequests(connection) }
                     }
                 } catch (_: SocketException) {
                     // 关闭测试服务器。
@@ -292,17 +307,36 @@ class AirPlayRecordLifecycleTest {
             }
         }
 
-        private fun readRequests(socket: Socket) {
+        private fun readRequests(connection: Connection) {
             try {
+                val socket = connection.socket
                 val input = socket.getInputStream()
+                var plaintext = ByteArray(0)
+                var offset = 0
+
+                fun readByte(): Int {
+                    val cipher = connection.cipher ?: return input.read()
+                    while (offset == plaintext.size) {
+                        val head = input.readNBytes(2)
+                        if (head.size != 2) throw EOFException()
+                        val length = (head[0].toInt() and 0xFF) or ((head[1].toInt() and 0xFF) shl 8)
+                        val encrypted = input.readNBytes(length + 16)
+                        if (encrypted.size != length + 16) throw EOFException()
+                        plaintext = cipher.decrypt(head + encrypted).data
+                        offset = 0
+                    }
+                    return plaintext[offset++].toInt() and 0xFF
+                }
+
                 while (!socket.isClosed) {
                     val header = ByteArrayOutputStream()
                     var tail = ""
                     while (!tail.endsWith("\r\n\r\n")) {
-                        val next = input.read()
+                        val next = readByte()
                         if (next < 0) throw EOFException()
                         header.write(next)
                         tail = (tail + next.toChar()).takeLast(4)
+                        check(header.size() <= 16_384)
                     }
                     val lines = header.toString("UTF-8").split("\r\n")
                     val first = lines.first().split(" ")
@@ -311,14 +345,13 @@ class AirPlayRecordLifecycleTest {
                             it.substringBefore(':').lowercase() to
                                 it.substringAfter(':').trim()
                         }
-                    val body = ByteArray(headers["content-length"]!!.toInt())
-                    var offset = 0
-                    while (offset < body.size) {
-                        val count = input.read(body, offset, body.size - offset)
-                        if (count < 0) throw EOFException()
-                        offset += count
-                    }
-                    val request = Request(first[0], first[1], headers["cseq"]!!, socket)
+                    val body =
+                        ByteArray(headers.getValue("content-length").toInt()) {
+                            val next = readByte()
+                            if (next < 0) throw EOFException()
+                            next.toByte()
+                        }
+                    val request = Request(first[0], first[1], headers.getValue("cseq"), connection, headers, body)
                     received.put(request)
                     reply(request)
                 }
@@ -331,7 +364,7 @@ class AirPlayRecordLifecycleTest {
 
         override fun close() {
             server.close()
-            connections.forEach { runCatching { it.close() } }
+            connections.forEach { runCatching { it.socket.close() } }
             executor.shutdownNow()
         }
     }

@@ -21,8 +21,9 @@ object ConnectionProgress {
         )
 
     /**
-     * 艾瑞泽 8 车机 `TimerThread` 的连接窗口：自 SPP 打开起 30 s 未建立会话即
-     * `WIRELESS_CONNECT_TIMEOUT` → Stop → 由车机重新发起。其他车机的窗口未知。
+     * 艾瑞泽 8 车机自 `TimerThread begin` 起约 30 s 未建立会话即 TIMEOUT → Stop → END。
+     * 手机侧用 BT_LINK 近似对时，仅作诊断提示；不是本地断开期限，也不证明车机会自动重试。
+     * 后续成功样例来自上层新一次 Start。其他车机的窗口未知。
      */
     const val ARRIZO8_CONNECT_WINDOW_MS = 30_000L
 

@@ -42,16 +42,24 @@ still-redacted recent runtime history.
   `CARWITH_FRAME`, `FIRST_VIDEO` and `FIRST_AUDIO`. Repeats are not journaled and
   details hold only fixed tokens (`source=0x5703`, `port=fallback`, `savedTrust=true`).
   `PAIR_SETUP` is absent when saved trust was reused. The layers are independent:
-  `IAP2_AUTHENTICATED` (the head unit's iAP `AUTHENTICATION_PASS`) does not imply
-  `PAIR_VERIFY`. Bluetooth milestones belong to the attempt that was current when
+  `IAP2_AUTHENTICATED` records the phone sending `0xAA05`; it does not prove local
+  certificate/signature verification or imply `PAIR_VERIFY`. `AUTH_SETUP` records
+  HTTP 200 and the response shape; the current implementation does not verify MFi
+  certificates/signatures and still proceeds to SETUP after auth-setup errors.
+  Bluetooth milestones belong to the attempt that was current when
   they arrived, so an attempt that a receiver restart began at Wi-Fi may lack them.
 - After `EXPORT_SNAPSHOT` the report adds `STAGE_DURATIONS` (accumulated milliseconds
   per stage, `*` on the current one), `MILESTONES` (offset from the attempt start, or
   `none`) and, while waiting or after a failure, `BLOCKED_AT <STAGE>:<STEP>` naming the
   missing step (for example `PAIRING:HOMEKIT_PAIRING` after TCP connected but before
-  pair-verify). The main card shows the same layers as a stepper; once 30 s pass after
-  `BT_LINK` without `RECORD` it notes that the Chery Arrizo 8 resets and retries at
-  that point. That window was observed only on that head unit.
+  pair-verify). The main card shows the same layers as a stepper; after 30 s from
+  `BT_LINK` without `RECORD` it shows the observed Chery Arrizo 8 connection-window
+  hint. The head unit measured 30.002 s from its own `TimerThread begin`, then
+  stopped the failed attempt and deregistered Bonjour; a later success used a new
+  upper-layer Start. Phone `BT_LINK` is only an approximate alignment point, and
+  this hint neither stops the phone attempt nor promises an automatic retry.
+  That window was observed only on that head unit. The report mapping and software /
+  on-device checks are in [the Arrizo 8 regression matrix](ARRIZO8-PROTOCOL-REGRESSION.md).
 - Source H.264 frames, video transport writes, native PCM chunks and sent audio
   packets are separate evidence. Writes do not prove receiver display or sound.
 - `RECEIVER_DETECTION` and `DETECT` notes contain the local wizard's fixed state,
@@ -317,6 +325,10 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 只读查看正在阻塞的连接、累计失败、配对/ACL 事件和回连接受/拒绝计数。固定摘要只保留原因、异常类型和必要数字；
 仅 remote/debug 另外记录原始异常和实际地址。旧轮迟到回调不能覆盖新轮结果，没有新增权限或连接兜底。
 本地公告成功不等于车机已识别；仍需用户在原车上复现，并反馈车机是否显示支持无线 CarPlay。
+2026-11-06 起两项本机公告共用生命周期：任一监听结束或蓝牙关闭即撤销整组，`SERVER_STOPPED recordsReleased=true` 表示
+本地注册与监听状态已清除；用户仍请求连接时可最多自动恢复三次，连续立即监听失败也受该上限约束。
+重新注册仍只记录 `SDP_REGISTER outcome=OK evidence=LOCAL_REGISTRATION_ONLY`，不增加车机已识别或回连计数。
+手动停止后不因蓝牙重开或旧恢复任务再次公告。实现与模拟器证据见 [HyperOS 手机兼容记录](HYPEROS-PHONE-COMPATIBILITY.md)。
 
 独立自检失败时，先停正式连接并保持解锁，在前台运行「CarWith 出流自检」约 30 秒后导出。
 `CARLIFE_SELF_TEST_DIAGNOSTICS` 和远程只读命令 `get_carlife_diagnostics` 会保留本轮/最近一次
