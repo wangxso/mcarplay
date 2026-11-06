@@ -2165,6 +2165,10 @@ object SessionController {
                 appendLog("AUDIO: 没有可用音频档位（候选=${candidates.map { it.label }}）——仅推视频")
                 return false
             }
+            if (!client.modes.phoneOwnsAudio) {
+                appendLog("AUDIO: 主音频资源当前归车机——跳过音频协商，不记为格式失败")
+                return false
+            }
             appendLog(
                 "AUDIO: 音频档位候选=${ordered.map { it.label }}" +
                     "（本车机记忆：${AudioProfileMemory.describe(entry)}；" +
@@ -2177,11 +2181,19 @@ object SessionController {
             var streamInfo: AirPlayClient.AudioStreamInfo? = null
             for (candidate in ordered) {
                 if (!client.isConnectionCurrent(connectionGeneration)) return false
+                if (!client.modes.phoneOwnsAudio) {
+                    appendLog("AUDIO: 主音频资源在协商期间转为车机占用——停止候选轮换，不记为格式失败")
+                    return false
+                }
                 val result = client.runAudioStream(sharedSecret, candidate, tuning, expectedEpoch = connectionGeneration)
                 if (result != null) {
                     chosen = candidate
                     streamInfo = result
                     break
+                }
+                if (!client.modes.phoneOwnsAudio) {
+                    appendLog("AUDIO: 主音频 SETUP 被拒时资源已归车机——不记为格式失败")
+                    return false
                 }
                 // SETUP 被拒不等于「车机不兼容」：可能只是资源仲裁/网络抖动，
                 // 不能据此把整台车机的音频判死（置 disabled 只认「拆链」证据）。

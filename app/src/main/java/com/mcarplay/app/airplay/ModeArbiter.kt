@@ -41,6 +41,10 @@ internal class ModeArbiter {
     @get:Synchronized
     val phoneOwnsScreen: Boolean get() = resources.getValue(SCREEN).owner == Entity.CONTROLLER
 
+    /** 主音频资源当前是否归手机。车机占用/借用时，音频 SETUP 拒绝不是格式不兼容。 */
+    @get:Synchronized
+    val phoneOwnsAudio: Boolean get() = resources.getValue(MAIN_AUDIO).owner == Entity.CONTROLLER
+
     /** `/info` 的 `modes`：车机开场的资源请求。返回一行说明。 */
     @Synchronized
     fun applyInitial(modes: Map<*, *>?): String = applyRequests(modes, initial = true)

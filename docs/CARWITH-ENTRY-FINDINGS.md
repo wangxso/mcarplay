@@ -1577,4 +1577,5 @@ WinPlay 与 Windows 版本未记录。
   `unborrowConstraint=1000`；`18:53:38.382` 自动归还主屏。借用持续约 28.2 秒，期间旧版 `0.1.5` 仍从
   `VIDEO: CarWith 帧 #3721` 持续发到 `#5100`（约 1,379 帧），且没有 `SCREEN_OUTPUT`/`screenSuspended` 字段，
   说明该 APK 尚未包含本修复。该载荷也确认：借用状态下 `requestUI` 必须遵守 `unborrowConstraint`，不能把倒车画面抢回；
-  本提交已解析该字段并加入精确载荷回归。
+  本提交已解析该字段并加入精确载荷回归。同一报告的主音频也以 `transferType=3` 归车机，三档音频 SETUP 均回
+  `400 Bad Request`；音频候选现在会先检查 `phoneOwnsAudio`，资源被车机占用时不再轮换格式或写入“格式不兼容”记忆。
