@@ -38,7 +38,7 @@ jobs:
         run: |
           ./gradlew --no-daemon --console=plain spotlessCheck \
             :app:testStandardDebugUnitTest :app:lintStandardDebug :app:assembleStandardDebug \
-            :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'
+            :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*' --tests 'com.mcarplay.app.usb.*'
       - name: Package APK and checksum
         run: |
           mkdir -p dist/debug

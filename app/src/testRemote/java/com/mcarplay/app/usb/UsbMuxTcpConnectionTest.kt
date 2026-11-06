@@ -45,6 +45,24 @@ class UsbMuxTcpConnectionTest {
     }
 
     @Test
+    fun retransmittedSynKeepsTheOriginalSynAckSequence() {
+        val connection =
+            UsbMuxTcpConnection(
+                sourcePort = 1,
+                destinationPort = 62_078,
+                writeFrame = frames::add,
+            )
+        connection.accept(segment(flags = UsbMuxProtocol.TCP_SYN, sequence = 0))
+        // 首个 SYN-ACK 丢失前业务线程已发出数据：nextSequence 已推进，SYN-ACK 仍必须回 ISN=0。
+        connection.send(byteArrayOf(1, 2, 3))
+        connection.accept(segment(flags = UsbMuxProtocol.TCP_SYN, sequence = 0))
+
+        val synAcks = frames.map(::tcp).filter { it.flags == (UsbMuxProtocol.TCP_SYN or UsbMuxProtocol.TCP_ACK) }
+        assertEquals(2, synAcks.size)
+        assertTrue(synAcks.all { it.sequence == 0 && it.acknowledgement == 1 })
+    }
+
+    @Test
     fun completesPureAckBeforeWakingProtocolReader() {
         val events = Collections.synchronizedList(mutableListOf<String>())
         val ackWriteStarted = CountDownLatch(1)

@@ -157,8 +157,11 @@ object UsbNcmAutoConnector {
                             "正在配置 USB 有线 CarPlay（${mode.displayName}），期间 USB ADB 会暂时断开…",
                         )
                     }
-                    launchRootDaemon(token, deviceMac, hostMac, mode)
+                    // 先置位再启动：launchRootDaemon 拉起的 su/setsid 可能在 2 秒日志检查
+                    // 超时抛出后仍在后台运行，此时必须让失败路径执行 root 回滚，否则
+                    // gadget 会一直占着 USB，直到用户手动点“停止”或 App 进程退出。
                     rootStarted = true
+                    launchRootDaemon(token, deviceMac, hostMac, mode)
                     val bound =
                         runCatching { awaitInterface(runId) }
                             .getOrElse { error ->

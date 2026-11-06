@@ -62,9 +62,9 @@ if [ "$run_gradle" = true ]; then
     if [ "${MCARPLAY_HOOK_SKIP_TESTS:-0}" = 1 ]; then
         echo "pre-commit: unit tests skipped (MCARPLAY_HOOK_SKIP_TESTS=1)"
     else
-        # remote-only tests live in app/src/testRemote (package bridge); the filter keeps the
+        # remote-only tests live in app/src/testRemote (packages bridge and usb); the filters keep the
         # shared tests from running a second time under the remote variant.
-        tasks="$tasks :app:testStandardDebugUnitTest :app:testRemoteDebugUnitTest --tests com.mcarplay.app.bridge.*"
+        tasks="$tasks :app:testStandardDebugUnitTest :app:testRemoteDebugUnitTest --tests com.mcarplay.app.bridge.* --tests com.mcarplay.app.usb.*"
     fi
     echo "pre-commit: ./gradlew $tasks"
     # Split $tasks into arguments without glob expansion (the --tests pattern contains '*').

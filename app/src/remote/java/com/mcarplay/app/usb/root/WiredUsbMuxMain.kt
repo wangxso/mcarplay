@@ -96,7 +96,7 @@ object WiredUsbMuxMain {
         private var bulkIn: FileDescriptor? = null
         private var reader: Thread? = null
         private var writer: Thread? = null
-        private val outbound = LinkedBlockingQueue<ByteArray>()
+        private val outbound = LinkedBlockingQueue<ByteArray>(OUTBOUND_CAPACITY)
 
         @Volatile
         private var lastReenumerationAt = 0L
@@ -482,7 +482,12 @@ object WiredUsbMuxMain {
 
         private fun enqueueLocked(bytes: ByteArray) {
             check(bulkIn != null) { "USBMUX bulk IN 尚未打开" }
-            outbound.put(bytes)
+            // 有界队列：主机停止取 bulk IN 时写线程会卡在 writeFully；若继续无限缓存，
+            // ACK 与业务帧会把 root 进程撑到 OOM。溢出说明主机已不再消费，让当前写入
+            // 失败并由连接层关闭对应连接（下一次握手可重建），而不是无限增长。
+            if (!outbound.offer(bytes)) {
+                throw IllegalStateException("USBMUX 出站队列已满（${outbound.size} 帧），主机未消费 bulk IN")
+            }
         }
 
         private fun closeBulk() {
@@ -539,6 +544,7 @@ object WiredUsbMuxMain {
     }
 
     private const val LOCKDOWN_PORT = 62_078
+    private const val OUTBOUND_CAPACITY = 512
     private const val DEFAULT_TRANSPORT_ID = "mcarplay-usb"
     private const val REENUMERATION_COOLDOWN_MILLIS = 15_000L
     private const val REENUMERATION_REPLY_GRACE_MILLIS = 300L

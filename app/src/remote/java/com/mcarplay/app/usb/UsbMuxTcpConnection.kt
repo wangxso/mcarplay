@@ -116,7 +116,10 @@ class UsbMuxTcpConnection(
                 UsbMuxProtocol.tcpFrame(
                     sourcePort = destinationPort,
                     destinationPort = sourcePort,
-                    sequence = (nextSequence - 1).toInt(),
+                    // 重传的 SYN 必须拿到与首个 SYN-ACK 相同的序号。出站数据从 1 开始，
+                    // 所以 ISN 恒为 0；不能用 nextSequence-1——连接已经发过数据后，
+                    // 主机重传 SYN 会收到一个远大于 ISN 的序号，握手永远无法完成。
+                    sequence = INITIAL_SEND_SEQUENCE,
                     acknowledgement = expectedReceiveSequence.toInt(),
                     flags = UsbMuxProtocol.TCP_SYN or UsbMuxProtocol.TCP_ACK,
                 )
@@ -249,5 +252,8 @@ class UsbMuxTcpConnection(
         const val MAX_PAYLOAD_BYTES = 16 * 1024
         const val NANOS_PER_MILLISECOND = 1_000_000L
         const val UINT32_MASK = 0xFFFF_FFFFL
+
+        /** 出站数据从 1 开始，SYN 占用的初始序号恒为 0。 */
+        const val INITIAL_SEND_SEQUENCE = 0
     }
 }
