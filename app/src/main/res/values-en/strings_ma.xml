@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="ma_connecting_hint">Bluetooth iAP2 handshake → join the car hotspot → start the CarPlay session</string>
-    <string name="ma_wallpaper_updated">Wallpaper updated</string>
-    <string name="ma_save_failed">Could not save</string>
     <string name="ma_audio_video_only">Video only (smoother)</string>
     <string name="ma_audio_enable">Turn on sound</string>
     <string name="action_cancel">Cancel</string>
@@ -53,8 +51,6 @@
     <string name="ma_psk_missing">No hotspot password yet; it arrives after Bluetooth connects</string>
     <string name="ma_native_audio_requested">Requested native CarWith audio</string>
     <string name="ma_dimmer_not_ready">Dimming is not ready (it turns on after connecting)</string>
-    <string name="ma_wallpaper_reset">Default wallpaper restored</string>
-    <string name="ma_reset_failed">Could not restore</string>
     <string name="ma_log_empty">The log is empty</string>
     <string name="ma_log_clip_label">mcarplay log</string>
     <string name="ma_log_copied">Copied %1$d characters of redacted log; export a diagnostic report for full details</string>

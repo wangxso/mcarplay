@@ -2,35 +2,31 @@
 <resources>
     <color name="ic_launcher_background">#0DCC58</color>
 
-    <!-- 手机侧 Material 3 色调令牌（与 design/phone-ui-proto.html 一一对应） -->
-    <color name="m3_surface">#0E1415</color>
-    <color name="m3_surface_low">#151B1C</color>
-    <color name="m3_surface_high">#232A2C</color>
-    <color name="m3_surface_highest">#2E3638</color>
-    <color name="m3_on_surface">#DDE5E5</color>
-    <color name="m3_on_var">#B0BEBE</color>
-    <color name="m3_outline">#899393</color>
-    <color name="m3_outline_var">#394444</color>
-    <color name="m3_primary">#7EDCE6</color>
-    <color name="m3_on_primary">#003540</color>
-    <color name="m3_pri_container">#0E4D58</color>
-    <color name="m3_on_pri_container">#A5EEF7</color>
-    <color name="m3_sec_container">#36494D</color>
-    <color name="m3_on_sec_container">#CEE7EB</color>
-    <color name="m3_error">#FFB4AB</color>
-    <color name="m3_err_container">#5C1A16</color>
-    <color name="m3_on_err_container">#FFDAD6</color>
-    <color name="m3_inverse">#2B3335</color>
-    <color name="m3_on_inverse">#ECF4F4</color>
-    <color name="m3_wave_idle">#39484A</color>
-    <color name="m3_wave_connecting">#3E8E9B</color>
-    <color name="m3_wave_connected">#4FB4C4</color>
-    <color name="m3_orbit">#2A3B3E</color>
-    <color name="m3_ok">#7BD8A5</color>
-    <color name="m3_ok_dot">#58C08A</color>
-    <color name="m3_amber">#E8C072</color>
+    <!-- 手机侧旧 Material 3 令牌：现为 ui_* 令牌（见 colors_ui.xml / values-night）的别名，
+         手机界面因此随系统浅/深色切换。新代码直接用 ui_*；这些别名在设置与诊断页迁完后删除。
+         车机桌面不使用它们（grep m3_ 无 launcher 命中），仍是独立的深色体系。 -->
+    <color name="m3_surface">@color/ui_bg</color>
+    <color name="m3_surface_low">@color/ui_card</color>
+    <color name="m3_surface_highest">@color/ui_track</color>
+    <color name="m3_on_surface">@color/ui_text</color>
+    <color name="m3_on_var">@color/ui_text_secondary</color>
+    <color name="m3_outline">@color/ui_text_disabled</color>
+    <color name="m3_outline_var">@color/ui_track</color>
+    <color name="m3_primary">@color/ui_accent_text</color>
+    <color name="m3_on_primary">@color/ui_on_accent</color>
+    <color name="m3_sec_container">@color/ui_field</color>
+    <color name="m3_on_sec_container">@color/ui_text</color>
+    <color name="m3_error">@color/ui_error_text</color>
+    <color name="m3_err_container">@color/ui_error_tint</color>
+    <color name="m3_on_err_container">@color/ui_error_text</color>
+    <color name="m3_inverse">@color/ui_text</color>
+    <color name="m3_on_inverse">@color/ui_bg</color>
+    <color name="m3_ok">@color/ui_ok_text</color>
+    <color name="m3_ok_dot">@color/ui_ok</color>
+    <color name="m3_amber">@color/ui_warn</color>
+    <color name="m3_mono_dim">@color/ui_text_secondary</color>
+    <color name="m3_mono_key">@color/ui_accent_text</color>
+    <!-- 日志控制台在浅色模式下仍是终端式深底，所以这两个保持固定值 -->
     <color name="m3_console_text">#8FCFA4</color>
     <color name="m3_console_bg">#0A0F10</color>
-    <color name="m3_mono_dim">#9FB2B0</color>
-    <color name="m3_mono_key">#6FC4CF</color>
 </resources>

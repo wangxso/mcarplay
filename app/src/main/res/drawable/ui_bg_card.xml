@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 卡片：白底、无边框、圆角 20dp；阴影由 View 的 elevation 提供 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/ui_card" />
+    <corners android:radius="@dimen/ui_radius_card" />
+</shape>

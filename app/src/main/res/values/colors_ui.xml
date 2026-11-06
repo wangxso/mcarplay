@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 界面重构令牌（Apple 风格，浅色）。见 docs/UI-REDESIGN.md §5.1。
+         深色值在 values-night/colors_ui.xml。旧的 m3_* 令牌在界面迁移完成前保持不变。 -->
+    <color name="ui_bg">#F5F5F7</color>
+    <color name="ui_card">#FFFFFF</color>
+    <color name="ui_field">#F5F5F7</color>
+    <color name="ui_track">#E5E5EA</color>
+    <color name="ui_text">#1D1D1F</color>
+    <color name="ui_text_secondary">#6E6E73</color>
+    <color name="ui_text_disabled">#AEAEB2</color>
+    <color name="ui_accent">#0071E3</color>
+    <!-- accent 作进度条与图标；accent_fill 是主按钮底（白字 ≥4.5）；accent_text 作文字（次按钮、链接） -->
+    <color name="ui_accent_fill">#0071E3</color>
+    <color name="ui_accent_text">#0062C4</color>
+    <color name="ui_on_accent">#FFFFFF</color>
+    <!-- 次按钮底：accent 10% -->
+    <color name="ui_accent_tint">#1A0071E3</color>
+    <!-- 进行中的层（进度条）：accent 40% -->
+    <color name="ui_accent_soft">#660071E3</color>
+    <!-- 状态色用于色块与图标；作为文字用 *_text（原色对比度不足 AA） -->
+    <color name="ui_ok">#34C759</color>
+    <color name="ui_ok_text">#1F7A35</color>
+    <color name="ui_error">#FF3B30</color>
+    <color name="ui_error_text">#C4001A</color>
+    <!-- 危险按钮底：error 12% -->
+    <color name="ui_error_tint">#1FFF3B30</color>
+    <!-- 提示/待办（橙）：warn 作色块与图标，warn_text 作文字；ok_tint / warn_tint 是徽标底 -->
+    <color name="ui_warn">#FF9500</color>
+    <color name="ui_warn_text">#8F5200</color>
+    <color name="ui_warn_tint">#1FFF9500</color>
+    <color name="ui_ok_tint">#1F34C759</color>
+    <color name="ui_ripple">#14000000</color>
+</resources>

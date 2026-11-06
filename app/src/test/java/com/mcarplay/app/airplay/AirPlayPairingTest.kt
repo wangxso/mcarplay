@@ -119,6 +119,30 @@ class AirPlayPairingTest {
     }
 
     @Test
+    fun setupCallbackFiresOnlyWhenPairSetupCompletes() {
+        val receiver = MockReceiver()
+        val transport = TlvTransport { path, body -> receiver.handle(path, body) }
+        var setups = 0
+        val handshake =
+            PairingHandshake(newIdentity(), { transport }, { error("unexpected reconnect") }, {}, onSetupComplete = { setups++ })
+        val first = handshake.run(null, null)
+        assertEquals(1, setups)
+        handshake.run(first.receiver, null)
+        handshake.run(first.receiver, null)
+        assertEquals(1, setups)
+    }
+
+    @Test
+    fun repairedTrustReportsTheFreshSetupOnce() {
+        val receiver = MockReceiver()
+        val transport = TlvTransport { path, body -> receiver.handle(path, body) }
+        var setups = 0
+        val handshake = PairingHandshake(newIdentity(), { transport }, {}, {}, onSetupComplete = { setups++ })
+        handshake.run(PairSetupClient.ReceiverIdentity(receiver.pairingId, receiver.staticKey.publicKey), null)
+        assertEquals(1, setups)
+    }
+
+    @Test
     fun forgottenControllerRepairsTrustOnceOnFreshConnection() {
         val receiver = MockReceiver()
         val requests = ArrayList<String>()
@@ -224,7 +248,7 @@ class AirPlayPairingTest {
      * [shortKeyRounds] 指定前几轮 M2 故意给首字节为 0 的 B，其余轮次 B 恒满长（否则约 1/256 触发重发 M1，请求计数不稳）；
      * [badSetupSignature] 让 M6 签名失效。
      */
-    private class MockReceiver(
+    internal class MockReceiver(
         private val padded: Boolean = true,
         private var shortKeyRounds: Int = 0,
         private val badSetupSignature: Boolean = false,

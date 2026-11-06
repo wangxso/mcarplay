@@ -3,9 +3,8 @@ package com.mcarplay.app.transport
 import java.io.Closeable
 import java.io.IOException
 import java.io.InputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
-import java.io.PipedInputStream
-import java.io.PipedOutputStream
 
 /** 阻塞式双向字节流抽象：蓝牙 RFCOMM socket 与内存回环测试共用。 */
 interface DuplexStream : Closeable {
@@ -43,56 +42,96 @@ class StreamDuplexStream(
     }
 }
 
-/** 内存回环流对：两端各持一个 DuplexStream，用于单元测试。 */
+/**
+ * 内存回环流对：两端各持一个 DuplexStream，用于单元测试。
+ *
+ * 任一端 close 后，两个方向都不再接受写入；对端读完已写入的字节后读到 EOF（-1），
+ * 与 socket 收到 FIN 一致。
+ */
 class InMemoryStreamPair {
     private val aToB = Pipe()
     private val bToA = Pipe()
 
     val sideA: DuplexStream =
         object : DuplexStream {
-            override fun read(buffer: ByteArray) = aToB.source.read(buffer)
+            override fun read(buffer: ByteArray) = aToB.read(buffer)
 
-            override fun write(bytes: ByteArray) = bToA.writeAndFlush(bytes)
+            override fun write(bytes: ByteArray) = bToA.write(bytes)
 
             override fun close() {
                 aToB.close()
-                bToA.closePartner()
+                bToA.close()
             }
         }
 
     val sideB: DuplexStream =
         object : DuplexStream {
-            override fun read(buffer: ByteArray) = bToA.source.read(buffer)
+            override fun read(buffer: ByteArray) = bToA.read(buffer)
 
-            override fun write(bytes: ByteArray) = aToB.writeAndFlush(bytes)
+            override fun write(bytes: ByteArray) = aToB.write(bytes)
 
             override fun close() {
                 bToA.close()
-                aToB.closePartner()
+                aToB.close()
             }
         }
 
+    /**
+     * 与线程无关的单向字节管道。
+     *
+     * 不用 PipedInputStream：它记住最后一个写入线程，该线程一退出、缓冲区又读空，
+     * 读端就报 `Write end dead` / `Pipe broken`。测试里的模拟车机线程发完最后一帧就退出，
+     * 于是链路被误判断开（CI 上 Iap2SenderSessionTest 偶发失败）；真 RFCOMM socket 没有这种语义。
+     */
     private class Pipe {
-        val source = PipedInputStream(1 shl 16)
-        val sink = PipedOutputStream()
+        private val lock = Object()
+        private val chunks = ArrayDeque<ByteArray>()
+        private var headOffset = 0
+        private var closed = false
 
-        init {
-            sink.connect(source)
+        fun write(bytes: ByteArray) {
+            synchronized(lock) {
+                if (closed) throw DuplexClosedException("in-memory pipe closed")
+                if (bytes.isEmpty()) return
+                chunks.addLast(bytes.copyOf())
+                lock.notifyAll()
+            }
         }
 
-        fun writeAndFlush(bytes: ByteArray) {
-            sink.write(bytes)
-            sink.flush()
+        /** 阻塞到有数据；关闭且已读空时返回 -1。 */
+        fun read(buffer: ByteArray): Int {
+            if (buffer.isEmpty()) return 0
+            synchronized(lock) {
+                while (chunks.isEmpty()) {
+                    if (closed) return -1
+                    try {
+                        lock.wait()
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw InterruptedIOException("in-memory pipe read interrupted")
+                    }
+                }
+                var copied = 0
+                while (copied < buffer.size && chunks.isNotEmpty()) {
+                    val head = chunks.first()
+                    val count = minOf(head.size - headOffset, buffer.size - copied)
+                    System.arraycopy(head, headOffset, buffer, copied, count)
+                    copied += count
+                    headOffset += count
+                    if (headOffset == head.size) {
+                        chunks.removeFirst()
+                        headOffset = 0
+                    }
+                }
+                return copied
+            }
         }
 
         fun close() {
-            runCatching { sink.close() }
-            runCatching { source.close() }
-        }
-
-        /** 关闭对端出口，让对方读到 EOF。 */
-        fun closePartner() {
-            runCatching { source.close() }
+            synchronized(lock) {
+                closed = true
+                lock.notifyAll()
+            }
         }
     }
 }

@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.IntentCompat
 import com.mcarplay.app.R
+import com.mcarplay.app.ui.EdgeToEdge
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 
@@ -40,6 +41,7 @@ class BtSnoopActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_btsnoop)
+        EdgeToEdge.padContent(this)
         status = findViewById(R.id.btsnoopStatus)
         result = findViewById(R.id.btsnoopResult)
         copy = findViewById(R.id.btsnoopCopy)

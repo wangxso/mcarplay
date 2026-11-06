@@ -20,7 +20,6 @@ import com.mcarplay.app.bt.BtSessionGate
 import com.mcarplay.app.bt.Iap2BluetoothClient
 import com.mcarplay.app.bt.Iap2BluetoothServer
 import com.mcarplay.app.bt.TargetDevicePrefs
-import com.mcarplay.app.capture.HiddenDisplaySource
 import com.mcarplay.app.carlife.CarLifeAudioEvent
 import com.mcarplay.app.carlife.CarLifeJoinGate
 import com.mcarplay.app.carlife.CarLifeLaunchStrategy
@@ -30,10 +29,15 @@ import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
 import com.mcarplay.app.carlife.mapCarLifeTouch
 import com.mcarplay.app.compat.CompatibilityPrefs
+import com.mcarplay.app.compat.PassatReturnPolicy
+import com.mcarplay.app.compat.PassatReturnStrategy
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverProbePlan
+import com.mcarplay.app.compat.VehiclePreset
+import com.mcarplay.app.compat.VehiclePresetRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
+import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.diagnostics.ConnectionStage
 import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.diagnostics.StreamEnvironment
@@ -45,21 +49,19 @@ import com.mcarplay.app.input.ConsumerKeys
 import com.mcarplay.app.input.HidNavigation
 import com.mcarplay.app.input.MediaKeyEdge
 import com.mcarplay.app.input.TouchReports
-import com.mcarplay.app.input.TouchRouter
-import com.mcarplay.app.launcher.VirtualLauncher
-import com.mcarplay.app.launcher.settings.AppOrientationCompat
-import com.mcarplay.app.launcher.settings.DisplayPrefs
 import com.mcarplay.app.net.AirPlayFeatures
 import com.mcarplay.app.net.CarPlayCtrlAdvertiser
 import com.mcarplay.app.net.CarPlayServiceBrowser
 import com.mcarplay.app.net.CtrlInviteGate
 import com.mcarplay.app.net.EndpointHosts
+import com.mcarplay.app.net.StreamingInviteReconnect
 import com.mcarplay.app.net.WifiCarPlayConnector
 import com.mcarplay.app.net.WifiConnectCommand
 import com.mcarplay.app.net.WifiSavedNetworks
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
+import com.mcarplay.app.settings.DisplayPrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
@@ -197,6 +199,7 @@ object SessionController {
         val app = context.applicationContext
         appContext = app
         ReceiverDetectionRuntime.initialize(app)
+        VehiclePresetRuntime.load(app)
         ReceiverDetectionRuntime.onBudgetExpired = { epoch ->
             Bg.run("detection-budget") {
                 synchronized(this) {
@@ -209,9 +212,6 @@ object SessionController {
             }
         }
         ensureSessionObjects(context.applicationContext)
-        // 横屏兼容写入失败的原因（user build 限制 / Shizuku 故障）只有这里能落盘：
-        // 车机侧设置面板的 toast 只给用户看，排查需要日志。
-        AppOrientationCompat.diagSink = ::appendLog
         // 主线程调用 shell 的告警（历史上两次真机 ANR 都源于此；HKS 下 logcat 不可读）
         Shell.violationSink = ::appendLog
         // HID 原始日志开关（键位校准）：静态标志从偏好初始化，进程冷启动也要生效
@@ -279,23 +279,11 @@ object SessionController {
     }
 
     /**
-     * 旋钮/四向拨杆 → 方向键：注入**应用屏**虚拟显示（DPAD 需要焦点，不能全局分发）。
-     *
-     * 走 UserService 的 `injectInputEvent`（毫秒级）；失败回退 `input -d <id> keyevent`
-     * （多 ~30ms 但不会丢键）。dок 屏不参与——跨屏焦点需要 Launcher 侧改造，见
-     * docs/HID-KNOB.md。
+     * 旋钮/四向拨杆 → 方向键。CarWith 流没有可注入方向键的应用屏（原先的虚拟屏桌面已移除），
+     * 这里只记日志，便于看到车机确实发来了导航类 HID。
      */
     private fun injectNavigationKey(keyCode: Int) {
-        // 优先注入「当前可见的应用屏」（桌面网格 / 打开中的应用屏），否则退回主应用屏
-        val displayId =
-            VirtualLauncher.activeAppDisplayId().takeIf { it > 0 }
-                ?: VirtualLauncher.appDisplayId
-        if (displayId <= 0) {
-            appendLog("HID: 应用屏未就绪（displayId=$displayId）——导航键忽略")
-            return
-        }
-        if (CarInputClient.keyEvent(displayId, keyCode)) return
-        Shell.exec("input -d $displayId keyevent $keyCode", 3_000L)
+        appendLog("HID: 导航键 ${HidNavigation.nameOf(keyCode)} 无处注入（CarWith 流不承载方向键）——忽略")
     }
 
     /**
@@ -362,9 +350,6 @@ object SessionController {
 
     @Volatile
     var currentClient: AirPlayClient? = null
-
-    @Volatile
-    var currentHiddenSource: HiddenDisplaySource? = null
 
     private val carLifeSessions = CarLifeSessionRegistry()
 
@@ -670,13 +655,20 @@ object SessionController {
                     },
                     targetProvider = targetProvider,
                     diagnostics = bluetoothDiagnostics,
+                    onAdapterStateChanged = { state -> bluetoothServer?.onAdapterStateChanged(state) },
                     onAwaitingReceiverTap = { name ->
                         // 艾瑞泽 8 这类车机只能由车机端发起，需要用户在车机上操作（2026-11-02）
                         phaseHint = t(R.string.sc_tap_phone_on_receiver, name)
                         uiHintSink?.invoke(t(R.string.sc_tap_phone_on_receiver_hint, name))
                     },
                 )
-            ctrlAdvertiser = CarPlayCtrlAdvertiser(context) { line -> appendLog(line) }
+            ctrlAdvertiser =
+                CarPlayCtrlAdvertiser(context) { line -> appendLog(line) }.also { advertiser ->
+                    advertiser.onInvite = {
+                        ConnectionDiagnostics.milestoneCurrent(ConnectionMilestone.CTRL_INVITED)
+                        onCtrlInvite()
+                    }
+                }
             endpointBrowser =
                 CarPlayServiceBrowser(
                     context,
@@ -814,6 +806,12 @@ object SessionController {
                 log = { line -> appendLog(line) },
                 requestedVideoSize = requestedVideoSize,
                 launchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
+                onReturnToCar = onReturnToCar@{
+                    if (currentCarLifeSession !== session) return@onReturnToCar
+                    val client = currentClient ?: return@onReturnToCar
+                    val note = client.modes.onUserReturnedToCar()
+                    enqueueModesAssert(client, "CarWith 返回车机（→ $note）", requestKeyFrame = false)
+                },
             )
         return session
     }
@@ -966,8 +964,10 @@ object SessionController {
         if (!alreadyRunning) {
             ctrlAdvertiser?.resetInviteCount()
             inviteRetryCount = 0
+            lastInviteReconnectAtMillis = 0L
             forceKeyFrameCount = 0
             requestUiCount = 0
+            takeBackFailures = 0
             touchLogCount = 0
         } else {
             appendLog("SESSION: 会话已在运行——沿用当前会话，不清零邀请与要帧计数")
@@ -1039,9 +1039,6 @@ object SessionController {
             CarPlayService
                 .stop(context)
             boundCarSsid = null
-            // 「强制应用横屏」覆盖的用户终态复原（原先在 retireSession 里——那里每轮
-            // 配对起步也执行，会杀掉新一轮刚拉起的应用，2026-10-23 移出到真实终态）。
-            appContext?.let { ctx -> AppOrientationCompat.resetAllAsync(ctx, ::appendLog) }
             // shell 兜底存下的系统网络（connect-network）自动 forget 还原：无互联网热点
             // 被系统当默认网会挤掉移动数据。失败只记日志（用户可到 WLAN 手动删）。
         } finally {
@@ -1059,7 +1056,8 @@ object SessionController {
                 } finally {
                     runCatching { retiringVideo?.stop() }
                     runCatching { retiringClient?.close() }
-                    runCatching { detachActiveBtSessions() }
+                    // 连接到此结束：先发 0xEA01 收掉本轮 EA 会话，免得车机挡住下一次（奥迪 EAP 泄漏保护）。
+                    runCatching { detachActiveBtSessions(eaStopReason = "连接结束 ${reason.name}") }
                     runCatching { bluetoothServer?.stop() }
                     runCatching { bluetoothClient?.stop() }
                     runCatching { bluetoothDiagnostics.finish() }
@@ -1225,11 +1223,7 @@ object SessionController {
         nativeAudioBridge = null
         currentSharedSecret = null
         currentAudioHost = null
-        currentHiddenSource?.release()
-        currentHiddenSource = null
         stopFormalCarLife()
-        TouchRouter
-            .reset()
         currentClient?.cancelled = true
         if (closeClient) currentClient?.close()
         currentClient = null
@@ -1296,6 +1290,7 @@ object SessionController {
         ssidSink?.invoke(wifi.ssid)
         lastWifiPsk = wifi.passphrase
         lastCarWifiSsid = wifi.ssid
+        ConnectionDiagnostics.milestoneCurrent(ConnectionMilestone.WIFI_CREDENTIALS, "source=0x5703")
         phaseHint = t(R.string.sc_got_credentials)
         appendLog(">>> 拿到车机热点凭据（0x5703）——立即绑定 WiFi + 广播 _carplay-ctrl")
         // ctrl 广播已在 startConnection 时发布（catplay：连接前保持发布能力在线）。
@@ -2105,10 +2100,15 @@ object SessionController {
     /** 单引号包裹的 POSIX shell 字面量（SSID/密码可能含空格与特殊字符）。 */
     private fun shellQuote(s: String): String = "'" + s.replace("'", "'\''") + "'"
 
-    /** 复现「BT 控制已结束」状态：断开当前任一路径的 iAP2 控制会话（DiPlay 只在此状态应答 RTSP）。 */
-    private fun detachActiveBtSessions() {
-        bluetoothServer?.detachCurrentSession()
-        bluetoothClient?.detachCurrentSession()
+    /**
+     * 断开当前任一路径的 iAP2 控制会话。
+     *
+     * [eaStopReason] 非空 = 本轮控制会话到此结束，先发 0xEA01 收掉 EA 会话再关；
+     * null = 复现「BT 控制已结束」状态（DiPlay 只在此状态应答 RTSP），保持原有立即关闭。
+     */
+    private fun detachActiveBtSessions(eaStopReason: String?) {
+        bluetoothServer?.detachCurrentSession(eaStopReason)
+        bluetoothClient?.detachCurrentSession(eaStopReason)
     }
 
     /**
@@ -2532,9 +2532,11 @@ object SessionController {
                 // 兜底：热点场景车机 IP = 网关（Audi 实测 .1，但取网关更通用）。
                 // mDNS 在部分网络/机型上不稳定（2026-10-11 实测车机 mDNS 时有时无）；
                 // 网关地址 + 默认端口 7000 直接连，AirPlay 端口是固定约定。
-                val gateway = wifiConnector?.gatewayAddress()
-                if (gateway != null && EndpointHosts.candidates(listOf(gateway)).isNotEmpty()) {
-                    appendLog(">>> [$source] mDNS 未发现，兜底使用网关地址 $gateway:7000（车机热点网关=车机）")
+                val gateways = wifiConnector?.gatewayCandidates().orEmpty()
+                val gateway = gateways.firstOrNull()
+                if (gateway != null) {
+                    val others = if (gateways.size > 1) "；其余默认路由网关 ${gateways.drop(1).joinToString("、")}" else ""
+                    appendLog(">>> [$source] mDNS 未发现，兜底使用网关地址 $gateway:7000（车机热点网关=车机$others）")
                     return effective.copy(
                         ipAddresses = listOf(gateway) + effective.ipAddresses,
                         airPlayPort = if (needPort) 7000 else effective.airPlayPort,
@@ -2706,7 +2708,7 @@ object SessionController {
                     ">>> [$source] 空端点等待 ${PENDING_START_SESSION_WAIT_MS / 60_000} 分钟超时——" +
                         "车机未下发 0x4301。拆掉保活链路让重连循环接管，请导出日志反馈",
                 )
-                detachActiveBtSessions()
+                detachActiveBtSessions(eaStopReason = "空端点等待超时")
             }
         }
     }
@@ -2767,6 +2769,7 @@ object SessionController {
     private fun scheduleTakeBackCheck(
         client: AirPlayClient,
         reason: String,
+        alreadyRetried: Boolean,
     ) {
         val touchesBefore = touchLogCount
         val keyFramesBefore = forceKeyFrameCount
@@ -2781,6 +2784,58 @@ object SessionController {
                 "SESSION: 拿回主屏 ${TAKE_BACK_CHECK_MS}ms 后：车机触控 +${touchLogCount - touchesBefore} 条、" +
                     "要关键帧 +${forceKeyFrameCount - keyFramesBefore} 次（${client.modes.describe()}；起因 $reason）",
             )
+            applyPassatReturnStrategy(
+                client,
+                PassatReturnPolicy.takeBackFailed(touchLogCount - touchesBefore, forceKeyFrameCount - keyFramesBefore),
+                alreadyRetried,
+            )
+        }
+    }
+
+    /** 实验策略只在主页「车型适配」手动选了大众时生效，其他车型选择或自动判定一律视为关闭。 */
+    private fun passatReturnStrategy(): PassatReturnStrategy =
+        if (VehiclePresetRuntime.current == VehiclePreset.VOLKSWAGEN) {
+            appContext?.let(CompatibilityPrefs::passatReturnStrategy) ?: PassatReturnStrategy.OFF
+        } else {
+            PassatReturnStrategy.OFF
+        }
+
+    /** 连续「拿回主屏车机没反应」次数；车机有反应或新一轮连接时清零。 */
+    @Volatile
+    private var takeBackFailures = 0
+
+    /** 帕萨特「回主界面再进」实验策略的失败后续动作；用户未选择策略时什么都不做。 */
+    private fun applyPassatReturnStrategy(
+        client: AirPlayClient,
+        failed: Boolean,
+        alreadyRetried: Boolean,
+    ) {
+        val strategy = passatReturnStrategy()
+        if (strategy == PassatReturnStrategy.OFF) return
+        if (!failed) {
+            takeBackFailures = 0
+            return
+        }
+        val failures = ++takeBackFailures
+        if (PassatReturnPolicy.retryRebuild(strategy, failed, alreadyRetried)) {
+            appendLog("PASSAT: 策略「失败后重建一次」——拿回主屏车机没反应，重建主屏流重试")
+            enqueueModesAssert(
+                client,
+                "帕萨特策略：拿回主屏无反应，重建重试",
+                requestKeyFrame = true,
+                retakeScreen = true,
+                rebuildStream = true,
+                takeBackRetried = true,
+            )
+        } else if (PassatReturnPolicy.disconnect(strategy, failures)) {
+            appendLog("PASSAT: 策略「连续失败后断开」——连续 $failures 次拿回主屏车机没反应，结束本轮，请重新连接")
+            synchronized(this) {
+                if (!connectCancelled && !client.cancelled && currentClient === client) {
+                    appContext?.let { disconnect(it, DiagnosticCode.VIDEO_CLOSED) }
+                }
+            }
+        } else {
+            appendLog("PASSAT: 策略 ${strategy.key}：拿回主屏车机没反应（连续 $failures 次）")
         }
     }
 
@@ -2790,6 +2845,7 @@ object SessionController {
         requestKeyFrame: Boolean,
         retakeScreen: Boolean = false,
         rebuildStream: Boolean = false,
+        takeBackRetried: Boolean = false,
     ) {
         val connectionGeneration = client.connectionGeneration
         val action =
@@ -2854,7 +2910,7 @@ object SessionController {
             }
             if (restoreScreen && client.modes.phoneOwnsScreen) {
                 videoSender?.reprimeOnNextKeyFrame()
-                scheduleTakeBackCheck(client, reason)
+                scheduleTakeBackCheck(client, reason, takeBackRetried)
             }
             // 自己补的 I 帧不计入车机要帧风暴（用户连点图标不能被当成解码失败）
             val keyFrame = restoreScreen && client.modes.phoneOwnsScreen && videoSender?.requestKeyFrame(fromReceiver = false) == true
@@ -2863,6 +2919,71 @@ object SessionController {
                     if (request.requestKeyFrame) "，关键帧" + (if (keyFrame) "已请求" else "未就绪") else "",
             )
         }
+    }
+
+    /** 上次「推流中车机邀请 → 重建会话」的 uptime 时刻（0 = 本次连接尚无；startConnection 清零）。 */
+    @Volatile
+    private var lastInviteReconnectAtMillis = 0L
+
+    /** 当前推流会话的诊断轮次（邀请重连时在时间线上收口本轮）。 */
+    @Volatile
+    private var streamingDiagnosticAttempt: String? = null
+
+    /**
+     * 车机 ctrl 邀请回调（应答线程）。连接阶段的邀请由连接流程消费，这里只处理推流中的邀请：
+     * 已登记的车机（[ReceiverCompatibility.Policy.reconnectOnStreamingInvite]）退役当前会话并按邀请重连，
+     * 带 [StreamingInviteReconnect.DEBOUNCE_MS] 防抖；其余车机只记日志（原行为）。
+     */
+    private fun onCtrlInvite() {
+        val client = currentClient ?: return
+        val streaming = !connectCancelled && !sessionStarting.get() && videoSender?.isRunning == true
+        if (!streaming) return
+        val now = android.os.SystemClock.uptimeMillis()
+        val decision =
+            synchronized(inviteReconnectLock) {
+                StreamingInviteReconnect
+                    .decide(
+                        streaming = true,
+                        enabled = client.receiverCompatibility().reconnectOnStreamingInvite,
+                        nowMillis = now,
+                        lastReconnectAtMillis = lastInviteReconnectAtMillis,
+                    ).also { if (it == StreamingInviteReconnect.Decision.RECONNECT) lastInviteReconnectAtMillis = now }
+            }
+        when (decision) {
+            StreamingInviteReconnect.Decision.NOT_STREAMING -> Unit
+            StreamingInviteReconnect.Decision.NOT_ENABLED ->
+                appendLog("CTRL: 推流中收到车机邀请——该车机未登记邀请重连，保持当前会话")
+            StreamingInviteReconnect.Decision.DEBOUNCED ->
+                appendLog(
+                    "CTRL: 推流中收到车机邀请——距上次邀请重连 ${now - lastInviteReconnectAtMillis}ms，" +
+                        "不足 ${StreamingInviteReconnect.DEBOUNCE_MS / 1000}s，忽略",
+                )
+            StreamingInviteReconnect.Decision.RECONNECT ->
+                Bg.run("streaming-invite-reconnect") { reconnectOnStreamingInvite(client) }
+        }
+    }
+
+    private val inviteReconnectLock = Any()
+
+    private fun reconnectOnStreamingInvite(client: AirPlayClient) {
+        val endpoint = client.currentEndpoint
+        if (connectCancelled ||
+            currentClient !== client ||
+            sessionStarting.get() ||
+            videoSender?.isRunning != true ||
+            !ReceiverDetectionRuntime.isCurrent(endpoint.observation)
+        ) {
+            appendLog("CTRL: 推流中邀请重连——会话已更替或结束，放弃")
+            return
+        }
+        appendLog(">>> 推流中收到车机 ctrl 邀请（车机要求重建会话）——退役当前会话，按邀请重连")
+        streamingDiagnosticAttempt?.let { attempt ->
+            ConnectionDiagnostics.timeline.note(attempt, "CTRL invite while streaming: reconnect")
+            ConnectionDiagnostics.timeline.videoEnded(attempt)
+        }
+        streamingDiagnosticAttempt = null
+        retireSession()
+        onCarPlayEndpoint(endpoint, "推流中邀请重连")
     }
 
     /** 本次连接内「SETUP 被车机关通道后等邀请重连」已用次数（startConnection 清零）。 */
@@ -3065,6 +3186,9 @@ object SessionController {
             watchForPendingStartSession(endpoint, source)
             return
         }
+        if (endpoint.ssid != INVITED_WIFI_LABEL) {
+            ConnectionDiagnostics.timeline.milestone(diagnosticAttempt, ConnectionMilestone.WIFI_CREDENTIALS, "source=endpoint")
+        }
         appendLog(
             ">>> [$source] 拿到接收端热点：SSID=${endpoint.ssid}；" +
                 "密码=${if (endpoint.passphrase.isEmpty()) "(空)" else "已获取"}",
@@ -3124,6 +3248,7 @@ object SessionController {
                 if (ownsConnection()) sessionStarting.set(false)
                 return@proceed
             }
+            ConnectionDiagnostics.timeline.milestone(diagnosticAttempt, ConnectionMilestone.WIFI_JOINED)
             ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.DISCOVERY)
             // 网络绑定完成：ctrl 广播重新注册（落到车机所在网络），同时开始后台 mDNS 发现。
             // 两者都发生在等邀请期间，不额外占用时间。
@@ -3162,6 +3287,13 @@ object SessionController {
                         appendLog(
                             "AIRPLAY: 并入交接期间晚到的 0x4301 端点 → " +
                                 "${effectiveEndpoint.ipAddresses.firstOrNull()}:${effectiveEndpoint.airPlayPort}",
+                        )
+                    }
+                    if (effectiveEndpoint.airPlayPort > 0 && EndpointHosts.hasUsable(effectiveEndpoint.ipAddresses)) {
+                        ConnectionDiagnostics.timeline.milestone(
+                            diagnosticAttempt,
+                            ConnectionMilestone.RECEIVER_RESOLVED,
+                            if (effectiveEndpoint.portIsFallback) "port=fallback" else "port=advertised",
                         )
                     }
                     if (wasCancelled()) {
@@ -3205,6 +3337,9 @@ object SessionController {
                                 }
                             },
                         ).also { created ->
+                            created.onMilestone = { reached, detail ->
+                                ConnectionDiagnostics.timeline.milestone(diagnosticAttempt, reached, detail)
+                            }
                             // 车机媒体键（iAP2 0x6802 通路）：方向盘/面板的上一曲、下一曲。
                             // 放在这里而不是调用点，保证重连重建 client 时也挂得上。
                             created.onMediaKey = { keyCode -> routeCarMediaKey(keyCode, "iAP2 0x6802") }
@@ -3217,12 +3352,6 @@ object SessionController {
                                 scheduleModesReclaim(created)
                             }
                         }
-                    // 「强制应用横屏」覆盖写入在配对起步就入队：`am compat enable` 会立即
-                    // 杀名单内应用，必须赶在 attach 拉起任何应用之前完成。配对阶段有几十秒
-                    // 空窗，写入在此期间自然排空，attach 只需 drain（~0ms）——原先在 attach
-                    // 里同步跑（1.6s，串行时 3.2s）会侵占「RECORD→屏幕口 keepAlive」的
-                    // ~10s 拆链预算（keepAlive 帧自 attach 返回后才起发，2026-10-23 定谳）。
-                    appContext?.let { ctx -> AppOrientationCompat.applyAllAsync(ctx, ::appendLog) }
                     if (ownsConnection()) retireSession()
                     // 会话静默降噪（2026-10-10）：从交接点起暂停其它接收端的出站连接探测
                     // （典型：连着 DiPlay 测试台时不再噪音式探测 Audi）。会话结束/断开时解除。
@@ -3282,7 +3411,8 @@ object SessionController {
                         // 门槛：仅当本轮真的连上过接收端 RTSP（attemptedPairing）才用此 hack；
                         // 端点未解析（无 IP）/端口未开时绝不值得断 BT（2026-10-11 踩过：
                         // mDNS 失败也触发 detach，白白拆掉车机窗口）。
-                        detachActiveBtSessions()
+                        // 这里只模拟交接后的退役状态，不结束 EA 会话。
+                        detachActiveBtSessions(eaStopReason = null)
                         client = newClient()
                         if (wasCancelled()) {
                             client.close()
@@ -3489,13 +3619,6 @@ object SessionController {
                                                         ReceiverDetectionRuntime.touch(client.currentEndpoint.observation)
                                                     }
                                                 }
-                                            } else {
-                                                contacts.forEach {
-                                                    TouchRouter.onContact(
-                                                        context.applicationContext,
-                                                        it,
-                                                    )
-                                                }
                                             }
                                         } else if (report != null) {
                                             appendLog(
@@ -3560,7 +3683,7 @@ object SessionController {
                                             "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；${request.note}）",
                                             requestKeyFrame = request.allowed,
                                             retakeScreen = request.retake,
-                                            rebuildStream = request.rebuildStream,
+                                            rebuildStream = PassatReturnPolicy.rebuildStream(passatReturnStrategy(), request.rebuildStream),
                                         )
                                     }
 
@@ -3627,7 +3750,6 @@ object SessionController {
                                 // openDataPort()，再协商音频，最后 RECORD + 启动编码器。
                                 var pendingVideoW = 0
                                 var pendingVideoH = 0
-                                var pendingVideoDensity = 0
                                 var carLife: CarLifeSession? = null
                                 lateinit var sessionVideoSender: VideoSender
                                 if (host != null) {
@@ -3655,30 +3777,12 @@ object SessionController {
                                             } ?: 30
                                     activeScalePercent = scalePct
                                     activeTargetFps = fps
-                                    // 车机触摸在通告视图坐标系（如 1160×540），流已按比例
-                                    // 缩放（如 1450×674）——注入前需映射，否则点击漂移
-                                    TouchRouter
-                                        .setCoordinateScale(
-                                            setup.displayWidth,
-                                            setup.displayHeight,
-                                            streamW,
-                                            streamH,
-                                        )
                                     appendLog(
                                         "DISPLAY: 流 ${setup.displayWidth}x${setup.displayHeight} → " +
                                             "${streamW}x$streamH（$scalePct%）@${fps}fps",
                                     )
                                     pendingVideoW = streamW
                                     pendingVideoH = streamH
-                                    // dock 屏密度随画布短边等比（设计基准 1160×540@420dpi，
-                                    // 见 design/launcher-proto.html：dock 48dp=126px）：高分辨率
-                                    // 车机（测试台 2320×1080=2×）下 dock 文字/图标与奥迪同比例
-                                    // 放大——此前固定 420dpi，dock 相对画布减半显小（2026-10-17）。
-                                    // 上限 4×（4K 级画布）。
-                                    pendingVideoDensity =
-                                        (420f * minOf(streamW, streamH) / 540f)
-                                            .toInt()
-                                            .coerceIn(120, 1680)
                                     val carLifeSource =
                                         object : ExternalVideoSource {
                                             override fun requestKeyFrame(): Boolean = currentCarLifeSession?.requestKeyFrame() == true
@@ -3744,11 +3848,6 @@ object SessionController {
                                                     // 车机侧断开：人在车外，让手机直接休眠（面板保持黑），
                                                     // 而不是先点亮再等 60s 超时
                                                     restorePhoneScreen(sleepIfCarSide = true)
-                                                    // 同样复原横屏覆盖。这里跑在推流收尾线程，不是连接
-                                                    // 关键路径，但统一走异步口以保持「串行、不重入」的语义。
-                                                    appContext?.let { ctx ->
-                                                        AppOrientationCompat.resetAllAsync(ctx, ::appendLog)
-                                                    }
                                                     // shell 兜底存的系统网络也要在这里还原：车机拆链是
                                                     // 最常见的离场方式（熄火），用户未必点「断开」——只挂
                                                     // disconnect 一端必遗留（2026-10-23 审阅定谳）。下一轮
@@ -3856,7 +3955,6 @@ object SessionController {
                                 if (host != null) {
                                     val videoW = pendingVideoW
                                     val videoH = pendingVideoH
-                                    val videoDensity = pendingVideoDensity
                                     val output = CarLifeOutput(diagnosticAttempt, sessionVideoSender)
                                     // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准
                                     val createdCarLife =
@@ -3869,6 +3967,7 @@ object SessionController {
                                     val videoStarted = claimed && videoSender?.start {} == true
                                     // 入网已完成，此时才拿低延迟锁（持锁会让入网所需的 Wi‑Fi 扫描失败）
                                     if (videoStarted) StreamingWifiLock.acquire(context)
+                                    if (videoStarted) streamingDiagnosticAttempt = diagnosticAttempt
                                     // 锁屏/息屏/Doze 迁移写进日志与时间线（锁屏退出的定位依据，只读不改状态）
                                     if (videoStarted) {
                                         ScreenLockMonitor.start(

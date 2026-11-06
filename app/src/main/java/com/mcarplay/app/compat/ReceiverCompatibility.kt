@@ -58,6 +58,12 @@ object ReceiverCompatibility {
         val pinnedMfiChallengeLength: Int? = null,
         /** 对已核对的车机栈，同一会话只发送一次 RECORD，避免重复启动遗留定时器。 */
         val singleRecordPerSession: Boolean = false,
+        /**
+         * 推流中收到车机 ctrl 邀请（`GET /ctrl-int/1/connect`）时退役当前会话并按邀请重连。大众 Cinemo 栈车机
+         * （ID7 `VW4131`、帕萨特 `VW4211`）推流中发邀请表示要重建会话：手机不接，车机约 18 s 后自行拆会话，
+         * 用户看到黑屏（ID7 黑屏诊断：15 次断流前各有一次邀请）。其余车机推流中的邀请只记日志。
+         */
+        val reconnectOnStreamingInvite: Boolean = false,
     )
 
     data class PairingFallback(
@@ -69,6 +75,65 @@ object ReceiverCompatibility {
         signals: ReceiverProfile.Signals,
         mediaCapabilities: String = "",
         receiverInstance: String? = null,
+        preset: VehiclePreset = VehiclePresetRuntime.current,
+    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset)
+
+    /** 用户在主页手动选择车型后，在自动判定结果之上叠加该车型的适配开关（[VehiclePreset.AUTO] 不改动）。 */
+    fun applyPreset(
+        policy: Policy,
+        preset: VehiclePreset,
+    ): Policy =
+        when (preset) {
+            VehiclePreset.AUTO -> policy
+            // 通用：关闭所有按车机登记的例外，走协议基线
+            VehiclePreset.GENERIC ->
+                policy.copy(
+                    bluetoothRole = BluetoothRole.KEEP_DURING_BRINGUP,
+                    allowBluetoothRetireRetry = false,
+                    requiresRealBluetoothIdentity = false,
+                    releaseBluetoothAfterSetup = false,
+                    reportWifiMacInSetup = false,
+                    skipIapTunnel = false,
+                    sendAppleClientHeaders = false,
+                    iphoneAuthSequence = false,
+                    pinnedMfiChallengeLength = null,
+                    singleRecordPerSession = false,
+                    reconnectOnStreamingInvite = false,
+                    rules = policy.rules + "manual.generic",
+                )
+            VehiclePreset.CHERY ->
+                policy.copy(
+                    releaseBluetoothAfterSetup = true,
+                    reportWifiMacInSetup = true,
+                    skipIapTunnel = true,
+                    sendAppleClientHeaders = true,
+                    iphoneAuthSequence = true,
+                    pinnedMfiChallengeLength = 32,
+                    rules = policy.rules + "manual.chery",
+                )
+            VehiclePreset.VOLKSWAGEN ->
+                policy.copy(reconnectOnStreamingInvite = true, rules = policy.rules + "manual.volkswagen")
+            VehiclePreset.WINPLAY ->
+                policy.copy(
+                    family = Family.WINPLAY,
+                    bluetoothRole = BluetoothRole.NETWORK_HANDOFF,
+                    requiresRealBluetoothIdentity = true,
+                    rules = policy.rules + "manual.winplay",
+                )
+            VehiclePreset.DIPLAY ->
+                policy.copy(family = Family.DIPLAY, allowBluetoothRetireRetry = true, rules = policy.rules + "manual.diplay")
+            VehiclePreset.CLASSIC_MIB3 ->
+                policy.copy(
+                    family = Family.CLASSIC_MIB3,
+                    linkGeneration = ReceiverProfile.LinkGeneration.CLASSIC_MIB3,
+                    rules = policy.rules + "manual.classic-mib3",
+                )
+        }
+
+    private fun resolveDetected(
+        signals: ReceiverProfile.Signals,
+        mediaCapabilities: String,
+        receiverInstance: String?,
     ): Policy {
         val profile = ReceiverProfile.classify(signals)
         val generation = ReceiverProfile.linkGenerationOf(signals)
@@ -103,6 +168,8 @@ object ReceiverCompatibility {
         // 只登记已取得原厂库和崩溃证据的协议身份；srcvers 是 AirPlay 栈版本，不等于整车固件。
         val cherySingleRecord =
             cheryReleasesBluetooth && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
+        // 大众车机型号自报 VWxxxx（ID7 VW4131、帕萨特 2025 VW4211），厂商字段并不统一（帕萨特报 Toppower）
+        val vwStreamingInvite = VW_MODEL.matches(normalize(signals.model))
         val rules =
             buildList {
                 add("protocol.${pairing.name.lowercase()}")
@@ -118,6 +185,7 @@ object ReceiverCompatibility {
                 if (cheryReleasesBluetooth) add("chery.iphone-auth-sequence")
                 if (cheryReleasesBluetooth) add("chery.mfi-32-only")
                 if (cherySingleRecord) add("chery.tiggo.320.17.7.single-record")
+                if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
             }
         return Policy(
             family = family,
@@ -135,6 +203,7 @@ object ReceiverCompatibility {
             iphoneAuthSequence = cheryReleasesBluetooth,
             pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
             singleRecordPerSession = cherySingleRecord,
+            reconnectOnStreamingInvite = vwStreamingInvite,
         )
     }
 
@@ -206,6 +275,8 @@ object ReceiverCompatibility {
 
     /** WinPlay iAP2 识别消息自报的固件号（`iap.ts` 硬编码）。 */
     private val WINPLAY_HANDOFF_FIRMWARE = setOf("1.2.4", "1.2.5")
+
+    private val VW_MODEL = Regex("vw\\d{4}")
 
     private fun normalize(value: String?): String = value.orEmpty().trim().lowercase(java.util.Locale.ROOT)
 }

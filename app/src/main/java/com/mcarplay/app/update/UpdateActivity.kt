@@ -14,11 +14,13 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
+import androidx.core.widget.doAfterTextChanged
 import com.mcarplay.app.BuildConfig
 import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.i18n.AppLanguage
+import com.mcarplay.app.ui.EdgeToEdge
 import com.mcarplay.app.ui.WhatsNewDialog
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
@@ -55,8 +57,11 @@ class UpdateActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_update)
+        EdgeToEdge.padContent(this)
         status = findViewById(R.id.updateStatus)
         notes = findViewById(R.id.updateNotes)
+        // 没有内容时不显示空卡片
+        notes.doAfterTextChanged { notes.visibility = if (it.isNullOrEmpty()) View.GONE else View.VISIBLE }
         progress = findViewById(R.id.updateProgress)
         check = findViewById(R.id.updateCheck)
         download = findViewById(R.id.updateDownload)

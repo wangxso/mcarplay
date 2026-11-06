@@ -17,6 +17,13 @@ disclosed `remote/debug` diagnostic export described below is unredacted.
    and firmware, screen message, and whether video, audio and touch work.
    Do not include passwords, pairing material or location screenshots.
 
+For CarWith entry-stage failures, allowing **Notification access** for mcarplay
+lets the report show whether a CarWith notification was observed while the seven
+ports were closed. This reuses the existing media/music permission; it records
+only the fixed CarWith package presence, foreground-service flag and timing, not
+notification titles or text. Without that access the claim stays explicitly
+unknown instead of treating "no notification seen" as "CarWith never started".
+
 The log switch controls display, not file diagnostics. Clearing the UI console
 does not erase report history. Long-pressing the log export icon includes larger,
 still-redacted recent runtime history.
@@ -34,6 +41,32 @@ still-redacted recent runtime history.
 - Random process/attempt IDs correlate stage transitions, warnings, terminal
   reasons, elapsed time, media counts and coarse memory/thread samples. Critical
   events use JSONL schema 1, independently of verbose protocol logs.
+- `MILESTONE` events (with a `milestone` field) record the first time an attempt
+  reaches each phone-side step: `BT_LINK`, `IAP2_IDENTIFIED`, `IAP2_AUTHENTICATED`,
+  `WIFI_CREDENTIALS`, `WIFI_JOINED`, `CTRL_INVITED`, `RECEIVER_RESOLVED`,
+  `AIRPLAY_CONNECTED`, `PAIR_SETUP`, `PAIR_VERIFY`, `AUTH_SETUP`, `SESSION_SETUP`,
+  `RECORD`; `FIRST_CARWITH_VIDEO`, `FIRST_VIDEO` and `FIRST_AUDIO_PACKET` carry
+  `CARWITH_FRAME`, `FIRST_VIDEO` and `FIRST_AUDIO`. Repeats are not journaled and
+  details hold only fixed tokens (`source=0x5703`, `port=fallback`, `savedTrust=true`).
+  `PAIR_SETUP` is absent when saved trust was reused. The layers are independent:
+  `IAP2_AUTHENTICATED` records the phone sending `0xAA05`; it does not prove local
+  certificate/signature verification or imply `PAIR_VERIFY`. `AUTH_SETUP` records
+  HTTP 200 and the response shape; the current implementation does not verify MFi
+  certificates/signatures and still proceeds to SETUP after auth-setup errors.
+  Bluetooth milestones belong to the attempt that was current when
+  they arrived, so an attempt that a receiver restart began at Wi-Fi may lack them.
+- After `EXPORT_SNAPSHOT` the report adds `STAGE_DURATIONS` (accumulated milliseconds
+  per stage, `*` on the current one), `MILESTONES` (offset from the attempt start, or
+  `none`) and, while waiting or after a failure, `BLOCKED_AT <STAGE>:<STEP>` naming the
+  missing step (for example `PAIRING:HOMEKIT_PAIRING` after TCP connected but before
+  pair-verify). The main card shows the same layers as a stepper; after 30 s from
+  `BT_LINK` without `RECORD` it shows the observed Chery Arrizo 8 connection-window
+  hint. The head unit measured 30.002 s from its own `TimerThread begin`, then
+  stopped the failed attempt and deregistered Bonjour; a later success used a new
+  upper-layer Start. Phone `BT_LINK` is only an approximate alignment point, and
+  this hint neither stops the phone attempt nor promises an automatic retry.
+  That window was observed only on that head unit. The report mapping and software /
+  on-device checks are in [the Arrizo 8 regression matrix](ARRIZO8-PROTOCOL-REGRESSION.md).
 - Source H.264 frames, video transport writes, native PCM chunks and sent audio
   packets are separate evidence. Writes do not prove receiver display or sound.
 - `RECEIVER_DETECTION` and `DETECT` notes contain the local wizard's fixed state,
@@ -68,6 +101,20 @@ still-redacted recent runtime history.
   `CARLIFE-DIAG` lines carry a source-run ID and record entry, source environment,
   all-listeners-connected, stop and failure snapshots. No extra TCP probes are
   made: a second connection can reset CarLife's session.
+- `CARWITH_NOTIFICATION_PROBE` is a process-wide, read-only presence probe that
+  reuses the existing notification-access grant. It records only whether a
+  notification from `com.miui.carlink` was observed, whether
+  `FLAG_FOREGROUND_SERVICE` was set, active counts, removals and elapsed
+  timestamps. Notification keys, titles, text, progress and other content never
+  enter the report or runtime log. `access=CONNECTED` means the listener is
+  actually bound; `UNKNOWN` or `DISCONNECTED` cannot support a claim about
+  whether CarWith started. In a CarLife attempt, `baseline=run` and
+  `deltaPosts`/`deltaForegroundPosts` compare against the session start.
+  `notification.accessEnabled` is the export-time settings-list value, not proof
+  that the listener was bound or that a notification was delivered.
+  `CARLIFE_SELF_TEST_DIAGNOSTICS` also carries the same probe snapshot with
+  `commandFrames`; zero command frames after all seven ports connected is
+  evidence of a silent protocol channel, not of a working cast session.
 - Source environment fields describe the fixed CarWith/CarLife packages' enabled
   and system-app flags, declared/granted permissions, the CarLife connect-service
   declaration and caller permission, and the readable CarWith global feature
@@ -244,6 +291,10 @@ vehicle compatibility; the affected user's phone/head unit must still be reteste
 | `SETUP_FAILED` | SETUP status and advertised capabilities. |
 | `CARWITH_FAILED` | Component versions, entry, original permissions, handshake and source video. |
 | `CARWITH_ENTRY_BLOCKED` | CarWith's seven listeners never appeared and the entry was requested while mcarplay was not in the foreground. Android/MIUI can drop such a background activity start without an error; on Xiaomi allow "Display pop-up windows while running in the background" (后台弹出界面) or keep mcarplay in front, then reconnect. When the Xiaomi permission is denied, mcarplay offers a shortcut to it before connecting. |
+| `CARWITH_ENTRY_NOT_OBSERVED` | The notification listener was bound, no CarWith notification was observed during the wait, and the seven ports stayed closed. This is not proof that CarWith's code never ran, but it points to entry/activation rather than the later protocol. Keep mcarplay in front and start Baidu CarLife wireless connection from CarWith settings. |
+| `CARWITH_ENTRY_STATUS_UNKNOWN` | The seven ports stayed closed and no notification listener was bound. The report cannot decide whether the CarWith entry ran. Use the CarWith settings entry manually; allowing notification access improves only future diagnostics. |
+| `CARWITH_LISTENERS_PENDING` | A CarWith notification was observed, but the seven ports stayed closed. CarWith reached at least its notification/service phase; check the CarWith and Xiaomi CarLife versions and restart the factory wireless connection. |
+| `CARWITH_PROTOCOL_SILENT` | All seven ports connected but the command channel delivered no CarLife frames. Listening sockets are not a valid cast session. Stop the existing CarWith connection and restart Baidu CarLife wireless connection from CarWith settings. |
 | `CARWITH_BUSY` | Stop the standalone self-test before starting a formal CarPlay connection. |
 | `VIDEO_CLOSED` | Transport ended. Status `stopped` after frames were sent (normal end, e.g. receiver off); `failed` if none were sent. Reset/broken pipe alone does not establish receiver crash. |
 | `AUDIO_UNAVAILABLE` | Audio setup failed; video may continue. Inspect format and input/output counts. |
@@ -281,6 +332,11 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 推流时运行日志还会记录 CarWith 与手机编码器的 SPS/PPS 特征、透传/转码码流统计（含车机要关键帧距上个 IDR 的时间）、
 车机时钟漂移、车机命令统计与结构、屏幕数据口回传或关闭，以及每分钟的 Wi-Fi 信号/速率、温控与电量（不含 SSID/BSSID）。
 
+首页卡片按「蓝牙 › 入网 › 发现 › 配对 › 会话 › CarWith › 画面」显示每层状态与耗时、最近到达的里程碑和当前层还缺的那一步；
+报告里对应 `STAGE_DURATIONS`、`MILESTONES` 和 `BLOCKED_AT` 三行，日志里是带 `milestone` 字段的 `MILESTONE` 事件。
+各层相互独立：iAP2 认证通过不代表 AirPlay 配对成功。自蓝牙链路起 30 s 仍未激活会话时，卡片会提示艾瑞泽 8 车机此时会自行重置重连；
+该窗口只在这台车机上观察到。
+
 手机日志能确定已记录的阶段和事实，但不能保证还原所有车机内部故障，必要时仍需接收端日志。
 “收到源数据”“已发送”“接收端显示/有声”是不同证据层级；分享前仍需检查自由文本中的隐私。
 
@@ -294,6 +350,10 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 只读查看正在阻塞的连接、累计失败、配对/ACL 事件和回连接受/拒绝计数。固定摘要只保留原因、异常类型和必要数字；
 仅 remote/debug 另外记录原始异常和实际地址。旧轮迟到回调不能覆盖新轮结果，没有新增权限或连接兜底。
 本地公告成功不等于车机已识别；仍需用户在原车上复现，并反馈车机是否显示支持无线 CarPlay。
+2026-11-06 起两项本机公告共用生命周期：任一监听结束或蓝牙关闭即撤销整组，`SERVER_STOPPED recordsReleased=true` 表示
+本地注册与监听状态已清除；用户仍请求连接时可最多自动恢复三次，连续立即监听失败也受该上限约束。
+重新注册仍只记录 `SDP_REGISTER outcome=OK evidence=LOCAL_REGISTRATION_ONLY`，不增加车机已识别或回连计数。
+手动停止后不因蓝牙重开或旧恢复任务再次公告。实现与模拟器证据见 [HyperOS 手机兼容记录](HYPEROS-PHONE-COMPATIBILITY.md)。
 
 独立自检失败时，先停正式连接并保持解锁，在前台运行「CarWith 出流自检」约 30 秒后导出。
 `CARLIFE_SELF_TEST_DIAGNOSTICS` 和远程只读命令 `get_carlife_diagnostics` 会保留本轮/最近一次
@@ -311,3 +371,38 @@ standard 和所有 release 保持脱敏；服务器只读日志 API 仍按原规
 再「提交错误报告」并分享给 mcarplay，或在页面里选择 zip / `btsnoop_hci.log`。文件只在本机流式解析，不复制、不保存、不上传；
 结果以 `BTSNOOP:` 写入诊断日志，只含时间、计数、CoD、服务 UUID 和结论（EIR 是否含 CarPlay、车机 SDP 是否收到 CarPlay 记录或中途停止续传），
 不含地址、设备名、服务名和链路密钥。错误报告原件含大量个人信息，不要转发。
+
+
+### CarWith system-log export (remote flavor only, 2026-11-04)
+
+The remote-debug settings page offers **导出 CarWith 系统日志** and a separate share button.
+Reproduce the failure first, then export promptly: this reads recent buffers rather than starting a continuous recording.
+The fixed bridge command `export_carwith_system_logs` performs the same local export and returns only its status/path;
+it does not upload the system-log body or append it to the bridge's runtime log. Share the file explicitly after review.
+There is no arbitrary remote shell or ADB command execution field.
+
+Choose either an already running, authorized Shizuku instance, or grant the remote package development permissions from a computer:
+
+```sh
+adb shell pm grant com.mcarplay.app.rd android.permission.READ_LOGS
+adb shell pm grant com.mcarplay.app.rd android.permission.DUMP
+```
+
+Root is not required for the ADB grant route. Keep the remote app in the foreground and allow the system's device-log prompt
+when shown (Android 13+). A ROM may reject grants or restrict logs; permission granted is not proof of complete visibility.
+Without Shizuku or READ_LOGS, export stops with these instructions rather than presenting this app's own log as system evidence.
+Without DUMP, the ADB route marks service sections unavailable. To revoke these development grants:
+
+```sh
+adb shell pm revoke com.mcarplay.app.rd android.permission.READ_LOGS
+adb shell pm revoke com.mcarplay.app.rd android.permission.DUMP
+```
+
+The report contains up to 2,000 recent logcat records for fixed CarWith/CarLife, CTA/security-center, activity-manager,
+crash and lifecycle tags; two package-scoped service dumps; TCP listener state; and read-only feature/app-op values.
+System activity-manager tags can also mention other apps. Each command retains at most 256 KB per output pipe, with
+concurrent draining and a deadline (5 seconds; 30 seconds for the ADB logcat consent prompt). Exit, timeout and truncation
+are reported independently; a saved file or missing event does not establish successful/failed component execution.
+Files are always passed through `DiagnosticRedactor`, including on raw remote-debug builds, and saved separately to
+`Download/mcarplay/mcarplay-carwith-system-*.txt`. Review before sharing; arbitrary third-party log text may contain private data.
+The permissions, UI, collector and bridge command are all in `src/remote`; standard builds do not include them.

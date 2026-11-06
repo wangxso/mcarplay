@@ -13,13 +13,13 @@
         <item name="android:textSize">13sp</item>
         <item name="android:textStyle">bold</item>
         <item name="android:background">@drawable/bg_btn_tonal</item>
-        <item name="android:textColor">@color/m3_on_sec_container</item>
+        <item name="android:textColor">@color/ui_btn_secondary_text</item>
         <item name="android:stateListAnimator">@null</item>
     </style>
 
     <!-- 主操作（下载/安装）：实心强调胶囊 -->
     <style name="Widget.Mcarplay.UpdateButton.Primary">
         <item name="android:background">@drawable/bg_cta_fill</item>
-        <item name="android:textColor">@color/m3_on_primary</item>
+        <item name="android:textColor">@color/ui_btn_primary_text</item>
     </style>
 </resources>

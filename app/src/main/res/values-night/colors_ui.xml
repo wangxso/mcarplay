@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 界面重构令牌的深色值（iOS 深色惯例，非 StyleKit 规则原文，待确认）。 -->
+    <color name="ui_bg">#000000</color>
+    <color name="ui_card">#1C1C1E</color>
+    <color name="ui_field">#2C2C2E</color>
+    <color name="ui_track">#38383A</color>
+    <color name="ui_text">#F5F5F7</color>
+    <color name="ui_text_secondary">#98989D</color>
+    <color name="ui_text_disabled">#636366</color>
+    <color name="ui_accent">#0A84FF</color>
+    <color name="ui_accent_fill">#0062CC</color>
+    <color name="ui_accent_text">#0A84FF</color>
+    <color name="ui_on_accent">#FFFFFF</color>
+    <color name="ui_accent_tint">#2E0A84FF</color>
+    <color name="ui_accent_soft">#660A84FF</color>
+    <color name="ui_ok">#30D158</color>
+    <color name="ui_ok_text">#30D158</color>
+    <color name="ui_error">#FF453A</color>
+    <color name="ui_error_text">#FF453A</color>
+    <color name="ui_error_tint">#2EFF453A</color>
+    <color name="ui_warn">#FF9F0A</color>
+    <color name="ui_warn_text">#FF9F0A</color>
+    <color name="ui_warn_tint">#2EFF9F0A</color>
+    <color name="ui_ok_tint">#2E30D158</color>
+    <color name="ui_ripple">#1FFFFFFF</color>
+</resources>

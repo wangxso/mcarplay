@@ -2,6 +2,8 @@ package com.mcarplay.app.bt
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.content.Context
@@ -14,9 +16,9 @@ import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.transport.StreamDuplexStream
+import com.mcarplay.app.util.Bg
 import java.io.IOException
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 手机侧（iPhone 角色）的 iAP2 蓝牙 RFCOMM 监听。
@@ -56,83 +58,125 @@ class Iap2BluetoothServer(
         private const val SESSION_TIMEOUT_MILLIS = 60_000L
     }
 
-    private val serviceRecords = AtomicReference<PhoneSdpRecords<BluetoothServerSocket>?>(null)
     private var diagnosticsEpoch = 0L
+    private val listener =
+        PhoneSdpListener(
+            open = ::openRecords,
+            onOpened = ::listenRecords,
+            onClosed = { diagnostics.serverStopped(diagnosticsEpoch) },
+        )
 
     @Volatile
     private var activeChannel: Iap2LinkChannel? = null
+
+    /** [activeChannel] 上的会话对象（与之同锁维护），退役时据此发 0xEA01。 */
+    private var activeSession: Iap2SenderSession? = null
     private val channelLock = Any()
 
-    @Volatile
-    private var running = false
-
-    val isRunning: Boolean get() = running
+    val isRunning: Boolean get() = listener.isRunning
 
     fun hasPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==
             PackageManager.PERMISSION_GRANTED
 
-    @Synchronized
-    fun start(): Boolean {
-        if (running) return true
-        if (!hasPermission()) {
-            log("BT: 缺少 BLUETOOTH_CONNECT 权限")
-            return false
-        }
-        val adapter =
-            try {
-                context.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
-            } catch (_: Exception) {
-                null
-            }
-        if (adapter == null || !adapter.isEnabled) {
-            log("BT: 蓝牙不可用或未开启")
-            return false
-        }
-        val diagnosticEpoch = diagnostics.epoch().also { diagnosticsEpoch = it }
-        return try {
-            val records =
-                PhoneSdpRecords.open { name, uuid ->
-                    val service =
-                        if (uuid ==
-                            PhoneSdpRecords.IPHONE_IAP2_UUID
-                        ) {
-                            BluetoothDiagnostics.Service.IAP2
-                        } else {
-                            BluetoothDiagnostics.Service.CARPLAY
-                        }
-                    val startedAt = SystemClock.elapsedRealtime()
-                    try {
-                        adapter.listenUsingRfcommWithServiceRecord(name, uuid).also {
-                            diagnostics.registration(diagnosticEpoch, service, SystemClock.elapsedRealtime() - startedAt)
-                        }
-                    } catch (error: Exception) {
-                        diagnostics.registration(diagnosticEpoch, service, SystemClock.elapsedRealtime() - startedAt, error)
-                        throw error
-                    }
-                }
-            serviceRecords.set(records)
-            running = true
-            diagnostics.listener(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, listening = true)
-            diagnostics.listener(diagnosticEpoch, BluetoothDiagnostics.Service.CARPLAY, listening = true)
-            log("BT: 监听 iAP2 并发布无线 CarPlay 手机能力，等待接收端回连…")
-            Thread({ acceptLoop(records, diagnosticEpoch) }, "iap2-bt-accept").apply {
-                isDaemon = true
-                start()
-            }
-            Thread({ acceptCapabilityLoop(records, diagnosticEpoch) }, "carplay-sdp-accept").apply {
-                isDaemon = true
-                start()
-            }
-            true
+    fun start(): Boolean =
+        try {
+            listener.start()
         } catch (error: IOException) {
-            diagnostics.serverStopped(diagnosticEpoch)
             log("BT: 监听失败 - ${BluetoothFailure.describe(error)}")
+            listener.recoveryToken()?.let(::recoverListener)
             false
         } catch (error: SecurityException) {
-            diagnostics.serverStopped(diagnosticEpoch)
             log("BT: 监听失败 - ${BluetoothFailure.describe(error)}")
             false
+        }
+
+    /** 复用客户端的系统状态广播；仅恢复仍由用户请求的公告，不重新启动媒体或连接车机。 */
+    internal fun onAdapterStateChanged(state: Int) {
+        when (state) {
+            BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> listener.adapterUnavailable()
+            BluetoothAdapter.STATE_ON -> listener.recoveryToken()?.let(::recoverListener)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openRecords(): PhoneSdpRecords<BluetoothServerSocket> {
+        if (!hasPermission()) throw SecurityException("BLUETOOTH_CONNECT not granted")
+        val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
+        if (adapter?.isEnabled != true) throw IOException("Bluetooth adapter unavailable")
+        val diagnosticEpoch = diagnostics.epoch().also { diagnosticsEpoch = it }
+        return PhoneSdpRecords.open { name, uuid ->
+            val service =
+                if (uuid == PhoneSdpRecords.IPHONE_IAP2_UUID) {
+                    BluetoothDiagnostics.Service.IAP2
+                } else {
+                    BluetoothDiagnostics.Service.CARPLAY
+                }
+            val startedAt = SystemClock.elapsedRealtime()
+            try {
+                adapter.listenUsingRfcommWithServiceRecord(name, uuid).also {
+                    diagnostics.registration(diagnosticEpoch, service, SystemClock.elapsedRealtime() - startedAt)
+                }
+            } catch (error: Exception) {
+                diagnostics.registration(diagnosticEpoch, service, SystemClock.elapsedRealtime() - startedAt, error)
+                throw error
+            }
+        }
+    }
+
+    private fun listenRecords(records: PhoneSdpRecords<BluetoothServerSocket>) {
+        val diagnosticEpoch = diagnosticsEpoch
+        diagnostics.listener(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, listening = true)
+        diagnostics.listener(diagnosticEpoch, BluetoothDiagnostics.Service.CARPLAY, listening = true)
+        log("BT: 监听 iAP2 并发布无线 CarPlay 手机能力，等待接收端回连…")
+        Thread({ acceptLoop(records, diagnosticEpoch) }, "iap2-bt-accept").apply {
+            isDaemon = true
+            start()
+        }
+        Thread({ acceptCapabilityLoop(records, diagnosticEpoch) }, "carplay-sdp-accept").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun recoverListener(token: Long) {
+        Bg.run("bt-sdp-recover") {
+            for ((index, delay) in listOf(0L, 500L, 1_500L).withIndex()) {
+                try {
+                    if (delay > 0) Thread.sleep(delay)
+                    // 手动停止、蓝牙再次关闭或另一任务已恢复时，旧任务直接退役。
+                    if (listener.recover(token)) log("BT: 已恢复本机 iAP2/CarPlay 公告（不代表车机已识别）")
+                    return@run
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return@run
+                } catch (error: IOException) {
+                    log("BT: 公告恢复 ${index + 1}/3 失败 - ${BluetoothFailure.describe(error)}")
+                } catch (error: SecurityException) {
+                    log("BT: 公告恢复需要蓝牙权限 - ${BluetoothFailure.describe(error)}")
+                    return@run
+                }
+            }
+        }
+    }
+
+    private fun listenerFailed(
+        records: PhoneSdpRecords<BluetoothServerSocket>,
+        diagnosticEpoch: Long,
+        service: BluetoothDiagnostics.Service,
+        error: IOException,
+    ) {
+        var retired = false
+        val token =
+            listener.failed(records) {
+                retired = true
+                diagnostics.listener(diagnosticEpoch, service, listening = false, error = error)
+                log("BT: ${service.name} 监听结束，本机公告已退役 - ${BluetoothFailure.describe(error)}")
+            }
+        if (token != null) {
+            recoverListener(token)
+        } else if (retired) {
+            log("BT: 公告自动恢复已达 3 次上限，请检查蓝牙后重新启动连接")
         }
     }
 
@@ -141,18 +185,15 @@ class Iap2BluetoothServer(
         records: PhoneSdpRecords<BluetoothServerSocket>,
         diagnosticEpoch: Long,
     ) {
-        while (running && serviceRecords.get() === records) {
+        while (listener.isCurrent(records)) {
             val socket: BluetoothSocket =
                 try {
                     records.iap2.accept()
                 } catch (error: IOException) {
-                    if (running && serviceRecords.get() === records) {
-                        diagnostics.listener(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, listening = false, error = error)
-                        log("BT: accept 失败 - ${BluetoothFailure.describe(error)}")
-                    }
+                    listenerFailed(records, diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, error)
                     break
                 }
-            if (serviceRecords.get() !== records) {
+            if (!listener.isCurrent(records)) {
                 runCatching { socket.close() }
                 break
             }
@@ -196,10 +237,10 @@ class Iap2BluetoothServer(
         records: PhoneSdpRecords<BluetoothServerSocket>,
         diagnosticEpoch: Long,
     ) {
-        while (running && serviceRecords.get() === records) {
+        while (listener.isCurrent(records)) {
             try {
                 records.carPlay.accept().use { socket ->
-                    if (serviceRecords.get() === records) {
+                    if (listener.isCurrent(records)) {
                         val address = runCatching { socket.remoteDevice?.address }.getOrNull()
                         diagnostics.incoming(
                             diagnosticEpoch,
@@ -210,9 +251,7 @@ class Iap2BluetoothServer(
                     }
                 }
             } catch (error: IOException) {
-                if (running && serviceRecords.get() === records) {
-                    diagnostics.listener(diagnosticEpoch, BluetoothDiagnostics.Service.CARPLAY, listening = false, error = error)
-                }
+                listenerFailed(records, diagnosticEpoch, BluetoothDiagnostics.Service.CARPLAY, error)
                 break
             }
         }
@@ -255,6 +294,9 @@ class Iap2BluetoothServer(
                 onGeneration,
                 peerAddress = socket.remoteDevice?.address,
                 observation = observation,
+                onSession = { session ->
+                    synchronized(channelLock) { if (activeChannel === channel) activeSession = session }
+                },
             )
         } catch (error: IOException) {
             log("SESSION 失败: ${error.message}")
@@ -262,6 +304,7 @@ class Iap2BluetoothServer(
             synchronized(channelLock) {
                 if (activeChannel === channel) {
                     activeChannel = null
+                    activeSession = null
                     BtSessionGate.inboundActive = false
                 }
             }
@@ -270,26 +313,34 @@ class Iap2BluetoothServer(
         }
     }
 
-    /** 主动结束当前 BT 控制会话（不影响监听）。用于 AirPlay 配对前复现控制通道退役状态。 */
-    fun detachCurrentSession() {
-        val current =
+    /**
+     * 主动结束当前 BT 控制会话（不影响监听）。
+     *
+     * [eaStopReason] 非空时先结束本轮 EA 会话（0xEA01，见 [retireControlLink]）；
+     * 为 null 时立即关闭，用于 AirPlay 配对前复现控制通道退役状态。
+     */
+    fun detachCurrentSession(eaStopReason: String? = null) {
+        val (channel, session) =
             synchronized(channelLock) {
-                activeChannel.also {
+                (activeChannel to activeSession).also {
                     activeChannel = null
+                    activeSession = null
                     BtSessionGate.inboundActive = false
                 }
             }
-        current?.let { channel ->
-            channel.close()
-            log("BT: 已主动断开当前控制会话（模拟 tunnel handoff 后的退役）")
-        }
+        channel ?: return
+        retireControlLink(session, eaStopReason) { channel.close() }
+        log(
+            if (eaStopReason == null) {
+                "BT: 已主动断开当前控制会话（模拟 tunnel handoff 后的退役）"
+            } else {
+                "BT: 已主动断开当前控制会话（$eaStopReason）"
+            },
+        )
     }
 
-    @Synchronized
     fun stop() {
-        running = false
-        serviceRecords.getAndSet(null)?.close()
-        diagnostics.serverStopped(diagnosticsEpoch)
+        listener.stop()
         log("BT: 监听已停止")
     }
 }

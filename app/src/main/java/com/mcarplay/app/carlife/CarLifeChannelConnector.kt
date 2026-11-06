@@ -48,6 +48,9 @@ class CarLifeChannelConnector(
     @Volatile
     var onAttemptFailed: ((attempt: Int, error: Exception) -> Unit)? = null
 
+    /** 当前连接的只读进度；用于把超时归因到入口阶段，不额外探测端口。 */
+    fun progressSnapshot(): Progress = progress
+
     /** 观察现有连接尝试；不额外探测端口，避免第二条连接重置 CarLife 会话。 */
     fun diagnosticSummary(): String {
         val current = progress

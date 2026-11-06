@@ -2,7 +2,6 @@
 <resources>
     <string name="main_device_detecting">Detecting device</string>
     <string name="main_shizuku_chip_online">Car service online</string>
-    <string name="cd_head_unit">Head unit</string>
     <string name="main_hero_idle">Not connected</string>
     <string name="main_cleanup_residual">Clean up leftover displays</string>
     <string name="main_hero_idle_hint">After pairing with the head unit over Bluetooth, tap the button below to connect wirelessly</string>
@@ -36,13 +35,8 @@
     <string name="cd_fake_off">Fake screen-off</string>
     <string name="main_dim_title">Fake screen-off now</string>
     <string name="main_dim_desc">Tap anywhere on the phone screen to restore</string>
-    <string name="cd_wallpaper">Wallpaper</string>
-    <string name="main_wallpaper_title">Car wallpaper</string>
-    <string name="main_wallpaper_desc">Full screen, aspect fill</string>
-    <string name="main_wallpaper_change">Change</string>
-    <string name="main_wallpaper_reset">Reset</string>
     <string name="cd_landscape">Landscape</string>
-    <string name="main_car_settings_desc">Home apps · landscape apps · supersampling · dock · default map</string>
+    <string name="main_car_settings_desc">Stream resolution · frame rate · screen off · fallbacks · nav ducking</string>
     <string name="cd_terminal">Terminal</string>
     <string name="main_shell_title">Shell global state</string>
     <string name="main_shell_desc">letterbox / virtual displays / wm overrides — for debugging</string>
@@ -73,4 +67,21 @@
     <string name="whats_new_title">What\'s new in %1$s</string>
     <string name="whats_new_title_unreleased">What\'s new (development build)</string>
     <string name="whats_new_ok">Got it</string>
+    <string name="main_tab_connect">Connect</string>
+    <string name="main_tab_settings">Settings</string>
+    <string name="main_tab_diagnostics">Diagnostics</string>
+    <string name="main_diag_checks_title">Self-test &amp; simulation</string>
+    <string name="main_vehicle_title">Vehicle profile</string>
+    <string name="main_vehicle_auto">Automatic (from what the head unit reports)</string>
+    <string name="main_vehicle_manual">Manual: %1$s</string>
+    <string name="main_vehicle_dialog_title">Choose vehicle profile</string>
+    <string name="main_vehicle_dialog_hint">Use only when automatic detection is wrong. This applies existing per-vehicle compatibility switches and does not mean the vehicle is verified. Takes effect on the next connection.</string>
+    <string name="main_vehicle_busy">Connection in progress; takes effect next time</string>
+    <string name="vehicle_preset_auto">Automatic (recommended)</string>
+    <string name="vehicle_preset_generic">Generic (no vehicle-specific exceptions)</string>
+    <string name="vehicle_preset_chery">Chery / Arrizo 8</string>
+    <string name="vehicle_preset_volkswagen">Volkswagen (ID series / Passat)</string>
+    <string name="vehicle_preset_winplay">WinPlay receiver</string>
+    <string name="vehicle_preset_diplay">DiPlay receiver (BYD etc.)</string>
+    <string name="vehicle_preset_classic_mib3">Audi classic MIB3</string>
 </resources>

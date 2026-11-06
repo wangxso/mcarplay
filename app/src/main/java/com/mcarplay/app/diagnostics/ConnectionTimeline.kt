@@ -32,6 +32,22 @@ enum class DiagnosticCode(
     SETUP_FAILED("CarPlay 会话未建立，请提供诊断报告核对接收端响应"),
     CARWITH_FAILED("CarWith 未完成出流，请检查组件版本、原厂连接开关和授权"),
     CARWITH_ENTRY_BLOCKED("应用在后台时未能打开 CarWith 入口；小米请在应用权限中允许「后台弹出界面」，或保持 mcarplay 在前台后重连"),
+    CARWITH_ENTRY_NOT_OBSERVED(
+        "等待七路连接期间未观察到 CarWith 通知，端口也未就绪；请保持 mcarplay 在前台，" +
+            "打开 CarWith 设置手动选择百度 CarLife 无线连接后重试",
+    ),
+    CARWITH_ENTRY_STATUS_UNKNOWN(
+        "七路端口未就绪，且未绑定通知监听器，无法判断 CarWith 入口是否执行；" +
+            "请从 CarWith 设置手动发起百度 CarLife 无线连接；可允许 mcarplay 的通知使用权供下次诊断",
+    ),
+    CARWITH_LISTENERS_PENDING(
+        "已观察到 CarWith 通知，但七路端口未就绪；请打开 CarWith 设置手动选择百度 CarLife 无线连接，" +
+            "并核对 CarWith/CarLife 组件版本",
+    ),
+    CARWITH_PROTOCOL_SILENT(
+        "七路端口已连接，但未收到 CarLife 协议响应；端口监听不等于有效投屏会话。" +
+            "请停止现有 CarWith 连接，再从 CarWith 设置重新发起百度 CarLife 无线连接",
+    ),
     CARWITH_BUSY("CarWith 正被独立自检占用，请先停止自检，再启动 CarPlay 连接"),
     VIDEO_CLOSED("视频连接已结束；仅凭此不能确认接收端崩溃，请检查网络和接收端"),
     AUDIO_UNAVAILABLE("音频未能启用，画面可以继续；请提供报告核对音频协商"),
@@ -71,6 +87,10 @@ class ConnectionTimeline(
         val lastVideoMsAgo: Long?,
         val sourceFrames: Long,
         val audioPackets: Long,
+        /** 首次到达各里程碑时距本轮开始的毫秒数，按到达先后排列。 */
+        val milestones: Map<ConnectionMilestone, Long> = emptyMap(),
+        /** 各阶段累计停留毫秒数（含当前阶段至今）；从未进入的阶段不在表中。 */
+        val stageDurations: Map<ConnectionStage, Long> = emptyMap(),
     ) {
         private val statusLabel: String
             get() =
@@ -120,6 +140,9 @@ class ConnectionTimeline(
     private var sourceFrames = 0L
     private var audioPackets = 0L
     private var endedAt: Long? = null
+    private val milestones = LinkedHashMap<ConnectionMilestone, Long>()
+    private val stageTime = LinkedHashMap<ConnectionStage, Long>()
+    private var stageSince = 0L
 
     fun begin(source: String): String =
         mutate {
@@ -139,6 +162,9 @@ class ConnectionTimeline(
             sourceFrames = 0
             audioPackets = 0
             lastSample = started
+            milestones.clear()
+            stageTime.clear()
+            stageSince = started
             emit("BEGIN", source)
             requireNotNull(id)
         }
@@ -148,9 +174,22 @@ class ConnectionTimeline(
         next: ConnectionStage,
     ) = mutate {
         if (id != attempt || !active() || stage == next) return@mutate
-        stage = next
+        enterStage(next)
         if (code == DiagnosticCode.ENDPOINT_PENDING) code = null
         emit("STAGE")
+    }
+
+    /**
+     * 记录本轮首次到达 [milestone]；重复到达（周期重发、重连重跑）不改变首次时刻，也不重复写入。
+     * [detail] 只写固定描述，不放地址等标识。
+     */
+    fun milestone(
+        attempt: String,
+        milestone: ConnectionMilestone,
+        detail: String = "",
+    ) = mutate {
+        if (id != attempt || !active()) return@mutate
+        if (reach(milestone)) emit("MILESTONE", detail, milestone)
     }
 
     fun issue(
@@ -222,10 +261,11 @@ class ConnectionTimeline(
             videoBytes += bytes
             lastVideo = elapsedTime()
             if (frames == 1L) {
-                stage = ConnectionStage.STREAMING
+                if (stage != ConnectionStage.STREAMING) enterStage(ConnectionStage.STREAMING)
                 status = "streaming"
                 if (code in listOf(DiagnosticCode.BT_LINK_CLOSED, DiagnosticCode.ENDPOINT_PENDING, DiagnosticCode.WIFI_LOST)) code = null
-                emit("FIRST_VIDEO")
+                reach(ConnectionMilestone.FIRST_VIDEO)
+                emit("FIRST_VIDEO", milestone = ConnectionMilestone.FIRST_VIDEO)
             }
         } else {
             chunks++
@@ -243,20 +283,29 @@ class ConnectionTimeline(
             if (id != attempt || !active()) return@mutate
             sourceFrames++
             if (stage == ConnectionStage.SELF_TEST) status = "receiving_source"
-            if (sourceFrames == 1L) emit("FIRST_CARWITH_VIDEO")
+            if (sourceFrames == 1L) {
+                reach(ConnectionMilestone.CARWITH_FRAME)
+                emit("FIRST_CARWITH_VIDEO", milestone = ConnectionMilestone.CARWITH_FRAME)
+            }
         }
 
     fun audioPacket(attempt: String) =
         mutate {
             if (id != attempt || !active()) return@mutate
             audioPackets++
-            if (audioPackets == 1L) emit("FIRST_AUDIO_PACKET")
+            if (audioPackets == 1L) {
+                reach(ConnectionMilestone.FIRST_AUDIO)
+                emit("FIRST_AUDIO_PACKET", milestone = ConnectionMilestone.FIRST_AUDIO)
+            }
         }
 
     fun snapshot(): Snapshot? = synchronized(lock) { state() }
 
     private fun state(): Snapshot? =
         id?.let {
+            val now = endedAt ?: elapsedTime()
+            val durations = stageTime.toMutableMap()
+            durations[stage] = (durations[stage] ?: 0L) + (now - stageSince).coerceAtLeast(0)
             Snapshot(
                 it,
                 startedAtMs,
@@ -271,8 +320,25 @@ class ConnectionTimeline(
                 lastVideo?.let { time -> (elapsedTime() - time).coerceAtLeast(0) },
                 sourceFrames,
                 audioPackets,
+                milestones.toMap(),
+                durations,
             )
         }
+
+    /** Called under [lock]: 记首次到达时刻；已到达过返回 false。 */
+    private fun reach(milestone: ConnectionMilestone): Boolean {
+        if (milestone in milestones) return false
+        milestones[milestone] = (elapsedTime() - started).coerceAtLeast(0)
+        return true
+    }
+
+    /** Called under [lock]: 把当前阶段的停留时间计入累计，再切到 [next]。 */
+    private fun enterStage(next: ConnectionStage) {
+        val now = elapsedTime()
+        stageTime[stage] = (stageTime[stage] ?: 0L) + (now - stageSince).coerceAtLeast(0)
+        stage = next
+        stageSince = now
+    }
 
     private fun active(): Boolean = status == "waiting" || status == "streaming" || status == "receiving_source"
 
@@ -299,6 +365,7 @@ class ConnectionTimeline(
     private fun emit(
         event: String,
         detail: String = "",
+        milestone: ConnectionMilestone? = null,
     ) {
         val state = state() ?: return
         val record =
@@ -319,6 +386,7 @@ class ConnectionTimeline(
                 .put("lastVideoMsAgo", state.lastVideoMsAgo ?: JSONObject.NULL)
                 .put("sourceVideoFrames", state.sourceFrames)
                 .put("audioPacketsSent", state.audioPackets)
+        milestone?.let { record.put("milestone", it.name) }
         outbox.addLast(Pending(record, detail))
     }
 

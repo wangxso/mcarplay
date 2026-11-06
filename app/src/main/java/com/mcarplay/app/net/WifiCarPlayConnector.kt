@@ -77,22 +77,27 @@ class WifiCarPlayConnector(
     var onNetworkLost: ((ssid: String) -> Unit)? = null
 
     /**
-     * 当前绑定网络的网关地址（车机热点场景 = 车机 IP）。
-     * mDNS 发现失败时的兜底路径。
+     * 当前绑定网络的默认路由网关（车机热点场景 = 车机 IP），按 IPv4 → 全局 IPv6 →
+     * 链路本地排序（[EndpointHosts.gatewayCandidates]）。mDNS 发现失败时的兜底路径。
      */
-    fun gatewayAddress(): String? {
-        val network = currentNetwork ?: return null
+    fun gatewayCandidates(): List<String> {
+        val network = currentNetwork ?: return emptyList()
         return try {
-            connectivityManager
-                .getLinkProperties(network)
-                ?.routes
-                ?.firstOrNull { it.isDefaultRoute }
-                ?.gateway
-                ?.hostAddress
+            val gateways =
+                connectivityManager
+                    .getLinkProperties(network)
+                    ?.routes
+                    .orEmpty()
+                    .filter { it.isDefaultRoute }
+                    .mapNotNull { it.gateway?.hostAddress }
+            EndpointHosts.gatewayCandidates(gateways)
         } catch (_: Exception) {
-            null
+            emptyList()
         }
     }
+
+    /** [gatewayCandidates] 的首选项。 */
+    fun gatewayAddress(): String? = gatewayCandidates().firstOrNull()
 
     /**
      * 本机在当前绑定网络上的 IPv4 地址（如 10.174.189.57）。

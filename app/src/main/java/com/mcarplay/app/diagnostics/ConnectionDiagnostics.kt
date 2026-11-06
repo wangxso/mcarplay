@@ -85,6 +85,14 @@ object ConnectionDiagnostics {
         timeline.snapshot()?.let { timeline.issue(it.id, code) }
     }
 
+    /** 蓝牙、ctrl 广播等不持有尝试号的组件：记到当前 CarPlay 尝试；已结束的尝试由时间线忽略。 */
+    fun milestoneCurrent(
+        milestone: ConnectionMilestone,
+        detail: String = "",
+    ) {
+        timeline.snapshot()?.let { timeline.milestone(it.id, milestone, detail) }
+    }
+
     fun uncaught(
         thread: Thread,
         throwable: Throwable,

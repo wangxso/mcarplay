@@ -80,24 +80,71 @@ class CarLifeSessionTest {
     }
 
     @Test
-    fun listenerTimeoutAfterBackgroundEntryIsReportedAsBlockedEntry() {
+    fun blockedEntryMessageKeepsOriginalCauseAndAction() {
         val timeout = CarLifeListenerTimeoutException("CarLife listener wait deadline: ECONNREFUSED")
-        assertTrue(CarLifeSession.isEntryBlockedSuspected(timeout, launchedInBackground = true))
-        val message = CarLifeSession.clientFailureMessage(timeout, entryBlockedSuspected = true)
+        val message = CarLifeSession.clientFailureMessage(timeout, DiagnosticCode.CARWITH_ENTRY_BLOCKED)
         assertTrue(message.startsWith(CarLifeSession.ENTRY_BLOCKED_HINT))
         assertTrue("Original cause must stay in the report", message.contains("ECONNREFUSED"))
     }
 
     @Test
-    fun foregroundEntryOrOtherErrorsKeepGenericFailure() {
-        val timeout = CarLifeListenerTimeoutException("CarLife listener wait deadline: ECONNREFUSED")
-        assertFalse(CarLifeSession.isEntryBlockedSuspected(timeout, launchedInBackground = false))
-        assertFalse(CarLifeSession.isEntryBlockedSuspected(IOException("CarLife connection cancelled"), true))
-        assertFalse(CarLifeSession.isEntryBlockedSuspected(ConnectException("reset"), true))
+    fun protocolSilentMessageExplainsPortsAreNotAValidSession() {
+        val message =
+            CarLifeSession.clientFailureMessage(
+                "CarLife 关键通道 VIDEO 已断开",
+                DiagnosticCode.CARWITH_PROTOCOL_SILENT,
+            )
+        assertTrue(message.startsWith(CarLifeSession.PROTOCOL_SILENT_HINT))
+    }
+
+    @Test
+    fun genericFailureDoesNotAddCarWithEntryAdvice() {
         assertEquals(
             "CarLife 客户端失败：reset",
-            CarLifeSession.clientFailureMessage(ConnectException("reset"), entryBlockedSuspected = false),
+            CarLifeSession.clientFailureMessage(ConnectException("reset"), DiagnosticCode.CARWITH_FAILED),
         )
+        assertFalse(
+            CarLifeSession.clientFailureMessage(IOException("cancelled"), DiagnosticCode.CARWITH_FAILED).contains("七路"),
+        )
+    }
+
+    @Test
+    fun listenerTimeoutWithObservedNotificationEndsAsListenersPending() {
+        var ended: String? = null
+        val session =
+            CarLifeSession(
+                Application(),
+                onAccessUnit = {},
+                onEnded = { ended = it },
+                log = {},
+                notificationSnapshot = {
+                    CarWithNotificationSnapshot(
+                        probeState = NotificationProbeState.CONNECTED,
+                        postEvents = 1,
+                        foregroundPostEvents = 1,
+                        activeNotifications = 1,
+                        activeForegroundNotifications = 1,
+                    )
+                },
+            )
+        (field("running").get(session) as AtomicBoolean).set(true)
+        invokeFail(session, CarLifeListenerTimeoutException("CarLife listener wait deadline: ECONNREFUSED"))
+
+        assertEquals(DiagnosticCode.CARWITH_LISTENERS_PENDING, session.endDiagnosticCode)
+        assertTrue(ended.orEmpty().startsWith(CarLifeSession.LISTENERS_PENDING_HINT))
+        assertFalse(session.entryBlockedSuspected)
+    }
+
+    @Test
+    fun allPortsWithoutCommandFramesEndsAsProtocolSilent() {
+        val connector = CarLifeChannelConnector(connect = { java.net.Socket() })
+        connector.connectAll(timeoutMs = 100)
+        val session = CarLifeSession(Application(), onAccessUnit = {}, onEnded = {}, log = {})
+        field("connector").set(session, connector)
+        (field("running").get(session) as AtomicBoolean).set(true)
+        invokeFail(session, "CarLife 关键通道 VIDEO 已断开")
+
+        assertEquals(DiagnosticCode.CARWITH_PROTOCOL_SILENT, session.endDiagnosticCode)
     }
 
     @Test
@@ -179,6 +226,26 @@ class CarLifeSessionTest {
             .apply { isAccessible = true }
             .invoke(session)
         return field("attachWatchThread").get(session) as Thread
+    }
+
+    private fun invokeFail(
+        session: CarLifeSession,
+        failure: Exception,
+    ) {
+        CarLifeSession::class.java
+            .getDeclaredMethod("fail", Exception::class.java)
+            .apply { isAccessible = true }
+            .invoke(session, failure)
+    }
+
+    private fun invokeFail(
+        session: CarLifeSession,
+        message: String,
+    ) {
+        CarLifeSession::class.java
+            .getDeclaredMethod("fail", String::class.java, Exception::class.java)
+            .apply { isAccessible = true }
+            .invoke(session, message, null)
     }
 
     @Test

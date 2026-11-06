@@ -1,14 +1,9 @@
 package com.mcarplay.app
 
 import android.app.Application
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.util.Log
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.i18n.AppLanguage
-import com.mcarplay.app.launcher.VirtualLauncher
 import com.mcarplay.app.util.DebugFileLog
 
 /**
@@ -32,27 +27,6 @@ open class SenderApp : Application() {
             Log.e(TAG, "未捕获异常（线程 ${thread.name}，已吞掉保进程）", throwable)
             // 不调用 previous：默认处理器会 killProcess 杀死整个 app
         }
-        // 应用安装/卸载/更新 → 桌面与车机设置的共享应用清单缓存失效
-        val packageFilter =
-            IntentFilter().apply {
-                addAction(Intent.ACTION_PACKAGE_ADDED)
-                addAction(Intent.ACTION_PACKAGE_REMOVED)
-                addAction(Intent.ACTION_PACKAGE_REPLACED)
-                addDataScheme("package")
-            }
-        registerReceiver(
-            object : BroadcastReceiver() {
-                override fun onReceive(
-                    context: Context,
-                    intent: Intent,
-                ) {
-                    VirtualLauncher
-                        .invalidateAppsCache()
-                    Log.i(TAG, "应用清单缓存已失效（包变化）")
-                }
-            },
-            packageFilter,
-        )
     }
 
     companion object {

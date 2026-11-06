@@ -2,6 +2,6 @@
 <!-- 分段控件选中片：蓝色圆角 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#FF0A84FF" />
+    <solid android:color="@color/ui_accent_fill" />
     <corners android:radius="8dp" />
 </shape>

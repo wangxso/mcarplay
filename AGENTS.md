@@ -18,8 +18,9 @@ derived from CarDeck (MIT); keep upstream notices in `LICENSE`, `NOTICE` and `TH
   via `su` + `app_process`, never from the app. See `docs/WIRED-CARPLAY.md`.
 - `video/`, `audio/`, `input/`, `capture/`, `render/`: media senders (H.264, AAC-LC with PCM resampling), HID touch/keys and display.
 - `diagnostics/`: connection timeline, error codes, redaction and the support report; `util/` holds `DebugFileLog` and `LogExporter`.
-- `launcher/`, `ui/`, `media/`, `legal/`, `shizuku/`, `service/`: CarDeck-derived launcher/settings UI, disclaimer, notification
-  media listener, optional Shizuku utilities and foreground services.
+- `ui/`, `settings/`, `media/`, `legal/`, `shizuku/`, `service/`: phone UI components and tokens, the car-display settings panel
+  (`SettingsContentActivity`), disclaimer, notification media listener, optional Shizuku utilities and foreground services. The CarDeck
+  virtual-display desktop (`launcher/`) was removed; the live path only forwards the CarWith stream.
 - `SessionController.kt` orchestrates a connection; `MainActivity.kt` is the main connection screen.
 
 Resources and assets are in `app/src/main/res/` and `app/src/main/assets/`; the Shizuku AIDL interface is

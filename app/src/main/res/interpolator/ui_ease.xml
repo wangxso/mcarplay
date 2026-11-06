@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- cubic-bezier(0.25, 0.1, 0.25, 1)：Apple 风格的缓动，不做回弹 -->
+<pathInterpolator xmlns:android="http://schemas.android.com/apk/res/android"
+    android:controlX1="0.25"
+    android:controlY1="0.1"
+    android:controlX2="0.25"
+    android:controlY2="1" />

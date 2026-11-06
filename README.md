@@ -27,7 +27,9 @@ Experimental. Source-side CarWith streaming has been tested across HyperOS OS1-O
 ARM64 AVDs as of November 4, 2026. Xiaomi-to-DiPlay and Xiaomi-to-WinPlay 1.2.5 test
 setups and one validated manual Xiaomi-to-Chery wireless path also have device or bench
 evidence as of October 31, 2026.
-The current formal release is `v0.1.3`; its scope remains the validated manual path.
+The current formal release is `v0.1.4`. It adds VW Passat 2025, Chery Arrizo 8 and Bluetooth
+auto-connect changes that have not been retested in those cars; the validated vehicle scope
+remains the manual Chery path.
 
 | Capability | Validation |
 | --- | --- |
@@ -132,17 +134,35 @@ an already-started native session, verified root to launch the legacy service, o
 manual setup in CarWith; ordinary Shizuku shell identity cannot start the protected service. Some receivers, including WinPlay 1.2.4 and 1.2.5, also check
 the phone's real Bluetooth identity. Android does not let ordinary apps read it: with
 [Shizuku](https://shizuku.rikka.app/) running, mcarplay reads and remembers it; without
-Shizuku, enter the address from the phone's settings under **本机蓝牙地址** on the main
-screen. A live Shizuku read takes precedence over a typed address. Optional display/launcher
+Shizuku, enter the address from the phone's settings under **本机蓝牙地址** in the **Connect** tab's
+readiness list. A live Shizuku read takes precedence over a typed address. Optional
 utilities may also use Shizuku.
 Receiver capabilities, Bluetooth handoff, pairing fallback and audio memory follow
 the [receiver compatibility design](docs/RECEIVER-COMPATIBILITY.md). Its policy matrix
 describes implementation and evidence boundaries, not a device support list.
 If pairing stalls after reinstalling, restart the test receiver to clear its previous session.
 
+## Interface
+
+The phone UI has three tabs: **Connect** (status, the start button and a readiness checklist), **Settings** (screen
+behavior, car settings, language, updates, disclaimer) and **Diagnostics** (self-test, Bluetooth capture analysis, logs).
+It follows the system light/dark theme. Screenshots come from an Android emulator, not a vehicle, and say nothing about
+vehicle compatibility.
+
+<table>
+<tr>
+<td><img src="docs/screenshots/ui-connect-light.png" width="240" alt="Connect tab"></td>
+<td><img src="docs/screenshots/ui-settings-light.png" width="240" alt="Settings tab"></td>
+<td><img src="docs/screenshots/ui-diagnostics-light.png" width="240" alt="Diagnostics tab"></td>
+</tr>
+</table>
+
+Dark theme: [Connect](docs/screenshots/ui-connect-dark.png), [Settings](docs/screenshots/ui-settings-dark.png),
+[Diagnostics](docs/screenshots/ui-diagnostics-dark.png), [Car display settings](docs/screenshots/ui-display-dark.png).
+
 ## Check for updates
 
-Open **检查更新** on the main screen while parked and disconnected. The app checks
+Open **检查更新** in the Settings tab while parked and disconnected. The app checks
 [GitHub Releases](https://github.com/wangxso/mcarplay/releases), shows release notes,
 and lets you download an APK and open the Android installer. **Include previews**
 is enabled by default for this experimental project; disable it for stable releases only.
@@ -160,7 +180,7 @@ See [update behavior, limitations and acceptance checks](docs/UPDATES.md).
 ## Language and release notes
 
 The interface is available in Simplified Chinese (default) and English. Change it under
-**界面语言 / Language** on the main screen; on Android 13 and later it also appears in the
+**界面语言 / Language** in the **Settings** tab; on Android 13 and later it also appears in the
 system per-app language settings. Logs and diagnostic reports stay in Chinese so they can
 be compared with existing evidence.
 
@@ -193,13 +213,13 @@ Coordinate calibration and configuration import are future work. See [implementa
 ## Compatibility fallbacks
 
 Two fallbacks from earlier versions are off by default. They have no vehicle evidence;
-turn one on only for the symptom below, then reconnect. Open **车机设置 → 显示** on the
-main screen (the same panel is on the car screen) and find:
+turn one on only for the symptom below, then reconnect. Open **Settings → 车机设置 → 显示** and find:
 
 | Switch | Symptom it addresses | What it does | Risk |
 | --- | --- | --- | --- |
 | **兼容兜底：配对失败后尝试明文** | Pairing fails every time on an older receiver that you know accepts only unencrypted sessions | After an ordinary pairing failure on a reachable receiver, retries once with an unencrypted (`et=NONE`) session. A 403 reply never falls back. | Uses the receiver's reconnect window; the session may be rejected |
 | **兼容兜底：音频格式未声明时仍尝试** | Video works but the app always streams video only, while the receiver can play sound | When the receiver lists no usable media audio format, still tries PCM 48 kHz (and non-media audio types) | No sound, or the receiver may disconnect shortly after audio starts |
+| **Experimental: Passat return to CarPlay** (pick one, off by default; requires Vehicle profile = Volkswagen on the home page) | Passat 2025 (VW4211) only sometimes re-enters CarPlay after returning to the native UI | Rebuild on fail: rebuild the screen stream once if the car shows no touch and asks for no key frame within 3 s; Disconnect on fail: end the session after two such failures in a row; No rebuild: tapping the icon only re-asserts ownership and resends parameter sets | No vehicle evidence for any of them; try one at a time; Disconnect on fail may misfire if you do not touch the screen |
 
 Turn the switch off again if it does not help. When reporting a problem, mention which
 switches were on; the diagnostic log records a `COMPAT:` line or an audio fallback line.
@@ -295,6 +315,16 @@ Run `python3 tools/prepare_upload.py` for a source-only upload folder and ZIP
 under `dist/`. SDK settings, signing files, caches, logs, captures and reference
 APKs are excluded. When uploading through GitHub's website, include `.github/`
 and the root dotfiles.
+
+## Star history
+
+<a href="https://www.star-history.com/#wangxso/mcarplay&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=wangxso/mcarplay&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=wangxso/mcarplay&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=wangxso/mcarplay&type=Date" />
+  </picture>
+</a>
 
 ## Acknowledgements
 
