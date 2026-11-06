@@ -1572,3 +1572,9 @@ WinPlay 与 Windows 版本未记录。
 - **验证范围：** JVM 状态机测试与本地 TCP 传输测试覆盖「暂停时零视频帧」「归还后 P 帧仍被拦住」「首次关键帧请求失败后重试」
   「新 IDR 后恢复」。
   **未在帕萨特或其他车型上实车验证**；仍需确认倒车影像、恢复延迟、触控以及不同车机归还主屏时的 `requestUI`/`UNTAKE` 时序。
+- **VW4131 倒车复核（2026-11-06 18:53，旧构建）：** 大众 ID.7（`VW4131`，AirPlay `320.17.7`）日志在
+  `18:53:10.197` 收到主屏 `changeModes`：`transferType=3`（BORROW）、`borrowID=4`、
+  `unborrowConstraint=1000`；`18:53:38.382` 自动归还主屏。借用持续约 28.2 秒，期间旧版 `0.1.5` 仍从
+  `VIDEO: CarWith 帧 #3721` 持续发到 `#5100`（约 1,379 帧），且没有 `SCREEN_OUTPUT`/`screenSuspended` 字段，
+  说明该 APK 尚未包含本修复。该载荷也确认：借用状态下 `requestUI` 必须遵守 `unborrowConstraint`，不能把倒车画面抢回；
+  本提交已解析该字段并加入精确载荷回归。

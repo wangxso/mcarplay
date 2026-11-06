@@ -132,6 +132,41 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun vw4131ReverseBorrowCannotBeRetakenUntilUnborrowed() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(
+            mapOf(
+                "reasonStr" to "0",
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "borrowID" to "4",
+                            "transferPriority" to 500,
+                            "resourceID" to 1,
+                            "transferType" to 3,
+                            "unborrowConstraint" to 1000,
+                        ),
+                    ),
+            ),
+        )
+        assertFalse(arbiter.phoneOwnsScreen)
+        assertFalse("A requestUI must not steal the reversing-camera screen", arbiter.onUserRequestedUi().allowed)
+
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "resourceID" to 1,
+                            "transferType" to 4,
+                        ),
+                    ),
+            ),
+        )
+        assertTrue(arbiter.phoneOwnsScreen)
+    }
+
+    @Test
     fun returningHomeDuringRecoveryKeepsNextRebuildPending() {
         val arbiter = ModeArbiter()
         arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 500))))

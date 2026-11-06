@@ -31,6 +31,7 @@ internal class ModeArbiter {
         var permanent: Entity = Entity.CONTROLLER,
         var takeConstraint: Int = CONSTRAINT_ANYTIME,
         var borrowConstraint: Int = CONSTRAINT_ANYTIME,
+        var unborrowConstraint: Int = CONSTRAINT_ANYTIME,
     )
 
     private val resources = linkedMapOf(SCREEN to Resource(), MAIN_AUDIO to Resource())
@@ -63,7 +64,7 @@ internal class ModeArbiter {
         if (screen.owner == Entity.CONTROLLER) {
             return UiRequest("主屏本就归手机，先报让出再拿回", retake = true, rebuildStream = screenRelinquished)
         }
-        val constraint = if (screen.permanent == Entity.CONTROLLER) screen.borrowConstraint else screen.takeConstraint
+        val constraint = if (screen.permanent == Entity.CONTROLLER) screen.unborrowConstraint else screen.takeConstraint
         if (constraint > PRIORITY_USER_INITIATED) {
             return UiRequest("车机持有主屏的约束高于 userInitiated，不抢", retake = false, allowed = false)
         }
@@ -125,6 +126,8 @@ internal class ModeArbiter {
             val priority = (request["transferPriority"] as? Number)?.toInt() ?: PRIORITY_NICE_TO_HAVE
             val takeConstraint = (request["takeConstraint"] as? Number)?.toInt() ?: CONSTRAINT_ANYTIME
             val borrowConstraint = (request["borrowConstraint"] as? Number)?.toInt() ?: CONSTRAINT_ANYTIME
+            val unborrowConstraint =
+                (request["unborrowConstraint"] as? Number)?.toInt() ?: borrowConstraint
             when (type) {
                 TRANSFER_TAKE ->
                     // 开场 niceToHave 的 take = 「没人要就先放车机」：手机要，就归手机（旧行为，22:46 一轮实测可出画）
@@ -146,6 +149,7 @@ internal class ModeArbiter {
                 TRANSFER_BORROW -> {
                     resource.owner = Entity.ACCESSORY
                     resource.borrowConstraint = borrowConstraint
+                    resource.unborrowConstraint = unborrowConstraint
                 }
                 TRANSFER_UNBORROW -> resource.owner = resource.permanent
             }
