@@ -336,24 +336,70 @@ object SessionController {
                     appendLog("AUTO-PLAY: CarWith 媒体已在播放，跳过")
                     return@run
                 }
-                val deadline = SystemClock.uptimeMillis() + 8_000L
-                while (SystemClock.uptimeMillis() < deadline) {
+                // 1) 先发 CarWith「媒体开始」硬按键；只有 CarWith 媒体处于可恢复状态时才生效。
+                if (session.sendHardKey(CarLifeProtocol.HARD_KEY_MEDIA_START)) {
+                    appendLog("AUTO-PLAY: 已发送 CarWith 媒体开始键，等待媒体 PCM")
+                    if (awaitMediaPcm(session, bridge, 6_000L)) {
+                        appendLog("AUTO-PLAY: CarWith 媒体已起播（媒体开始键）")
+                        return@run
+                    }
+                }
+                // 2) 硬按键无效时复现用户在车机屏上点 CarWith 媒体卡播放键的触摸。
+                repeat(2) { index ->
                     if (currentCarLifeSession !== session) return@run
                     if (bridge.lastMediaPcmAtMs > 0L) {
                         appendLog("AUTO-PLAY: CarWith 媒体已自行起播，跳过")
                         return@run
                     }
-                    if (session.sendHardKey(CarLifeProtocol.HARD_KEY_MEDIA_START)) {
-                        appendLog("AUTO-PLAY: 已发送 CarWith 媒体开始键起播（不切歌；CarWith 媒体无系统通知）")
-                        return@run
+                    if (tapCarWithMediaPlay(session)) {
+                        appendLog("AUTO-PLAY: 已点击 CarWith 媒体卡播放键（第 ${index + 1} 次）")
+                        if (awaitMediaPcm(session, bridge, 3_000L)) {
+                            appendLog("AUTO-PLAY: CarWith 媒体已起播（媒体卡播放键）")
+                            return@run
+                        }
                     }
-                    Thread.sleep(500L)
+                    Thread.sleep(300L)
                 }
-                appendLog("AUTO-PLAY: CarWith 未进入可发键状态，放弃本次主动起播")
+                appendLog("AUTO-PLAY: 未能自动起播（可在车机上手动点播放键）")
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
             }
         }
+    }
+
+    /** 等待 CarWith 媒体 PCM 出现；true = 已开始播放。 */
+    private fun awaitMediaPcm(
+        session: CarLifeSession,
+        bridge: CarLifeAudioBridge,
+        timeoutMs: Long,
+    ): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (currentCarLifeSession !== session) return false
+            if (bridge.lastMediaPcmAtMs > 0L) return true
+            Thread.sleep(200L)
+        }
+        return bridge.lastMediaPcmAtMs > 0L && currentCarLifeSession === session
+    }
+
+    /** CarWith 媒体卡播放键在 CarWith 视频中的相对坐标（实测 DiPlay 1920x1080：(1531,1011)）。 */
+    private const val AUTO_PLAY_TAP_X_FRACTION = 0.7975f
+    private const val AUTO_PLAY_TAP_Y_FRACTION = 0.9361f
+
+    /**
+     * 点击 CarWith 媒体卡的播放键。坐标按 CarWith 视频宽高比例给出：
+     * DiPlay 台架 1920x1080 上用户手动点击 (1531,1011) 可起播，对应 0.7975 / 0.9361。
+     */
+    private fun tapCarWithMediaPlay(session: CarLifeSession): Boolean {
+        val width = session.videoWidth
+        val height = session.videoHeight
+        if (width <= 0 || height <= 0) return false
+        val x = (width * AUTO_PLAY_TAP_X_FRACTION).toInt().coerceIn(0, width - 1)
+        val y = (height * AUTO_PLAY_TAP_Y_FRACTION).toInt().coerceIn(0, height - 1)
+        val down = session.sendTouch(x, y, true)
+        Thread.sleep(80L)
+        val up = session.sendTouch(x, y, false)
+        return down || up
     }
 
     private fun stopAutoPlayWatch() {
