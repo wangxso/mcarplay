@@ -17,6 +17,13 @@ disclosed `remote/debug` diagnostic export described below is unredacted.
    and firmware, screen message, and whether video, audio and touch work.
    Do not include passwords, pairing material or location screenshots.
 
+For CarWith entry-stage failures, allowing **Notification access** for mcarplay
+lets the report show whether a CarWith notification was observed while the seven
+ports were closed. This reuses the existing media/music permission; it records
+only the fixed CarWith package presence, foreground-service flag and timing, not
+notification titles or text. Without that access the claim stays explicitly
+unknown instead of treating "no notification seen" as "CarWith never started".
+
 The log switch controls display, not file diagnostics. Clearing the UI console
 does not erase report history. Long-pressing the log export icon includes larger,
 still-redacted recent runtime history.
@@ -94,6 +101,20 @@ still-redacted recent runtime history.
   `CARLIFE-DIAG` lines carry a source-run ID and record entry, source environment,
   all-listeners-connected, stop and failure snapshots. No extra TCP probes are
   made: a second connection can reset CarLife's session.
+- `CARWITH_NOTIFICATION_PROBE` is a process-wide, read-only presence probe that
+  reuses the existing notification-access grant. It records only whether a
+  notification from `com.miui.carlink` was observed, whether
+  `FLAG_FOREGROUND_SERVICE` was set, active counts, removals and elapsed
+  timestamps. Notification keys, titles, text, progress and other content never
+  enter the report or runtime log. `access=CONNECTED` means the listener is
+  actually bound; `UNKNOWN` or `DISCONNECTED` cannot support a claim about
+  whether CarWith started. In a CarLife attempt, `baseline=run` and
+  `deltaPosts`/`deltaForegroundPosts` compare against the session start.
+  `notification.accessEnabled` is the export-time settings-list value, not proof
+  that the listener was bound or that a notification was delivered.
+  `CARLIFE_SELF_TEST_DIAGNOSTICS` also carries the same probe snapshot with
+  `commandFrames`; zero command frames after all seven ports connected is
+  evidence of a silent protocol channel, not of a working cast session.
 - Source environment fields describe the fixed CarWith/CarLife packages' enabled
   and system-app flags, declared/granted permissions, the CarLife connect-service
   declaration and caller permission, and the readable CarWith global feature
@@ -270,6 +291,10 @@ vehicle compatibility; the affected user's phone/head unit must still be reteste
 | `SETUP_FAILED` | SETUP status and advertised capabilities. |
 | `CARWITH_FAILED` | Component versions, entry, original permissions, handshake and source video. |
 | `CARWITH_ENTRY_BLOCKED` | CarWith's seven listeners never appeared and the entry was requested while mcarplay was not in the foreground. Android/MIUI can drop such a background activity start without an error; on Xiaomi allow "Display pop-up windows while running in the background" (后台弹出界面) or keep mcarplay in front, then reconnect. When the Xiaomi permission is denied, mcarplay offers a shortcut to it before connecting. |
+| `CARWITH_ENTRY_NOT_OBSERVED` | The notification listener was bound, no CarWith notification was observed during the wait, and the seven ports stayed closed. This is not proof that CarWith's code never ran, but it points to entry/activation rather than the later protocol. Keep mcarplay in front and start Baidu CarLife wireless connection from CarWith settings. |
+| `CARWITH_ENTRY_STATUS_UNKNOWN` | The seven ports stayed closed and no notification listener was bound. The report cannot decide whether the CarWith entry ran. Use the CarWith settings entry manually; allowing notification access improves only future diagnostics. |
+| `CARWITH_LISTENERS_PENDING` | A CarWith notification was observed, but the seven ports stayed closed. CarWith reached at least its notification/service phase; check the CarWith and Xiaomi CarLife versions and restart the factory wireless connection. |
+| `CARWITH_PROTOCOL_SILENT` | All seven ports connected but the command channel delivered no CarLife frames. Listening sockets are not a valid cast session. Stop the existing CarWith connection and restart Baidu CarLife wireless connection from CarWith settings. |
 | `CARWITH_BUSY` | Stop the standalone self-test before starting a formal CarPlay connection. |
 | `VIDEO_CLOSED` | Transport ended. Status `stopped` after frames were sent (normal end, e.g. receiver off); `failed` if none were sent. Reset/broken pipe alone does not establish receiver crash. |
 | `AUDIO_UNAVAILABLE` | Audio setup failed; video may continue. Inspect format and input/output counts. |

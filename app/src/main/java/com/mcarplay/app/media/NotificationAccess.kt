@@ -6,7 +6,7 @@ import com.mcarplay.app.shizuku.Shell
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 通知使用权的查询与授予（音乐卡数据源的前置条件）。
+ * 通知使用权的查询与授予（音乐卡与 CarWith 入口阶段诊断的共同前置条件）。
  *
  * **为什么单独成一个对象**：此前授权只在 `MainActivity.onCreate` 里「Shizuku 已就绪」
  * 时才尝试一次。一旦那次时机不对——手机重启后 Shizuku 未运行、或者改包名后首次启动
@@ -89,7 +89,7 @@ object NotificationAccess {
             granted = ok
             log(
                 if (ok) {
-                    "MEDIA: 通知使用权已授予（音乐卡可显示歌名/播放状态）"
+                    "MEDIA: 通知使用权已授予（音乐卡可显示歌名/播放状态，CarWith 入口诊断可用）"
                 } else {
                     "MEDIA: 通知使用权未授予（cmd 结果=${result.exitCode}）——" +
                         "音乐卡只显示播放状态、无歌名；可在系统设置「通知使用权」手动开启"
