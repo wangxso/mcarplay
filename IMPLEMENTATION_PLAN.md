@@ -6,12 +6,23 @@
 
 ## 当前基线与结论
 
-- **11 月 6 日 CarWith 入口阶段非 root 探针（代码与单测，未真机复测）：** 复用媒体卡已有的通知使用权，只记录
-  `com.miui.carlink` 通知是否存在、前台服务标志、活动/移除计数和时序，不读取标题或正文。入口超时拆为
-  `CARWITH_LISTENERS_PENDING`、`CARWITH_ENTRY_NOT_OBSERVED`、`CARWITH_ENTRY_STATUS_UNKNOWN`，保留后台
-  `CARWITH_ENTRY_BLOCKED`；七口全连但命令通道零帧归为 `CARWITH_PROTOCOL_SILENT`。未绑定通知监听器时保持未知，
-  不推断 CarWith 未执行。该改动只增强诊断，不修复 CarWith 4.0.4 / Android 13 / CarLife 8.6.8 的实际出流故障，
-  仍需故障手机复测并导出报告。详见 `docs/DIAGNOSTICS.md` 与 `docs/CARWITH-4.0.4-ANALYSIS.md`。
+- **11 月 6 日手机端 SDP 生命周期恢复（无新增实车验收）：** 两项 iAP2/CarPlay 公告改为成组管理，任一监听结束均撤销，
+  修复旧 `running=true` 阻止重新监听的问题；复用系统蓝牙广播，重开后只恢复用户仍请求的公告。
+  旧回调/恢复令牌不能影响新轮次或在用户停止后复活，连续注册/立即监听失败共用最多三次自动恢复预算。
+  未按 HyperOS/手机型号更换 UUID，未改变 iAP2、认证、CHERY/RECORD 或媒体策略。
+  新增生命周期测试 11 项，蓝牙定向 67 项通过；最新完整 standard 859 项、remote bridge 24 项，均 0 失败/错误/跳过，
+  Spotless、standard lint/debug 构建通过。HyperOS 3/API 36 与 HyperOS 4/API 37 的本地注册、后台返回、蓝牙重开恢复和停止后不恢复已实际观察；
+  OS1/API 33 混合 AVD 在 Enforcing 下未完成开机，OS2/API 35 启动应用发生 ANR，不能记为通过。
+  具体系统版本、APK 指纹、模拟器矩阵与同车换手机验收见 `docs/HYPEROS-PHONE-COMPATIBILITY.md`；仍需四接收端实体回归。
+
+- **11 月 6 日艾瑞泽 8 报告对照与回归补充（无新增实车结果）：** 对照用户提供的固件包、协议分析、88 阶段证据链和 HTML/PDF 报告，
+  确认适用于既有 `IC2172 / …387_250619_R` 车机的分层定位。新增 CHERY 合成 iAP2 与诊断时序回归，并补 AirPlay 配对/生命周期负例；
+  30 秒仅作车机窗口参考，手机 `BT_LINK` 不等于车机 `TimerThread begin`，失败后新 Start 另算尝试。
+  断开后约 20 秒崩溃的直接机制已由历史证据定位为周期回调读取空 server；重复 RECORD / 多次 SessionStart 仍是触发候选，
+  已补充同停止逻辑的单变量归因、至少 60 秒独立观察、PID/重启检查及可复现场景至少三轮要求，无新增原始库/崩溃文件复核。
+  未修改连接策略；单次 RECORD 候选、音画触控、动态音频和四接收端实车回归仍待完成。
+  新增 9 项测试，定向 49 项通过；完整 standard 848 项、remote 桥 24 项通过，均 0 失败/0 跳过，Spotless、standard lint/debug 构建通过。
+  测试清单、认证验证边界、报告指纹和实车验收项见 `docs/ARRIZO8-PROTOCOL-REGRESSION.md`。
 
 - **11 月 5 日 v0.1.5-test.1 测试版（待发布）：** 汇总界面重构（PR #35）与 PR #31、#33、#34 的修复，仅通过单元测试、模拟器和一台小米手机检查，DiPlay、WinPlay、macplay、艾瑞泽 8 的实车回归尚未进行。测试通过后计划升到 1.0.0。
 

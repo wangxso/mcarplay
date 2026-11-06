@@ -11,13 +11,13 @@ package com.mcarplay.app.diagnostics
 enum class ConnectionMilestone(
     val stage: ConnectionStage,
 ) {
-    /** iAP2 链路同步完成（RFCOMM 已通）。艾瑞泽 8 的 30 s 连接计时约从此刻（SPP open）起算。 */
+    /** iAP2 链路同步完成（RFCOMM 已通）；可近似对齐艾瑞泽 8 的 TimerThread begin，不是其精确起点。 */
     BT_LINK(ConnectionStage.BLUETOOTH),
 
     /** 已回 0x1D02 IdentificationAccepted。 */
     IAP2_IDENTIFIED(ConnectionStage.BLUETOOTH),
 
-    /** 已发 0xAA05 认证完成；车机侧对应 iAP `AUTHENTICATION_PASS`，不代表 AirPlay 配对成功。 */
+    /** 已发 0xAA05 自报认证完成；不代表本机校验了证书/签名，也不代表 AirPlay 配对成功。 */
     IAP2_AUTHENTICATED(ConnectionStage.BLUETOOTH),
 
     /** 拿到车机热点信息（0x5703，或带 SSID 的 0x4301）。 */
@@ -41,7 +41,7 @@ enum class ConnectionMilestone(
     /** pair-verify 完成，控制通道已加密。 */
     PAIR_VERIFY(ConnectionStage.PAIRING),
 
-    /** `POST /auth-setup`（MFi-SAP）得到 2xx 应答；车机侧对应 MFi SAP / MFi Auth。 */
+    /** `POST /auth-setup` 得到 HTTP 200；当前仅记录响应结构，不代表 MFi 证书/签名已验证。 */
     AUTH_SETUP(ConnectionStage.SETUP),
 
     /** 初始 SETUP 被接受；车机侧对应 `_AirPlayHandleSessionCreated`。 */

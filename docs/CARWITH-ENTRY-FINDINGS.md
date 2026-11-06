@@ -1553,3 +1553,51 @@ WinPlay 与 Windows 版本未记录。
 **证据状态：无。** 只有单元测试（`PassatReturnPolicyTest`）与构建通过，三者都未上车。「无触控且无要帧」的判据在用户拿回后 3 s 内没碰屏时
 也会成立，可能误判，策略 2 尤其如此。请每次只选一个，上车反复「回主界面再进」，导出日志看 `PASSAT:` 与 `SESSION: 拿回主屏` 两类行，
 把结果（成功次数/总次数）补记到本节后再下结论。
+
+## 2026-11-06：艾瑞泽 8 固件/协议报告转为回归矩阵（源码对照，无新增设备验收）
+
+输入为用户提供的 `FIRMWARE_PACKAGE_ANALYSIS.md`、`CARPLAY_PROTOCOL_ANALYSIS.md`、`FIRMWARE_CARPLAY_CHAIN.md`
+与 `carplay-protocol-report.html/.pdf`。当前实车 SOC `M1E_IC2172/82_03_21.387_250619_R` 与本仓库历史证据相符，
+但报告中的真 iPhone 会话不能当作本轮 MCarPlay 的验证。原始包、库、日志、配对材料未复制进仓库。
+
+- **可用结论：** iAP2 PASS、入网、Bonjour/ctrl、pair-verify、MFi auth-setup、SETUP/RECORD 与音画触控独立验收。
+  报告中的 `WirelessCarPlayStatus=1` 是能力更新，Linker `Connect(0)` 是会话事件；都不等同于应用已出画。
+- **计时修正：** 30.002 s 的精确起点是车机 `TimerThread begin`；手机 `BT_LINK` 只提供近似对时提示。
+  失败例执行 TIMEOUT → Stop/Bonjour 注销 → END，随后上层新一次 Start；不证明同轮无缝重连或上层一定自动重试。
+- **实现范围：** 补合成 iAP2 回环、诊断时间线与 AirPlay 配对/停止边界，不改变现有 CHERY 匹配、挑战长度、单次 RECORD 或媒体策略。
+  没有原始 plist/TLV/pcap，不能声称新增真实报文回放或 84/88 项逐包验证。
+- **断开崩溃结论收敛：** 11 月 6 日用户转述另一边分析，与 11 月 3 日本文件保存的静态分析和 13 份历史 tombstone 摘要一致；
+  本次未重新复核原始库或崩溃文件。直接机制为 Finalize 后周期回调仍从 `session+0x10` 取得空 server，
+  在 `_PerformPeriodTasks+640` 访问 `0xac`；约 20 s 与 server 空闲阈值吻合，区别于建链阶段的 30 s watchdog。
+  蓝牙关闭顺序、type-130、真实 MAC、来源名、speechMode、HKP、auth-setup、MFi 32B、结束原因和 TCP 残留的既有对照未消除崩溃。
+  重复 RECORD / 多次 SessionStart 仍是优先触发候选；一条 started 日志不能代替实际 Start/timer 计数。
+  回归矩阵补充独立观察至少 60 s、进程重启检查、可复现场景至少三轮及同停止逻辑的 RECORD 单变量归因要求。
+- **仍未验收：** 当前候选在车上的音画触控、首次/复用配对、动态音频、断开后 60 s 与直接重连；
+  11 月 3 日的原厂断开崩溃候选仍未证实修复，且 RECORD 与停止流程同时改变，候选通过也不能直接归因 RECORD。
+  有线仍为“未实测”，不因包内存在 USB 模块改变结论。
+
+完整的报告指纹、现有覆盖、新增用例、88 阶段实车检查点和 DiPlay/WinPlay/macplay/艾瑞泽 8 合并门槛见
+[艾瑞泽 8 协议回归矩阵](ARRIZO8-PROTOCOL-REGRESSION.md)。新增 9 项测试，定向 49 项通过；完整 standard 848 项、remote 桥 24 项
+通过，均 0 失败/0 跳过，Spotless、standard lint/debug 构建通过。上述离线结果不替代设备证据。
+
+## 2026-11-06：HyperOS 手机端 SDP 生命周期与 AVD 检查（无新增实车验收）
+
+两项手机侧 SDP/RFCOMM 公告改为共享生命周期，修复监听异常退出后 `running` 仍为真导致无法重新发布的问题。
+复用蓝牙状态广播，在用户仍请求连接时恢复；用户停止、新轮次与蓝牙再次关闭会作废旧任务，自动恢复最多三次。
+UUID、iAP2/认证、CHERY/RECORD 和媒体策略未改变，不按 HyperOS 大版本增加手机白名单。
+新增生产生命周期回归 11 项，蓝牙定向 67 项通过；最新完整 standard 859 项、remote bridge 24 项均 0 失败/错误/跳过，
+Spotless、standard lint/debug 构建通过。
+
+本轮使用保留原数据的 Xiaomi system + ranchu 混合 AVD，保持 SELinux Enforcing，不代表对应实体手机原厂 ROM：
+
+- HyperOS 3 / Android 16 API 36 / `OS3.0.2.0.WMCCNXM`：实际覆盖安装并进入连接流程，初始与蓝牙重开后两项公告均
+  `SDP_REGISTER outcome=OK evidence=LOCAL_REGISTRATION_ONLY`；后台返回保留等待状态，确认用户停止后再次蓝牙重开未重新公告。
+- HyperOS 4 / Android 17 API 37 / `OS4.0.24.0.XFRCNXM`：同一 APK 安装并通过首页、声音与电池优化提示进入连接流程；
+  初始与蓝牙重开后两项公告注册、后台返回、确认停止后不再恢复均与 HyperOS 3 一致。该实例有主副屏，截屏固定使用主屏 ID。
+- HyperOS 2 / Android 15 API 35 / `OS2.0.215.0.VMCCNXM`：覆盖安装成功，启动后空白；本轮三份退出记录均为启动阶段 ANR，
+  未取得可归因的线程栈，未覆盖公告/连接，不记为通过。
+- HyperOS 1 / Android 13 API 33 / `V816.0.4.0.TGACNXM`：追加观察 150 s 后仍处开机动画，zygote 重启、package 服务不存在，
+  未达到安装运行 APK 的条件，不能据此判定真实 HyperOS 1 手机兼容性。
+
+APK 指纹、完整矩阵、截图/日志的证据边界及同车换手机步骤见 [HyperOS 手机兼容记录](HYPEROS-PHONE-COMPATIBILITY.md)。
+没有操作当前连接的真实手机、车机或接收端，没有新增车机发现、iAP2 回连、媒体、触控或断开后原厂稳定性验收。
