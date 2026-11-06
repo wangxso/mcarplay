@@ -72,8 +72,10 @@ internal object DisclaimerContent {
                         "· Shizuku（shell 权限）：用于创建受信虚拟屏、注入触摸事件、写入系统" +
                         "兼容性设置（如强制应用横屏）、读取窗口与显示状态。本应用不会用它执行" +
                         "与本应用服务无关的命令，CarWith 主链路不依赖此权限；\n" +
-                        "· 通知使用权 / 媒体会话：仅用于在车机桌面显示当前播放的音乐信息" +
-                        "（歌名、歌手、封面、播放进度）；\n" +
+                        "· 通知使用权 / 媒体会话：用于在车机桌面显示当前播放的音乐信息" +
+                        "（歌名、歌手、封面、播放进度），以及在本地诊断 CarWith 是否启动到通知阶段。" +
+                        "该诊断只记录是否观察到 CarWith 通知及前台服务标志，" +
+                        "不读取通知标题、正文或其它应用内容；\n" +
                         "· 蓝牙：用于与接收端配对及无线控制链路；\n" +
                         "· 屏幕录制（投屏）授权：用于非原生音频路径的播放捕获。CarWith 原生音频" +
                         "不需要 mcarplay 额外申请录屏授权。\n\n" +
@@ -154,8 +156,10 @@ internal object DisclaimerContent {
                         "compatibility settings (such as forcing apps to landscape) and reads window and display state. The " +
                         "app does not use it to run commands unrelated to its own function, and the CarWith main path does " +
                         "not need it;\n" +
-                        "· Notification access / media sessions: used only to show the currently playing music on the car " +
-                        "home screen (title, artist, cover, progress);\n" +
+                        "· Notification access / media sessions: used to show the currently playing music on the car home " +
+                        "screen (title, artist, cover, progress), and to diagnose locally whether CarWith started far " +
+                        "enough to post a notification. That diagnostic records only whether a CarWith notification " +
+                        "and foreground-service flag exist; it does not read notification titles, text or other apps' content;\n" +
                         "· Bluetooth: for pairing with the receiver and the wireless control link;\n" +
                         "· Screen recording (screen capture) permission: for playback capture on the non-native audio path. " +
                         "Native CarWith audio does not need mcarplay to request it.\n\n" +

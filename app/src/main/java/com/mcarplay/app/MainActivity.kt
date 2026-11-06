@@ -1480,12 +1480,7 @@ class MainActivity : AppCompatActivity() {
             getString(
                 if (running) R.string.carlife_self_test_stop else R.string.carlife_self_test_start,
             )
-        carLifeSelfTestDesc.text =
-            if (running) {
-                CarLifeDiagnostics.status(this)
-            } else {
-                getString(R.string.carlife_self_test_idle)
-            }
+        carLifeSelfTestDesc.text = CarLifeDiagnostics.status(this)
     }
 
     private fun toggleExternalHu() {

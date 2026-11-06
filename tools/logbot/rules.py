@@ -43,6 +43,22 @@ CODE_ADVICE: dict[str, tuple[str, str]] = {
         "应用在后台时系统拦截了 CarWith 入口，CarWith 的监听端口一直没有出现。",
         "小米手机请在应用权限里允许「后台弹出界面」，或连接时保持 mcarplay 在前台，然后重连。",
     ),
+    "CARWITH_ENTRY_NOT_OBSERVED": (
+        "通知监听可用，但等待七路连接期间没有观察到 CarWith 通知，端口也没有就绪。",
+        "这不能证明 CarWith 内部从未执行，但入口很可能没有完成初始化。保持 mcarplay 在前台，从 CarWith 设置手动选择百度 CarLife 无线连接后重试。",
+    ),
+    "CARWITH_ENTRY_STATUS_UNKNOWN": (
+        "七路端口未就绪，且本进程没有绑定通知监听器，无法判断 CarWith 入口是否执行。",
+        "从 CarWith 设置手动发起百度 CarLife 无线连接；如允许 mcarplay 的通知使用权，下一次报告可区分入口是否启动到通知阶段。",
+    ),
+    "CARWITH_LISTENERS_PENDING": (
+        "已经观察到 CarWith 通知，但七路 CarLife 监听端口仍未就绪。",
+        "CarWith 至少启动到了通知阶段；检查 CarWith/小米 CarLife 版本，并从 CarWith 设置重新选择百度 CarLife 无线连接。",
+    ),
+    "CARWITH_PROTOCOL_SILENT": (
+        "七路端口都已连上，但命令通道没有收到任何 CarLife 协议帧。",
+        "端口监听不等于有效投屏会话；停止现有 CarWith 连接，再从 CarWith 设置重新发起百度 CarLife 无线连接并复测。",
+    ),
     "CARWITH_BUSY": ("CarWith 正被独立自检占用。", "先停止自检，再启动正式 CarPlay 连接。"),
     "VIDEO_CLOSED": (
         "视频连接已结束。已发过帧时多为正常结束（例如接收端关闭）；一帧都没发出则是失败。",
@@ -107,7 +123,7 @@ LOG_PATTERNS = [
         "info",
         re.compile(r"CARLIFE:.*(?:ECONNREFUSED|Connection refused)"),
         "CarWith 本地端口暂未就绪，mcarplay 在重试。",
-        "启动时短暂重试是正常的；只有最终以 CARWITH_FAILED / CARWITH_ENTRY_BLOCKED 结束才说明 CarWith 没起来。",
+        "启动时短暂重试是正常的；最终结论以 CARWITH_* 错误码和通知探针字段为准。",
     ),
     LogPattern(
         "reset",

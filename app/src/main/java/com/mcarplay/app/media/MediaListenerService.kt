@@ -5,10 +5,13 @@ import android.media.MediaMetadata
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.service.notification.NotificationListenerService
+import android.service.notification.StatusBarNotification
+import com.mcarplay.app.carlife.CarWithNotificationProbe
 
 /**
  * 通知监听服务：借通知使用权枚举系统活跃媒体会话，向应用提供「正在播放」状态
- * （歌名/歌手/播放中）。音乐卡片（仪表盘）据此渲染与控制。
+ * （歌名/歌手/播放中）。音乐卡片（仪表盘）据此渲染与控制；同一通知监听器也只读
+ * 观察 CarWith 是否出现通知，用于区分入口阶段故障，不保存通知内容。
  *
  * **为什么必须有通知使用权**：`MediaSessionManager.getActiveSessions()` 在未授权时
  * 仍会返回会话（所以播放状态拿得到），但 `metadata` 恒为 null——表现为「播放状态在变、
@@ -30,6 +33,7 @@ class MediaListenerService : NotificationListenerService() {
         NotificationAccess.markGranted()
         NotificationAccess.markConnected()
         MediaSessionsState.accessGranted = true
+        CarWithNotificationProbe.onListenerConnected(runCatching { activeNotifications }.getOrNull())
         try {
             manager.addOnActiveSessionsChangedListener(
                 sessionListener,
@@ -48,6 +52,7 @@ class MediaListenerService : NotificationListenerService() {
         super.onListenerDisconnected()
         MediaSessionsState.accessGranted = false
         NotificationAccess.markDisconnected()
+        CarWithNotificationProbe.onListenerDisconnected()
         // 必须清空：否则卡片会保留断开前的歌名/播放状态，出现「正在播放 + 未在播放」
         // 甚至「正在播放 + 无法读取播放信息」的自相矛盾显示（2026-10-19 实测：
         // 重装后监听器未被系统绑定，卡片长时间停在旧状态）。
@@ -55,9 +60,20 @@ class MediaListenerService : NotificationListenerService() {
         watched.clear()
     }
 
+    override fun onNotificationPosted(notification: StatusBarNotification?) {
+        super.onNotificationPosted(notification)
+        CarWithNotificationProbe.onNotificationPosted(notification)
+    }
+
+    override fun onNotificationRemoved(notification: StatusBarNotification?) {
+        super.onNotificationRemoved(notification)
+        CarWithNotificationProbe.onNotificationRemoved(notification)
+    }
+
     override fun onDestroy() {
         mainHandler.removeCallbacks(periodicRefresh)
         runCatching { manager.removeOnActiveSessionsChangedListener(sessionListener) }
+        CarWithNotificationProbe.onListenerDisconnected()
         MediaSessionsState.publish(null)
         super.onDestroy()
     }

@@ -48,6 +48,7 @@
     <string name="carlife_self_test_content_description">CarWith 自检</string>
     <string name="carlife_self_test_title">CarWith 出流自检</string>
     <string name="carlife_self_test_idle">启动 CarWith 验证真实 H.264；请先断开其他接收端</string>
+    <string name="carlife_self_test_last_result">上次结果：%1$s</string>
     <string name="carlife_open_settings">设置</string>
     <string name="carlife_self_test_start">自检</string>
     <string name="carlife_self_test_stop">停止</string>
