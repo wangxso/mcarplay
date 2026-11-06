@@ -3695,6 +3695,9 @@ object SessionController {
                                                 receiverMaxFps = setup.maxFps,
                                                 // 车机拿走主屏（原车界面、倒车影像等）时暂停屏幕视频，归还后从新的 IDR 恢复
                                                 phoneOwnsScreen = { client.modes.phoneOwnsScreen },
+                                                onScreenOutputSuspended = { suspended ->
+                                                    ConnectionDiagnostics.timeline.screenOutput(diagnosticAttempt, suspended)
+                                                },
                                                 onExternalFrameSent = { bytes ->
                                                     ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
                                                     val now = android.os.SystemClock.uptimeMillis()

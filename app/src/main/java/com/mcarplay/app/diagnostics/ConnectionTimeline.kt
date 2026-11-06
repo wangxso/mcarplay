@@ -62,6 +62,8 @@ class ConnectionTimeline(
         val startedAtMs: Long,
         val stage: ConnectionStage,
         val status: String,
+        /** 主屏不归手机，屏幕视频已被门控暂停；此时 lastVideoMsAgo 增长不代表传输停滞。 */
+        val screenSuspended: Boolean,
         val elapsedMs: Long,
         val code: DiagnosticCode?,
         val videoFrames: Long,
@@ -91,6 +93,8 @@ class ConnectionTimeline(
             "会话 $id · ${stage.label} · $statusLabel · ${elapsedMs / 1000}s\n" +
                 (
                     code?.let { "${it.name}：${it.advice}" } ?: when {
+                        screenSuspended ->
+                            "主屏由车机持有，屏幕视频已暂停；等待主屏归还并收到新的关键帧"
                         status == "streaming" && (lastVideoMsAgo ?: 0) >= 5000 ->
                             "最近 ${(lastVideoMsAgo ?: 0) / 1000}s 未发出新视频帧；请确认接收端画面，并导出报告"
                         sourceFrames > 0 && videoFrames == 0L && stage != ConnectionStage.SELF_TEST -> "已收到 CarWith 视频，尚未向接收端发出视频帧"
@@ -113,6 +117,7 @@ class ConnectionTimeline(
     private var startedAtMs = 0L
     private var stage = ConnectionStage.PRECHECK
     private var status = "waiting"
+    private var screenSuspended = false
     private var code: DiagnosticCode? = null
     private var started = 0L
     private var frames = 0L
@@ -135,6 +140,7 @@ class ConnectionTimeline(
             startedAtMs = wallTime()
             stage = ConnectionStage.PRECHECK
             status = "waiting"
+            screenSuspended = false
             code = null
             started = elapsedTime()
             endedAt = null
@@ -273,6 +279,22 @@ class ConnectionTimeline(
             }
         }
 
+    /**
+     * 主屏归属导致的屏幕视频暂停/恢复。暂停期间 [Snapshot.lastVideoMsAgo] 继续增长是预期行为，
+     * 不能按传输停滞报警；恢复以新的 IDR 已发送为准。
+     */
+    fun screenOutput(
+        attempt: String,
+        suspended: Boolean,
+    ) = mutate {
+        if (id != attempt || !active() || screenSuspended == suspended) return@mutate
+        screenSuspended = suspended
+        emit(
+            "SCREEN_OUTPUT",
+            if (suspended) "主屏归车机，屏幕视频已暂停" else "主屏视频已由新的 IDR 恢复",
+        )
+    }
+
     fun audioPacket(attempt: String) =
         mutate {
             if (id != attempt || !active()) return@mutate
@@ -295,6 +317,7 @@ class ConnectionTimeline(
                 startedAtMs,
                 stage,
                 status,
+                screenSuspended,
                 ((endedAt ?: elapsedTime()) - started).coerceAtLeast(0),
                 code,
                 frames,
@@ -361,6 +384,7 @@ class ConnectionTimeline(
                 .put("event", event)
                 .put("stage", state.stage.name)
                 .put("status", state.status)
+                .put("screenSuspended", state.screenSuspended)
                 .put("elapsedMs", state.elapsedMs)
                 .put("code", state.code?.name ?: "NONE")
                 .put("videoFrames", state.videoFrames)

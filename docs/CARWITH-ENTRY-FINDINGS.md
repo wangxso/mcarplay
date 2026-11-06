@@ -1568,6 +1568,7 @@ WinPlay 与 Windows 版本未记录。
 - **对应修改（本提交，未在车上验证）：** `VideoSender` 每帧检查 `ModeArbiter.phoneOwnsScreen`。主屏归车机时
   丢弃全部视频帧，包括 IDR；屏幕流 socket、CarWith、iAP2 与音频不关闭，keepAlive 继续发送。主屏归还后等待新的
   IDR，重发参数集，并每秒重试关键帧请求直到 IDR 到达，之后才恢复全帧率。若暂停期间车机重新拿走主屏，门控重新进入暂停。
+  诊断层收到 `SCREEN_OUTPUT` 暂停/恢复事件；主屏让出期间不再把 `lastVideoMsAgo` 增长误报成视频停滞。
 - **验证范围：** JVM 状态机测试与本地 TCP 传输测试覆盖「暂停时零视频帧」「归还后 P 帧仍被拦住」「首次关键帧请求失败后重试」
   「新 IDR 后恢复」。
   **未在帕萨特或其他车型上实车验证**；仍需确认倒车影像、恢复延迟、触控以及不同车机归还主屏时的 `requestUI`/`UNTAKE` 时序。

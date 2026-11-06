@@ -35,6 +35,7 @@
     <string name="status_failed">failed</string>
     <string name="status_stopped">ended</string>
     <string name="summary_header">Session %1$s · %2$s · %3$s · %4$ds</string>
+    <string name="summary_video_paused">The main screen belongs to the head unit, so screen video is paused until it returns and a fresh key frame arrives</string>
     <string name="summary_video_stalled">No new video frame sent in the last %1$ds; check the receiver\'s picture and export a report</string>
     <string name="summary_source_only">CarWith video received, but no frame has been sent to the receiver yet</string>
     <string name="summary_waiting_carwith">Still waiting for the first CarWith frame; check the factory permissions and export a report</string>

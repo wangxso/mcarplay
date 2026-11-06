@@ -54,6 +54,11 @@ still-redacted recent runtime history.
   that point. That window was observed only on that head unit.
 - Source H.264 frames, video transport writes, native PCM chunks and sent audio
   packets are separate evidence. Writes do not prove receiver display or sound.
+- `SCREEN_OUTPUT` events and the snapshot field `screenSuspended` distinguish an
+  intentional main-screen pause from transport stalling. While the head unit owns
+  the screen, the report states that video is suspended instead of warning that no
+  new frame was written. The state clears only after the first fresh IDR is sent;
+  the screen stream socket, audio and keepAlive remain active.
 - `RECEIVER_DETECTION` and `DETECT` notes contain the local wizard's fixed state,
   trial/stage, storage status and media/input counters. Private receiver bindings,
   installation secrets and environment/capability digests are excluded. Counts do

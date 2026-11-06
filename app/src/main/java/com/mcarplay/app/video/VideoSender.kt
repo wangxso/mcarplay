@@ -65,6 +65,8 @@ class VideoSender(
      * 默认 true = 调用方未提供资源仲裁状态时不改变原行为。
      */
     private val phoneOwnsScreen: () -> Boolean = { true },
+    /** 主屏归属导致的屏幕视频暂停/恢复；用于让诊断层区分“主动暂停”和“传输停滞”。 */
+    private val onScreenOutputSuspended: (Boolean) -> Unit = {},
     private val uptimeMs: () -> Long = { android.os.SystemClock.uptimeMillis() },
 ) {
     @Volatile
@@ -109,6 +111,7 @@ class VideoSender(
     private val streamStats = PassthroughStreamStats()
     private val streamStatsLogged = AtomicBoolean(false)
     private val screenOutputGate = ScreenOutputGate()
+    private val screenSuspendedReported = AtomicBoolean(false)
     private var lastStreamStatsLogAt = 0L
 
     /** 车机经屏幕数据口回传的字节数（正常为 0；非 0 或被车机关闭都值得记录）。 */
@@ -286,6 +289,7 @@ class VideoSender(
                     isDaemon = true
                     start()
                 }
+                reportScreenSuspended(false, force = true)
                 log("VIDEO: 外部 CarWith H.264 输入已启动 ${width}x$height@$targetFps")
                 return true
             }
@@ -515,8 +519,10 @@ class VideoSender(
                 screenOutputGate.admit(ownsScreen, keyFrame, uptimeMs())
             }
         when (decision.transition) {
-            ScreenOutputGate.Transition.PAUSED ->
+            ScreenOutputGate.Transition.PAUSED -> {
+                reportScreenSuspended(true)
                 log("VIDEO: 主屏归车机——暂停发送全部视频帧（keepAlive 继续；归还后从新的 IDR 恢复）")
+            }
 
             ScreenOutputGate.Transition.RESUMING -> {
                 log(
@@ -526,6 +532,7 @@ class VideoSender(
             }
 
             ScreenOutputGate.Transition.RESUMED -> {
+                reportScreenSuspended(false)
                 log("VIDEO: 主屏输出恢复——首个 IDR 已放行（本次暂停共跳过 ${decision.skippedThisPause} 帧）")
                 prepareScreenResume(passthrough)
             }
@@ -542,6 +549,15 @@ class VideoSender(
             }
         }
         return decision.send
+    }
+
+    private fun reportScreenSuspended(
+        suspended: Boolean,
+        force: Boolean = false,
+    ) {
+        if (!force && screenSuspendedReported.getAndSet(suspended) == suspended) return
+        screenSuspendedReported.set(suspended)
+        runCatching { onScreenOutputSuspended(suspended) }
     }
 
     /** 暂停可能持续到车机拆掉解码器，恢复时重新声明参数集。 */

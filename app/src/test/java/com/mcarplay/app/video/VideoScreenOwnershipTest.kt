@@ -2,10 +2,12 @@ package com.mcarplay.app.video
 
 import com.mcarplay.app.airplay.StreamFrameCipher
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -21,6 +23,9 @@ class VideoScreenOwnershipTest {
             val keyFrameRequestCount = AtomicInteger()
             val firstRequestFailed = CountDownLatch(1)
             val secondRequestSucceeded = CountDownLatch(1)
+            val screenPaused = CountDownLatch(1)
+            val screenResumed = CountDownLatch(1)
+            val screenStates = CopyOnWriteArrayList<Boolean>()
             val ended = CountDownLatch(1)
             val sender =
                 VideoSender(
@@ -49,6 +54,14 @@ class VideoScreenOwnershipTest {
                                 }
                         },
                     phoneOwnsScreen = { phoneOwnsScreen.get() },
+                    onScreenOutputSuspended = { suspended ->
+                        screenStates.add(suspended)
+                        if (suspended) {
+                            screenPaused.countDown()
+                        } else if (screenPaused.count == 0L) {
+                            screenResumed.countDown()
+                        }
+                    },
                     uptimeMs = { nowMs.get() },
                 )
             try {
@@ -61,6 +74,7 @@ class VideoScreenOwnershipTest {
                     assertTrue(sender.submitExternalFrame(pFrame(1)))
                     assertTrue(sender.submitExternalFrame(keyFrame(2)))
                     awaitSkipped(sender, 2)
+                    assertTrue(screenPaused.await(2, TimeUnit.SECONDS))
                     assertEquals("No video frame may reach the car while it owns the screen", 1L, sender.framesSentTotal)
 
                     phoneOwnsScreen.set(true)
@@ -78,6 +92,9 @@ class VideoScreenOwnershipTest {
 
                     assertTrue(sender.submitExternalFrame(keyFrame(5)))
                     awaitFrames(sender, 2)
+                    assertTrue("Screen diagnostics must resume only after the fresh IDR", screenResumed.await(2, TimeUnit.SECONDS))
+                    assertTrue(screenStates.contains(true))
+                    assertFalse(screenStates.last())
                     assertTrue("P frames may resume after the first new IDR", sender.submitExternalFrame(pFrame(6)))
                     awaitFrames(sender, 3)
                 }
