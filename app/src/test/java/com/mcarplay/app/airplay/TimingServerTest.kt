@@ -24,6 +24,16 @@ class TimingServerTest {
     }
 
     @Test
+    fun ntpNowUsesNtpEpoch() {
+        // 使用 NTP 纪元，同时覆盖 DiPlay 对较短 BigInteger 编码越界的兼容场景。
+        val packed = ByteBuffer.wrap(TimingServer.ntpNow()).long
+        val secs = packed ushr 32
+        val expected = System.currentTimeMillis() / 1000L + 2_208_988_800L
+        assertTrue("packed=$packed", packed < 0)
+        assertTrue("secs=$secs expected=$expected", Math.abs(secs - expected) <= 2)
+    }
+
+    @Test
     fun respondsToTimesyncRequestEchoingT3() {
         val request = ByteArray(32)
         request[0] = (2 shl 6).toByte()
