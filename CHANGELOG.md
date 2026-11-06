@@ -3,6 +3,27 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.6] - 2026-11-06
+
+> Stable release collecting the screen-ownership, main-audio arbitration, phone SDP recovery and CarWith entry-diagnostics work since v0.1.5-test.3. The screen and audio candidates were not tried in a vehicle on this build, and DiPlay, WinPlay, macplay and Chery Arrizo 8 regressions are still pending. This does not establish real-vehicle compatibility.
+> 正式版，汇总 v0.1.5-test.3 以来屏幕归属、主音频仲裁、手机端 SDP 恢复与 CarWith 入口诊断的改动。屏幕与音频两项候选尚未在此构建上实车验证，DiPlay、WinPlay、macplay 与艾瑞泽 8 的回归仍未进行，不代表实车兼容。
+
+### English
+- **Screen video while the head unit owns the main screen:** all frames, including IDRs, are dropped while CarPlay resource arbitration says the main screen belongs to (or is borrowed by) the head unit — the native UI or a reversing camera. The screen socket, CarWith, iAP2, audio and keepAlive stay up. After the screen returns, parameter sets are re-sent and output resumes from a fresh IDR; keyframe requests are retried once per second. `SCREEN_OUTPUT` events and `screenSuspended` in reports separate an intentional pause from a stalled stream. Borrow ownership is tracked explicitly, so a BORROW sent after a permanent TAKE is also bounded by `unborrowConstraint` and `requestUI` cannot steal a reversing camera. The transcode pipeline stops consuming frames while fully paused, and an unreadable ownership callback fails closed.
+- **Main audio arbitration:** before audio SETUP, mcarplay reports `mainAudio` as controller (matching the iPhone ordering) and honors `takeConstraint` / `unborrowConstraint`. If the head unit holds or borrows main audio above user-initiated priority (for example a reversing prompt), no SETUP is sent and no format-failure memory is written; the path retries once after `changeModes` returns the resource. A refused claim is no longer reported as `AUDIO_UNAVAILABLE`, and the retry no longer holds the session lock across SETUP. The connection, dynamic-enable and retry paths share one start+RECORD helper.
+- **Phone SDP lifecycle:** the two iAP2/CarPlay SDP-RFCOMM announcements are managed as a group; if either listener exits, the other is withdrawn, and the pair is re-published from the shared Bluetooth state while the user still wants a connection. User stop, a new round or another Bluetooth-off cancels the restore, which retries at most three times. UUIDs, iAP2/authentication, CHERY/RECORD and media policy are unchanged. HyperOS 3 (API 36) and HyperOS 4 (API 37) emulator runs covered registration, background return and Bluetooth-off recovery; API 33/35 runs were inconclusive.
+- **CarWith entry diagnostics:** entry-stage diagnosis plus a notification probe record why the seven CarLife ports do not appear (entry not created, service not started, connection state reset) without root, and the support report carries the stage and probe result. The Arrizo 8 firmware/protocol report was turned into a regression matrix with synthetic iAP2 and diagnostic-timing tests; no new device acceptance.
+- **Validation:** 895 JVM tests and 24 remote bridge tests, plus `spotlessCheck`, `lintStandardDebug` and `assembleStandardDebug`, passed locally; the debug APK reports `0.1.6-debug` (versionCode 1060000). Python and Node tests were not rerun, and no vehicle was used. The signed tag workflow additionally runs `lintStandardRelease` and `assembleStandardRelease`.
+
+### 简体中文
+- **车机持有主屏时的屏幕视频：** CarPlay 资源仲裁判定主屏归车机或正被车机借用（原车界面、倒车影像）时，丢弃全部视频帧（包括 IDR）；屏幕流 socket、CarWith、iAP2、音频与 keepAlive 保持运行。主屏归还后重发参数集，等到新的 IDR 才恢复输出，关键帧请求每秒重试。报告里的 `SCREEN_OUTPUT` 事件与 `screenSuspended` 字段区分“主动暂停”和“传输停滞”。借用状态单独记录，因此永久 TAKE 之后的 BORROW 同样受 `unborrowConstraint` 约束，`requestUI` 不会抢走倒车画面。转码管线在完全暂停时停止吃帧；归属读取失败时按车机持有处理（fail-closed）。
+- **主音频仲裁：** 音频 SETUP 前先把 `mainAudio` 报归手机（与 iPhone 时序一致），并遵守 `takeConstraint` / `unborrowConstraint`。车机以高于 userInitiated 的约束持有或借用主音频（如倒车提示音）时不发 SETUP，也不写入“格式不兼容”记忆；`changeModes` 归还后再重试一次。claim 被拒不再记为 `AUDIO_UNAVAILABLE`，重试也不再跨 SETUP 持有会话锁；连接、动态补启和重试三条路径共用同一个“启动音频并补 RECORD”的辅助函数。
+- **手机端 SDP 生命周期：** 两项 iAP2/CarPlay SDP-RFCOMM 公告成组管理，任一监听结束即撤销另一项；用户仍请求连接时，根据共享蓝牙状态重新发布。用户停止、新一轮连接或再次关闭蓝牙都会取消恢复，自动恢复最多三次。UUID、iAP2/认证、CHERY/RECORD 与媒体策略未改变。HyperOS 3（API 36）与 HyperOS 4（API 37）模拟器覆盖了注册、后台返回与蓝牙重开恢复；API 33/35 的结果不能算通过。
+- **CarWith 入口诊断：** 新增入口阶段诊断与通知探测，在无 root 的情况下记录七个 CarLife 端口为何没有出现（入口未创建、服务未启动、连接状态被重置），支持报告会带上阶段与探测结果。艾瑞泽 8 的固件/协议报告转为回归矩阵，补充合成 iAP2 与诊断时序测试；没有新的设备验收。
+- **验证：** 895 项 JVM 测试、24 项 remote 调试桥测试，以及 `spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 在本地通过；debug APK 为 `0.1.6-debug`（versionCode 1060000）。未重跑 Python 与 Node 测试，未使用实车。签名的 tag 工作流还会运行 `lintStandardRelease` 与 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.5-test.3...v0.1.6](https://github.com/wangxso/mcarplay/compare/v0.1.5-test.3...v0.1.6)
+
 ## [v0.1.5-test.3] - 2026-11-05
 
 > Experimental prerelease on top of v0.1.5-test.2: fixes the home-page vehicle profile dialog, which showed no choices in test.2. Everything else in test.2 is unchanged and still has not been tried in a vehicle; DiPlay, WinPlay, macplay and Chery Arrizo 8 regressions are still pending. This does not establish real-vehicle compatibility.
