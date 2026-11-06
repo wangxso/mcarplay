@@ -49,6 +49,8 @@ import com.mcarplay.app.input.ConsumerKeys
 import com.mcarplay.app.input.HidNavigation
 import com.mcarplay.app.input.MediaKeyEdge
 import com.mcarplay.app.input.TouchReports
+import com.mcarplay.app.media.AutoPlaySuppressor
+import com.mcarplay.app.media.MediaSessionsState
 import com.mcarplay.app.net.AirPlayFeatures
 import com.mcarplay.app.net.CarPlayCtrlAdvertiser
 import com.mcarplay.app.net.CarPlayServiceBrowser
@@ -62,6 +64,7 @@ import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
 import com.mcarplay.app.settings.DisplayPrefs
+import com.mcarplay.app.settings.MediaPrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
@@ -255,6 +258,55 @@ object SessionController {
         audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }
 
+    /** 上车自动播放抑制状态；只在设置关闭时启用，见 [armAutoPlaySuppression]。 */
+    private val autoPlaySuppressor = AutoPlaySuppressor()
+    private var autoPlayListener: (() -> Unit)? = null
+    private val autoPlayHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val autoPlayTimeout = Runnable { stopAutoPlayWatch() }
+
+    /**
+     * 「上车自动播放音乐」关闭时，在 CarWith 连接后的一小段窗口内抑制自动播放：
+     *  - 前 [AutoPlaySuppressor.KEY_WINDOW_MILLIS] 内丢弃车机的播放键；
+     *  - [AutoPlaySuppressor.WATCH_WINDOW_MILLIS] 内音乐自行开始时暂停一次。
+     * 连接前已经在播放的音乐不处理；用户随后在车机上按播放会先解除抑制。
+     */
+    private fun armAutoPlaySuppression() {
+        stopAutoPlayWatch()
+        val context = appContext ?: return
+        if (MediaPrefs.autoPlayOnConnect(context)) return
+        if (MediaSessionsState.nowPlaying?.playing == true) {
+            appendLog("MEDIA: 上车自动播放已关闭——连接前已在播放，保持现状")
+            return
+        }
+        autoPlaySuppressor.arm(alreadyPlaying = false, nowMs = SystemClock.uptimeMillis())
+        val listener = {
+            if (MediaSessionsState.nowPlaying?.playing == true &&
+                autoPlaySuppressor.shouldPauseStartedPlayback(SystemClock.uptimeMillis())
+            ) {
+                appendLog("MEDIA: 上车自动播放已关闭——暂停连接后自行开始的音乐")
+                dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+            }
+        }
+        autoPlayListener = listener
+        MediaSessionsState.addListener(listener)
+        autoPlayHandler.postDelayed(autoPlayTimeout, AutoPlaySuppressor.WATCH_WINDOW_MILLIS + 1_000L)
+        appendLog(
+            "MEDIA: 上车自动播放已关闭——${AutoPlaySuppressor.KEY_WINDOW_MILLIS / 1000}s 内忽略车机自动播放键，" +
+                if (MediaSessionsState.accessGranted) {
+                    "${AutoPlaySuppressor.WATCH_WINDOW_MILLIS / 1000}s 内暂停自行开始的音乐"
+                } else {
+                    "通知使用权未授予，无法识别自行开始的音乐"
+                },
+        )
+    }
+
+    private fun stopAutoPlayWatch() {
+        autoPlayListener?.let(MediaSessionsState::removeListener)
+        autoPlayListener = null
+        autoPlaySuppressor.disarm()
+        autoPlayHandler.removeCallbacks(autoPlayTimeout)
+    }
+
     /**
      * 车机/方向盘媒体键的统一出口（AirPlay `hidSendReport` 与 iAP2 0x6802 共用）。
      *
@@ -268,6 +320,13 @@ object SessionController {
         keyCode: Int,
         source: String,
     ) {
+        val isPlayKey = keyCode == KeyEvent.KEYCODE_MEDIA_PLAY || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+        if (isPlayKey && autoPlaySuppressor.shouldDropPlayKey(SystemClock.uptimeMillis())) {
+            appendLog("EVENT: 车机媒体键（$source）→ 已忽略（设置「上车自动播放音乐」已关闭）")
+            return
+        }
+        // 用户/车机主动按播放：解除观察窗口，别把它当成“自行开始”再暂停。
+        if (isPlayKey) autoPlaySuppressor.disarm()
         val hardKey = CarLifeProtocol.hardKeyFor(keyCode)
         if (hardKey != null && currentCarLifeSession?.sendHardKey(hardKey) == true) {
             appendLog("EVENT: 车机媒体键（$source）→ CarWith 硬按键 $hardKey")
@@ -1109,6 +1168,7 @@ object SessionController {
     ) {
         currentClient?.beginOrderlyStop()
         screenStreamRecovery = null
+        stopAutoPlayWatch()
         val retiringSender = videoSender
         videoSender = null
         if (preserveScreenSocket) retiringSender?.quiesceForOrderlyStop() else retiringSender?.stop()
@@ -3930,6 +3990,9 @@ object SessionController {
                                         )
                                     }
                                     if (videoStarted) carLifeOutput = output
+                                    // 在 CarWith 启动前布防：CarWith 可能在 start() 内就恢复媒体，
+                                    // 启动后再取 nowPlaying 会把自动播放误当成“连接前已在播放”。
+                                    if (videoStarted) armAutoPlaySuppression()
                                     val carLifeStarted = videoStarted && createdCarLife.start()
                                     appendLog(
                                         "MODE: CarWith ${if (carLifeStarted) "已请求连接，等待真实视频" else "连接请求失败"} " +
@@ -3942,6 +4005,7 @@ object SessionController {
                                     if (carLifeStarted) {
                                         appendLog("SCREEN: CarWith 尚未收到首帧，保持手机可见以完成原厂连接")
                                     } else {
+                                        stopAutoPlayWatch()
                                         ConnectionDiagnostics.timeline.finish(diagnosticAttempt, DiagnosticCode.CARWITH_FAILED, true)
                                         if (carLifeOutput === output) carLifeOutput = null
                                         releaseCarLifeSession(createdCarLife)

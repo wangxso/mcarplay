@@ -1688,3 +1688,10 @@ APK 指纹、完整矩阵、截图/日志的证据边界及同车换手机步骤
   说明该 APK 尚未包含本修复。该载荷也确认：借用状态下 `requestUI` 必须遵守 `unborrowConstraint`，不能把倒车画面抢回；
   本提交已解析该字段并加入精确载荷回归。同一报告的主音频也以 `transferType=3` 归车机，三档音频 SETUP 均回
   `400 Bad Request`；音频候选现在会先检查 `phoneOwnsAudio`，资源被车机占用时不再轮换格式或写入“格式不兼容”记忆。
+
+## 2026-11-06 小米 17 Pro Max + DiPlay：用户确认无问题
+
+- **来源：** 用户口头反馈「diplay+xiaomi 17 pro max没问题」。
+- **已知：** 手机 Xiaomi 17 Pro Max，接收端 DiPlay；用户确认本次连接无问题。
+- **未记录：** 具体构建版本、HyperOS/CarWith/小米 CarLife/DiPlay 版本、连接步骤，以及视频、声音、触控各自是否覆盖。
+  本条目只记录一次用户确认，不扩展为车机兼容或长期稳定性结论；WinPlay、macplay、艾瑞泽 8 与真车仍待回归。

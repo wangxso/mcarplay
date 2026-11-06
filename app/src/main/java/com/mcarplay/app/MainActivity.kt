@@ -51,6 +51,7 @@ import com.mcarplay.app.media.NotificationAccess
 import com.mcarplay.app.service.BatteryExemption
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ExternalHuService
+import com.mcarplay.app.settings.MediaPrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
@@ -119,6 +120,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var externalHuDesc: TextView
     private lateinit var btnExternalHu: TextView
     private lateinit var switchAlwaysOn: androidx.appcompat.widget.SwitchCompat
+    private lateinit var switchAutoPlayMusic: androidx.appcompat.widget.SwitchCompat
     private lateinit var advBody: View
     private lateinit var advChevron: ImageView
     private lateinit var shellStateText: TextView
@@ -883,6 +885,7 @@ class MainActivity : AppCompatActivity() {
         externalHuDesc = findViewById(R.id.externalHuDesc)
         btnExternalHu = findViewById(R.id.btnExternalHu)
         switchAlwaysOn = findViewById(R.id.switchAlwaysOn)
+        switchAutoPlayMusic = findViewById(R.id.switchAutoPlayMusic)
         advBody = findViewById(R.id.advBody)
         advChevron = findViewById(R.id.advChevron)
         shellStateText = findViewById(R.id.shellStateText)
@@ -1157,6 +1160,13 @@ class MainActivity : AppCompatActivity() {
                     .detach()
             }
             log("MODE: 常亮+暗幕 ${if (checked) "开启" else "关闭"}")
+        }
+
+        // ---- 上车自动播放音乐 ----
+        switchAutoPlayMusic.isChecked = MediaPrefs.autoPlayOnConnect(this)
+        switchAutoPlayMusic.setOnCheckedChangeListener { _, checked ->
+            MediaPrefs.setAutoPlayOnConnect(this, checked)
+            log("MODE: 上车自动播放音乐 ${if (checked) "开启" else "关闭"}")
         }
 
         // ---- 英雄卡主操作 ----
