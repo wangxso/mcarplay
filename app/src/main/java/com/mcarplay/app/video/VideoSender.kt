@@ -60,6 +60,11 @@ class VideoSender(
     private val onExternalFrameSent: ((Int) -> Unit)? = null,
     /** 车机 /info displays[0].maxFPS（0 = 未知）；只约束转码时的编码帧率。 */
     private val receiverMaxFps: Int = 0,
+    /**
+     * 主屏此刻是否归手机。归车机时暂停全部视频帧；归还后等新的 IDR 再恢复。
+     * 默认 true = 调用方未提供资源仲裁状态时不改变原行为。
+     */
+    private val phoneOwnsScreen: () -> Boolean = { true },
 ) {
     @Volatile
     private var width: Int = (width / 2) * 2
@@ -102,6 +107,7 @@ class VideoSender(
     /** 透传码流特征与车机要帧时序（诊断）；会话结束时汇总一行。 */
     private val streamStats = PassthroughStreamStats()
     private val streamStatsLogged = AtomicBoolean(false)
+    private val screenOutputGate = ScreenOutputGate()
     private var lastStreamStatsLogAt = 0L
 
     /** 车机经屏幕数据口回传的字节数（正常为 0；非 0 或被车机关闭都值得记录）。 */
@@ -160,6 +166,7 @@ class VideoSender(
 
     /** 主屏拿回后，下一个 CarWith IDR 前重发 VideoConfig 并内联 SPS/PPS（见 [reprimeOnNextKeyFrame]）。 */
     private val reprimePending = AtomicBoolean(false)
+    private val encoderReprimePending = AtomicBoolean(false)
     private val externalQueue = java.util.concurrent.LinkedBlockingQueue<ExternalVideoFrame>(64)
 
     @Volatile
@@ -400,7 +407,8 @@ class VideoSender(
         }
         releaseVideoResources(active, codec, surface)
         if (externalVideoSource != null && streamStatsLogged.compareAndSet(false, true)) {
-            log("VIDEO: 透传码流统计（会话结束）${streamStats.summary()}")
+            val gate = synchronized(screenOutputGate) { screenOutputGate.summary() }
+            log("VIDEO: 透传码流统计（会话结束）${streamStats.summary()}\n  ↳ 屏幕输出门控：$gate")
         }
     }
 
@@ -485,6 +493,64 @@ class VideoSender(
      */
     fun reprimeOnNextKeyFrame() {
         if (externalVideoSource != null && transcoder == null) reprimePending.set(true)
+    }
+
+    /**
+     * 按主屏归属决定本帧是否发送。
+     *
+     * 暂停期间连 IDR 也不发：车机正在显示原车界面或倒车影像，任何视频帧都属于无意义流量。
+     * 归还后必须等新的 IDR，因为暂停前的参考帧已经无法接续。
+     */
+    private fun admitScreenFrame(
+        keyFrame: Boolean,
+        passthrough: Boolean,
+    ): Boolean {
+        val ownsScreen = runCatching { phoneOwnsScreen() }.getOrDefault(true)
+        val decision =
+            synchronized(screenOutputGate) {
+                screenOutputGate.admit(ownsScreen, keyFrame)
+            }
+        when (decision.transition) {
+            ScreenOutputGate.Transition.PAUSED ->
+                log("VIDEO: 主屏归车机——暂停发送全部视频帧（keepAlive 继续；归还后从新的 IDR 恢复）")
+
+            ScreenOutputGate.Transition.RESUMING -> {
+                log(
+                    "VIDEO: 主屏已归还——等待新的 IDR 恢复（本次暂停已跳过 ${decision.skippedThisPause} 帧）",
+                )
+                prepareScreenResume(passthrough)
+                requestKeyFrame(fromReceiver = false)
+            }
+
+            ScreenOutputGate.Transition.RESUMED -> {
+                log("VIDEO: 主屏输出恢复——首个 IDR 已放行（本次暂停共跳过 ${decision.skippedThisPause} 帧）")
+                prepareScreenResume(passthrough)
+            }
+
+            null -> Unit
+        }
+        return decision.send
+    }
+
+    /** 暂停可能持续到车机拆掉解码器，恢复时重新声明参数集。 */
+    private fun prepareScreenResume(passthrough: Boolean) {
+        if (passthrough) {
+            reprimePending.set(true)
+        } else {
+            encoderReprimePending.set(true)
+        }
+    }
+
+    /** 转码 / 本地编码路径恢复时重发编码器 VideoConfig。 */
+    private fun resendVideoConfig(avcC: ByteArray) {
+        val output = socket?.getOutputStream() ?: return
+        synchronized(writeLock) {
+            if (quiescing.get()) return
+            output.write(buildVideoConfigHeader(avcC.size, width, height))
+            output.write(avcC)
+            output.flush()
+            log("VIDEO: 主屏输出恢复——重发 VideoConfig avcC=${avcC.size}B ${width}x$height")
+        }
     }
 
     // ---- 编码输出 → 协议封装发送 ----
@@ -605,6 +671,10 @@ class VideoSender(
                 }
                 var nalUnits = splitAnnexB(frame.data)
                 if (nalUnits.isEmpty()) continue
+                if (!admitScreenFrame(frame.keyFrame, passthrough = true)) {
+                    maybeSendKeepAlive(output)
+                    continue
+                }
                 if (frame.keyFrame && reprimePending.compareAndSet(true, false)) {
                     val inlined = withParameterSets(nalUnits, frame.sps, frame.pps)
                     log(
@@ -778,7 +848,15 @@ class VideoSender(
                             sendVideoConfig(buffer, bufferInfo.size, output)
                         } else if (bufferInfo.size > 0) {
                             val keyFrame = flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
-                            val sent = sendVideoFrame(buffer, bufferInfo.size, keyFrame, output)
+                            val sent =
+                                if (admitScreenFrame(keyFrame, passthrough = false)) {
+                                    if (keyFrame && encoderReprimePending.compareAndSet(true, false)) {
+                                        cachedVideoConfig?.let { resendVideoConfig(it) }
+                                    }
+                                    sendVideoFrame(buffer, bufferInfo.size, keyFrame, output)
+                                } else {
+                                    0
+                                }
                             // 转码输出顶替了 CarWith 透传：诊断时间线的帧数 / 字节 / 时间戳照常更新，
                             // 否则 5 s 后会误报视频停滞（2026-11-01 审查）
                             if (sent > 0 && externalVideoSource != null) {
