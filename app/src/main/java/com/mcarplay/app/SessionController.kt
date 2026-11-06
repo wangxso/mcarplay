@@ -343,8 +343,8 @@ object SessionController {
                         appendLog("AUTO-PLAY: CarWith 媒体已自行起播，跳过")
                         return@run
                     }
-                    if (session.sendHardKey(CarLifeProtocol.HARD_KEY_SEEK_ADD)) {
-                        appendLog("AUTO-PLAY: 已发送 CarWith 下一首起播（CarWith 媒体无系统通知，不能用媒体会话恢复）")
+                    if (session.sendHardKey(CarLifeProtocol.HARD_KEY_MEDIA_START)) {
+                        appendLog("AUTO-PLAY: 已发送 CarWith 媒体开始键起播（不切歌；CarWith 媒体无系统通知）")
                         return@run
                     }
                     Thread.sleep(500L)
