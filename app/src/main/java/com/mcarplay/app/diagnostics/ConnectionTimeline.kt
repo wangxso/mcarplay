@@ -32,6 +32,22 @@ enum class DiagnosticCode(
     SETUP_FAILED("CarPlay 会话未建立，请提供诊断报告核对接收端响应"),
     CARWITH_FAILED("CarWith 未完成出流，请检查组件版本、原厂连接开关和授权"),
     CARWITH_ENTRY_BLOCKED("应用在后台时未能打开 CarWith 入口；小米请在应用权限中允许「后台弹出界面」，或保持 mcarplay 在前台后重连"),
+    CARWITH_ENTRY_NOT_OBSERVED(
+        "等待七路连接期间未观察到 CarWith 通知，端口也未就绪；请保持 mcarplay 在前台，" +
+            "打开 CarWith 设置手动选择百度 CarLife 无线连接后重试",
+    ),
+    CARWITH_ENTRY_STATUS_UNKNOWN(
+        "七路端口未就绪，且未绑定通知监听器，无法判断 CarWith 入口是否执行；" +
+            "请从 CarWith 设置手动发起百度 CarLife 无线连接；可允许 mcarplay 的通知使用权供下次诊断",
+    ),
+    CARWITH_LISTENERS_PENDING(
+        "已观察到 CarWith 通知，但七路端口未就绪；请打开 CarWith 设置手动选择百度 CarLife 无线连接，" +
+            "并核对 CarWith/CarLife 组件版本",
+    ),
+    CARWITH_PROTOCOL_SILENT(
+        "七路端口已连接，但未收到 CarLife 协议响应；端口监听不等于有效投屏会话。" +
+            "请停止现有 CarWith 连接，再从 CarWith 设置重新发起百度 CarLife 无线连接",
+    ),
     CARWITH_BUSY("CarWith 正被独立自检占用，请先停止自检，再启动 CarPlay 连接"),
     VIDEO_CLOSED("视频连接已结束；仅凭此不能确认接收端崩溃，请检查网络和接收端"),
     AUDIO_UNAVAILABLE("音频未能启用，画面可以继续；请提供报告核对音频协商"),

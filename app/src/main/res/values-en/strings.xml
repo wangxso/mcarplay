@@ -45,6 +45,7 @@
     <string name="carlife_self_test_content_description">CarWith self-test</string>
     <string name="carlife_self_test_title">CarWith stream self-test</string>
     <string name="carlife_self_test_idle">Start CarWith to verify real H.264; disconnect other receivers first</string>
+    <string name="carlife_self_test_last_result">Last result: %1$s</string>
     <string name="carlife_open_settings">Settings</string>
     <string name="carlife_self_test_start">Test</string>
     <string name="carlife_self_test_stop">Stop</string>

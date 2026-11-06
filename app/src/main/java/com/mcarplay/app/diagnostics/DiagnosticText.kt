@@ -26,6 +26,10 @@ object DiagnosticText {
                 DiagnosticCode.SETUP_FAILED -> R.string.dc_setup_failed
                 DiagnosticCode.CARWITH_FAILED -> R.string.dc_carwith_failed
                 DiagnosticCode.CARWITH_ENTRY_BLOCKED -> R.string.dc_carwith_entry_blocked
+                DiagnosticCode.CARWITH_ENTRY_NOT_OBSERVED -> R.string.dc_carwith_entry_not_observed
+                DiagnosticCode.CARWITH_ENTRY_STATUS_UNKNOWN -> R.string.dc_carwith_entry_status_unknown
+                DiagnosticCode.CARWITH_LISTENERS_PENDING -> R.string.dc_carwith_listeners_pending
+                DiagnosticCode.CARWITH_PROTOCOL_SILENT -> R.string.dc_carwith_protocol_silent
                 DiagnosticCode.CARWITH_BUSY -> R.string.dc_carwith_busy
                 DiagnosticCode.VIDEO_CLOSED -> R.string.dc_video_closed
                 DiagnosticCode.AUDIO_UNAVAILABLE -> R.string.dc_audio_unavailable

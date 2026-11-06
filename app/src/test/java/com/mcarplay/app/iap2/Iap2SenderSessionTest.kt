@@ -60,6 +60,95 @@ class Iap2SenderSessionTest {
         accessoryChannel.close()
     }
 
+    /** 合成 CHERY 旧协议会话：高位信道字节与 iAP2 安全枚举原样传递，先通知入网，再交接端点。 */
+    @Test
+    fun cheryWifiCallbackPrecedesEndpointHandoffWithoutStartSession() {
+        val wifi = Iap2SenderSession.WifiConfiguration("Synthetic-Car-AP", "synthetic-password", 149, 2)
+        val milestones = mutableListOf<ConnectionMilestone>()
+        val delivered = mutableListOf<Iap2SenderSession.WifiConfiguration>()
+        val endpoint =
+            cheryBringUp(wifi, providesStartSession = false, milestones = milestones) { credentials ->
+                assertEquals(
+                    listOf(ConnectionMilestone.BT_LINK, ConnectionMilestone.IAP2_IDENTIFIED, ConnectionMilestone.IAP2_AUTHENTICATED),
+                    milestones,
+                )
+                delivered += credentials
+            }
+
+        assertEquals(listOf(wifi), delivered)
+        assertEquals(wifi.ssid, endpoint.ssid)
+        assertEquals(wifi.passphrase, endpoint.passphrase)
+        assertEquals(149, endpoint.channel)
+        assertEquals(2, endpoint.securityType)
+        assertEquals("CHERY", endpoint.receiverSignals.manufacturer)
+        assertEquals("Tiggo", endpoint.receiverSignals.model)
+        assertEquals(0, endpoint.airPlayPort)
+        assertTrue(endpoint.ipAddresses.isEmpty())
+        assertFalse("iAP2 结束尚未经过 AirPlay 配对", milestones.contains(ConnectionMilestone.PAIR_VERIFY))
+        assertFalse(milestones.contains(ConnectionMilestone.RECORD))
+        assertFalse(milestones.contains(ConnectionMilestone.FIRST_VIDEO))
+    }
+
+    /** TCP 7000 是该车日志的观测值，发送端仍须保留 0x4301 声明的地址和动态端口。 */
+    @Test
+    fun cheryAdvertisedEndpointKeepsItsPortAndLegacyWifiParameters() {
+        for (port in listOf(7000, 47001)) {
+            val wifi = Iap2SenderSession.WifiConfiguration("Synthetic-Car-AP", "synthetic-password", 149, 2)
+            val endpoint = cheryBringUp(wifi, airPlayPort = port)
+            assertEquals(port, endpoint.airPlayPort)
+            assertEquals(listOf("192.168.49.1", "fd00::1"), endpoint.ipAddresses)
+            assertEquals(wifi.ssid, endpoint.ssid)
+            assertEquals(149, endpoint.channel)
+            assertEquals(2, endpoint.securityType)
+            assertEquals("CHERY", endpoint.receiverSignals.manufacturer)
+        }
+    }
+
+    private fun cheryBringUp(
+        wifi: Iap2SenderSession.WifiConfiguration,
+        providesStartSession: Boolean = true,
+        airPlayPort: Int = 7000,
+        milestones: MutableList<ConnectionMilestone> = mutableListOf(),
+        onWifi: (Iap2SenderSession.WifiConfiguration) -> Unit = {},
+    ): Iap2SenderSession.CarPlayEndpoint {
+        val pair = InMemoryStreamPair()
+        val phone = Iap2LinkChannel(pair.sideA, name = "chery-phone")
+        val accessory = Iap2LinkChannel(pair.sideB, name = "synthetic-chery")
+        val mock =
+            MockAccessory(
+                accessory,
+                shape = MockAccessory.Shape.CHERY,
+                wifiConfiguration = wifi,
+                providesStartSession = providesStartSession,
+                airPlayPort = airPlayPort,
+            )
+        val failure = AtomicReference<Throwable?>()
+        val worker =
+            Thread({ runCatching { mock.run() }.onFailure { failure.set(it) } }, "synthetic-chery-accessory").apply {
+                isDaemon = true
+                start()
+            }
+        try {
+            val endpoint =
+                Iap2SenderSession(
+                    phone,
+                    log = {},
+                    bluetoothMac = "02:00:00:00:00:01",
+                    onWifiCredentials = onWifi,
+                    onMilestone = { milestones += it },
+                ).run(timeoutMillis = 5_000)
+            worker.join(2_000)
+            assertFalse("合成车机会话未结束", worker.isAlive)
+            failure.get()?.let { throw AssertionError("合成车机会话失败", it) }
+            assertEquals("CHERY 首次 MFi 必须只发 32B 挑战", listOf(32), mock.mfiChallengeSizes)
+            return endpoint
+        } finally {
+            phone.close()
+            accessory.close()
+            worker.join(2_000)
+        }
+    }
+
     /**
      * 奥迪 MMI 9310 形态：识别帧只声明发 0x5703/0xea03（不发 0x4301），Phase 1
      * 因此不等待；车机在保活期间（Phase 1 之后）才补发 0x4301。
@@ -641,6 +730,11 @@ class Iap2SenderSessionTest {
         private val slowWifi: Boolean = false,
         /** 0x1D01 声明的 EA 协议（协议号、名称），依次放在参数 10、11、12。 */
         private val eaProtocols: List<Pair<Int, String>> = emptyList(),
+        /** 合成参数；不包含报告中的真实热点凭据。 */
+        private val wifiConfiguration: Iap2SenderSession.WifiConfiguration =
+            Iap2SenderSession.WifiConfiguration("MockAP", "secret-passphrase", 36, 2),
+        private val providesStartSession: Boolean = true,
+        private val airPlayPort: Int = 49152,
     ) {
         private val parser = Iap2Csm.Parser()
         private val pending = ArrayDeque<Iap2Csm.Frame>()
@@ -649,6 +743,9 @@ class Iap2SenderSessionTest {
         @Volatile
         var sawWifiRequest: Boolean = false
             private set
+
+        /** 实际从发送端收到的挑战长度，不能只测试策略常量。 */
+        val mfiChallengeSizes = java.util.Collections.synchronizedList(ArrayList<Int>())
 
         /** 收到的 0xEA00 载荷（与 0xEA01 逐条比对）。 */
         val eaOpenBodies = java.util.Collections.synchronizedList(ArrayList<List<Byte>>())
@@ -659,6 +756,9 @@ class Iap2SenderSessionTest {
         /** 车机形态。 */
         enum class Shape {
             TEST_BENCH,
+
+            // 只复用报告确认的身份/旧 WiFi 语义；消息声明清单是合成的，不是实车报文。
+            CHERY,
             AUDI_9310,
             AUDI_3315,
             BMW_ID9,
@@ -685,8 +785,8 @@ class Iap2SenderSessionTest {
             send(
                 Iap2MessageIds.IDENTIFICATION_INFORMATION,
                 Iap2Csm.string(0, identityName()),
-                Iap2Csm.string(1, "MU-1"),
-                Iap2Csm.string(2, "Mock Manufacturer"),
+                Iap2Csm.string(1, if (shape == Shape.CHERY) "Tiggo" else "MU-1"),
+                Iap2Csm.string(2, if (shape == Shape.CHERY) "CHERY" else "Mock Manufacturer"),
                 Iap2Csm.string(4, "test-1.0"),
                 *declarationParams(),
                 *eaProtocols
@@ -697,7 +797,12 @@ class Iap2SenderSessionTest {
 
             expect(Iap2MessageIds.MFI_REQUEST_CERTIFICATE)
             send(Iap2MessageIds.MFI_CERTIFICATE, Iap2Csm.param(0, ByteArray(64) { it.toByte() }))
-            expect(Iap2MessageIds.MFI_REQUEST_CHALLENGE)
+            val challenge = expectFrame(Iap2MessageIds.MFI_REQUEST_CHALLENGE)
+            mfiChallengeSizes +=
+                Iap2Csm
+                    .parseParams(challenge.body)
+                    .single { it.id == 0 }
+                    .value.size
             send(Iap2MessageIds.MFI_RESPONSE, Iap2Csm.param(0, ByteArray(70) { (it * 7).toByte() }))
             expect(Iap2MessageIds.MFI_AUTHENTICATION_SUCCEEDED)
 
@@ -750,21 +855,21 @@ class Iap2SenderSessionTest {
                 send(Iap2MessageIds.START_NOW_PLAYING_UPDATES)
                 send(
                     Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
-                    Iap2Csm.string(1, "MockAP"),
-                    Iap2Csm.string(2, "secret-passphrase"),
-                    Iap2Csm.u8(3, 2),
-                    Iap2Csm.u8(4, 36),
+                    Iap2Csm.string(1, wifiConfiguration.ssid),
+                    Iap2Csm.string(2, wifiConfiguration.passphrase),
+                    Iap2Csm.u8(3, wifiConfiguration.securityType),
+                    Iap2Csm.u8(4, wifiConfiguration.channel),
                 )
             }
 
             // CarPlay 启动
             expect(Iap2MessageIds.CARPLAY_AVAILABILITY)
-            if (!lateStartSession) {
+            if (providesStartSession && !lateStartSession) {
                 sendStartSession()
             }
 
             expect(Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER)
-            if (lateStartSession) {
+            if (providesStartSession && lateStartSession) {
                 // 车机打开 CarPlay 窗口后补发（Phase 1 早已结束）
                 Thread.sleep(150)
                 sendStartSession()
@@ -788,6 +893,7 @@ class Iap2SenderSessionTest {
                 Shape.CT5_NEW_PROTOCOL -> "CADILLAC_2179"
                 Shape.VW_PASSAT -> "Volkswagen"
                 Shape.TEST_BENCH -> "MockCarPlay"
+                Shape.CHERY -> "Cloudrive"
             }
 
         /**
@@ -803,6 +909,12 @@ class Iap2SenderSessionTest {
                     arrayOf(
                         Iap2Csm.u16List(6, intArrayOf(0xaa06, 0x5703)),
                         Iap2Csm.u16List(7, intArrayOf(0x4e0c, 0x4e0d, 0x4e0e, 0x5702)),
+                    )
+                // CHERY 合成旧协议清单：验证省略 0x4301 时仍能交接凭据给 WiFi/mDNS。
+                Shape.CHERY ->
+                    arrayOf(
+                        Iap2Csm.u16List(6, if (providesStartSession) intArrayOf(0x5703, 0x4301) else intArrayOf(0x5703)),
+                        Iap2Csm.u16List(7, intArrayOf(0x5702, 0x4300, 0x4e0d, 0x4e0e)),
                     )
                 // 测试台：完全不声明 → 画像 UNKNOWN → 走旧协议
                 Shape.TEST_BENCH -> emptyArray()
@@ -852,7 +964,7 @@ class Iap2SenderSessionTest {
                     addressParam(3, "fd00::1", padTo = 47),
                     Iap2Csm.u8(4, 2),
                 ),
-                Iap2Csm.u32(2, 49152L),
+                Iap2Csm.u32(2, airPlayPort.toLong()),
                 Iap2Csm.string(3, "mock-device-id"),
                 Iap2Csm.string(4, "a".repeat(64) + "publickeyhex"),
                 Iap2Csm.string(5, "560.20"),

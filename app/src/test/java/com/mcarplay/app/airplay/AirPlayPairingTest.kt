@@ -248,7 +248,7 @@ class AirPlayPairingTest {
      * [shortKeyRounds] 指定前几轮 M2 故意给首字节为 0 的 B，其余轮次 B 恒满长（否则约 1/256 触发重发 M1，请求计数不稳）；
      * [badSetupSignature] 让 M6 签名失效。
      */
-    private class MockReceiver(
+    internal class MockReceiver(
         private val padded: Boolean = true,
         private var shortKeyRounds: Int = 0,
         private val badSetupSignature: Boolean = false,

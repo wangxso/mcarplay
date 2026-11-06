@@ -6,6 +6,7 @@ import com.mcarplay.app.SessionController
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionStage
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.diagnostics.DiagnosticText
 import com.mcarplay.app.service.CarPlayService
 
 /** Standalone CarWith connectivity check, independent of the CarPlay transport. */
@@ -16,6 +17,9 @@ object CarLifeDiagnostics {
 
     @Volatile
     private var lastReport = "schema=1 state=NOT_STARTED"
+
+    @Volatile
+    private var lastCode: DiagnosticCode? = null
 
     @Synchronized
     fun start(context: Context): Boolean {
@@ -43,6 +47,7 @@ object CarLifeDiagnostics {
                 onEnded = { reason ->
                     attempt?.let {
                         val code = created?.endDiagnosticCode ?: DiagnosticCode.CARWITH_FAILED
+                        lastCode = code
                         ConnectionDiagnostics.selfTest.finish(it, code, true, reason)
                     }
                     log("CARLIFE: 自检结束 - $reason")
@@ -66,6 +71,7 @@ object CarLifeDiagnostics {
             return false
         }
         session = candidate
+        lastCode = null
         lastReport = "schema=1 state=STARTING"
         attempt = ConnectionDiagnostics.selfTest.begin("carwith_self_test")
         diagnosticAttempt = attempt
@@ -92,7 +98,10 @@ object CarLifeDiagnostics {
 
     @Synchronized
     fun status(context: Context): String {
-        val active = session ?: return context.getString(R.string.ma_hu_step_idle)
+        val active =
+            session ?: return lastCode?.let {
+                context.getString(R.string.carlife_self_test_last_result, DiagnosticText.advice(context, it))
+            } ?: context.getString(R.string.ma_hu_step_idle)
         val phase =
             context.getString(
                 when (active.state) {

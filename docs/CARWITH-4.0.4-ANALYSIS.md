@@ -73,6 +73,29 @@ SHA-256 为 `a20bd237534d82df08d561974365dc7da66e36899d3e64cc1b137cac0b084605`�
 正式会话的 `sourceVideoFrames` 在 IDR 入流门控后计数，零本身也不能证明从未收到视频字节。
 不得用版本升级、自检启动或端口建立直接替代“收到可解析源帧”的验收。
 
+## 2026-11-06 非 root 入口阶段探针（代码已实现，待真机复测）
+
+公开入口的 `startActivity()` 返回仍只记为 `REQUESTED`，不能证明 CarWith 接收了 Intent。
+为解决普通手机用户只能提供 mcarplay 报告、无法再操作手机取日志的问题，新增了复用现有
+「通知使用权」的只读探针：
+
+- 只观察 `com.miui.carlink` 的通知是否存在、是否带 `FLAG_FOREGROUND_SERVICE`、活动数量、
+  移除次数和单调时钟；标题、正文、进度、通知 key 均不入报告。
+- `access=CONNECTED` 表示通知监听器已实际绑定；`UNKNOWN`/`DISCONNECTED` 时明确保持未知，
+  不推断 CarWith 未启动。`notification.accessEnabled` 只表示导出时授权列表里有本组件，
+  不代表监听器已绑定或通知已送达。
+- 入口等待超时现在区分：已观察到 CarWith 通知但七口未就绪
+  (`CARWITH_LISTENERS_PENDING`)、监听可用但未观察到通知
+  (`CARWITH_ENTRY_NOT_OBSERVED`)、监听未绑定无法判断
+  (`CARWITH_ENTRY_STATUS_UNKNOWN`)；后台请求仍由 `CARWITH_ENTRY_BLOCKED` 表示。
+- 七口全部连上后，若命令通道收到零帧，结束码为 `CARWITH_PROTOCOL_SILENT`，并在报告中
+  单列 `commandFrames`。这条只证明命令通道在这一轮没有帧，不代表七口从未监听。
+- 通知探针不会启动 CarWith、额外连接端口或申请新权限；没有通知使用权时也必须能完成
+  原有连接流程，结论降级为未知。
+
+该改动只提高可观测性，不修复 CarWith 4.0.4 / Android 13 / CarLife 8.6.8 的原始故障。
+仍需在故障手机上复现、导出报告，并按实际出现的 `CARWITH_*` 码决定下一步。
+
 ## 分析证据与限制
 
 - REA 归档完整清单 Evidence：

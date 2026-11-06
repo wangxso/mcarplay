@@ -1,6 +1,7 @@
 package com.mcarplay.app.carlife
 
 import android.app.Application
+import android.os.SystemClock
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.diagnostics.DiagnosticExportPolicy
@@ -38,6 +39,7 @@ class CarLifeSession(
     private val requestLegacyEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestLegacyCarWithService(application) },
     private val requestSettingsEntry: () -> CarLifeLauncher.EntryLaunchResult = { CarLifeLauncher.requestCarWithSettings(application) },
     private val attachedFirstFrameWaitMs: Long = ATTACHED_FIRST_FRAME_WAIT_MS,
+    private val notificationSnapshot: () -> CarWithNotificationSnapshot = CarWithNotificationProbe::snapshot,
     /** CarWith 发来「返回车机」时回调（命令读取线程）。 */
     private val onReturnToCar: () -> Unit = {},
 ) {
@@ -90,6 +92,12 @@ class CarLifeSession(
     @Volatile
     private var connector: CarLifeChannelConnector? = null
 
+    @Volatile
+    private var notificationBaseline: CarWithNotificationSnapshot? = null
+
+    @Volatile
+    private var commandFramesReceived: Long = 0L
+
     /** 入口请求发出时本应用不在前台；七口超时时据此提示系统可能拦截了入口。 */
     @Volatile
     var entryLaunchedInBackground: Boolean = false
@@ -100,8 +108,9 @@ class CarLifeSession(
     var entryBlockedSuspected: Boolean = false
         private set
 
-    val endDiagnosticCode: DiagnosticCode
-        get() = if (entryBlockedSuspected) DiagnosticCode.CARWITH_ENTRY_BLOCKED else DiagnosticCode.CARWITH_FAILED
+    @Volatile
+    var endDiagnosticCode: DiagnosticCode = DiagnosticCode.CARWITH_FAILED
+        private set
 
     @Volatile
     var videoWidth: Int = CarLifeProtocol.DEFAULT_WIDTH
@@ -131,13 +140,18 @@ class CarLifeSession(
         return "schema=1 run=$sourceRun running=${running.get() && !endReported} failed=$endReported " +
             "elapsedMs=$elapsed state=${state.name} " +
             "entry=$entryResult route=$entryRoute background=$entryLaunchedInBackground " +
-            "entryBlockedSuspected=$entryBlockedSuspected " +
+            "entryBlockedSuspected=$entryBlockedSuspected code=${endDiagnosticCode.name} " +
+            "commandFrames=$commandFramesReceived carwithNotification=[${notificationProbeSummary()}] " +
             "listeners=[${connector?.diagnosticSummary() ?: lastChannelSummary}] video=${videoInfo()} ${stats.snapshot().summary()}"
     }
 
     fun start(): Boolean {
         if (!running.compareAndSet(false, true)) return true
         startedAtMs = monotonicMs()
+        notificationBaseline = notificationSnapshot()
+        ConnectionDiagnostics.runtimeLog(
+            "CARLIFE-DIAG run=$sourceRun event=NOTIFICATION_BASELINE ${notificationProbeSummary()}",
+        )
         Bg.run("carlife-source-environment") {
             val fields = CarLifeSourceEnvironment.snapshot(appContext).entries.joinToString(" ") { "${it.key}=${it.value}" }
             ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG run=$sourceRun event=ENV $fields")
@@ -249,7 +263,10 @@ class CarLifeSession(
                 log("CARLIFE: 已附着现有 CarWith 七口会话，无需再打开入口")
                 if (launchStrategy == CarLifeLaunchStrategy.COMPATIBLE) startAttachedFirstFrameWatch()
             }
-            ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG run=$sourceRun event=LISTENERS_CONNECTED ${activeConnector.diagnosticSummary()}")
+            ConnectionDiagnostics.runtimeLog(
+                "CARLIFE-DIAG run=$sourceRun event=LISTENERS_CONNECTED ${activeConnector.diagnosticSummary()} " +
+                    "notification=[${notificationProbeSummary()}]",
+            )
             log("CARLIFE: 七路连接完成，开始协议握手")
             stateMachine.onConnected().forEach(::sendAction)
             startChannelReader(CarLifeChannel.VIDEO)
@@ -261,8 +278,7 @@ class CarLifeSession(
         } catch (error: Exception) {
             if (running.get()) {
                 DiagnosticExportPolicy.exception("CARLIFE_CONNECT_AND_READ", error)
-                entryBlockedSuspected = isEntryBlockedSuspected(error, entryLaunchedInBackground)
-                fail(clientFailureMessage(error, entryBlockedSuspected))
+                fail(error)
             }
         } finally {
             // A peer close is already reported by the channel reader. Only
@@ -318,7 +334,7 @@ class CarLifeSession(
         entryRoute = plan.route
         ConnectionDiagnostics.runtimeLog(
             "CARLIFE-DIAG run=$sourceRun event=ENTRY result=$entryResult route=$entryRoute " +
-                "background=$entryLaunchedInBackground",
+                "background=$entryLaunchedInBackground notification=[${notificationProbeSummary()}]",
         )
         when (plan.route) {
             EntryRoute.CARWITH_ENTRY ->
@@ -363,6 +379,7 @@ class CarLifeSession(
         val input = socket.getInputStream()
         while (running.get()) {
             val frame = readCarLifeSocket(input, CarLifeChannel.COMMAND.port)
+            commandFramesReceived++
             handleCommand(frame)
             if (stateMachine.state == CarLifeStateMachine.State.FAILED) {
                 fail("CarLife 握手失败（未发送伪造成功结果）")
@@ -649,16 +666,51 @@ class CarLifeSession(
         }
     }
 
-    private fun fail(message: String) {
+    private fun fail(error: Exception) {
+        fail("CarLife 客户端失败", error)
+    }
+
+    private fun fail(
+        message: String,
+        error: Exception? = null,
+    ) {
         if (!endReported) {
+            val code = classifyTerminalFailure(error)
+            endDiagnosticCode = code
+            entryBlockedSuspected = code == DiagnosticCode.CARWITH_ENTRY_BLOCKED
             endReported = true
             if (endedAtMs == null) endedAtMs = monotonicMs()
+            val finalMessage =
+                if (error == null) {
+                    clientFailureMessage(message, code)
+                } else {
+                    clientFailureMessage(error, code)
+                }
             ConnectionDiagnostics.runtimeLog("CARLIFE-DIAG event=FAILED ${diagnosticSummary()}")
-            log("CARLIFE: $message")
-            onEnded(message)
+            log("CARLIFE: $finalMessage")
+            onEnded(finalMessage)
         }
         stop()
     }
+
+    private fun classifyTerminalFailure(error: Exception?): DiagnosticCode {
+        val listenerProgress = connector?.progressSnapshot()
+        return CarWithEntryDiagnosis.classify(
+            CarWithEntryDiagnosis.Evidence(
+                listenersTimedOut = error is CarLifeListenerTimeoutException,
+                listenersConnectedOnce = listenerProgress?.allConnectedOnce == true,
+                commandFramesReceived = commandFramesReceived,
+                entryLaunchedInBackground = entryLaunchedInBackground,
+                notification = notificationSnapshot(),
+                notificationBaseline = notificationBaseline,
+            ),
+        )
+    }
+
+    private fun notificationProbeSummary(): String =
+        runCatching {
+            notificationSnapshot().diagnosticSummary(SystemClock.elapsedRealtime(), notificationBaseline)
+        }.getOrElse { "unavailable:${it.javaClass.simpleName}" }
 
     /** 连接前已有七口，或实际请求到的入口及回退层级。 */
     enum class EntryRoute { NONE, ATTACHED, CARWITH_ENTRY, LEGACY_ROOT_SERVICE, CARWITH_SETTINGS }
@@ -666,7 +718,6 @@ class CarLifeSession(
     internal companion object {
         private fun monotonicMs(): Long = System.nanoTime() / 1_000_000
 
-        const val ENTRY_BLOCKED_HINT = "CarWith 入口在后台发起，可能被系统拦截"
         const val UNPARSED_AUDIO_LOG_EVERY = 2_000L
 
         data class EntryPlan(
@@ -693,22 +744,34 @@ class CarLifeSession(
                 else -> EntryPlan(settingsEntry, EntryRoute.NONE)
             }
 
-        fun isEntryBlockedSuspected(
-            error: Exception,
-            launchedInBackground: Boolean,
-        ): Boolean = launchedInBackground && error is CarLifeListenerTimeoutException
-
         fun clientFailureMessage(
             error: Exception,
-            entryBlockedSuspected: Boolean,
-        ): String {
-            val base = "CarLife 客户端失败：${error.message ?: error.javaClass.simpleName}"
-            return if (entryBlockedSuspected) {
-                "$ENTRY_BLOCKED_HINT（小米需允许「后台弹出界面」，或保持 mcarplay 在前台后重连）；$base"
-            } else {
-                base
+            code: DiagnosticCode,
+        ): String = clientFailureMessage("CarLife 客户端失败：${error.message ?: error.javaClass.simpleName}", code)
+
+        fun clientFailureMessage(
+            base: String,
+            code: DiagnosticCode,
+        ): String =
+            when (code) {
+                DiagnosticCode.CARWITH_ENTRY_BLOCKED ->
+                    "$ENTRY_BLOCKED_HINT（小米需允许「后台弹出界面」，或保持 mcarplay 在前台后重连）；$base"
+                DiagnosticCode.CARWITH_ENTRY_NOT_OBSERVED ->
+                    "$ENTRY_NOT_OBSERVED_HINT；$base"
+                DiagnosticCode.CARWITH_ENTRY_STATUS_UNKNOWN ->
+                    "$ENTRY_STATUS_UNKNOWN_HINT；$base"
+                DiagnosticCode.CARWITH_LISTENERS_PENDING ->
+                    "$LISTENERS_PENDING_HINT；$base"
+                DiagnosticCode.CARWITH_PROTOCOL_SILENT ->
+                    "$PROTOCOL_SILENT_HINT；$base"
+                else -> base
             }
-        }
+
+        const val ENTRY_BLOCKED_HINT = "CarWith 入口在后台发起，可能被系统拦截"
+        const val ENTRY_NOT_OBSERVED_HINT = "七路未就绪，且通知使用权开启时未观察到 CarWith 通知"
+        const val ENTRY_STATUS_UNKNOWN_HINT = "七路未就绪；通知使用权不足，无法判断 CarWith 入口是否执行"
+        const val LISTENERS_PENDING_HINT = "已观察到 CarWith 通知，但七路端口未就绪"
+        const val PROTOCOL_SILENT_HINT = "七路已连接，但未收到 CarLife 协议响应"
 
         const val CONNECT_TIMEOUT_MS = 800
         const val LISTENER_WAIT_MS = 25_000L
