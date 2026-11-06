@@ -1,10 +1,17 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-11-05。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-11-06。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
 ## 当前基线与结论
+
+- **11 月 6 日 CarWith 入口阶段非 root 探针（代码与单测，未真机复测）：** 复用媒体卡已有的通知使用权，只记录
+  `com.miui.carlink` 通知是否存在、前台服务标志、活动/移除计数和时序，不读取标题或正文。入口超时拆为
+  `CARWITH_LISTENERS_PENDING`、`CARWITH_ENTRY_NOT_OBSERVED`、`CARWITH_ENTRY_STATUS_UNKNOWN`，保留后台
+  `CARWITH_ENTRY_BLOCKED`；七口全连但命令通道零帧归为 `CARWITH_PROTOCOL_SILENT`。未绑定通知监听器时保持未知，
+  不推断 CarWith 未执行。该改动只增强诊断，不修复 CarWith 4.0.4 / Android 13 / CarLife 8.6.8 的实际出流故障，
+  仍需故障手机复测并导出报告。详见 `docs/DIAGNOSTICS.md` 与 `docs/CARWITH-4.0.4-ANALYSIS.md`。
 
 - **11 月 5 日 v0.1.5-test.1 测试版（待发布）：** 汇总界面重构（PR #35）与 PR #31、#33、#34 的修复，仅通过单元测试、模拟器和一台小米手机检查，DiPlay、WinPlay、macplay、艾瑞泽 8 的实车回归尚未进行。测试通过后计划升到 1.0.0。
 

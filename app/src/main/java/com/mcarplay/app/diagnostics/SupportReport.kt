@@ -12,12 +12,15 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.SystemClock
+import android.provider.Settings
 import com.mcarplay.app.BuildConfig
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeSourceEnvironment
+import com.mcarplay.app.carlife.CarWithNotificationProbe
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
+import com.mcarplay.app.media.NotificationAccess
 import com.mcarplay.app.util.DebugFileLog
 import com.mcarplay.app.util.DeviceIdentity
 import org.json.JSONObject
@@ -47,6 +50,7 @@ object SupportReport {
                 ConnectionDiagnostics.selfTest.snapshot()?.let { "CarWith 自检：" + exportSummary(it) },
                 "RECEIVER_DETECTION " + ReceiverDetectionRuntime.reportSummary(),
                 "BLUETOOTH_DIAGNOSTICS " + SessionController.bluetoothDiagnosticSummary(),
+                "CARWITH_NOTIFICATION_PROBE " + CarWithNotificationProbe.diagnosticSummary(),
                 "CARLIFE_SELF_TEST_DIAGNOSTICS " + CarLifeDiagnostics.reportSummary(),
             ).joinToString("\n\n").ifEmpty { "本进程尚无连接尝试；请复现问题后再导出" }
         return render(
@@ -186,6 +190,16 @@ object SupportReport {
             put("system.uptimeMs", SystemClock.elapsedRealtime().toString())
             put("carwith.version", packageVersion(context, CarLifeLauncher.CARWITH_PACKAGE))
             put("carlife.version", packageVersion(context, CarLifeLauncher.CARLIFE_PACKAGE))
+            put(
+                "notification.accessEnabled",
+                value {
+                    NotificationAccess
+                        .isGrantedIn(
+                            Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners"),
+                            NotificationAccess.componentSpec(context),
+                        ).toString()
+                },
+            )
             // 只记来源（Shizuku/系统设置/手动/已保存/未获取），不记地址本身
             put("bluetooth.identitySource", value { DeviceIdentity.peek(context).source.name })
             put(
