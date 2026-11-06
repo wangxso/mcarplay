@@ -300,6 +300,62 @@ object SessionController {
         )
     }
 
+    /**
+     * 开关打开时的主动起播。CarWith 的音乐走原生 PCM，不产生系统媒体会话/通知，普通媒体键
+     * 无法恢复；这里在 CarWith 启动后用已验证的 CarWith 硬按键（下一首）起播一次。若已经
+     * 收到 MEDIA PCM（正在播放）则不动。开关关闭时仍走 [armAutoPlaySuppression]。
+     */
+    private fun armAutoPlayBehavior(session: CarLifeSession) {
+        val context = appContext ?: return
+        if (!MediaPrefs.autoPlayOnConnect(context)) {
+            armAutoPlaySuppression()
+            return
+        }
+        if (!audioEnabledForSession) {
+            appendLog("AUTO-PLAY: 本次连接未开启车机侧声音，不主动起播")
+            return
+        }
+        Bg.run("auto-play-start") {
+            try {
+                Thread.sleep(2_000L)
+                if (currentCarLifeSession !== session) return@run
+                var bridge = nativeAudioBridge
+                val bridgeDeadline = SystemClock.uptimeMillis() + 6_000L
+                while (bridge == null && SystemClock.uptimeMillis() < bridgeDeadline) {
+                    Thread.sleep(500L)
+                    if (currentCarLifeSession !== session) return@run
+                    bridge = nativeAudioBridge
+                }
+                if (bridge == null) {
+                    // 非 CarWith 原生音频路径：只在已有媒体会话时恢复一次。
+                    appendLog("AUTO-PLAY: 无 CarWith 原生音频桥，发送一次系统播放键")
+                    dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+                    return@run
+                }
+                if (bridge.lastMediaPcmAtMs > 0L) {
+                    appendLog("AUTO-PLAY: CarWith 媒体已在播放，跳过")
+                    return@run
+                }
+                val deadline = SystemClock.uptimeMillis() + 8_000L
+                while (SystemClock.uptimeMillis() < deadline) {
+                    if (currentCarLifeSession !== session) return@run
+                    if (bridge.lastMediaPcmAtMs > 0L) {
+                        appendLog("AUTO-PLAY: CarWith 媒体已自行起播，跳过")
+                        return@run
+                    }
+                    if (session.sendHardKey(CarLifeProtocol.HARD_KEY_SEEK_ADD)) {
+                        appendLog("AUTO-PLAY: 已发送 CarWith 下一首起播（CarWith 媒体无系统通知，不能用媒体会话恢复）")
+                        return@run
+                    }
+                    Thread.sleep(500L)
+                }
+                appendLog("AUTO-PLAY: CarWith 未进入可发键状态，放弃本次主动起播")
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+    }
+
     private fun stopAutoPlayWatch() {
         autoPlayListener?.let(MediaSessionsState::removeListener)
         autoPlayListener = null
@@ -3994,7 +4050,7 @@ object SessionController {
                                     if (videoStarted) carLifeOutput = output
                                     // 在 CarWith 启动前布防：CarWith 可能在 start() 内就恢复媒体，
                                     // 启动后再取 nowPlaying 会把自动播放误当成“连接前已在播放”。
-                                    if (videoStarted) armAutoPlaySuppression()
+                                    if (videoStarted) armAutoPlayBehavior(createdCarLife)
                                     val carLifeStarted = videoStarted && createdCarLife.start()
                                     appendLog(
                                         "MODE: CarWith ${if (carLifeStarted) "已请求连接，等待真实视频" else "连接请求失败"} " +

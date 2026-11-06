@@ -37,7 +37,7 @@
     <string name="main_dim_desc">点击手机屏幕任意处恢复</string>
     <string name="cd_auto_play">自动播放</string>
     <string name="main_auto_play_title">上车自动播放音乐</string>
-    <string name="main_auto_play_desc">关闭后连接车机时不会自动开始播放手机音乐；已在播放的保持不变，仍可在车机上手动播放</string>
+    <string name="main_auto_play_desc">打开后连接车机时主动让 CarWith 开始播放音乐（发送一次下一首）；已在播放的保持不变。CarWith 媒体没有系统通知，不能用普通媒体会话恢复</string>
     <string name="cd_landscape">横屏</string>
     <string name="main_car_settings_desc">流分辨率 · 帧率 · 息屏 · 兼容兜底 · 导航压低音量</string>
     <string name="cd_terminal">终端</string>
