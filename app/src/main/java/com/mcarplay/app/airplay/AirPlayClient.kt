@@ -2628,8 +2628,14 @@ class AirPlayClient(
     /**
      * RECORD 激活会话。受影响的车机每个连接最多发一次：并发调用共享结果，超时也不能在原会话重发。
      * 其他接收端保留音频后补发 RECORD 的既有行为。等待网络响应时不持有客户端锁，close 可随时终止。
+     *
+     * [force] 只给“屏幕流已 TEARDOWN 并重新 SETUP”的恢复路径用：新流必须重新激活，
+     * 不能被上面的单次 RECORD 缓存挡掉（艾瑞泽 8，2026-11-06：重进 CarPlay 后触控/按键失效）。
      */
-    fun record(timeoutMillis: Int = 10_000): Boolean {
+    fun record(
+        timeoutMillis: Int = 10_000,
+        force: Boolean = false,
+    ): Boolean {
         val epoch: Long
         val attempt: java.util.concurrent.CompletableFuture<Boolean>?
         val owner: Boolean
@@ -2638,7 +2644,7 @@ class AirPlayClient(
             epoch = connectionEpoch
             val single = singleRecordMode ?: receiverCompatibility().singleRecordPerSession.also { singleRecordMode = it }
             val previous = recordAttempt
-            if (single && previous != null) {
+            if (single && previous != null && !force) {
                 attempt = previous
                 owner = false
             } else {

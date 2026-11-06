@@ -3916,7 +3916,9 @@ object SessionController {
                                             }
                                             if (!replacement.openDataPort() ||
                                                 wasCancelled() ||
-                                                !client.record() ||
+                                                // 屏幕流已 TEARDOWN/SETUP：单次 RECORD 车机也必须重发一次，
+                                                // 否则新流没有激活（艾瑞泽 8 重进后触控/按键失效）。
+                                                !client.record(force = true) ||
                                                 wasCancelled() ||
                                                 !replacement.start {} ||
                                                 wasCancelled()
