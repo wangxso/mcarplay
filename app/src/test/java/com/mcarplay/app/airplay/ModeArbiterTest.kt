@@ -117,6 +117,40 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun screenBorrowDoesNotChangeAudioOwnership() {
+        // 倒车只借用主屏时，屏幕视频暂停；已经运行的主音频通道不受影响。
+        val arbiter = ModeArbiter()
+        arbiter.applyInitial(
+            mapOf(
+                "resources" to
+                    listOf(
+                        resource(1, 1, 100, 100),
+                        resource(2, 1, 100, 100),
+                    ),
+            ),
+        )
+        assertTrue(arbiter.phoneOwnsScreen)
+        assertTrue(arbiter.phoneOwnsAudio)
+
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "borrowID" to "4",
+                            "transferPriority" to 500,
+                            "resourceID" to 1,
+                            "transferType" to 3,
+                            "unborrowConstraint" to 1000,
+                        ),
+                    ),
+            ),
+        )
+        assertFalse(arbiter.phoneOwnsScreen)
+        assertTrue(arbiter.phoneOwnsAudio)
+    }
+
+    @Test
     fun audioStreamStartTakesMainAudioBackWithoutTakingTheScreen() {
         // VW4131 报告：主屏归车机、主音频被车机借用后，音频 SETUP 三档全部 400。
         // 真 iPhone 在 Main audio setting up 前先报 mainAudio controller。
