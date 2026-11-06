@@ -10,13 +10,17 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 class VideoScreenOwnershipTest {
     @Test
-    fun senderPausesWhileCarOwnsScreenAndResumesOnTheNextIdr() {
+    fun senderPausesWhileCarOwnsScreenAndRetriesTheIdrRequest() {
         ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
             val phoneOwnsScreen = AtomicBoolean(true)
-            val keyFrameRequests = AtomicInteger()
+            val nowMs = AtomicLong()
+            val keyFrameRequestCount = AtomicInteger()
+            val firstRequestFailed = CountDownLatch(1)
+            val secondRequestSucceeded = CountDownLatch(1)
             val ended = CountDownLatch(1)
             val sender =
                 VideoSender(
@@ -29,12 +33,23 @@ class VideoScreenOwnershipTest {
                     onEnded = { ended.countDown() },
                     externalVideoSource =
                         object : ExternalVideoSource {
-                            override fun requestKeyFrame(): Boolean {
-                                keyFrameRequests.incrementAndGet()
-                                return true
-                            }
+                            override fun requestKeyFrame(): Boolean =
+                                when (keyFrameRequestCount.incrementAndGet()) {
+                                    1 -> {
+                                        firstRequestFailed.countDown()
+                                        false
+                                    }
+
+                                    2 -> {
+                                        secondRequestSucceeded.countDown()
+                                        true
+                                    }
+
+                                    else -> true
+                                }
                         },
                     phoneOwnsScreen = { phoneOwnsScreen.get() },
+                    uptimeMs = { nowMs.get() },
                 )
             try {
                 assertTrue(sender.start {})
@@ -45,18 +60,25 @@ class VideoScreenOwnershipTest {
                     phoneOwnsScreen.set(false)
                     assertTrue(sender.submitExternalFrame(pFrame(1)))
                     assertTrue(sender.submitExternalFrame(keyFrame(2)))
-                    Thread.sleep(150)
+                    awaitSkipped(sender, 2)
                     assertEquals("No video frame may reach the car while it owns the screen", 1L, sender.framesSentTotal)
 
                     phoneOwnsScreen.set(true)
+                    nowMs.set(1_000)
                     assertTrue(sender.submitExternalFrame(pFrame(3)))
-                    Thread.sleep(150)
+                    assertTrue(firstRequestFailed.await(2, TimeUnit.SECONDS))
+                    awaitSkipped(sender, 3)
                     assertEquals("A P frame after screen return must wait for a new IDR", 1L, sender.framesSentTotal)
-                    assertTrue("Screen return must ask CarWith for a fresh IDR", keyFrameRequests.get() > 0)
 
-                    assertTrue(sender.submitExternalFrame(keyFrame(4)))
+                    nowMs.addAndGet(ScreenOutputGate.DEFAULT_KEY_FRAME_RETRY_MS)
+                    assertTrue(sender.submitExternalFrame(pFrame(4)))
+                    assertTrue("A failed IDR request must be retried", secondRequestSucceeded.await(2, TimeUnit.SECONDS))
+                    awaitSkipped(sender, 4)
+                    assertEquals("Retrying the IDR request must not leak video frames", 1L, sender.framesSentTotal)
+
+                    assertTrue(sender.submitExternalFrame(keyFrame(5)))
                     awaitFrames(sender, 2)
-                    assertTrue("P frames may resume after the first new IDR", sender.submitExternalFrame(pFrame(5)))
+                    assertTrue("P frames may resume after the first new IDR", sender.submitExternalFrame(pFrame(6)))
                     awaitFrames(sender, 3)
                 }
             } finally {
@@ -66,15 +88,28 @@ class VideoScreenOwnershipTest {
         }
     }
 
+    private fun awaitSkipped(
+        sender: VideoSender,
+        expected: Long,
+    ) {
+        awaitCondition { sender.screenFramesSkippedTotal >= expected }
+        assertEquals(expected, sender.screenFramesSkippedTotal)
+    }
+
     private fun awaitFrames(
         sender: VideoSender,
         expected: Long,
     ) {
+        awaitCondition { sender.framesSentTotal >= expected }
+        assertEquals(expected, sender.framesSentTotal)
+    }
+
+    private fun awaitCondition(condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
-        while (System.nanoTime() < deadline && sender.framesSentTotal < expected) {
+        while (System.nanoTime() < deadline && !condition()) {
             Thread.sleep(10)
         }
-        assertEquals(expected, sender.framesSentTotal)
+        assertTrue("Timed out waiting for video sender state", condition())
     }
 
     private fun keyFrame(timestampUs: Long): ExternalVideoFrame =

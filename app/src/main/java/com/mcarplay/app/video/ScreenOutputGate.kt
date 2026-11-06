@@ -9,7 +9,9 @@ package com.mcarplay.app.video
  *
  * 非线程安全：由 [VideoSender] 串行调用。
  */
-internal class ScreenOutputGate {
+internal class ScreenOutputGate(
+    private val keyFrameRetryMs: Long = DEFAULT_KEY_FRAME_RETRY_MS,
+) {
     enum class Transition {
         /** 主屏刚归车机，开始暂停视频帧。 */
         PAUSED,
@@ -26,6 +28,10 @@ internal class ScreenOutputGate {
         val transition: Transition? = null,
         val skippedThisPause: Long = 0L,
         val skippedTotal: Long = 0L,
+        /** 调用方现在应请求一个新的 IDR；请求失败时，后续 P 帧会按间隔再次触发。 */
+        val requestKeyFrame: Boolean = false,
+        /** 本次暂停中的第几次关键帧请求（0 = 本帧不请求）。 */
+        val keyFrameRequestAttempt: Int = 0,
     )
 
     private enum class State {
@@ -37,10 +43,19 @@ internal class ScreenOutputGate {
     private var state = State.ACTIVE
     private var skippedThisPause = 0L
     private var skippedTotal = 0L
+    private var lastKeyFrameRequestAtMs: Long? = null
+    private var keyFrameRequestAttempt = 0
+
+    init {
+        require(keyFrameRetryMs > 0) { "keyFrameRetryMs must be positive" }
+    }
+
+    val skippedFramesTotal: Long get() = skippedTotal
 
     fun admit(
         phoneOwnsScreen: Boolean,
         keyFrame: Boolean,
+        nowMs: Long,
     ): Decision {
         if (!phoneOwnsScreen) {
             val transition =
@@ -49,6 +64,8 @@ internal class ScreenOutputGate {
                 } else {
                     state = State.SUSPENDED
                     skippedThisPause = 0L
+                    lastKeyFrameRequestAtMs = null
+                    keyFrameRequestAttempt = 0
                     Transition.PAUSED
                 }
             skip()
@@ -61,7 +78,7 @@ internal class ScreenOutputGate {
                 return Decision(true, Transition.RESUMED, skippedThisPause, skippedTotal)
             }
             skip()
-            return Decision(false, Transition.RESUMING, skippedThisPause, skippedTotal)
+            return requestKeyFrame(Transition.RESUMING, nowMs)
         }
         if (state == State.AWAIT_KEY_FRAME) {
             if (keyFrame) {
@@ -69,15 +86,53 @@ internal class ScreenOutputGate {
                 return Decision(true, Transition.RESUMED, skippedThisPause, skippedTotal)
             }
             skip()
-            return Decision(false, null, skippedThisPause, skippedTotal)
+            val request = shouldRequestKeyFrame(nowMs)
+            return Decision(
+                send = false,
+                skippedThisPause = skippedThisPause,
+                skippedTotal = skippedTotal,
+                requestKeyFrame = request,
+                keyFrameRequestAttempt = if (request) keyFrameRequestAttempt else 0,
+            )
         }
         return Decision(true, null, skippedThisPause, skippedTotal)
     }
 
-    fun summary(): String = "主屏归车机时累计跳过 $skippedTotal 帧，最近一次暂停 $skippedThisPause 帧"
+    fun summary(): String =
+        "主屏归车机时累计跳过 $skippedTotal 帧，最近一次暂停 $skippedThisPause 帧，" +
+            "最近一次暂停请求关键帧 $keyFrameRequestAttempt 次"
 
     private fun skip() {
         skippedThisPause++
         skippedTotal++
+    }
+
+    private fun requestKeyFrame(
+        transition: Transition,
+        nowMs: Long,
+    ): Decision {
+        lastKeyFrameRequestAtMs = nowMs
+        keyFrameRequestAttempt++
+        return Decision(
+            send = false,
+            transition = transition,
+            skippedThisPause = skippedThisPause,
+            skippedTotal = skippedTotal,
+            requestKeyFrame = true,
+            keyFrameRequestAttempt = keyFrameRequestAttempt,
+        )
+    }
+
+    private fun shouldRequestKeyFrame(nowMs: Long): Boolean {
+        val last = lastKeyFrameRequestAtMs ?: return true
+        if (nowMs - last < keyFrameRetryMs) return false
+        lastKeyFrameRequestAtMs = nowMs
+        keyFrameRequestAttempt++
+        return true
+    }
+
+    companion object {
+        /** 等待 IDR 时重试关键帧请求的最小间隔。 */
+        const val DEFAULT_KEY_FRAME_RETRY_MS = 1_000L
     }
 }

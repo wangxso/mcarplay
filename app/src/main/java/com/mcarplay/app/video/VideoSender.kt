@@ -65,6 +65,7 @@ class VideoSender(
      * 默认 true = 调用方未提供资源仲裁状态时不改变原行为。
      */
     private val phoneOwnsScreen: () -> Boolean = { true },
+    private val uptimeMs: () -> Long = { android.os.SystemClock.uptimeMillis() },
 ) {
     @Volatile
     private var width: Int = (width / 2) * 2
@@ -177,6 +178,9 @@ class VideoSender(
 
     /** 已发送帧总数（英雄卡实时帧率 = 1s 轮询取差值）。 */
     val framesSentTotal: Long get() = framesSent
+
+    internal val screenFramesSkippedTotal: Long
+        get() = synchronized(screenOutputGate) { screenOutputGate.skippedFramesTotal }
 
     /**
      * 提前建立屏幕数据端口 TCP 连接（幂等）。
@@ -508,7 +512,7 @@ class VideoSender(
         val ownsScreen = runCatching { phoneOwnsScreen() }.getOrDefault(true)
         val decision =
             synchronized(screenOutputGate) {
-                screenOutputGate.admit(ownsScreen, keyFrame)
+                screenOutputGate.admit(ownsScreen, keyFrame, uptimeMs())
             }
         when (decision.transition) {
             ScreenOutputGate.Transition.PAUSED ->
@@ -519,7 +523,6 @@ class VideoSender(
                     "VIDEO: 主屏已归还——等待新的 IDR 恢复（本次暂停已跳过 ${decision.skippedThisPause} 帧）",
                 )
                 prepareScreenResume(passthrough)
-                requestKeyFrame(fromReceiver = false)
             }
 
             ScreenOutputGate.Transition.RESUMED -> {
@@ -528,6 +531,15 @@ class VideoSender(
             }
 
             null -> Unit
+        }
+        if (decision.requestKeyFrame) {
+            val requested = requestKeyFrame(fromReceiver = false)
+            if (decision.transition == null) {
+                log(
+                    "VIDEO: 等待 IDR 超时——重试关键帧请求（第 ${decision.keyFrameRequestAttempt} 次，" +
+                        "结果=${if (requested) "已提交" else "未提交"}）",
+                )
+            }
         }
         return decision.send
     }
