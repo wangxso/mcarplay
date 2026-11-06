@@ -47,6 +47,18 @@ class ScreenOutputGateTest {
     }
 
     @Test
+    fun suspendedStateIsObservableOnlyWhileFullyPaused() {
+        val gate = ScreenOutputGate()
+        assertFalse(gate.isSuspended)
+        gate.admit(phoneOwnsScreen = false, keyFrame = true, nowMs = 0)
+        assertTrue("The transcode feed path may stop while fully paused", gate.isSuspended)
+        gate.admit(phoneOwnsScreen = true, keyFrame = false, nowMs = 100)
+        assertFalse("AWAIT_KEY_FRAME must keep feeding so an IDR can be produced", gate.isSuspended)
+        gate.admit(phoneOwnsScreen = true, keyFrame = true, nowMs = 200)
+        assertFalse(gate.isSuspended)
+    }
+
+    @Test
     fun firstFrameAfterReturnCanResumeWhenItIsAnIdr() {
         val gate = ScreenOutputGate()
         gate.admit(phoneOwnsScreen = false, keyFrame = false, nowMs = 0)

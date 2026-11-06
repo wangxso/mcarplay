@@ -116,8 +116,17 @@ internal class ModeArbiter {
     @Synchronized
     fun describe(): String =
         resources.entries.joinToString(" ") { (id, resource) ->
-            "${if (id == SCREEN) "主屏" else "主音频"}=${if (resource.owner == Entity.CONTROLLER) "手机" else "车机"}" +
-                "(约束 ${resource.takeConstraint})"
+            val name = if (id == SCREEN) "主屏" else "主音频"
+            val owner =
+                when {
+                    resource.owner == Entity.CONTROLLER -> "手机"
+                    resource.borrowed -> "车机借用"
+                    else -> "车机"
+                }
+            // 借用期间真正约束 requestUI 的是 unborrowConstraint；日志里必须报它，
+            // 否则导出报告会写成“约束 100”，与“点图标拿不回主屏”的现场行为矛盾。
+            val constraint = if (resource.borrowed) resource.unborrowConstraint else resource.takeConstraint
+            "$name=$owner(约束 $constraint)"
         }
 
     private fun applyRequests(

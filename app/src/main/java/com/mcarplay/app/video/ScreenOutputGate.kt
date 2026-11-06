@@ -52,6 +52,12 @@ internal class ScreenOutputGate(
 
     val skippedFramesTotal: Long get() = skippedTotal
 
+    /**
+     * 已确认主屏归车机并处于暂停。转码路径可据此停止向编码器喂帧以省功耗；
+     * AWAIT_KEY_FRAME 必须继续喂帧，否则编码器无法产出恢复所需的新 IDR。
+     */
+    val isSuspended: Boolean get() = state == State.SUSPENDED
+
     fun admit(
         phoneOwnsScreen: Boolean,
         keyFrame: Boolean,

@@ -423,6 +423,13 @@ object SessionController {
     var audioEnabledForSession: Boolean = false
 
     /**
+     * 音频因主音频资源归车机而被跳过：车机 `changeModes` 归还主音频后重试一次。
+     * 无会话或已重试成功时清除，避免后续无线会话被上一轮的台架状态影响。
+     */
+    @Volatile
+    private var audioRetryPending = false
+
+    /**
      * 「开启声音（兼容档）」：候选里把非 media 档（compatibility 等）排前面。
      * 2026-10-19 Honda HFT 实测——media 档只声明 44.1k，该车机音频通路只吃得下 48k，
      * 走默认档会「上线几秒后整车机拆链」。
@@ -934,6 +941,7 @@ object SessionController {
                 ReceiverDetectionRuntime.stop(reason.name, cancelled = reason == DiagnosticCode.USER_STOP)
             }
             pendingEndpointUpdate = null
+            audioRetryPending = false
             retireSession(closeClient = false, preserveScreenSocket = true)
             BtSessionGate.sessionActive = true
             // BT 控制会话只在这里（用户终态）退役，socket close 让保活读循环立刻退出：
@@ -1168,6 +1176,34 @@ object SessionController {
             appendLog("AUDIO: 动态加入音频流——检查会话激活")
             client.record()
         }
+    }
+
+    /**
+     * 车机以高约束借用/持有主音频时跳过音频；`changeModes` 归还后再补一次。
+     * 失败仍由 [startAudioChannel] 自己记日志；这里只负责不占住会话锁。
+     */
+    private fun retryAudioAfterArbitrationReturn(client: AirPlayClient) {
+        // 只把状态检查放在短临界区里；SETUP 最长数秒，不能占着会话锁（disconnect 是
+        // @Synchronized，UI 线程点“断开”会跟着卡住）。
+        val ready =
+            synchronized(this) {
+                if (client !== currentClient || client.sessionStopping || !audioEnabledForSession) return
+                if (audioSender?.isRunning == true) return
+                val context = appContext ?: return
+                val secret = currentSharedSecret ?: return
+                Triple(context, secret, currentAudioHost)
+            }
+        if (startAudioChannel(ready.first, client, ready.second, ready.third)) {
+            appendLog("AUDIO: 车机归还主音频后音频流已建立——检查会话激活")
+            client.record()
+        }
+    }
+
+    private fun maybeRetryAudioAfterArbitrationReturn(client: AirPlayClient) {
+        if (!audioRetryPending || !client.modes.phoneOwnsAudio) return
+        audioRetryPending = false
+        appendLog("AUDIO: 车机已归还主音频——后台重试建立音频流")
+        Bg.run("audio-arbitration-retry") { retryAudioAfterArbitrationReturn(client) }
     }
 
     /**
@@ -2166,9 +2202,11 @@ object SessionController {
                 return false
             }
             if (!client.modes.phoneOwnsAudio) {
-                appendLog("AUDIO: 主音频资源当前归车机——跳过音频协商，不记为格式失败")
+                appendLog("AUDIO: 主音频资源当前归车机——跳过音频协商，不记为格式失败；车机归还后重试")
+                audioRetryPending = true
                 return false
             }
+            audioRetryPending = false
             appendLog(
                 "AUDIO: 音频档位候选=${ordered.map { it.label }}" +
                     "（本车机记忆：${AudioProfileMemory.describe(entry)}；" +
@@ -2183,6 +2221,7 @@ object SessionController {
                 if (!client.isConnectionCurrent(connectionGeneration)) return false
                 if (!client.modes.phoneOwnsAudio) {
                     appendLog("AUDIO: 主音频资源在协商期间转为车机占用——停止候选轮换，不记为格式失败")
+                    audioRetryPending = true
                     return false
                 }
                 val result = client.runAudioStream(sharedSecret, candidate, tuning, expectedEpoch = connectionGeneration)
@@ -2273,6 +2312,7 @@ object SessionController {
                 }
                 false
             } else {
+                audioRetryPending = false
                 true
             }
         } catch (error: Exception) {
@@ -3572,6 +3612,7 @@ object SessionController {
                                         // 旧实现一律回「手机持有」，帕萨特回主界面后再点图标就切不回 CarPlay（2026-11-01 22:47）
                                         val note = client.modes.onChangeModes(command["params"] as? Map<*, *>)
                                         enqueueModesAssert(client, "车机请求 changeModes（→ $note）", requestKeyFrame = false)
+                                        maybeRetryAudioAfterArbitrationReturn(client)
                                     }
 
                                     "requestUI" -> {
@@ -3904,7 +3945,9 @@ object SessionController {
                                 // 音频通道（可选）：SETUP type=100 → UDP RTP 推流。
                                 // 会话已激活（RECORD 完成）后再协商；失败不影响视频主链路。
                                 val audioStarted = startAudioChannel(context, client, sessionKey, host)
-                                if (audioEnabledForSession && !audioStarted) {
+                                // 主音频归车机时的“跳过”不是音频故障：不写结论码，等车机归还后重试；
+                                // 否则 AUDIO_UNAVAILABLE 会长期盖住 SCREEN_OUTPUT 的暂停说明。
+                                if (audioEnabledForSession && !audioStarted && !audioRetryPending && client.modes.phoneOwnsAudio) {
                                     ConnectionDiagnostics.timeline.issue(diagnosticAttempt, DiagnosticCode.AUDIO_UNAVAILABLE)
                                 }
                                 if (audioStarted) {

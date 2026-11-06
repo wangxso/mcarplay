@@ -245,6 +245,26 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun describeReportsBorrowStateAndUnborrowConstraint() {
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(
+            mapOf(
+                "resources" to
+                    listOf(
+                        mapOf(
+                            "resourceID" to 1,
+                            "transferType" to 3,
+                            "borrowConstraint" to 100,
+                            "unborrowConstraint" to 1000,
+                        ),
+                    ),
+            ),
+        )
+        assertTrue(arbiter.describe(), arbiter.describe().contains("主屏=车机借用(约束 1000)"))
+        assertFalse(arbiter.describe(), arbiter.describe().contains("主屏=车机(约束 100)"))
+    }
+
+    @Test
     fun returningHomeDuringRecoveryKeepsNextRebuildPending() {
         val arbiter = ModeArbiter()
         arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 500))))

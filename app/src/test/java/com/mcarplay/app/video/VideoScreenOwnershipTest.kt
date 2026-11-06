@@ -105,6 +105,38 @@ class VideoScreenOwnershipTest {
         }
     }
 
+    @Test
+    fun encoderPathResumesWithAFreshVideoConfig() {
+        val ownsScreen = AtomicBoolean(false)
+        val sender = admissionOnlySender(ownsScreen)
+
+        assertFalse(sender.admitScreenFrame(keyFrame = true, passthrough = false))
+        assertFalse("Pausing must not arm a resume reprime", sender.isEncoderReprimePending)
+
+        ownsScreen.set(true)
+        assertFalse("P frames after return must wait for a fresh IDR", sender.admitScreenFrame(keyFrame = false, passthrough = false))
+        assertTrue("Encoder path must re-send VideoConfig when output resumes", sender.isEncoderReprimePending)
+        assertFalse("Encoder path must not arm the passthrough parameter-set reprime", sender.isPassthroughReprimePending)
+
+        assertTrue(sender.admitScreenFrame(keyFrame = true, passthrough = false))
+    }
+
+    private fun admissionOnlySender(phoneOwnsScreen: AtomicBoolean): VideoSender =
+        VideoSender(
+            "127.0.0.1",
+            1,
+            StreamFrameCipher.ChaCha(ByteArray(32)),
+            640,
+            480,
+            log = {},
+            externalVideoSource =
+                object : ExternalVideoSource {
+                    override fun requestKeyFrame(): Boolean = true
+                },
+            phoneOwnsScreen = { phoneOwnsScreen.get() },
+            uptimeMs = { 0 },
+        )
+
     private fun awaitSkipped(
         sender: VideoSender,
         expected: Long,
