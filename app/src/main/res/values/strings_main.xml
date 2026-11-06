@@ -2,7 +2,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
     <string name="main_device_detecting">设备检测中</string>
     <string name="main_shizuku_chip_online">车机服务在线</string>
-    <string name="cd_head_unit">车机</string>
     <string name="main_hero_idle">未连接</string>
     <string name="main_cleanup_residual">清理残留屏</string>
     <string name="main_hero_idle_hint">与车机蓝牙完成配对后，点击下方按钮发起无线连接</string>
@@ -36,13 +35,8 @@
     <string name="cd_fake_off">假息屏</string>
     <string name="main_dim_title">立即假息屏</string>
     <string name="main_dim_desc">点击手机屏幕任意处恢复</string>
-    <string name="cd_wallpaper">壁纸</string>
-    <string name="main_wallpaper_title">车机壁纸</string>
-    <string name="main_wallpaper_desc">全屏 aspectFill</string>
-    <string name="main_wallpaper_change">更换</string>
-    <string name="main_wallpaper_reset">恢复默认</string>
     <string name="cd_landscape">横屏</string>
-    <string name="main_car_settings_desc">桌面应用 · 应用横屏 · 超采样 · dock 栏 · 默认地图</string>
+    <string name="main_car_settings_desc">流分辨率 · 帧率 · 息屏 · 兼容兜底 · 导航压低音量</string>
     <string name="cd_terminal">终端</string>
     <string name="main_shell_title">Shell 全局状态</string>
     <string name="main_shell_desc">letterbox / 虚拟屏 / wm 覆盖 —— 调试排查用</string>
@@ -71,4 +65,21 @@
     <string name="whats_new_title">更新内容 · %1$s</string>
     <string name="whats_new_title_unreleased">更新内容（开发构建）</string>
     <string name="whats_new_ok">知道了</string>
+    <string name="main_tab_connect">连接</string>
+    <string name="main_tab_settings">设置</string>
+    <string name="main_tab_diagnostics">诊断</string>
+    <string name="main_diag_checks_title">自检与模拟</string>
+    <string name="main_vehicle_title">车型适配</string>
+    <string name="main_vehicle_auto">自动（按车机自报信息判断）</string>
+    <string name="main_vehicle_manual">手动：%1$s</string>
+    <string name="main_vehicle_dialog_title">选择车型适配</string>
+    <string name="main_vehicle_dialog_hint">仅在自动判断不准时使用。选择只套用已有的车型适配开关，不代表该车型已验证。下次连接生效。</string>
+    <string name="main_vehicle_busy">连接进行中，下次连接生效</string>
+    <string name="vehicle_preset_auto">自动（推荐）</string>
+    <string name="vehicle_preset_generic">通用（关闭所有车型例外）</string>
+    <string name="vehicle_preset_chery">奇瑞 / 艾瑞泽 8</string>
+    <string name="vehicle_preset_volkswagen">大众（ID 系列 / 帕萨特）</string>
+    <string name="vehicle_preset_winplay">WinPlay 接收端</string>
+    <string name="vehicle_preset_diplay">DiPlay 接收端（比亚迪等）</string>
+    <string name="vehicle_preset_classic_mib3">奥迪经典 MIB3</string>
 </resources>

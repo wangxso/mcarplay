@@ -40,6 +40,11 @@ def analyze_report(text: str) -> dict:
         for event in events:
             last.update(event)
         ended = next((event for event in reversed(events) if event.get("event") == "END"), None)
+        milestones: dict[str, object] = {}
+        for event in events:
+            name = event.get("milestone")
+            if isinstance(name, str) and name not in milestones:
+                milestones[name] = event.get("elapsedMs")
         evidence = []
         if ended is None:
             evidence.append("No END retained: may still be active or records were interrupted; not proof of a crash.")
@@ -51,6 +56,8 @@ def analyze_report(text: str) -> dict:
             evidence.append("Video transport writes recorded; receiver display/decode is not established by these counters.")
         if ended and ended.get("code") == "USER_STOP":
             evidence.append("User-requested stop, not a connection failure.")
+        if "IAP2_AUTHENTICATED" in milestones and "AIRPLAY_CONNECTED" in milestones and "PAIR_VERIFY" not in milestones:
+            evidence.append("iAP2 authentication completed, but AirPlay pair-verify did not; the layers succeed independently.")
         if any(event.get("event") == "UNCAUGHT_EXCEPTION" for event in events):
             evidence.append("An uncaught thread exception was captured; inspect its stack in the report.")
         summaries.append({
@@ -65,6 +72,8 @@ def analyze_report(text: str) -> dict:
             "videoFrames": last.get("videoFrames", 0),
             "nativeAudioChunks": last.get("audioChunks", 0),
             "audioPacketsSent": last.get("audioPacketsSent", 0),
+            "milestones": milestones,
+            "lastMilestone": next(reversed(milestones), None),
             "evidence": evidence,
         })
     return {

@@ -34,6 +34,24 @@ still-redacted recent runtime history.
 - Random process/attempt IDs correlate stage transitions, warnings, terminal
   reasons, elapsed time, media counts and coarse memory/thread samples. Critical
   events use JSONL schema 1, independently of verbose protocol logs.
+- `MILESTONE` events (with a `milestone` field) record the first time an attempt
+  reaches each phone-side step: `BT_LINK`, `IAP2_IDENTIFIED`, `IAP2_AUTHENTICATED`,
+  `WIFI_CREDENTIALS`, `WIFI_JOINED`, `CTRL_INVITED`, `RECEIVER_RESOLVED`,
+  `AIRPLAY_CONNECTED`, `PAIR_SETUP`, `PAIR_VERIFY`, `AUTH_SETUP`, `SESSION_SETUP`,
+  `RECORD`; `FIRST_CARWITH_VIDEO`, `FIRST_VIDEO` and `FIRST_AUDIO_PACKET` carry
+  `CARWITH_FRAME`, `FIRST_VIDEO` and `FIRST_AUDIO`. Repeats are not journaled and
+  details hold only fixed tokens (`source=0x5703`, `port=fallback`, `savedTrust=true`).
+  `PAIR_SETUP` is absent when saved trust was reused. The layers are independent:
+  `IAP2_AUTHENTICATED` (the head unit's iAP `AUTHENTICATION_PASS`) does not imply
+  `PAIR_VERIFY`. Bluetooth milestones belong to the attempt that was current when
+  they arrived, so an attempt that a receiver restart began at Wi-Fi may lack them.
+- After `EXPORT_SNAPSHOT` the report adds `STAGE_DURATIONS` (accumulated milliseconds
+  per stage, `*` on the current one), `MILESTONES` (offset from the attempt start, or
+  `none`) and, while waiting or after a failure, `BLOCKED_AT <STAGE>:<STEP>` naming the
+  missing step (for example `PAIRING:HOMEKIT_PAIRING` after TCP connected but before
+  pair-verify). The main card shows the same layers as a stepper; once 30 s pass after
+  `BT_LINK` without `RECORD` it notes that the Chery Arrizo 8 resets and retries at
+  that point. That window was observed only on that head unit.
 - Source H.264 frames, video transport writes, native PCM chunks and sent audio
   packets are separate evidence. Writes do not prove receiver display or sound.
 - `RECEIVER_DETECTION` and `DETECT` notes contain the local wizard's fixed state,
@@ -281,6 +299,11 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 推流时运行日志还会记录 CarWith 与手机编码器的 SPS/PPS 特征、透传/转码码流统计（含车机要关键帧距上个 IDR 的时间）、
 车机时钟漂移、车机命令统计与结构、屏幕数据口回传或关闭，以及每分钟的 Wi-Fi 信号/速率、温控与电量（不含 SSID/BSSID）。
 
+首页卡片按「蓝牙 › 入网 › 发现 › 配对 › 会话 › CarWith › 画面」显示每层状态与耗时、最近到达的里程碑和当前层还缺的那一步；
+报告里对应 `STAGE_DURATIONS`、`MILESTONES` 和 `BLOCKED_AT` 三行，日志里是带 `milestone` 字段的 `MILESTONE` 事件。
+各层相互独立：iAP2 认证通过不代表 AirPlay 配对成功。自蓝牙链路起 30 s 仍未激活会话时，卡片会提示艾瑞泽 8 车机此时会自行重置重连；
+该窗口只在这台车机上观察到。
+
 手机日志能确定已记录的阶段和事实，但不能保证还原所有车机内部故障，必要时仍需接收端日志。
 “收到源数据”“已发送”“接收端显示/有声”是不同证据层级；分享前仍需检查自由文本中的隐私。
 
@@ -311,3 +334,38 @@ standard 和所有 release 保持脱敏；服务器只读日志 API 仍按原规
 再「提交错误报告」并分享给 mcarplay，或在页面里选择 zip / `btsnoop_hci.log`。文件只在本机流式解析，不复制、不保存、不上传；
 结果以 `BTSNOOP:` 写入诊断日志，只含时间、计数、CoD、服务 UUID 和结论（EIR 是否含 CarPlay、车机 SDP 是否收到 CarPlay 记录或中途停止续传），
 不含地址、设备名、服务名和链路密钥。错误报告原件含大量个人信息，不要转发。
+
+
+### CarWith system-log export (remote flavor only, 2026-11-04)
+
+The remote-debug settings page offers **导出 CarWith 系统日志** and a separate share button.
+Reproduce the failure first, then export promptly: this reads recent buffers rather than starting a continuous recording.
+The fixed bridge command `export_carwith_system_logs` performs the same local export and returns only its status/path;
+it does not upload the system-log body or append it to the bridge's runtime log. Share the file explicitly after review.
+There is no arbitrary remote shell or ADB command execution field.
+
+Choose either an already running, authorized Shizuku instance, or grant the remote package development permissions from a computer:
+
+```sh
+adb shell pm grant com.mcarplay.app.rd android.permission.READ_LOGS
+adb shell pm grant com.mcarplay.app.rd android.permission.DUMP
+```
+
+Root is not required for the ADB grant route. Keep the remote app in the foreground and allow the system's device-log prompt
+when shown (Android 13+). A ROM may reject grants or restrict logs; permission granted is not proof of complete visibility.
+Without Shizuku or READ_LOGS, export stops with these instructions rather than presenting this app's own log as system evidence.
+Without DUMP, the ADB route marks service sections unavailable. To revoke these development grants:
+
+```sh
+adb shell pm revoke com.mcarplay.app.rd android.permission.READ_LOGS
+adb shell pm revoke com.mcarplay.app.rd android.permission.DUMP
+```
+
+The report contains up to 2,000 recent logcat records for fixed CarWith/CarLife, CTA/security-center, activity-manager,
+crash and lifecycle tags; two package-scoped service dumps; TCP listener state; and read-only feature/app-op values.
+System activity-manager tags can also mention other apps. Each command retains at most 256 KB per output pipe, with
+concurrent draining and a deadline (5 seconds; 30 seconds for the ADB logcat consent prompt). Exit, timeout and truncation
+are reported independently; a saved file or missing event does not establish successful/failed component execution.
+Files are always passed through `DiagnosticRedactor`, including on raw remote-debug builds, and saved separately to
+`Download/mcarplay/mcarplay-carwith-system-*.txt`. Review before sharing; arbitrary third-party log text may contain private data.
+The permissions, UI, collector and bridge command are all in `src/remote`; standard builds do not include them.

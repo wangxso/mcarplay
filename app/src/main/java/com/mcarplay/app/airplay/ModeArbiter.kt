@@ -73,6 +73,21 @@ internal class ModeArbiter {
         return UiRequest("用户点图标，拿回主屏（车机约束 $constraint ≤ userInitiated）", retake = false, rebuildStream = rebuild)
     }
 
+    /**
+     * 用户在 CarWith 点了「返回车机」：主屏与主音频都报归车机，与真 iPhone 点车机原生图标回到车机界面一致。
+     * takeConstraint 放宽到 anytime，用户之后再点 CarPlay 图标（requestUI）仍可拿回。
+     */
+    @Synchronized
+    fun onUserReturnedToCar(): String {
+        for (resource in resources.values) {
+            resource.owner = Entity.ACCESSORY
+            resource.permanent = Entity.ACCESSORY
+            resource.takeConstraint = CONSTRAINT_ANYTIME
+        }
+        screenRelinquished = true
+        return describe()
+    }
+
     @Synchronized
     fun onScreenStreamRestored() {
         if (phoneOwnsScreen) screenRelinquished = false

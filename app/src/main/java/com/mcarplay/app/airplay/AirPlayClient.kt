@@ -11,6 +11,7 @@ import com.mcarplay.app.compat.ReceiverCapabilities
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverProbePlan
+import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.iap2.Iap2Csm
 import com.mcarplay.app.iap2.Iap2MessageIds
 import com.mcarplay.app.iap2.Iap2SenderSession
@@ -160,6 +161,14 @@ class AirPlayClient(
      */
     @Volatile
     var pairingUnsupported: Boolean = false
+        private set
+
+    /**
+     * 车机在配对应答里给出**确定性**拒绝（TLV Error = MaxPeers / MaxTries，或已保存的信任与重新注册
+     * 都被 Authentication 拒绝）。非 null 时配对窗口已提前结束：重试只会拿到同一个码。
+     */
+    @Volatile
+    internal var pairingRejection: PairingRejectedException? = null
         private set
 
     /** 控制通道是否已加密（pair-verify 完成）。false = 明文会话（老车机 / 未配对）。 */
@@ -340,8 +349,10 @@ class AirPlayClient(
         // 默认 120s 内每 2s 试一次——用户在车机上点一下的等待不会被提前放弃。
         val deadline = System.currentTimeMillis() + windowMillis
         var attempt = 0
+        pairingRejection = null
         while (System.currentTimeMillis() < deadline && !cancelled) {
             attempt++
+            var trustInvalidated = false
             // 每轮重试前吸收一次 mDNS 新结果：网关兜底地址连不通时，车机的
             // _airplay._tcp 可能已经在后台发现到，及时换过去比空转 120s 强。
             endpointRefresher?.invoke(endpoint)?.let { refreshed ->
@@ -376,15 +387,21 @@ class AirPlayClient(
                             pairSetupRejected = true
                             pairingForbidden = true
                         },
-                        onTrustInvalidated = { pairings.remove(pairingEndpoint, identity.pairingId) },
+                        onTrustInvalidated = {
+                            trustInvalidated = true
+                            pairings.remove(pairingEndpoint, identity.pairingId)
+                        },
+                        onSetupComplete = { milestone(ConnectionMilestone.PAIR_SETUP) },
                     )
-                val result = handshake.run(pairings.load(pairingEndpoint, identity.pairingId), pairingEndpoint.publicKey?.let(::hexToBytes))
+                val remembered = pairings.load(pairingEndpoint, identity.pairingId)
+                val result = handshake.run(remembered, pairingEndpoint.publicKey?.let(::hexToBytes))
                 if (cancelled) return null
                 result.receiver?.let { pairings.save(pairingEndpoint, identity.pairingId, it) }
                 val keys = result.keys
                 // pair-verify 之后双方立即启用加密（接收端在 M4 应答后开启）
                 cipher = ControlCipher(keys.phoneReadKey, keys.phoneWriteKey)
                 log("AIRPLAY: 控制通道加密已启用")
+                milestone(ConnectionMilestone.PAIR_VERIFY, "savedTrust=${remembered != null}")
                 return keys
             } catch (error: IOException) {
                 if (cancelled) {
@@ -396,6 +413,14 @@ class AirPlayClient(
                 // 见 pairingForbidden 注释：标记后主控不再断 BT / 不降级明文
                 if (message.contains("403")) pairingForbidden = true
                 log("AIRPLAY: 配对第 $attempt 次尝试失败 - $message")
+                if (error is PairingRejectedException &&
+                    pairingRejectionAction(error, trustInvalidated) == PairingRejectionAction.STOP
+                ) {
+                    pairingRejection = error
+                    log("AIRPLAY: ⚠ 车机确定性拒绝配对（${error.message}），停止重试——${pairingRejectionHint(error.code)}")
+                    close()
+                    return null
+                }
                 if (!iphonePairingTypeFailed && receiverCompatibility().iphoneAuthSequence) {
                     iphonePairingTypeFailed = true
                     log("AIRPLAY: X-Apple-HKP: 0 下配对失败——后续尝试回退为 2")
@@ -409,7 +434,7 @@ class AirPlayClient(
                 // 403 退避（真机抓包：车机首连被拒后需 18~20s 才进入可接受状态，
                 // 期间高频重试除徒增车机负载外可能一直重置其就绪状态机）；
                 // 其余失败维持快速轮询等端口开放
-                Thread.sleep(pairingRetryBackoffMs(message))
+                Thread.sleep(pairingRetryDelayMs(error))
             }
         }
         close()
@@ -440,6 +465,7 @@ class AirPlayClient(
                 request("POST", "/auth-setup", body, timeoutMillis = AUTH_SETUP_TIMEOUT_MILLIS)
             val elapsed = SystemClock.uptimeMillis() - startedAt
             log("AIRPLAY: auth-setup [$statusLine] ${response.size}B ${elapsed}ms ${describeAuthSetupResponse(response)}")
+            if (statusLine.contains(" 200")) milestone(ConnectionMilestone.AUTH_SETUP, "elapsedMs=$elapsed")
         } catch (error: IOException) {
             log("AIRPLAY: auth-setup 失败（${SystemClock.uptimeMillis() - startedAt}ms）- ${error.message}——继续 SETUP")
         }
@@ -1028,6 +1054,7 @@ class AirPlayClient(
             return null
         }
         sessionSetupAccepted = true
+        milestone(ConnectionMilestone.SESSION_SETUP)
         val root =
             try {
                 BinaryPlist.parse(responseBody)
@@ -1681,6 +1708,20 @@ class AirPlayClient(
      * 话车机全程健康却永不切到 CarPlay 画面。
      */
     var onTunnelControlSessionComplete: (() -> Unit)? = null
+
+    /**
+     * 连接里程碑（TCP 连通、pair-setup/verify、auth-setup、SETUP、RECORD）回调，由宿主记到本轮诊断；
+     * 每项只看首次，重复到达由时间线忽略。detail 只放固定描述，不放地址。
+     */
+    @Volatile
+    var onMilestone: ((ConnectionMilestone, String) -> Unit)? = null
+
+    private fun milestone(
+        reached: ConnectionMilestone,
+        detail: String = "",
+    ) {
+        runCatching { onMilestone?.invoke(reached, detail) }
+    }
 
     /** MIB3 虚拟链路是否已布防（armMib3 成功）——拆链归因用：布防了但控制会话没完成就被拆 = 链路看门狗，与音频档位无关。 */
     @Volatile
@@ -2625,6 +2666,7 @@ class AirPlayClient(
                     }
                 }
             log(if (accepted) "AIRPLAY: ✓ RECORD 完成——会话已激活" else "AIRPLAY: RECORD 未激活当前会话 [$statusLine]")
+            if (accepted) milestone(ConnectionMilestone.RECORD)
         } catch (error: IOException) {
             log("AIRPLAY: RECORD 失败 - ${error.message}")
         } finally {
@@ -2912,6 +2954,7 @@ class AirPlayClient(
                     }
                     if (port != target.airPlayPort) endpoint = endpoint.copy(airPlayPort = port)
                     log("AIRPLAY: TCP 已连通 $activeHost:$port（本机 ${newSocket.localAddress.hostAddress}）")
+                    milestone(ConnectionMilestone.AIRPLAY_CONNECTED, if (port == target.airPlayPort) "port=advertised" else "port=fallback")
                     return true
                 } catch (error: IOException) {
                     runCatching { newSocket.close() }

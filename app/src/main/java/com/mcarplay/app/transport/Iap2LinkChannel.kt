@@ -20,10 +20,15 @@ class Iap2LinkChannel(
     private val lock = Object()
     private val controls = LinkedBlockingQueue<ByteArray?>()
     private val readyLatch = CountDownLatch(1)
+    private val terminatedLatch = CountDownLatch(1)
 
     @Volatile
     private var terminated = false
     private var readySignalled = false
+
+    /** 对端最后一帧（含纯 ACK）的单调时钟毫秒；从未收到为 -1。 */
+    @Volatile
+    private var lastPeerFrameAtMillis = -1L
 
     /** 原始字节转储预算（每方向每连接），真车字节级对照用。 */
     private var rxDumpBudget = RAW_DUMP_LIMIT
@@ -46,6 +51,7 @@ class Iap2LinkChannel(
             log("LINK: 丢弃未知会话 $sessionId 的数据帧（$size 字节）")
         }
         engine.onFrameReceived = { control, sequence, ack, sessionId, size ->
+            lastPeerFrameAtMillis = nowMillis()
             // 真车调试关键观测：车机在识别阶段是否回帧、回什么（静默分歧全靠它定位）
             if (rxFrameLogs < FRAME_LOG_LIMIT) {
                 rxFrameLogs++
@@ -79,6 +85,15 @@ class Iap2LinkChannel(
         if (!readyLatch.await(timeoutMillis, TimeUnit.MILLISECONDS)) return false
         return !terminated
     }
+
+    /** 对端最后一帧距今的毫秒数；从未收到过对端帧返回 null。只用于诊断日志。 */
+    fun millisSinceLastPeerFrame(): Long? = lastPeerFrameAtMillis.takeIf { it >= 0 }?.let { nowMillis() - it }
+
+    /**
+     * 等待链路终结（[close] 或读写失败），最多 [timeoutMillis]；返回是否已终结。
+     * 可被中断：调用方若需要在已中断状态下等待，先清除中断标志、等完再恢复。
+     */
+    fun awaitTerminated(timeoutMillis: Long): Boolean = terminatedLatch.await(timeoutMillis, TimeUnit.MILLISECONDS) || terminated
 
     /** 对端协商的最大控制载荷（已扣除帧头与校验和），协商前为 null。 */
     fun peerMaxControlPayload(): Int? = synchronized(lock) { engine.peerSynchronization?.maxLength?.minus(Iap2LinkEngine.HEADER_BYTES + 1) }
@@ -240,6 +255,7 @@ class Iap2LinkChannel(
         readyLatch.countDown()
         lock.notifyAll()
         runCatching { stream.close() }
+        terminatedLatch.countDown()
         if (failure != null) {
             log("LINK closed: ${failure.message}")
         } else {

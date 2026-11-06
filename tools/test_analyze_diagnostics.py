@@ -28,6 +28,27 @@ class AnalyzeDiagnosticsTest(unittest.TestCase):
         self.assertEqual("PAIRING_FAILED", data["attempts"][0]["code"])
         self.assertEqual(9000, data["attempts"][0]["elapsedMs"])
 
+    def test_collects_first_milestones_in_arrival_order(self):
+        data = analyze_report(report(
+            {"process": "p1", "attempt": "a1", "event": "MILESTONE", "milestone": "BT_LINK", "elapsedMs": 400},
+            {"process": "p1", "attempt": "a1", "event": "MILESTONE", "milestone": "IAP2_AUTHENTICATED", "elapsedMs": 900},
+            {"process": "p1", "attempt": "a1", "event": "STAGE", "stage": "PAIRING", "elapsedMs": 4000},
+            {"process": "p1", "attempt": "a1", "event": "MILESTONE", "milestone": "AIRPLAY_CONNECTED", "elapsedMs": 4100},
+            {"process": "p1", "attempt": "a1", "event": "MILESTONE", "milestone": "BT_LINK", "elapsedMs": 9000},
+            {"process": "p1", "attempt": "a1", "event": "END", "stage": "PAIRING", "status": "failed",
+             "code": "PAIRING_FAILED", "elapsedMs": 30000},
+        ))
+        attempt = data["attempts"][0]
+        self.assertEqual({"BT_LINK": 400, "IAP2_AUTHENTICATED": 900, "AIRPLAY_CONNECTED": 4100}, attempt["milestones"])
+        self.assertEqual(["BT_LINK", "IAP2_AUTHENTICATED", "AIRPLAY_CONNECTED"], list(attempt["milestones"]))
+        self.assertEqual("AIRPLAY_CONNECTED", attempt["lastMilestone"])
+        self.assertTrue(any("pair-verify did not" in line for line in attempt["evidence"]))
+
+    def test_reports_without_milestones_stay_compatible(self):
+        data = analyze_report(report({"process": "p1", "attempt": "a1", "event": "STAGE", "stage": "WIFI"}))
+        self.assertEqual({}, data["attempts"][0]["milestones"])
+        self.assertIsNone(data["attempts"][0]["lastMilestone"])
+
     def test_missing_end_does_not_claim_crash(self):
         data = analyze_report(report({"process": "p1", "attempt": "a1", "event": "STAGE", "stage": "CARWITH"}))
         self.assertIn("not proof of a crash", data["attempts"][0]["evidence"][0])

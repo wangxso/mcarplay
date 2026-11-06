@@ -5,7 +5,6 @@ import android.media.MediaMetadata
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.service.notification.NotificationListenerService
-import com.mcarplay.app.launcher.VirtualLauncher
 
 /**
  * 通知监听服务：借通知使用权枚举系统活跃媒体会话，向应用提供「正在播放」状态
@@ -220,8 +219,12 @@ class MediaListenerService : NotificationListenerService() {
     }
 }
 
-/** 全局「正在播放」状态（本进程内共享；GridActivity 音乐卡监听渲染）。 */
+/** 全局「正在播放」状态（本进程内共享）。 */
 object MediaSessionsState {
+    /** 日志出口（界面启动时接到主界面日志）。 */
+    @Volatile
+    var logSink: ((String) -> Unit)? = null
+
     data class NowPlaying(
         val title: String?,
         val artist: String?,
@@ -285,7 +288,7 @@ object MediaSessionsState {
                 old?.playing != value?.playing ||
                 old?.art !== value?.art
         if (contentChanged) {
-            VirtualLauncher.logSink?.invoke(
+            logSink?.invoke(
                 "MEDIA: " + (
                     value?.let { "${it.title ?: "?"} - ${it.artist ?: "?"} playing=${it.playing}" }
                         ?: "无活跃会话"

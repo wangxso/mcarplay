@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh-rCN">
     <string name="ma_connecting_hint">蓝牙 iAP2 握手 → 加入车机热点 → 建立 CarPlay 会话</string>
-    <string name="ma_wallpaper_updated">壁纸已更新</string>
-    <string name="ma_save_failed">保存失败</string>
     <string name="ma_audio_video_only">仅视频（更流畅）</string>
     <string name="ma_audio_enable">开启声音</string>
     <string name="action_cancel">取消</string>
@@ -53,8 +51,6 @@
     <string name="ma_psk_missing">暂无热点密码——蓝牙连上后自动获取</string>
     <string name="ma_native_audio_requested">CarWith 原生音频已请求接入</string>
     <string name="ma_dimmer_not_ready">暗幕未就绪（连接成功后自动启用）</string>
-    <string name="ma_wallpaper_reset">已恢复默认壁纸</string>
-    <string name="ma_reset_failed">恢复失败</string>
     <string name="ma_log_empty">日志为空</string>
     <string name="ma_log_clip_label">mcarplay 日志</string>
     <string name="ma_log_copied">已复制 %1$d 字符脱敏日志；完整信息请导出诊断报告</string>

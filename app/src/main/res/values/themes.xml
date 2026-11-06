@@ -1,41 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 系统栏统一深色：导航栏不显式设置时，MagicOS 会按浅色主题给一个**白色**底
-         （实测 #FCFCFC）——正常界面里是底部一条白边，假息屏时（全屏黑遮罩）
-         尤其突兀，看起来像没适配全面屏（2026-10-18 用户截图反馈）。
-         假息屏遮罩是 APPLICATION_OVERLAY 窗口，只能覆盖内容区（系统栏由 SystemUI
-         画在其上），所以系统栏颜色必须自身就是黑的才能与遮罩融为一体。 -->
+    <!-- 沉浸式系统栏：状态栏与底部手势条都透明，内容铺到屏幕边缘（EdgeToEdge.enable），
+         图标明暗跟随浅/深色。旧版把导航栏涂黑是为了和假息屏遮罩融合（MagicOS 默认给白色导航栏底，
+         2026-10-18）；遮罩是全屏覆盖窗口，系统栏透明时同样被盖住，不再需要黑色导航栏。 -->
     <style name="Theme.CarPlaySender" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:statusBarColor">#000000</item>
-        <item name="android:navigationBarColor">#000000</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
-        <item name="android:colorBackground">#101418</item>
-    </style>
-
-    <!-- 车机桌面（dock/网格/设置）：窗口透明——壁纸由 GL 合成器画在最底层，
-         Activity 不垫底色（否则壁纸被盖住） -->
-    <style name="Theme.CarPlaySender.Launcher" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:colorBackground">@android:color/transparent</item>
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:statusBarColor">#000000</item>
-        <item name="android:navigationBarColor">#000000</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
-    </style>
-
-    <!-- 车机设置：进入/退出用滑动转场（windowAnimationStyle 全版本可用，
-         不依赖 API 34 已废弃的 overridePendingTransition） -->
-    <style name="Theme.CarPlaySender.Settings" parent="Theme.CarPlaySender.Launcher">
-        <item name="android:windowAnimationStyle">@style/CarPlaySettingsAnimation</item>
-    </style>
-
-    <style name="CarPlaySettingsAnimation" parent="">
-        <item name="android:activityOpenEnterAnimation">@anim/settings_in</item>
-        <item name="android:activityOpenExitAnimation">@anim/stay</item>
-        <item name="android:activityCloseEnterAnimation">@anim/stay</item>
-        <item name="android:activityCloseExitAnimation">@anim/settings_out</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:colorBackground">@color/ui_bg</item>
     </style>
 
     <!-- 静默投屏跳板（audio/SilentProjectionActivity）：全透明、无动画、不抢焦点。

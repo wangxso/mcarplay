@@ -36,6 +36,42 @@ class EndpointHostsTest {
     }
 
     @Test
+    fun gatewayPrefersIpv4EvenWhenLinkLocalRouteComesFirst() {
+        // 奥迪 4910 形态：第一条默认路由是 fe80 网关
+        val gateways = EndpointHosts.gatewayCandidates(listOf("fe80::1%wlan0", "192.168.43.1"))
+        assertEquals(listOf("192.168.43.1", "fe80::1%wlan0"), gateways)
+    }
+
+    @Test
+    fun gatewayGlobalIpv6BeforeLinkLocal() {
+        assertEquals(
+            listOf("2001:db8::1", "fe80::1"),
+            EndpointHosts.gatewayCandidates(listOf("fe80::1", "2001:db8::1")),
+        )
+    }
+
+    @Test
+    fun gatewayDropsUnspecifiedAndDuplicates() {
+        assertEquals(
+            listOf("10.0.0.1"),
+            EndpointHosts.gatewayCandidates(listOf("0.0.0.0", "::", "0:0:0:0:0:0:0:0", "10.0.0.1", "10.0.0.1")),
+        )
+        assertTrue(EndpointHosts.gatewayCandidates(listOf("0.0.0.0", "::%wlan0")).isEmpty())
+        assertTrue(EndpointHosts.gatewayCandidates(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun unspecifiedDetection() {
+        assertTrue(EndpointHosts.isUnspecified("0.0.0.0"))
+        assertTrue(EndpointHosts.isUnspecified("::"))
+        assertTrue(EndpointHosts.isUnspecified("::%wlan0"))
+        assertFalse(EndpointHosts.isUnspecified("0.0.0.1"))
+        assertFalse(EndpointHosts.isUnspecified("::1"))
+        assertFalse(EndpointHosts.isUnspecified("fe80::1"))
+        assertFalse(EndpointHosts.isUnspecified(""))
+    }
+
+    @Test
     fun duplicateScopedAndUnscopedAddressesCollapse() {
         val ordered = EndpointHosts.candidates(listOf("fe80::1", "fe80::1%wlan0", "FE80::1%3"))
         assertEquals(1, ordered.size)

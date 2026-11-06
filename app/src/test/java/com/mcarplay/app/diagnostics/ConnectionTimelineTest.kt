@@ -244,4 +244,109 @@ class ConnectionTimelineTest {
         assertEquals("waiting", selfTest.snapshot()!!.status)
         assertTrue(records.none { JSONObject(it).optString("code") == "SUPERSEDED" })
     }
+
+    @Test
+    fun milestoneKeepsFirstArrivalAndJournalsOnce() {
+        val id = timeline.begin("receiver")
+        now = 400
+        timeline.milestone(id, ConnectionMilestone.BT_LINK, "rfcomm")
+        now = 9_000
+        timeline.milestone(id, ConnectionMilestone.BT_LINK, "rfcomm again")
+        assertEquals(mapOf(ConnectionMilestone.BT_LINK to 400L), timeline.snapshot()!!.milestones)
+        val marks = records.map { JSONObject(it) }.filter { it.getString("event") == "MILESTONE" }
+        assertEquals(1, marks.size)
+        assertEquals("BT_LINK", marks.single().getString("milestone"))
+        assertEquals(400L, marks.single().getLong("elapsedMs"))
+        assertEquals("rfcomm", marks.single().getString("detail"))
+        assertTrue(records.map { JSONObject(it) }.filter { it.getString("event") != "MILESTONE" }.none { it.has("milestone") })
+    }
+
+    @Test
+    fun milestoneIgnoresReplacedAndFinishedAttempts() {
+        val old = timeline.begin("first")
+        val next = timeline.begin("replacement")
+        timeline.milestone(old, ConnectionMilestone.PAIR_VERIFY)
+        assertTrue(timeline.snapshot()!!.milestones.isEmpty())
+        timeline.finish(next, DiagnosticCode.PAIRING_FAILED, true)
+        timeline.milestone(next, ConnectionMilestone.PAIR_VERIFY)
+        assertTrue(timeline.snapshot()!!.milestones.isEmpty())
+        assertTrue(records.none { JSONObject(it).getString("event") == "MILESTONE" })
+    }
+
+    @Test
+    fun beginClearsMilestonesAndDurations() {
+        val first = timeline.begin("first")
+        timeline.stage(first, ConnectionStage.BLUETOOTH)
+        timeline.milestone(first, ConnectionMilestone.BT_LINK)
+        now = 1_000
+        timeline.begin("second")
+        val state = timeline.snapshot()!!
+        assertTrue(state.milestones.isEmpty())
+        assertEquals(mapOf(ConnectionStage.PRECHECK to 0L), state.stageDurations)
+    }
+
+    @Test
+    fun stageDurationsAccumulateAcrossReentryAndFreezeAtEnd() {
+        val id = timeline.begin("receiver")
+        now = 100
+        timeline.stage(id, ConnectionStage.BLUETOOTH)
+        now = 1_100
+        timeline.stage(id, ConnectionStage.WIFI)
+        now = 1_600
+        timeline.stage(id, ConnectionStage.BLUETOOTH)
+        now = 1_900
+        assertEquals(1_300L, timeline.snapshot()!!.stageDurations[ConnectionStage.BLUETOOTH])
+        timeline.stage(id, ConnectionStage.PAIRING)
+        now = 4_900
+        timeline.finish(id, DiagnosticCode.PAIRING_FAILED, true)
+        now = 60_000
+        val durations = timeline.snapshot()!!.stageDurations
+        assertEquals(100L, durations[ConnectionStage.PRECHECK])
+        assertEquals(1_300L, durations[ConnectionStage.BLUETOOTH])
+        assertEquals(500L, durations[ConnectionStage.WIFI])
+        assertEquals(3_000L, durations[ConnectionStage.PAIRING])
+        assertNull(durations[ConnectionStage.SETUP])
+    }
+
+    @Test
+    fun mediaCallbacksRecordTheirOwnMilestones() {
+        val id = timeline.begin("receiver")
+        now = 1_500
+        timeline.stage(id, ConnectionStage.CARWITH)
+        now = 2_000
+        timeline.sourceFrame(id)
+        now = 2_500
+        timeline.media(id, true, 100)
+        now = 2_700
+        timeline.audioPacket(id)
+        now = 5_000
+        timeline.sourceFrame(id)
+        timeline.media(id, true, 100)
+        timeline.audioPacket(id)
+        val state = timeline.snapshot()!!
+        assertEquals(
+            mapOf(
+                ConnectionMilestone.CARWITH_FRAME to 2_000L,
+                ConnectionMilestone.FIRST_VIDEO to 2_500L,
+                ConnectionMilestone.FIRST_AUDIO to 2_700L,
+            ),
+            state.milestones,
+        )
+        assertEquals(1_000L, state.stageDurations[ConnectionStage.CARWITH])
+        assertEquals(2_500L, state.stageDurations[ConnectionStage.STREAMING])
+        val tagged = records.map { JSONObject(it) }.filter { it.has("milestone") }
+        assertEquals(listOf("FIRST_CARWITH_VIDEO", "FIRST_VIDEO", "FIRST_AUDIO_PACKET"), tagged.map { it.getString("event") })
+    }
+
+    @Test
+    fun firstVideoFromEarlierStageStillCountsThatStage() {
+        val id = timeline.begin("receiver")
+        timeline.stage(id, ConnectionStage.SETUP)
+        now = 800
+        timeline.media(id, true, 100)
+        now = 1_000
+        val durations = timeline.snapshot()!!.stageDurations
+        assertEquals(800L, durations[ConnectionStage.SETUP])
+        assertEquals(200L, durations[ConnectionStage.STREAMING])
+    }
 }

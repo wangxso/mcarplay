@@ -1,10 +1,51 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-11-04。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-11-05。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
 ## 当前基线与结论
+
+- **11 月 5 日 v0.1.5-test.1 测试版（待发布）：** 汇总界面重构（PR #35）与 PR #31、#33、#34 的修复，仅通过单元测试、模拟器和一台小米手机检查，DiPlay、WinPlay、macplay、艾瑞泽 8 的实车回归尚未进行。测试通过后计划升到 1.0.0。
+
+- **11 月 5 日手机端界面重构（`feat/ui-redesign`，仅界面与死代码清理，未做真车回归）：** 手机端改为「连接 / 设置 / 诊断」三标签，Apple 风格令牌并跟随系统浅/深色；首页英雄卡去掉大车图。移除了从 CarDeck 继承、现行 CarWith 路径无法到达的虚拟屏桌面（`launcher/`、Dock、Grid、壁纸等），保留「车机显示」设置面板；HID 方向键因此只记日志不再注入。截图来自 Android 模拟器（HyperOS_3 AVD），门禁通过；DiPlay、WinPlay、macplay、艾瑞泽 8 的回归尚未进行，合并前必须补做。详见 `docs/UI-REDESIGN.md`。
+
+- **11 月 5 日相关项目调研：** 对照 CarPToCarL `70db71e`、AuDiCar AMCar `ce35062`（均为 MIT）和 hypercar
+  `739c6b0`（GPL-3.0，只参考思路）。它们修过的 IDR 起流、晚到 `0x4301`、前台请求和音频 SETUP 字段，mcarplay 已覆盖。
+  同日已实现两项，单元测试通过，未上车验证：
+  - 有序断开时补发 `0xEA01` StopEASession（参数照抄 `0xEA00`，后台发送后等 200 ms 再关链路；`0xEA03` 日志记录参数形状）；
+  - 网关兜底在所有默认路由中优先选 IPv4，剔除未指定地址。
+
+  待跟进：
+  - 上述两项的实机回归（DiPlay、WinPlay、macplay、艾瑞泽 8），以及在奥迪 MIB3 上确认 `0xEA01` 的效果；
+  - 定位「返回车机」命令后，对比 phone→HU `requestUI` 与 `modesChanged`；
+  - 查 VW4131 报告中推流时的 ctrl 邀请；
+  - 60 fps / 大画布、语音键、GPS 与附着入口作为实验开关。
+
+  外部实车结果不作为本项目证据。详见 `docs/RELATED-PROJECTS-2026-11-05.md`。
+
+- **11 月 4 日远程版 CarWith 系统日志导出：** 调试页增加本机导出/分享与固定桥命令
+  `export_carwith_system_logs`，采集最近的 CarWith/CarLife/CTA 与系统启动记录、服务及监听状态。
+  支持 Shizuku，或用户通过电脑 ADB 授予 READ_LOGS / DUMP 后在前台确认系统日志访问；无需 root。
+  未授权时显示操作命令；输出限量、超时和失败明确标记，独立脱敏保存到下载目录，内容不自动上传。
+  仅修改 remote 源集，不改变 CarWith 入口或媒体协议。用法与限制见 `docs/DIAGNOSTICS.md`。
+
+
+- **11 月 5 日新增：主页「车型适配」手动选择（离线通过，未上车验证）。** 选项：自动（默认）/ 通用 / 奇瑞艾瑞泽 8 / 大众 / WinPlay / DiPlay / 奥迪经典 MIB3，
+  存 `settings` 的 `compat_vehicle_preset`，经 `VehiclePresetRuntime` 在 `ReceiverCompatibility.resolve` 的自动结果上叠加已有适配开关
+  （规则标签 `manual.*` 进 `COMPAT:` 日志）。只复用已登记的例外规则，不新增未验证的车型行为；下次连接生效。
+- **11 月 4 日待解决：CarWith「返回车机」无效。** 投屏中点 CarWith 界面上的「返回车机」按钮，车机屏幕没有切回车机原生界面，
+  仍停在 CarPlay 画面（用户反馈，车型与版本待补）。原因尚未确认。此前 `CarLifeCommandRouter` 对未识别的 7240 命令走
+  `else -> Result()`，既不处理也不记日志，所以现有报告看不出这个按钮发了哪条 CarLife 命令；AirPlay 侧 `releaseScreen` 只在车机点 CarPlay 图标后
+  「先让出、再拿回」时短暂使用（`SessionController` 的 `pendingScreenRetake`），手机这边没有把主屏持续交还车机的路径。已加诊断：未识别命令记为
+  `CARLIFE: 未处理命令 kind=0x… len=… fields=[…] 第N次`（只记 kind、长度和 protobuf 字段形状，0..255 的 varint 记数值，不记字符串等内容；
+  每种 kind 前 3 次及第 2ⁿ 次记录，最多跟踪 64 种）。下一步：用含此日志的构建复现，记下点按钮的时刻，确认对应命令，再映射为把主屏交还车机的
+  `modesChanged`（参照真 iPhone 点 OEM 图标返回车机的序列）。
+  **11 月 5 日进展（离线通过，未上车验证）：** DiPlay（比亚迪，srcvers 950.7.1）支持报告里，点「返回车机」后约 110 ms 出现
+  `CARLIFE: 未处理命令 kind=0x10021 len=0 fields=[]`，多次点按一一对应；该命令含义未公开，仅凭时序推断。已把 `0x10021`
+  映射为 `ModeArbiter.onUserReturnedToCar()`（主屏、主音频报归车机，takeConstraint 放宽），经 `enqueueModesAssert` 发 `modesChanged`；
+  之后点 CarPlay 图标（`requestUI`）仍可拿回并重建流。待上车确认车机是否真的切回原生界面、音频是否交还。
+  上车确认前不要宣称「返回车机」可用。
 
 - **11 月 4 日 v0.1.4 正式版：** 用户决定在 WinPlay 台架回归通过后直接发布，汇总 PR #21、#22（含 #25）、#24、#27、#29、#30。合并构建只在 WinPlay 上回归（约 4 分钟画面、触控正常，最后几秒播放的音乐有声）；DiPlay、macplay、大众帕萨特 2025 与奇瑞艾瑞泽 8 未在此构建上复测，不新增车型支持结论。证据见 `docs/CARWITH-ENTRY-FINDINGS.md`。
 

@@ -155,6 +155,55 @@ class BridgeSetupActivity : AppCompatActivity() {
                 textSize = 14f
             }
 
+        val systemLogStatus =
+            label(
+                "复现失败后点导出，读取最近的 CarWith / CarLife / 安全中心启动日志。" +
+                    "需要已授权的 Shizuku，或电脑 ADB 授权（不需要 root）。系统日志单独脱敏保存，不自动上传。\n" +
+                    "Android 13+ 若询问读取设备日志，请保持本页前台并选择允许。\n" +
+                    "无 Shizuku 时执行：\n${CarWithSystemLogExporter.adbInstructions(packageName)}",
+            ).apply { setTextIsSelectable(true) }
+        var systemLogUri: android.net.Uri? = null
+        val shareSystemLogs =
+            Button(this).apply {
+                text = "分享已导出的系统日志"
+                isEnabled = false
+                setOnClickListener {
+                    val uri = systemLogUri ?: return@setOnClickListener
+                    startActivity(
+                        Intent.createChooser(
+                            Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                clipData = android.content.ClipData.newRawUri("CarWith system diagnostics", uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            },
+                            "分享 CarWith 系统日志",
+                        ),
+                    )
+                }
+            }
+        val exportSystemLogs =
+            Button(this).apply {
+                text = "导出 CarWith 系统日志"
+                setOnClickListener {
+                    isEnabled = false
+                    shareSystemLogs.isEnabled = false
+                    systemLogStatus.text = "正在读取最近的系统日志…"
+                    val app = applicationContext
+                    Bg.run("carwith-system-log-export") {
+                        val result = CarWithSystemLogExporter.export(app)
+                        runOnUiThread {
+                            if (!isDestroyed) {
+                                isEnabled = true
+                                systemLogStatus.text = result.detail
+                                systemLogUri = result.uri
+                                shareSystemLogs.isEnabled = result.uri != null
+                            }
+                        }
+                    }
+                }
+            }
+
         val note =
             TextView(this).apply {
                 text =
@@ -187,6 +236,9 @@ class BridgeSetupActivity : AppCompatActivity() {
                 addView(openMain)
             },
             installPerm,
+            exportSystemLogs,
+            shareSystemLogs,
+            systemLogStatus,
             statusText!!,
             label(""),
             note,

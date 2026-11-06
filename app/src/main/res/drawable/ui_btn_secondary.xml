@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/ui_track" />
+            <corners android:radius="999dp" />
+        </shape>
+    </item>
+    <item>
+        <ripple android:color="@color/ui_ripple">
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/ui_accent_tint" />
+                    <corners android:radius="999dp" />
+                </shape>
+            </item>
+        </ripple>
+    </item>
+</selector>

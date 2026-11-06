@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- iOS 式开关轨道：51×31dp 胶囊，开 = ok 绿，关 = track 灰 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/ui_ok" />
+            <corners android:radius="999dp" />
+            <size android:width="51dp" android:height="31dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/ui_track" />
+            <corners android:radius="999dp" />
+            <size android:width="51dp" android:height="31dp" />
+        </shape>
+    </item>
+</selector>
