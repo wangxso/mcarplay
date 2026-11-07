@@ -312,6 +312,197 @@ Pad 已成功覆盖安装最新版。首次测试复现“只补授 Wi-Fi 权限
 
 结论：本轮不能判定 SU7 是否提供无线 CarPlay 接收端——指定目标时连接跳过 SDP 闸门，日志没有记录车机声明的服务。已在 wangxso/mcarplay#12 为指定目标增加一次 SDP 服务记录；下次实测应同时尝试在车机上进入 CarPlay/手机互联的添加设备界面，并填写本机真实蓝牙地址（`v0.1.3-test.3`）。不据此声明 SU7 不兼容。
 
+## 小米 17 有线 CarPlay 能力探测（2026-10-29）
+
+小米 17（2509FPN0BC，`popsicle`）已 root，经无线 adb 运行 remote 包（`feat/wired-carplay-root`，`906671c`）的 `WiredGadgetMain probe`，USB 口未接线、未接车机。HyperOS、CarWith 版本未记录。
+
+1. functionfs 内核支持、`cdc_ncm`/`usbnet` 主机驱动已加载；唯一 UDC 为 `a600000.dwc3`。
+2. `sys.usb.config=none`，configfs 有 `g1`、`g2`；增强版 probe 确认 `vendor.usbgadget-hal` 在运行、`g1`（`0x18d1`）占着 UDC，即 USB 由 Gadget HAL 管理，原先「回滚写 `mtp,adb`」的假设不适用，已改为 `svc usb resetUsbGadget`。
+3. 有 `usb_role`、Type-C `data_role` 与高通 `ssusb/mode` 三个角色切换节点；能否写入、能否在无 PD 的线缆上切成主机尚未验证。
+
+结论：只说明本机满足有线实验的软件前提，不代表支持有线 CarPlay。完整输出与后续步骤见 `docs/WIRED-CARPLAY.md`。
+
+同日空跑 `up --timeout 30`（USB 接 Windows 电脑，不接车机）：gadget 绑定成功，Windows 以 `VID_05AC&PID_12A8` 枚举为 Apple Mobile Device 复合设备（接口实例带 `RESTORE_MODE`，接口布局仍与真 iPhone 不同）；收到并应答 Apple 充电请求 `0x40`（`wValue=100`）；30 秒超时后回滚，用户确认 USB adb 与 `g1` 的 UDC 均恢复。只验证了「冒充 iPhone」这一环，不涉及角色切换和车机。
+
+## 小米 17 手动 PD 角色互换后黑屏重启（2026-10-29）
+
+小米 17 经 USB-C 直连 vivo Pad Air，PD 协商为手机主机兼供电（`[host]`/`[source]`，`usb_power_delivery`）。为让 Pad 当主机，经无线 adb 以 root 手动依次写 `/sys/class/typec/port0/power_role=sink`、`data_role=device`（均返回 0），随后 adb 掉线、手机黑屏，拔掉 USB 后重启。未运行 `up`，未建立 iPhone gadget；无法区分是哪一次互换触发，未取得内核日志。
+
+结论与处置：在这台手机上写 Type-C 角色节点有风险；`WiredGadgetMain` 的 `up`/`down` 已不再自动写 `data_role`，`probe` 只读显示。普通平板不适合作为有线 CarPlay 测试台。详见 `docs/WIRED-CARPLAY.md`。
+
+同日接 Mac（MacPlay 1.2.4 有线模式等待中）再空跑 `up --timeout 60`：手机为 PD 设备兼接收方；macOS 枚举为 Apple iPhone（`05ac:12a8`，分配 1000 mA），先发设备到主机的厂商请求 `0x45`（`wLength=4`，按现有策略 STALL），再发充电请求 `0x40`（`wValue=1000 wIndex=500`）。无角色切换请求，60 秒后回滚，USB adb 恢复。MacPlay 全程停在等待 iPhone 连接；它的有线模式依赖 usbmuxd，不能代替车机测试角色切换。
+
+## 小米 17 + MacPlay 有线出画再测（2026-10-29 19:50）
+
+本地代码为 PR #14 的 `1818920`；手机实际运行已安装的 remote `0.1.3-rd-debug` 台架工具，未重装或核验 APK 与提交逐字节一致。
+手机为 `2509FPN0BC`，HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`（104000020），小米 CarLife
+`8.8.5`（274）；USB 直连 Mac，接收端 MacPlay `1.2.4`（41），无实体车机或车机固件。
+
+1. 无线 adb 连通后，`probe` 确认 root、FunctionFS、`cdc_ncm`/`usbnet`；手机为设备兼 sink，`g1` 占着 UDC。
+2. MacPlay 点击有线「启动接收」，手机运行 `up --timeout 30`。创建 gadget 立即报 `Out of memory`，在枚举之前失败并回滚，退出码 1。
+   同时内核报告 `/devices/virtual/android_usb/android2` 重名、`-EEXIST`，调用栈含 `gadgets_make`/`configfs_mkdir`；
+   `MemAvailable` 约 6 GB，不能按 shell 文案直接判定物理内存不足。是否与前几轮创建/删除遗留有关尚未复现。
+3. MacPlay 显示「连接启动超时」「未检测到USB连接的iPhone」；无画面，未建立媒体会话，声音、触控未测。
+4. 回滚后 USB adb、`sys.usb.config=adb`、`g1/UDC=a600000.dwc3` 均恢复，手机仍为设备兼 sink；未手写 Type-C 角色节点。
+
+MacPlay 公开源码 `fb132c0796f5aa425ca1a453dd9d394a9ecfacbc` 的 `watch_usbmuxd` → `usbmuxd::open_provider`
+要求 usbmuxd 发现、lockdown 的 iPhone 产品类型、已有信任会话和 `com.apple.carkit.service`，再进入 iAP2；
+本项目未实现这些接口，且 USB 主机 iAP2/NCM/媒体尚未集成。结论只限当前台架未出画，不推断真实车机兼容性。
+完整步骤、内核错误和源码链接见 `docs/WIRED-CARPLAY.md`。
+
+## 小米 17 + MacPlay USB NCM 媒体路径出画（2026-10-29 20:14）
+
+设备与上节相同：小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，
+小米 CarLife `8.8.5`，MacPlay `1.2.4`（41），USB 直连 Mac。本轮没有模拟 iPhone 的 VID/PID，也没有实体车机。
+
+1. root 台架临时把一个空闲 gadget 配成 CDC-NCM，并使用独立策略路由把单一目标 IPv6 地址送到 `usb0`；
+   没有改 Wi-Fi 默认路由或 Type-C 角色节点。remote debug 入口用网卡 `ifindex` 和显式
+   `fe80::…%usb0` 端点连接 MacPlay `:17000`，跳过无线发现。
+2. 从 USB NCM 启动到首帧约 30 秒；MacPlay 日志出现 `first-decoded-frame width=1280 height=720`，
+   CarPlay 画面窗口打开。用户确认窗口内 CarWith 界面正常，这不是静态截图或离线解码。
+3. 随后稳定观察约 180 秒：MacPlay 的 `media-statistics` 从 200 增至 3183 个视频包；手机侧同期从
+   CarWith 帧 #1 连续发送到 #3241，均记录为 `1280x720@30`。手机时序应答地址明确带 `%usb0`。
+4. macOS 的连接来源与接口流量都落在 USB NCM 网卡；无线 adb 主要用于控制，不承载视频。
+5. MacPlay 始终把它作为 AirPlay 接收器使用，界面仍显示“未检测到 USB 连接的 iPhone”。因此本轮证明
+   **USB 物理媒体路径可用**，没有证明 iPhone 的 usbmux/lockdown/carkit 枚举、真实车机角色切换或 USB 主机侧
+   iAP2 可用；声音和触控也未测试。
+6. 台架结束后 `sys.usb.config=adb`，`g1/UDC=a600000.dwc3`，空闲 `g2` 未绑定，手机端台架状态与 `usb0`
+   均已清理。设备型号和版本的完整台架步骤见 `docs/WIRED-CARPLAY.md`；原始日志含标识，留在被忽略的
+   `captures/`，不提交。
+
+## 小米 17 + MacPlay 的 remoteDebug 一键有线入口（2026-10-29 20:50）
+
+设备与前节相同：小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`，
+小米 CarLife `8.8.5`（274），root 管理器为 KernelSU，MacPlay `1.2.4`（41）。本轮安装的是新 remote debug
+构建；`standard` manifest 不包含一键入口。无线 adb 只用于控制和观察，媒体仍走 USB NCM。
+
+1. 主界面的 USB 卡片通过显式 Activity 探测只在 remote 包显示。点击后 App 自动发起 root 请求并取得成功
+   （返回 `uid=0`），固定脚本配置
+   CDC-NCM、等待 `usb0` 的链路本地 IPv6，然后由 JmDNS 在指定接口发现 `_airplay._tcp` 的 `:17000` 服务。
+   MacPlay 的系统 AirPlay 服务 `:7000` 同时可见，但没有被误选。
+2. User 启动 MacPlay 有线接收后，App 自动连接 USB AirPlay 端点并返回主界面。MacPlay 显示
+   「CarPlay已连接 首帧已解码，CarPlay画面窗口已打开」；手机记录 `1280x720@30`、首个关键帧和持续视频发送，
+   本轮连续出画约 99 秒至 CarWith 帧 #1961。
+3. 在 App 主界面确认断开后，CarLife 七路、AirPlay 视频和 root 台架均停止；`sys.usb.config=adb`、
+   `usb0` 消失、状态目录删除，MacPlay TCP 连接关闭，USB adb 随后恢复。
+4. 调试中确认了两个机型相关问题并已规避：无绝对路径的 `ProcessBuilder("su")` 被 Android/KernelSU
+   环境以 `EACCES` 拒绝；多行 `su -c` 轮询报 `no closing quote`；Android 17 对 `usb0` 的
+   all-nodes `ping6` 返回 `sendmsg: EINVAL`。最终 root 调用使用绝对路径，轮询进入固定 root 脚本，发现改用
+   JmDNS。
+
+结论只覆盖 remoteDebug 的 USB NCM 媒体台架。MacPlay 仍作为显式 AirPlay 接收器，手机没有在它的 USB 设备列表
+中显示为 iPhone；截至该次一键连接，音频与触控仍未验证，音频随后在下一节完成实际出声确认。真实车机枚举、
+角色切换、usbmux/lockdown/carkit 与 USB 主机侧 iAP2 仍未验证。完整步骤与边界见 `docs/WIRED-CARPLAY.md`。
+
+## 小米 17 + MacPlay USB NCM 音频数据链（2026-10-29 21:46–21:52）
+
+设备为小米 17（`2509FPN0BC`），HyperOS `OS4.0.4.0.XPBCNXM`，CarWith `4.0.20-20260923`（104000020），
+小米 CarLife `8.8.5`（274），KernelSU；接收端为 MacPlay `1.2.4`（41，公开源码
+`fb132c0796f5aa425ca1a453dd9d394a9ecfacbc`）。USB 直连 Mac，无线 adb 仅用于控制和观察。
+
+1. 一键入口自动取得 root，配置 CDC-NCM 后同时得到 IPv4 与多个链路本地 IPv6 地址。mDNS 同时解析到系统
+   AirPlay `:7000` 和 MacPlay `:17000`；名称与端口筛选只接受后者，MacPlay 日志随后记录
+   `control-connected family=IPv6`。手机时序应答地址带 `%usb0`，媒体连接不是 Wi-Fi。
+2. MacPlay 的 `/info` 给出可用媒体档。手机按 `type=102/media/AAC-LC 48kHz 2ch` 优先协商，保留
+   `type=100` media/compatibility/default PCM 作为同会话替换档。CarWith MEDIA 通道初始化
+   `44100Hz 2ch 16bit`，首个 PCM 包 `nonzero=true`，应用把 44.1kHz 重采样为 48kHz 并编码为 AAC-LC。
+3. 连续观察约 550 秒。MacPlay 在 540 秒统计点为：视频 10,389 包，音频 24,219 包；音频统计中
+   `decrypted=24219`、`forwarded=24219`、`decodedBuffers=24207`、`rejected=0`、`invalid=0`、
+   `authenticationErrors=0`、`pipelineErrors=0`，RTP 抖动丢包/迟到/重复为 0，队列缓冲为 0ms，
+   平均抖动约 4.575ms，播放提前量约 16.410ms。手机侧同时持续记录 CarWith PCM 接入和非零外部 PCM 包。
+4. 本轮没有用 `decodedBuffers` 直接宣称“已听到”。核对 MacPlay 公开源码后，统计探针在
+   [`volume` 前的 sink pad probe](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-gst-video/rust/audioplayer/src/lib.rs#L194-L200)，
+   统计链路在
+   [`pipeline_desc`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-gst-video/rust/audioplayer/src/lib.rs#L73-L84)
+   中继续经过 `audioconvert → clocksync → volume → audioconvert → audioresample → queue → osxaudiosink`；
+   收包转发路径见
+   [`audio_recv.rs`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-gst-video/rust/addon/src/audio_recv.rs#L25-L36)。
+   因此能确认包已进入 MacPlay 的 CoreAudio 输出管线。
+5. MacPlay 界面显示“播放 iPhone 音频”开启、媒体音量 100%、输出为系统默认的 MacBook Air 扬声器；同期
+   macOS 系统“输出音量”为 13% 且“静音”勾选开启。用户没有听到声音与系统静音一致，不能据此判成手机、
+   USB 或 MacPlay 音频失败。随后用户取消系统静音并再次播放 CarWith 音乐，确认声音正常、无异常，实际扬声器
+   输出已验收。
+
+结论：有线路线当前明确承载了 CarWith 视频和音频；AAC-LC 收包、认证、解密、RTP 解包、AAC 解码与向
+`osxaudiosink` 的供流均有日志和源码路径证据，用户也已确认实际听到音乐。触控、真实车机 NCM、角色切换及
+USB 主机侧 iAP2 仍未验收。本次网络使用 IPv6 链路本地，但真实车机也可能只用 IPv4；现有入口支持 mDNS、
+USB 邻居和手动地址三类候选，并对每个候选建立独立 IPv4/IPv6 路由。
+
+### 健壮化版本复测（22:03–22:10）
+
+安装包含 IPv6/IPv4 mDNS 依次回退、邻居/手动地址替换和完整网卡清理的新 remote APK 后复测一次。USB NCM
+同时有 IPv4 与两个链路本地 IPv6 地址，入口先在 `usb0` 的可用 IPv6 上发现 MacPlay `:17000`，随后建立
+1280x720 视频。22:07 在 MacPlay 画面中播放 CarWith 音乐后，手机连续记录 44.1kHz/2ch PCM 接入、重采样到
+48kHz 和外部 PCM 发包；MacPlay 在 390 秒统计点为视频 5,382 包、音频 7,918 包，音频
+`decrypted=forwarded=7918`、`decodedBuffers=7906`，`invalid`、认证错误、管线错误和 RTP 抖动丢包均为 0。
+本轮观察时 macOS 仍是输出静音、音量 13%；随后用户取消静音并确认 CarWith 音乐正常播放，实际听感已补验。
+
+随后直接执行包装内的 `down` 回滚并结束 App：`usb0` 消失、状态目录删除、`g2` UDC 清空、`g1` 重新绑定
+`a600000.dwc3`、`sys.usb.config=adb`，且 USB adb 重新出现。此前另用 `am force-stop` 模拟进程被杀，
+守护脚本在同一路径完成回滚。双栈 mDNS 中本轮实际走 IPv6；IPv4 mDNS、邻居和手动地址分支由离线测试覆盖，
+真实车机仍需按其 NCM 与角色切换行为实机验证。
+
+### MacPlay iPhone 兼容身份实测（22:27）
+
+“未检测到USB连接的iPhone”来自设备身份筛选，不属于音视频故障。MacPlay 公开源码的
+[`refreshUSB`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/App/MacPlay.swift#L654-L697)
+枚举 `IOUSBHostDevice`，只把 USB Product Name 含 `iPhone` 的设备放进列表。remote debug 入口现在默认
+先声明 `05ac:12a8`、`Apple Inc.` 与 `iPhone`，同时保留 NCM 功能；iPhone 身份枚举失败会回退到原来的
+Linux CDC-NCM `1d6b:0104` / `mcarplay USB media bench`。
+
+小米 17 实测中，macOS IORegistry 显示 `USB Product Name=iPhone`、`idVendor=1452`、`idProduct=4776`、
+`USB Vendor Name=Apple Inc.`，序列号为应用内生成并稳定复用的 40 位十六进制伪标识，不读取手机硬件标识；
+`usb0` 同时拥有 IPv4 与链路本地 IPv6。MacPlay 随后完成 AirPlay 控制、认证、音频 SETUP 和视频 SETUP，
+手机发送 `1280x720` 首帧并持续出流。这证明兼容身份可以满足 MacPlay 的设备列表筛选，且没有破坏现有 NCM
+音视频链路。另行强制结束并重新启动两次，macOS 读到的伪序列号一致，便于 MacPlay 保持稳定的设备选择键。
+
+MacPlay 的有线会话还通过系统 usbmuxd 找 USB 设备：
+[`watch_usbmuxd`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/bin/livi-helperd/src/wired.rs#L157-L240)
+枚举 usbmuxd 设备，[`open_provider`](https://github.com/Roylyl/MacPlay/blob/fb132c0796f5aa425ca1a453dd9d394a9ecfacbc/native/livi-helperd/crates/iap2-wired/src/usbmuxd.rs#L104-L135)
+再连接 lockdown、校验 `ProductType` 为 iPhone、读取信任记录并启动 `com.apple.carkit.service`。当前 NCM 台架
+没有这些接口或服务，只借用 USB 网卡承载 AirPlay。因此“设备列表看到 iPhone”可以成立，但 MacPlay 的辅助进程
+仍无法建立完整的 USB-iPhone 控制会话；本次媒体成功来自既有 AirPlay/NCM 路径。
+
+实测两条回滚路径均通过：强制结束 App 后由守护脚本恢复；在入口界面点击“停止并恢复 USB”后，
+`sys.usb.config=adb`、`g1/UDC=a600000.dwc3`、台架状态目录删除，USB adb 重新出现，macOS 设备名恢复为
+`Xiaomi 17 Pro Max`。完整 Apple 复合 USB gadget 与 usbmux/lockdown/carkit 仍是下一阶段。真实音频现已由
+用户确认；触控、真实车机角色切换、NCM 和 USB 主机侧 iAP2 仍未验收。
+
+## 小米 17 + MacPlay 完整有线 CarPlay 会话（2026-10-30 00:30–00:55）
+
+环境同 10-29：`2509FPN0BC`、HyperOS `OS4.0.4.0.XPBCNXM`、CarWith `4.0.20-20260923`、小米 CarLife `8.8.5`、
+KernelSU；MacPlay `1.2.4`（41）有线模式。台架为 NCM + FunctionFS usbmux 复合 iPhone 身份。
+
+- MacPlay 经系统 usbmuxd 打开 `com.apple.carkit.service`，有线 iAP2 识别、MFi 认证通过，下发
+  `CarPlayStartSession port=17000`；手机随后经 USB NCM 的链路本地 IPv6 完成 AirPlay 配对与 RECORD。
+- 首次会话 38.7 秒断开：HyperOS Greezer 在 CarWith 启动高德时以 `LM FZ` 冻结本应用 uid，超时解冻时遗漏，
+  进程冻结 63 秒（`dumpsys greezer` 记录 `frozen=63s`）；`connectedDevice` 前台服务不构成豁免。
+- 台架加入 Greezer 守护后，启动初期约 5 秒内仍被 `quick freeze` 多次，均在 0.6 秒内解冻。
+- 音频曾因台架每秒重建 peer 策略规则出现 `ENETUNREACH` 并停止；规则改为幂等、音频与同步包增加 3 秒发送宽限后，
+  240 秒内视频 4,480 包、音频 9,914 包，`invalid=0`、认证错误 0、RTP 抖动丢包 0，触控事件到达手机。
+
+结论只适用于 Mac 台架，不代表真实车机的 USB 角色切换或有线 CarPlay 已支持。详见 `docs/WIRED-CARPLAY.md`。
+
+
+## 小米 17 + DiPlay 平板有线 CarPlay（2026-10-30 01:15、01:21）
+
+手机 `2509FPN0BC / OS4.0.4.0.XPBCNXM`、CarWith `4.0.20-20260923`、小米 CarLife `8.8.5`、KernelSU，
+mcarplay remoteDebug；接收端 vivo Pad Air `PA2353 / Android 14 / DiPlay 0.2.22 (41)`，未使用平板 root。
+手机以 USB 线直接接平板，由平板作 USB 主机；双方无线 adb 仅用于控制和观察，媒体走 USB NCM。
+
+- 修复 usbmux 同步写导致两侧读线程互等后，DiPlay 完成 lockdown/carkit、有线 iAP2 识别和 MFi 认证。
+- DiPlay 的 `0x52 wIndex=4` 请求现触发 soft_connect 断开再接通，实测约 1.7 秒后恢复枚举。
+- DiPlay 不发布 mDNS，手机从 `0x4301 CarPlayStartSession` 接收端口 7000 与链路本地 IPv6，补 USB scope 后直连。
+- 01:15 会话约 3 分钟持续视频（约 20fps、recoveries=0），AAC-LC 48kHz 解码并进入 AudioTrack，
+  触控回帧记录一次 9ms；平板截图可见 CarWith 地图、Dock 和媒体卡片。除日志证据外，用户随后确认平板实际播放出声音（听感确认，2026-10-30 补记）。
+- 该轮 DiPlay 的 bplist BigInteger 编码因同步时间值不足 8 字节而越界，`/feedback` 持续 500；
+  手机将单调计时时钟按固定偏移平移至 NTP 纪元后，01:21 复测反馈为 200，音频开始后包含 sampleTime、timestamp、
+  streamConnectionID，未再见对应越界。此前“真 iPhone 必须使用该纪元”的推断未获设备抓包验证，不作为结论。
+- 用户在入口停止后，安装前确认 `sys.usb.config=adb` 且台架状态目录消失；覆盖安装并重新打开有线入口可自动重连。
+  连接成功已自动返回主界面；此前“仍停在查找”的判断来自失败的 UI dump 所留下的旧 XML，不构成状态机异常证据。
+
+本轮为平板台架证据，不能替代真实车机 USB 角色切换和兼容性验收。实现与降级路径见 `docs/WIRED-CARPLAY.md`。
+
 ## 「TTS/VOICE 提示优先」的修正（2026-10-30，代码核对，无新设备证据）
 
 前文（原生音频接入一节）记录的「TTS/VOICE 已有提示优先选择」，实际实现是 `CarLifeAudioBridge` 在任何 TTS/VOICE PCM 到达后 500ms 内丢弃全部 MEDIA PCM：音乐被切断而非压低，丢掉的音乐样本也不会补回。该行为已改为手机侧混音与音乐 ducking，方案、参数与台架验证步骤见 `docs/AUDIO-DUCKING.md`。本节只是代码层面的更正；新行为尚无任何接收端或车机的听感证据。

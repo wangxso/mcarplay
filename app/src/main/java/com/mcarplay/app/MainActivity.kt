@@ -1126,6 +1126,14 @@ class MainActivity : AppCompatActivity() {
                 startActivity(bridgeSetup)
             }
         }
+        val wiredConnect =
+            Intent().setClassName(packageName, "com.mcarplay.app.bridge.UsbWiredConnectActivity")
+        if (packageManager.resolveActivity(wiredConnect, 0) != null) {
+            findViewById<LinearLayout>(R.id.btnWiredConnect).visibility = View.VISIBLE
+            findViewById<LinearLayout>(R.id.btnWiredConnect).setOnClickListener {
+                startActivity(wiredConnect)
+            }
+        }
 
         findViewById<LinearLayout>(R.id.rowBtIdentity).setOnClickListener {
             BtIdentityDialog.show(this) { updateReadyRow() }
@@ -1639,6 +1647,10 @@ class MainActivity : AppCompatActivity() {
         val elapsed = SystemClock.elapsedRealtime() - connectedAt
         val mm = elapsed / 60_000
         val ss = elapsed % 60_000 / 1_000
+        if (SessionController.isUsbMediaBenchConnected()) {
+            heroSubline.text = getString(R.string.ma_connected_usb_subline, mm, ss)
+            return
+        }
         val ssid =
             ssidInput.text
                 .toString()

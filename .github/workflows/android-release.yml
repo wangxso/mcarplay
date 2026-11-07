@@ -80,7 +80,7 @@ jobs:
         run: |
           ./gradlew --no-daemon --console=plain -Pmcarplay.requireReleaseSigning=true \
             spotlessCheck :app:testStandardDebugUnitTest :app:lintStandardRelease :app:assembleStandardRelease \
-            :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'
+            :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*' --tests 'com.mcarplay.app.usb.*'
       - name: Verify and package signed APK
         run: |
           python - <<'PY'

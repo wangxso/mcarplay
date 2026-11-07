@@ -12,6 +12,10 @@ derived from CarDeck (MIT); keep upstream notices in `LICENSE`, `NOTICE` and `TH
   video/audio parsers, touch, session registry, plus EasyConn/External-HU discovery, mDNS and Wi-Fi Direct (P2P) helpers.
 - `airplay/`, `iap2/`, `bt/`, `net/`, `transport/`: CarPlay transport — AirPlay pairing and crypto, binary plist, iAP2 link and
   sessions, Bluetooth RFCOMM, receiver discovery and Wi-Fi join.
+- `usb/`: the shared `UsbMediaEndpoint`/`UsbNcmDiscovery` surface lives in `app/src/main`; the root-only wired CarPlay
+  experiment (FunctionFS/configfs iPhone gadget, USB role switch and the USB host iAP2 stream) lives in
+  `app/src/remote/java/com/mcarplay/app/usb/`, so it never ships in `standard`. `usb/root/WiredGadgetMain` is a bench tool run
+  via `su` + `app_process`, never from the app. See `docs/WIRED-CARPLAY.md`.
 - `video/`, `audio/`, `input/`, `capture/`, `render/`: media senders (H.264, AAC-LC with PCM resampling), HID touch/keys and display.
 - `diagnostics/`: connection timeline, error codes, redaction and the support report; `util/` holds `DebugFileLog` and `LogExporter`.
 - `ui/`, `settings/`, `media/`, `legal/`, `shizuku/`, `service/`: phone UI components and tokens, the car-display settings panel
@@ -23,10 +27,11 @@ Resources and assets are in `app/src/main/res/` and `app/src/main/assets/`; the 
 `app/src/main/aidl/com/mcarplay/app/shizuku/ICarInput.aidl`. Other source sets:
 
 - `app/src/debug/`: debug-only `BtAnchorService`, used only for bench emulation; it is not evidence for no-ADB or vehicle support.
-- `app/src/remote/`: the `remote` flavor's remote-debug bridge (`bridge/`); it must never leak into `standard`.
+- `app/src/remote/`: the `remote` flavor's remote-debug bridge (`bridge/`) and the root-only wired USB bench (`usb/`); it must
+  never leak into `standard`.
 - `app/src/test/java/`: JVM unit tests, including protocol replay under `replay/`; fixtures notes in `app/src/test/resources/carplay/fixtures/`.
-- `app/src/testRemote/java/`: JVM tests for `remote`-only code (package `com.mcarplay.app.bridge`), run by the filtered
-  `:app:testRemoteDebugUnitTest` in the gate.
+- `app/src/testRemote/java/`: JVM tests for `remote`-only code (packages `com.mcarplay.app.bridge` and `com.mcarplay.app.usb`),
+  run by the filtered `:app:testRemoteDebugUnitTest` in the gate.
 
 Python tools in `tools/`: `carlife_probe.py` (CarLife loopback probe, writes raw H.264), `analyze_diagnostics.py` (offline summary
 of a redacted support report), `release_notes.py` (extracts a changelog entry for a tag) and `prepare_upload.py` (source-only
@@ -51,8 +56,9 @@ Use JDK 21 (bytecode targets Java 17), Android SDK Platform 35 and Build Tools 3
 ignored `local.properties`. `minSdk` is 31, `targetSdk` 34. Run from the repository root:
 
 - Full gate, as in CI: `./gradlew spotlessCheck :app:testStandardDebugUnitTest :app:lintStandardDebug :app:assembleStandardDebug
-  :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*'`. The filtered remote task runs only the `remote` flavor's own
-  tests in `app/src/testRemote/` (it also compiles the remote sources) without repeating the shared suite.
+  :app:testRemoteDebugUnitTest --tests 'com.mcarplay.app.bridge.*' --tests 'com.mcarplay.app.usb.*'`. The filtered remote task
+  runs only the `remote` flavor's own tests in `app/src/testRemote/` (it also compiles the remote sources) without repeating the
+  shared suite.
 - `./gradlew spotlessApply` formats Kotlin and `*.gradle.kts`.
 - `./gradlew :app:updateLintBaseline` rebuilds `app/lint-baseline.xml`; do it only for intentional exemptions. Lint aborts on errors.
 - Python tests: `python3 -m venv .venv && .venv/bin/python -m pip install -r tools/requirements.txt`, then
