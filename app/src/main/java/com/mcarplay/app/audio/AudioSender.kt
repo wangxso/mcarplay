@@ -298,6 +298,8 @@ class AudioSender(
 
             Thread(
                 {
+                    // 息屏后 CPU 调度收紧，采集/发送线程必须按音频优先级运行，否则 UDP 节奏抖动 → 车机卡顿
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
                     try {
                         recorder.startRecording()
                     } catch (error: Exception) {
@@ -381,6 +383,8 @@ class AudioSender(
             startSyncLoop()
             Thread(
                 {
+                    // 外部 PCM（CarWith 原生音频）同样按音频优先级发送，避免息屏后发送节奏被压
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
                     try {
                         runExternalLoop()
                     } catch (_: InterruptedException) {
@@ -562,6 +566,7 @@ class AudioSender(
         val worker =
             Thread(
                 {
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
                     var syncSequence = 0
                     var first = true
                     try {

@@ -37,6 +37,8 @@ class CarLifeAudioBridge(
         val worker =
             Thread(
                 {
+                    // 这里把 CarWith 的 PCM 及时交给发送端；息屏后按音频优先级调度
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
                     try {
                         while (running.get()) {
                             val next = queue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS)
