@@ -23,12 +23,22 @@ class CarLifeAudioBridge(
     private var accepted = 0L
     private var dropped = 0L
 
+    /**
+     * 最近一次收到 CarWith MEDIA PCM 的 uptimeMillis；0 = 本桥尚未收到媒体音频。
+     * 「上车自动播放音乐」用它判断 CarWith 是否已在自行播放，避免重复起播。
+     */
+    @Volatile
+    var lastMediaPcmAtMs: Long = 0L
+        private set
+
     fun start() {
         if (!running.compareAndSet(false, true)) return
         sender.startExternalSource()
         val worker =
             Thread(
                 {
+                    // 这里把 CarWith 的 PCM 及时交给发送端；息屏后按音频优先级调度
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
                     try {
                         while (running.get()) {
                             val next = queue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS)
@@ -86,6 +96,9 @@ class CarLifeAudioBridge(
         event: CarLifeAudioEvent,
     ) {
         applyPendingDuckDb()
+        if (channel == CarLifeChannel.MEDIA && event is CarLifeAudioEvent.Pcm) {
+            lastMediaPcmAtMs = android.os.SystemClock.uptimeMillis()
+        }
         if (event !is CarLifeAudioEvent.Pcm) {
             converters.remove(channel)
             if (event is CarLifeAudioEvent.Stop && channel == CarLifeChannel.MEDIA) mixer.mediaStopped()

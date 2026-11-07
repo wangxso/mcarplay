@@ -333,6 +333,42 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun userRequestedUiRetakesAudioAfterReturnToCar() {
+        // 0x10021 返回车机同时交还主屏与主音频；重进 CarPlay 只拿回主屏会让车机继续持有音频。
+        val arbiter = ModeArbiter()
+        arbiter.onUserReturnedToCar()
+        assertFalse(arbiter.phoneOwnsScreen)
+        assertFalse(arbiter.phoneOwnsAudio)
+
+        val request = arbiter.onUserRequestedUi()
+
+        assertTrue(request.allowed)
+        assertTrue(arbiter.phoneOwnsScreen)
+        assertTrue("Re-entering CarPlay must also take main audio back", arbiter.phoneOwnsAudio)
+        assertTrue(request.note, request.note.contains("主音频"))
+    }
+
+    @Test
+    fun userRequestedUiDoesNotStealBorrowedAudioAboveUserInitiated() {
+        val arbiter = ModeArbiter()
+        arbiter.onUserReturnedToCar()
+        // 主屏已归还手机；主音频仍被车机以 unborrowConstraint=1000 借用（如倒车提示音）。
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 2, 500, 100))))
+        arbiter.onChangeModes(
+            mapOf("resources" to listOf(resource(2, 3, 500, 100) + ("unborrowConstraint" to 1000L))),
+        )
+        assertTrue(arbiter.phoneOwnsScreen)
+        assertFalse(arbiter.phoneOwnsAudio)
+
+        val request = arbiter.onUserRequestedUi()
+
+        assertTrue(request.allowed)
+        assertTrue(arbiter.phoneOwnsScreen)
+        assertFalse("A reversing prompt keeps main audio", arbiter.phoneOwnsAudio)
+        assertTrue(request.note, request.note.contains("不抢"))
+    }
+
+    @Test
     fun vw4131AudioBorrowIsNotTreatedAsPhoneAudioOwnership() {
         val arbiter = ModeArbiter()
         arbiter.applyInitial(

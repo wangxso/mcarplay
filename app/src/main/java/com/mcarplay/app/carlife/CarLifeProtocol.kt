@@ -62,6 +62,11 @@ object CarLifeProtocol {
     // 其他键值各参考资料互相矛盾（旋钮/确认等），未经实机核对前不发送。
     const val HARD_KEY_SEEK_SUB = 15
     const val HARD_KEY_SEEK_ADD = 16
+
+    // 取自 CarLife SDK 的 com.baidu.carlife.core.CommonParams：媒体开始/停止是 31/32，
+    // 与上一首/下一首（15/16）不同。自动起播用 31，避免切歌。
+    const val HARD_KEY_MEDIA_START = 31
+    const val HARD_KEY_MEDIA_STOP = 32
     const val VIDEO_FRAME = 0x20001
     const val VIDEO_HEARTBEAT = 0x20002
     const val MEDIA_INIT = 196609

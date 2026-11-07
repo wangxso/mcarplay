@@ -1695,3 +1695,15 @@ APK 指纹、完整矩阵、截图/日志的证据边界及同车换手机步骤
 - **已知：** 手机 Xiaomi 17 Pro Max，接收端 DiPlay；用户确认本次连接无问题。
 - **未记录：** 具体构建版本、HyperOS/CarWith/小米 CarLife/DiPlay 版本、连接步骤，以及视频、声音、触控各自是否覆盖。
   本条目只记录一次用户确认，不扩展为车机兼容或长期稳定性结论；WinPlay、macplay、艾瑞泽 8 与真车仍待回归。
+
+## 2026-11-06 Pixel 5 / Android 13：0.1.6 蓝牙公告与恢复（无接收端验收）
+
+- **环境：** Google Pixel 5（redfin），Android 13 / SDK 33，build `TQ3A.230901.001`（user）；mcarplay `0.1.6-debug`；
+  蓝牙开启，本机蓝牙地址可由系统读取（真实地址不在本文记录）。
+- **观察：** 点「启动连接」后两项公告 `SDP_REGISTER` 均为 `outcome=OK evidence=LOCAL_REGISTRATION_ONLY`
+  （IAP2 `…caff`、CarPlay `2d8d2466…`），两个 listener `listening=true`，界面进入等待车机回连。
+- **恢复：** 关闭蓝牙收到 `SERVER_STOPPED` 与 adapter OFF；重新开启后两项公告再次注册并出现
+  「已恢复本机 iAP2/CarPlay 公告」。点「取消连接」并确认后监听停止；再次关闭/开启蓝牙，新增 `SDP_REGISTER` 为 0
+  （用户停止后不复活）。
+- **边界：** 没有实体车机/接收端，只证明本机 SDP 注册、监听与生命周期恢复，不代表车机发现或回连。
+  此前 HyperOS 1 / API 33 AVD 未能完成开机，本条补上一个真实 API 33 设备的本地结果。
