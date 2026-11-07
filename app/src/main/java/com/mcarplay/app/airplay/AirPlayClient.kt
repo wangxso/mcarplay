@@ -3304,7 +3304,12 @@ class AirPlayClient(
     private var unmatchedMessages = 0
 
     private fun failAllPending(reason: String) {
-        val waiting = pendingResponses.values.toList()
+        // ConcurrentHashMap 的 values.toList() 在并发增删时会抛 NoSuchElementException：
+        // 2026-11-06 21:59 掉线时 airplay-rtsp-reader 因此 FATAL（readLoop → failAllPending）。
+        // CHM.forEach 是弱一致遍历，不会抛；随后 clear 仍保持“唤醒全部等待者”的语义。
+        val waiting =
+            ArrayList<java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>>(pendingResponses.size)
+        pendingResponses.forEach { _, queue -> waiting += queue }
         pendingResponses.clear()
         if (waiting.isEmpty()) return
         log("AIRPLAY: $reason——唤醒 ${waiting.size} 个待响应请求")
