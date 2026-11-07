@@ -2,6 +2,7 @@ package com.mcarplay.app.service
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import com.mcarplay.app.util.DebugFileLog
 
 /**
  * 推流期间的 Wi‑Fi 低延迟锁：阻止无线进入激进省电（否则接收端 20s 内判死拆链）。
@@ -43,8 +44,14 @@ object StreamingWifiLock {
                         setReferenceCounted(false)
                         acquire()
                     }
+                }.onFailure {
+                    DebugFileLog.append(context, "WIFI: 高性能锁获取失败 - ${it.message}")
                 }.getOrNull()
         }
+        DebugFileLog.append(
+            context,
+            "WIFI: 推流锁已持（低延迟=${lowLatency?.isHeld == true} 高性能=${highPerf?.isHeld == true}）",
+        )
     }
 
     @Synchronized
