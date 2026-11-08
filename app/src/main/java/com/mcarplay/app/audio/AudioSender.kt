@@ -703,14 +703,17 @@ class AudioSender(
      * 短暂断路时丢弃当前包仍推进游标，接收端据此按丢包处理。
      */
     private fun sendPayload(payload: ByteArray): Boolean {
-        val wire = sealPacket(payload, sequence, timestamp, nonceCounter, markerPending)
-        markerPending = false
+        val marker = markerPending
+        val wire = sealPacket(payload, sequence, timestamp, nonceCounter, marker)
         sequence = (sequence + 1) and 0xFFFF
         timestamp += samplesPerPacket
         nonceCounter++
         val client = socket ?: return false
         return try {
             client.send(DatagramPacket(wire, wire.size))
+            // 只有真正发出去了才清 marker：首包发送失败后仍要让下一包带上 talkspurt 起点，
+            // 接收端才能重新锚定播放（seq/ts/nonce 已照常推进，丢包由接收端按缺包处理）。
+            if (marker) markerPending = false
             runCatching { onPacketSent?.invoke() }
             packetsSent++
             bytesSent += wire.size

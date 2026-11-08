@@ -302,8 +302,9 @@ object SessionController {
 
     /**
      * 开关打开时的主动起播。CarWith 的音乐走原生 PCM，不产生系统媒体会话/通知，普通媒体键
-     * 无法恢复；这里在 CarWith 启动后用已验证的 CarWith 硬按键（下一首）起播一次。若已经
-     * 收到 MEDIA PCM（正在播放）则不动。开关关闭时仍走 [armAutoPlaySuppression]。
+     * 无法恢复；这里在 CarWith **视频就绪后**用「媒体开始」硬按键起播一次；硬按键无效时，
+     * 仅在已适配的 DiPlay 布局上点击媒体卡播放键。若已经收到 MEDIA PCM（正在播放）则不动。
+     * 开关关闭时仍走 [armAutoPlaySuppression]。
      */
     private fun armAutoPlayBehavior(session: CarLifeSession) {
         val context = appContext ?: return
@@ -317,11 +318,16 @@ object SessionController {
         }
         Bg.run("auto-play-start") {
             try {
+                val readyDeadline = SystemClock.uptimeMillis() + AUTO_PLAY_READY_TIMEOUT_MS
                 Thread.sleep(2_000L)
                 if (currentCarLifeSession !== session) return@run
+                // CarWith 的硬按键/触摸在 VIDEO_RUNNING 之前会被静默拒绝；冷启动可能远慢于 2s。
+                if (!awaitVideoRunning(session, readyDeadline)) {
+                    appendLog("AUTO-PLAY: CarWith 视频未就绪（等待超时），跳过自动起播")
+                    return@run
+                }
                 var bridge = nativeAudioBridge
-                val bridgeDeadline = SystemClock.uptimeMillis() + 6_000L
-                while (bridge == null && SystemClock.uptimeMillis() < bridgeDeadline) {
+                while (bridge == null && SystemClock.uptimeMillis() < readyDeadline) {
                     Thread.sleep(500L)
                     if (currentCarLifeSession !== session) return@run
                     bridge = nativeAudioBridge
@@ -345,6 +351,11 @@ object SessionController {
                     }
                 }
                 // 2) 硬按键无效时复现用户在车机屏上点 CarWith 媒体卡播放键的触摸。
+                // 只有实测过的 DiPlay 16:9 布局才允许盲点击，其他接收端只保留硬按键。
+                if (!canTapCarWithMediaCard(session)) {
+                    appendLog("AUTO-PLAY: 当前接收端/画面比例不在已适配的 DiPlay 布局，跳过媒体卡点击")
+                    return@run
+                }
                 repeat(2) { index ->
                     if (currentCarLifeSession !== session) return@run
                     if (bridge.lastMediaPcmAtMs > 0L) {
@@ -386,9 +397,45 @@ object SessionController {
     private const val AUTO_PLAY_TAP_X_FRACTION = 0.7975f
     private const val AUTO_PLAY_TAP_Y_FRACTION = 0.9361f
 
+    /** CarWith 冷启动可能慢于 2s；等视频阶段最多 25s（与连接等待上限一致）。 */
+    private const val AUTO_PLAY_READY_TIMEOUT_MS = 25_000L
+
+    /** 等待 CarWith 进入视频阶段；硬按键/触摸在此之前会被静默拒绝。 */
+    private fun awaitVideoRunning(
+        session: CarLifeSession,
+        deadlineMs: Long,
+    ): Boolean {
+        var logged = false
+        while (SystemClock.uptimeMillis() < deadlineMs) {
+            if (currentCarLifeSession !== session) return false
+            if (session.isVideoRunning()) return true
+            if (!logged) {
+                appendLog("AUTO-PLAY: 等待 CarWith 视频就绪（最多 25s）")
+                logged = true
+            }
+            Thread.sleep(200L)
+        }
+        return session.isVideoRunning() && currentCarLifeSession === session
+    }
+
+    /**
+     * 媒体卡点击坐标只在 DiPlay 1920×1080 布局上实测过；其他接收端或画面比例不执行盲点击，
+     * 只保留安全的「媒体开始」硬按键，避免点到 CarWith 的其他控件。
+     */
+    private fun canTapCarWithMediaCard(session: CarLifeSession): Boolean {
+        val policy = currentClient?.receiverCompatibility() ?: return false
+        if (policy.family != ReceiverCompatibility.Family.DIPLAY) return false
+        val width = session.videoWidth
+        val height = session.videoHeight
+        if (width <= 0 || height <= 0) return false
+        val ratio = width.toDouble() / height
+        return kotlin.math.abs(ratio - 16.0 / 9.0) <= 0.05
+    }
+
     /**
      * 点击 CarWith 媒体卡的播放键。坐标按 CarWith 视频宽高比例给出：
      * DiPlay 台架 1920x1080 上用户手动点击 (1531,1011) 可起播，对应 0.7975 / 0.9361。
+     * 只有 DOWN 与 UP 都发出才算完成；UP 失败时补发一次原始 UP，避免 CarWith 留下按下态。
      */
     private fun tapCarWithMediaPlay(session: CarLifeSession): Boolean {
         val width = session.videoWidth
@@ -398,8 +445,12 @@ object SessionController {
         val y = (height * AUTO_PLAY_TAP_Y_FRACTION).toInt().coerceIn(0, height - 1)
         val down = session.sendTouch(x, y, true)
         Thread.sleep(80L)
-        val up = session.sendTouch(x, y, false)
-        return down || up
+        var up = session.sendTouch(x, y, false)
+        if (down && !up) {
+            // sendTouch 已把 touchState 清成空闲；这里绕过状态机补一个原始 UP。
+            up = session.sendTouchUp(x, y)
+        }
+        return down && up
     }
 
     private fun stopAutoPlayWatch() {

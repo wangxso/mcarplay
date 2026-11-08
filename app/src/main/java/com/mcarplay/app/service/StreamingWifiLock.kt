@@ -2,6 +2,7 @@ package com.mcarplay.app.service
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.os.Build
 import com.mcarplay.app.util.DebugFileLog
 
 /**
@@ -11,10 +12,10 @@ import com.mcarplay.app.util.DebugFileLog
  * 全部 `Scan aborted (-7)`；入网时系统选择框浮在本应用之上、本应用仍算前台，选择框因此
  * 无网络可选（2026-10-27 小米实测：mcarplay 前台扫描失败、按 Home 后立即恢复）。
  *
- * 锁屏后本应用不再前台，`WIFI_MODE_FULL_LOW_LATENCY` 的低延迟随之失效，无线回到省电，
- * 音频 UDP 在驱动里排队 → 锁屏听歌卡顿。因此在同一时机再持一把
- * `WIFI_MODE_FULL_HIGH_PERF`：它不依赖前台，息屏后仍禁止省电。两把锁都只在入网
- * 完成、视频启动后获取，不会再影响扫描。
+ * **Android 14+**：系统把 `WIFI_MODE_FULL_HIGH_PERF` 并入 `WIFI_MODE_FULL_LOW_LATENCY`，
+ * 低延迟模式严格要求「前台 + 亮屏」；真锁屏后系统恢复省电，任何用户态 Wi‑Fi 锁都无法阻止。
+ * 本应用支持的方式是「连接时真息屏 / 常亮+暗幕」（[com.mcarplay.app.ui.ScreenDimmer]：
+ * 物理面板断电但系统保持交互），这样低延迟锁继续生效。API 33 及以下才额外持 HIGH_PERF 锁。
  */
 object StreamingWifiLock {
     private var lowLatency: WifiManager.WifiLock? = null
@@ -22,7 +23,7 @@ object StreamingWifiLock {
 
     @Synchronized
     fun acquire(context: Context) {
-        if (lowLatency?.isHeld == true && highPerf?.isHeld == true) return
+        if (lowLatency?.isHeld == true && (Build.VERSION.SDK_INT >= 34 || highPerf?.isHeld == true)) return
         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         if (lowLatency?.isHeld != true) {
             lowLatency =
@@ -33,9 +34,9 @@ object StreamingWifiLock {
                     }
                 }.getOrNull()
         }
-        if (highPerf?.isHeld != true) {
-            // HIGH_PERF 在 API 29 起标记废弃，但仍是息屏后禁止 Wi‑Fi 省电的有效模式；
-            // LOW_LATENCY 的前台限制在部分机型上会随锁屏解除。
+        if (Build.VERSION.SDK_INT < 34 && highPerf?.isHeld != true) {
+            // API 33 及以下 HIGH_PERF 仍能在息屏后禁止省电；34+ 已被系统并入 LOW_LATENCY，
+            // 再持一把既无效又会让日志误报「高性能锁已持」，因此不再获取。
             @Suppress("DEPRECATION")
             val mode = WifiManager.WIFI_MODE_FULL_HIGH_PERF
             highPerf =
@@ -48,10 +49,17 @@ object StreamingWifiLock {
                     DebugFileLog.append(context, "WIFI: 高性能锁获取失败 - ${it.message}")
                 }.getOrNull()
         }
+        val note = if (Build.VERSION.SDK_INT >= 34) "；Android 14+ 低延迟需前台+亮屏）" else "）"
         DebugFileLog.append(
             context,
-            "WIFI: 推流锁已持（低延迟=${lowLatency?.isHeld == true} 高性能=${highPerf?.isHeld == true}）",
+            "WIFI: 推流锁已持（低延迟=${lowLatency?.isHeld == true} 高性能=${highPerf?.isHeld == true}" + note,
         )
+        if (Build.VERSION.SDK_INT >= 34) {
+            DebugFileLog.append(
+                context,
+                "WIFI: 真锁屏会关闭 Wi‑Fi 低延迟；锁屏听歌请用「连接时真息屏」或「常亮+暗幕」保持系统交互",
+            )
+        }
     }
 
     @Synchronized

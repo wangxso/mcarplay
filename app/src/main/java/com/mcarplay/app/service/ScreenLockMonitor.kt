@@ -152,8 +152,9 @@ object ScreenLockMonitor {
             }
         val hint =
             when {
-                event == "SCREEN_OFF" && !state.batteryExempt -> "——未豁免电池优化，系统可能在息屏后冻结/限网"
-                event == "SCREEN_OFF" -> "——Wi‑Fi 低延迟锁息屏后不再生效"
+                event == "SCREEN_OFF" && !state.batteryExempt ->
+                    "——未豁免电池优化，系统可能在息屏后冻结/限网；锁屏听歌请用「连接时真息屏」"
+                event == "SCREEN_OFF" -> "——Wi‑Fi 低延迟锁息屏后不再生效；锁屏听歌请用「连接时真息屏」/「常亮+暗幕」"
                 event == "STREAM_START" && !state.batteryExempt -> "——建议把 mcarplay 设为「省电策略：无限制」"
                 else -> ""
             }
