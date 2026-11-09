@@ -57,8 +57,9 @@ object StreamingWifiLock {
         if (Build.VERSION.SDK_INT >= 34) {
             DebugFileLog.append(
                 context,
-                "WIFI: 真锁屏会关闭 Wi‑Fi 低延迟；锁屏听歌请用「连接时真息屏」或「常亮+暗幕」保持系统交互",
+                "WIFI: 真锁屏会关闭 Wi‑Fi 低延迟；正在尝试通过 Shizuku 强制（未运行/未授权时请用「连接时真息屏」）",
             )
+            WifiLowLatencyForce.enable(context)
         }
     }
 
@@ -68,5 +69,6 @@ object StreamingWifiLock {
         lowLatency = null
         runCatching { highPerf?.release() }
         highPerf = null
+        WifiLowLatencyForce.disable()
     }
 }
