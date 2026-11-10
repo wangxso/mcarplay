@@ -29,7 +29,8 @@ Resources and assets are in `app/src/main/res/` and `app/src/main/assets/`; the 
   `:app:testRemoteDebugUnitTest` in the gate.
 
 Python tools in `tools/`: `carlife_probe.py` (CarLife loopback probe, writes raw H.264), `analyze_diagnostics.py` (offline summary
-of a redacted support report), `release_notes.py` (extracts a changelog entry for a tag) and `prepare_upload.py` (source-only
+of a redacted support report), `compare_diagnostics.py` (diffs two reports of the same scenario: timeline order plus normalised
+log lines per tag; the regression oracle for behaviour-preserving refactors), `release_notes.py` (extracts a changelog entry for a tag) and `prepare_upload.py` (source-only
 upload bundle under `dist/`), each with `test_*.py`. `logbot/` is a QQ official-bot webhook service that diagnoses uploaded
 reports with rules (mirroring `DiagnosticCode`) plus an optional OpenAI-compatible AI pass; keep `logbot/rules.py` in sync with
 `diagnostics/` and `docs/DIAGNOSTICS.md`. `tools/debug-bridge/agent-api.mjs` is the read-only, redacted log API that

@@ -1,7 +1,7 @@
 # 会话编排层重构方案（草案）
 
 基线：`main` @ `ab0cb93`（v0.1.6，文中行号与统计均以此为准，搬移后会漂移）。
-状态：**Phase 0 的代码护栏已在 `refactor/session-phase0-guardrails` 完成（只加测试，不改生产代码）；对比脚本与基线实车报告待完成；
+状态：**Phase 0 的代码护栏已在 `refactor/session-phase0-guardrails` 完成（只加测试与工具，不改生产代码）；基线实车报告待采集；
 Phase 1 起尚未开始。** 2026-11-10 对照代码复查后修订过一次，改动见文末「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 
 ## 1. 背景与目标
@@ -348,13 +348,11 @@ interface SessionEnvironment {
 - 已做反向验证：在 `net/EndpointHosts.kt` 加一行 `import com.mcarplay.app.SessionController`，并把 `VIDEO: 转码统计` 改成别的措辞，
   对应两个测试都失败；验证后已还原。
 - 历史事故对照表（附录 B）。
+- 对比脚本 `tools/compare_diagnostics.py`（附 `test_compare_diagnostics.py`），用法与判据见第 6 节。`LogContractTest` 同时守住它依赖的
+  报告分节标题、报告头时间和进程起点日志行的格式。脚本只用合成报告和本机的自检日志验证过，还没有在真实支持报告上跑过。
 
 待完成：
 
-- **对比脚本** `tools/compare_diagnostics.py <基准报告> <候选报告>`（S，附 `test_compare_diagnostics.py`）。
-  现有 `analyze_diagnostics.py` 只汇总单份报告。脚本比较两项：时间线的 stage/milestone 顺序与错误码；归一化后的日志行序列。
-  归一化去掉时间戳，把数字、十六进制、地址和已脱敏占位替换成记号；并发线程的全局先后会抖动，所以按标签（`AIRPLAY:`、`SESSION:`、
-  `>>>` 等）分组比较，周期性行（`ENV:`、统计、保活）列入忽略清单。输出第一处分歧和两边多出的行。
 - **基线实车报告**：按附录 A 在当前 `main` 上跑一遍四台接收端，留存脱敏支持报告（不进仓库）。这也是 `main` 本来就欠的回归。
 
 完成标准：门禁通过；对比脚本可用；基线报告已归档。
@@ -436,6 +434,27 @@ interface SessionEnvironment {
 - **工作量估算**：原方案 Phase 1–3 约 14 个 PR 各跑全矩阵，约 390 次场景、14 轮实车。分级后约 16 个 PR 的 T1 共 48 次冒烟，
   加 4 次 T2 共 112 次，实车从 14 轮降到 4 轮。数字是估算，用来说明量级。
 - **记录**：按附录 A 的模板；新现象按 AGENTS.md 写进 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+### 对比脚本
+
+```bash
+python3 tools/compare_diagnostics.py 基准报告.txt 候选报告.txt
+```
+
+两份报告是同一场景在基准构建和候选构建上各导出的支持报告。退出码 0 表示一致，1 表示有差异。
+
+- **时间线**：取两边最近 N 次连接尝试（`--attempts N`，默认 1，从末尾对齐；默认只看 `carplay` 轨道）。比较阶段顺序、里程碑首次出现的顺序、
+  结束状态与错误码、告警码、记录项、首包事件、各媒体计数是否前进。耗时与帧数不计入结论，首帧和结束耗时作为提示输出。
+- **日志**：只取这些尝试的时间窗内的行（首个事件前 3 秒到末个事件后 15 秒，可用 `--margin-before/--margin-after` 调整）。
+  日志行只有时分秒，日期靠每次进程启动写的 `DIAGNOSTICS: … timeMs=…` 行推算；该行被截断时退回报告头的导出时间；都没有就比较全部日志并说明。
+- **归一化**：去掉时间戳，数字、长十六进制、UUID、地址和脱敏别名换成占位符；`0x4301` 这类四位以内的协议消息号保留。
+- **判据**：按标签分组（`AIRPLAY:`、`SESSION:`、`>>>` 等），比较每个标签下「出现过哪些行」和「各行首次出现的先后」。
+  重试次数、周期性输出的次数、不同标签之间的交错都不比较。「基准一次、候选多次」只作为提示，`--strict-counts` 时计入结论。
+- **默认忽略的标签**：`ENV`、`HID`、`HID-RAW`、`TIMING`、`DIMMER`、`UI`、`UPDATE`、`DISCLAIMER`、`BTSNOOP`、`DIAGNOSTICS`、`PRIVACY`、
+  `UNREDACTED`。用 `--ignore-tag`、`--keep-tag`、`--ignore-line 正则` 调整。
+- **噪声基线**：同一构建跑两次也会有差异（线程竞态导致的先后变化）。把第二次基准运行传给 `--noise-baseline`，
+  两次基准之间同样存在的差异会被标为噪声、不计入结论。建议每台接收端的基线都采两份。
+- 也接受 `run-as` 取出的裸 `main_debug.log`：没有时间线，只比较全部日志。
 - **测试台之外的车型**（奥迪 MMI、帕萨特/ID7、本田 HFT、凯迪拉克 CT5 等）有专门分支但不在必测集。主要依靠附录 B：
   每条历史事故在对应 PR 里变成 JVM 测试。能联系到车主时随 T2 的 test 版一并验证；联系不到的在 CHANGELOG 里写明未验证。
 

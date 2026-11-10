@@ -88,6 +88,29 @@ class LogContractTest {
         )
     }
 
+    /**
+     * `tools/compare_diagnostics.py` 靠这些格式切分报告、给日志行定日期：报告头的导出时间、两个分节标题，
+     * 以及每次进程启动写入日志的 `DIAGNOSTICS: schema=… process=… timeMs=…` 行。
+     */
+    @Test
+    fun reportLayoutThatTheCompareScriptParsesIsUnchanged() {
+        val anchors =
+            listOf(
+                "mcarplay support report / ",
+                "generatedAt=",
+                " timezone=",
+                "=== CONNECTION TIMELINE / ",
+                "=== RUNTIME LOG / ",
+                "DIAGNOSTICS: schema=1 process=",
+                " timeMs=",
+            )
+        val missing = anchors.filter { anchor -> mainStrings.none { it.contains(anchor) } }
+        assertTrue(
+            "以下报告/日志格式已变，tools/compare_diagnostics.py 与其测试需同一提交更新：\n" + missing.joinToString("\n"),
+            missing.isEmpty(),
+        )
+    }
+
     @Test
     fun stageLabelsMatchConnectionStage() {
         val labels =
