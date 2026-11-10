@@ -47,7 +47,7 @@ class ArchitectureRulesTest {
     /** 基线（`ab0cb93`）已有的反向依赖：`文件 -> 被引用的全名前缀`。只减不增。 */
     private val allowedUpwardReferences =
         setOf(
-            // CarWith 自检与外部车机控制直接写日志、认领 CarLife 会话；Phase 1f 改为注入 log 与注册表
+            // CarWith 自检与外部车机控制直接写日志、认领 CarLife 会话；Phase 2h 改为注入 log 与注册表
             "carlife/CarLifeDiagnostics.kt -> com.mcarplay.app.SessionController",
             "carlife/CarLifeDiagnostics.kt -> com.mcarplay.app.service",
             "carlife/ExternalHuController.kt -> com.mcarplay.app.SessionController",

@@ -10,7 +10,7 @@
   重构方案见 `docs/ARCHITECTURE-REFACTOR.md`（基线 `main` @ `ab0cb93`）。新增 `ArchitectureRulesTest`（引擎层不得引用
   `SessionController`/界面层，6 处现有例外登记在只减不增的允许清单）、`LogContractTest`（`tools/logbot/rules.py` 依赖的日志短语、
   阶段文案与错误码）和 `KotlinSourceTest`，共 16 项。本地 915 项 standard JVM 测试 + 24 项 remote 调试桥测试、Spotless、
-  standard lint/debug 构建通过。四台接收端的基线支持报告尚未采集；Phase 1 起的搬移在 1.0.0 之后进行。
+  standard lint/debug 构建通过。四台接收端的基线支持报告与报告对比脚本尚未完成；Phase 1 起的改动在当前 `main` 的四台接收端回归完成后开始。
 
 - **11 月 6 日 v0.1.6 正式版（本地构建，未推 tag）：** 汇总 PR #42 屏幕归属门控、#44 主音频仲裁、#43 手机端 SDP 生命周期与 #41 CarWith 入口诊断；
   新增「上车自动播放音乐」开关（默认开，关闭后连接窗口内拦截车机自动播放并暂停自行开始的音乐）。
