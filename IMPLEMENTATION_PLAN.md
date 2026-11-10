@@ -1,10 +1,16 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-11-06。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-11-10。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
 ## 当前基线与结论
+
+- **11 月 10 日会话编排层重构 Phase 0（`refactor/session-phase0-guardrails`，仅护栏测试，未改生产代码，无实车验证）：**
+  重构方案见 `docs/ARCHITECTURE-REFACTOR.md`（基线 `main` @ `ab0cb93`）。新增 `ArchitectureRulesTest`（引擎层不得引用
+  `SessionController`/界面层，6 处现有例外登记在只减不增的允许清单）、`LogContractTest`（`tools/logbot/rules.py` 依赖的日志短语、
+  阶段文案与错误码）和 `KotlinSourceTest`，共 16 项。本地 915 项 standard JVM 测试 + 24 项 remote 调试桥测试、Spotless、
+  standard lint/debug 构建通过。四台接收端的基线支持报告尚未采集；Phase 1 起的搬移在 1.0.0 之后进行。
 
 - **11 月 6 日 v0.1.6 正式版（本地构建，未推 tag）：** 汇总 PR #42 屏幕归属门控、#44 主音频仲裁、#43 手机端 SDP 生命周期与 #41 CarWith 入口诊断；
   新增「上车自动播放音乐」开关（默认开，关闭后连接窗口内拦截车机自动播放并暂停自行开始的音乐）。
