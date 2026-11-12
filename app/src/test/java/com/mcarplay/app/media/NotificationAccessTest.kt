@@ -1,5 +1,7 @@
 package com.mcarplay.app.media
 
+import android.provider.Settings
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -77,5 +79,17 @@ class NotificationAccessTest {
     @Test
     fun missingLiveSectionIsNotTreatedAsBound() {
         assertFalse(NotificationAccess.isLiveIn("no such section", spec))
+    }
+
+    /** ROM 不认「直达本应用」的详情页时，必须回退到监听器列表页。 */
+    @Test
+    fun settingsFallBackFromDetailToListenerList() {
+        assertEquals(
+            listOf(
+                Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS,
+                Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS,
+            ),
+            NotificationAccess.listenerSettingsActions(),
+        )
     }
 }

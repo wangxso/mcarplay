@@ -17,6 +17,11 @@
     <string name="dc_carwith_listeners_pending">A CarWith notification was observed, but the seven ports did not become ready; open CarWith settings, select Baidu CarLife wireless connection manually and check the CarWith/CarLife component versions</string>
     <string name="dc_carwith_protocol_silent">The seven ports connected, but no CarLife protocol response arrived; listening sockets do not prove a valid cast session. Stop the existing CarWith connection, start Baidu CarLife wireless connection again from CarWith settings, then retry</string>
     <string name="dc_carwith_busy">CarWith is busy with the self-test; stop the self-test before starting CarPlay</string>
+    <string name="diag_notification_access_title">Notification access</string>
+    <string name="diag_notification_access_desc_granted">On: the music card can show track details, and CarWith entry diagnosis works</string>
+    <string name="diag_notification_access_desc_missing">Off: the music card has no track details and CarWith entry diagnosis stays \"unknown\"; tap the button to open system settings</string>
+    <string name="diag_notification_access_open">Open</string>
+    <string name="diag_notification_access_unavailable">Could not open system settings; enable it manually under Settings → Notifications &amp; status bar → Notification access</string>
     <string name="dc_video_closed">The video connection ended; this alone does not mean the receiver crashed, so check the network and receiver</string>
     <string name="dc_audio_unavailable">Audio could not be enabled; video can continue. Send a report so the audio negotiation can be checked</string>
     <string name="dc_connection_incomplete">The connection has not completed; check the last stage and the receiver\'s prompts</string>
