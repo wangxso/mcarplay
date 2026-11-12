@@ -58,6 +58,10 @@
     <string name="sc_use_current_title">Use the current Wi-Fi?</string>
     <string name="sc_use_current_body">If the phone and the receiver are on the same router (for example DiPlay same-LAN mode), you can use the current Wi-Fi.\n\nMake sure both are on the same network; if the receiver has its own hotspot, join \"%1$s\" in Wi-Fi settings.</string>
     <string name="sc_use_current">Use current Wi-Fi</string>
+    <string name="sc_current_network">the current network</string>
+    <string name="sc_known_ssid_title">Join the car hotspot manually</string>
+    <string name="sc_known_ssid_body">Only the hotspot name \"%1$s\" was received, without a security type or password, so it cannot be joined automatically as an open network. Join it in system Wi-Fi settings, then return to this app.</string>
+    <string name="sc_bt_link_closed_while_joining">The Bluetooth link closed, so waiting for the car network has stopped; waiting for the head unit to reconnect…</string>
     <string name="sc_join_title">Join the car hotspot</string>
     <string name="sc_join_body">mcarplay will join the \"%1$s\" hotspot. It has no internet, so the system may switch back to the previous Wi-Fi.\n\nIf the connection drops, join \"%2$s\" yourself in Wi-Fi settings (a manual connection is not switched back).</string>
     <string name="sc_join_continue">Join automatically</string>

@@ -22,6 +22,7 @@ object DiagnosticText {
                 DiagnosticCode.WIFI_LOST -> R.string.dc_wifi_lost
                 DiagnosticCode.WIFI_PERMISSION -> R.string.dc_wifi_permission
                 DiagnosticCode.WIFI_JOIN_FAILED -> R.string.dc_wifi_join_failed
+                DiagnosticCode.AIRPLAY_CONNECT_FAILED -> R.string.dc_airplay_connect_failed
                 DiagnosticCode.PAIRING_FAILED -> R.string.dc_pairing_failed
                 DiagnosticCode.SETUP_FAILED -> R.string.dc_setup_failed
                 DiagnosticCode.CARWITH_FAILED -> R.string.dc_carwith_failed
@@ -136,6 +137,7 @@ object DiagnosticText {
     fun progressDetail(
         context: Context,
         progress: ConnectionProgress.Progress,
+        arrizo8: Boolean = false,
     ): String {
         val latest =
             progress.latest?.let { (reached, atMs) ->
@@ -154,7 +156,11 @@ object DiagnosticText {
                     blocker(context, it),
                 )
             }
-        val window = context.getString(R.string.progress_head_unit_window).takeIf { progress.pastHeadUnitWindow }
+        val window =
+            context
+                .getString(
+                    if (arrizo8) R.string.progress_head_unit_window_arrizo8 else R.string.progress_head_unit_window,
+                ).takeIf { progress.pastHeadUnitWindow }
         return listOfNotNull(latest, blocked, window).joinToString("\n")
     }
 

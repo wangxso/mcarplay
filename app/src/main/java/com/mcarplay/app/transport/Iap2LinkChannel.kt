@@ -26,6 +26,11 @@ class Iap2LinkChannel(
     private var terminated = false
     private var readySignalled = false
 
+    /** 链路被引擎终止时的原因；null = 正常 close 或仍在运行。 */
+    @Volatile
+    var terminationReason: String? = null
+        private set
+
     /** 对端最后一帧（含纯 ACK）的单调时钟毫秒；从未收到为 -1。 */
     @Volatile
     private var lastPeerFrameAtMillis = -1L
@@ -70,6 +75,8 @@ class Iap2LinkChannel(
                 )
             }
         }
+        // RFCOMM/蓝牙通道由 BtSession 负责关闭 socket 并在车机重连后重建。
+        engine.rebuildOnNewSyn = true
         Thread({ runReader() }, "$name-reader").apply {
             isDaemon = true
             start()
@@ -251,6 +258,7 @@ class Iap2LinkChannel(
     private fun finishLocked(failure: IOException?) {
         if (terminated) return
         terminated = true
+        terminationReason = failure?.message
         controls.offer(POISON) // 哨兵：唤醒阻塞的接收方（LBQ 不接受 null）
         readyLatch.countDown()
         lock.notifyAll()

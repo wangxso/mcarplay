@@ -28,6 +28,7 @@ enum class DiagnosticCode(
     WIFI_LOST("车机网络已丢失，请检查接收端热点及手机 WLAN 后重连"),
     WIFI_PERMISSION("请允许「附近 WLAN 设备」权限后重试"),
     WIFI_JOIN_FAILED("未能绑定车机网络，请检查 WLAN、附近设备权限及系统加入确认框"),
+    AIRPLAY_CONNECT_FAILED("未能连接车机 AirPlay 端口，请检查两点是否在同一车机网络，并确认接收端 AirPlay 服务已启动"),
     PAIRING_FAILED("未完成 AirPlay 配对，请检查接收端提示，必要时重启接收端后重试"),
     SETUP_FAILED("CarPlay 会话未建立，请提供诊断报告核对接收端响应"),
     CARWITH_FAILED("CarWith 未完成出流，请检查组件版本、原厂连接开关和授权"),
@@ -57,6 +58,9 @@ enum class DiagnosticCode(
     USER_STOP("用户主动停止，非连接故障"),
     SUPERSEDED("新的连接尝试替代了上一轮"),
 }
+
+/** 只描述“正在等待/可降级”的告警：它们不是一轮连接停止的原因，结束时让位给具体失败码。 */
+private val NON_TERMINAL_ISSUES = setOf(DiagnosticCode.ENDPOINT_PENDING, DiagnosticCode.AUDIO_UNAVAILABLE)
 
 /**
  * Pure, generation-scoped state. Old callbacks cannot overwrite a replacement attempt.
@@ -234,10 +238,14 @@ class ConnectionTimeline(
         detail: String = "",
     ) = mutate {
         if (id != attempt || !active()) return@mutate
+        // 已有具体错误（如 WIFI_LOST）不能被通用阶段回退覆盖；但等待态/非致命告警
+        // （ENDPOINT_PENDING、AUDIO_UNAVAILABLE）不是本轮停止的原因，不得盖住调用方给的 fallback。
+        val causeCode = code?.takeIf { it !in NON_TERMINAL_ISSUES }
         val reason =
             when {
                 cancelled && code == DiagnosticCode.BT_LINK_CLOSED -> DiagnosticCode.BT_LINK_CLOSED
                 cancelled -> DiagnosticCode.USER_STOP
+                causeCode != null -> causeCode
                 fallback != null -> fallback
                 stage == ConnectionStage.PAIRING -> DiagnosticCode.PAIRING_FAILED
                 stage == ConnectionStage.SETUP -> DiagnosticCode.SETUP_FAILED

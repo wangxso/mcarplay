@@ -34,8 +34,14 @@ class CarPlayServiceBrowser(
     @Volatile
     private var resolved: NsdServiceInfo? = null
 
+    /** 每次清缓存/换网递增；旧网段的异步 resolve 回调不能把结果写回新代次。 */
+    @Volatile
+    private var cacheGeneration = 0
+
     /** 新会话开始时清掉上一轮缓存（车机可能换了地址/端口）。 */
+    @Synchronized
     fun resetCache() {
+        cacheGeneration++
         resolved = null
     }
 
@@ -96,8 +102,10 @@ class CarPlayServiceBrowser(
     // 每轮发现一个新监听器：stopServiceDiscovery 是异步的，旧监听器未注销前复用会抛「listener already in use」
     private var discoveryListener: NsdManager.DiscoveryListener? = null
 
-    private fun newDiscoveryListener() =
-        object : NsdManager.DiscoveryListener {
+    private fun newDiscoveryListener(): NsdManager.DiscoveryListener {
+        // 监听器建立时捕获代次；旧监听器排队到 reset/restart 之后的回调不能借用新代次。
+        val generation = cacheGeneration
+        return object : NsdManager.DiscoveryListener {
             override fun onStartDiscoveryFailed(
                 serviceType: String,
                 errorCode: Int,
@@ -122,17 +130,19 @@ class CarPlayServiceBrowser(
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
                 log("$TAG: 发现服务 ${serviceInfo.serviceName} (${serviceInfo.serviceType})，解析中…")
-                resolveWithRetry(serviceInfo, attempts = 3)
+                resolveWithRetry(serviceInfo, attempts = 3, generation = generation)
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
                 log("$TAG: 服务消失 ${serviceInfo.serviceName}")
             }
         }
+    }
 
     private fun resolveWithRetry(
         serviceInfo: NsdServiceInfo,
         attempts: Int,
+        generation: Int,
     ) {
         val listener =
             object : NsdManager.ResolveListener {
@@ -143,7 +153,7 @@ class CarPlayServiceBrowser(
                     if (errorCode == NsdManager.FAILURE_ALREADY_ACTIVE && attempts > 1) {
                         Thread {
                             Thread.sleep(200)
-                            resolveWithRetry(info, attempts - 1)
+                            resolveWithRetry(info, attempts - 1, generation)
                         }.start()
                     } else {
                         log("$TAG: 解析失败 ${info.serviceName} code=$errorCode")
@@ -165,8 +175,14 @@ class CarPlayServiceBrowser(
                     val accepted = accept(info)
                     log("$TAG: OK ${info.serviceName} -> $host:${info.port}${if (accepted) "" else "（非车机，忽略）"}")
                     if (txt.isNotEmpty()) log("$TAG: TXT $txt")
-                    if (accepted) resolved = info
-                    onEndpoint(info)
+                    // resetCache 与最终写入/上报必须是同一个临界区：否则旧网段的
+                    // resolve 可能在清缓存后重新写回，并把旧地址带给下一轮连接。
+                    synchronized(this@CarPlayServiceBrowser) {
+                        if (accepted && generation == cacheGeneration) {
+                            resolved = info
+                            onEndpoint(info)
+                        }
+                    }
                 }
             }
         nsdManager.resolveService(serviceInfo, listener)

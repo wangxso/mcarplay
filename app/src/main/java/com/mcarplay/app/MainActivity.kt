@@ -969,8 +969,8 @@ class MainActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
                 var answered = false
-                // 取消（返回键/点外部/被 cancelConnecting 联动关闭）= null，流程据此中止；
-                // 「打开 WLAN」除了回调 false，还要把用户送到系统 WLAN 页手动连。
+                // 取消（返回键/点外部/被 cancelConnecting 联动关闭）= null，流程据此中止。
+                // 弹窗只返回选择；是否打开 WLAN 设置由调用方决定，避免「继续等待」被误解成跳转。
                 val dialog =
                     DarkMessageDialog.show(
                         activity = this,
@@ -980,11 +980,6 @@ class MainActivity : AppCompatActivity() {
                             listOf(
                                 DarkMessageDialog.Action(spec.negative) {
                                     answered = true
-                                    runCatching {
-                                        startActivity(
-                                            android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS),
-                                        )
-                                    }
                                     onChoice(false)
                                 },
                                 DarkMessageDialog.Action(
@@ -1381,7 +1376,13 @@ class MainActivity : AppCompatActivity() {
                 text.setSpan(StyleSpan(Typeface.BOLD), start, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         }
-        DiagnosticText.progressDetail(this, progress).takeIf { it.isNotEmpty() }?.let { text.append("\n").append(it) }
+        DiagnosticText
+            .progressDetail(
+                this,
+                progress,
+                arrizo8 = SessionController.currentReceiverUsesArrizo8Hint(),
+            ).takeIf { it.isNotEmpty() }
+            ?.let { text.append("\n").append(it) }
         view.text = text
         view.visibility = View.VISIBLE
     }

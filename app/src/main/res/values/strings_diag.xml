@@ -8,6 +8,7 @@
     <string name="dc_wifi_lost">车机网络已丢失，请检查接收端热点及手机 WLAN 后重连</string>
     <string name="dc_wifi_permission">请允许「附近 WLAN 设备」权限后重试</string>
     <string name="dc_wifi_join_failed">未能绑定车机网络，请检查 WLAN、附近设备权限及系统加入确认框</string>
+    <string name="dc_airplay_connect_failed">未能连接车机 AirPlay 端口，请检查手机与车机是否在同一网络，并确认接收端 AirPlay 服务已启动</string>
     <string name="dc_pairing_failed">未完成 AirPlay 配对，请检查接收端提示，必要时重启接收端后重试</string>
     <string name="dc_setup_failed">CarPlay 会话未建立，请提供诊断报告核对接收端响应</string>
     <string name="dc_carwith_failed">CarWith 未完成出流，请检查组件版本、原厂连接开关和授权</string>
@@ -71,7 +72,8 @@
     <string name="progress_since_bluetooth">自蓝牙握手 %1$ds</string>
     <string name="progress_blocker_active">当前：%1$s</string>
     <string name="progress_blocker_failed">停在：%1$s</string>
-    <string name="progress_head_unit_window">已超过 30 s 仍未建立会话：艾瑞泽 8 车机此时会自行重置并重新发起，可稍候</string>
+    <string name="progress_head_unit_window">已超过 30 s 仍未建立会话：接收端可能已重置本次尝试，可稍候或重新连接</string>
+    <string name="progress_head_unit_window_arrizo8">已超过 30 s 仍未建立会话：艾瑞泽 8 车机此时会自行重置并重新发起，可稍候</string>
     <string name="blocker_bt_link">等待车机蓝牙连入（iAP2 链路未建立）</string>
     <string name="blocker_iap2_auth">蓝牙已连，iAP2 识别/认证未完成</string>
     <string name="blocker_wifi_info">iAP2 已认证，等待车机下发热点信息</string>

@@ -43,7 +43,8 @@ still-redacted recent runtime history.
   events use JSONL schema 1, independently of verbose protocol logs.
 - `MILESTONE` events (with a `milestone` field) record the first time an attempt
   reaches each phone-side step: `BT_LINK`, `IAP2_IDENTIFIED`, `IAP2_AUTHENTICATED`,
-  `WIFI_CREDENTIALS`, `WIFI_JOINED`, `CTRL_INVITED`, `RECEIVER_RESOLVED`,
+  `WIFI_CREDENTIALS` (only a complete accessory-provided configuration, never a bare SSID),
+  `WIFI_JOINED`, `CTRL_INVITED`, `RECEIVER_RESOLVED`,
   `AIRPLAY_CONNECTED`, `PAIR_SETUP`, `PAIR_VERIFY`, `AUTH_SETUP`, `SESSION_SETUP`,
   `RECORD`; `FIRST_CARWITH_VIDEO`, `FIRST_VIDEO` and `FIRST_AUDIO_PACKET` carry
   `CARWITH_FRAME`, `FIRST_VIDEO` and `FIRST_AUDIO`. Repeats are not journaled and
@@ -60,8 +61,9 @@ still-redacted recent runtime history.
   `none`) and, while waiting or after a failure, `BLOCKED_AT <STAGE>:<STEP>` naming the
   missing step (for example `PAIRING:HOMEKIT_PAIRING` after TCP connected but before
   pair-verify). The main card shows the same layers as a stepper; after 30 s from
-  `BT_LINK` without `RECORD` it shows the observed Chery Arrizo 8 connection-window
-  hint. The head unit measured 30.002 s from its own `TimerThread begin`, then
+  `BT_LINK` without `RECORD` it shows a generic receiver-reset hint. Only an exact
+  `CHERY / Tiggo / 320.17.7` fingerprint shows the observed Chery Arrizo 8
+  connection-window hint. That head unit measured 30.002 s from its own `TimerThread begin`, then
   stopped the failed attempt and deregistered Bonjour; a later success used a new
   upper-layer Start. Phone `BT_LINK` is only an approximate alignment point, and
   this hint neither stops the phone attempt nor promises an automatic retry.
@@ -294,6 +296,7 @@ vehicle compatibility; the affected user's phone/head unit must still be reteste
 | `ENDPOINT_PENDING` | Awaiting receiver information; not a terminal failure. |
 | `BT_LINK_CLOSED` | Control link ended before session establishment. |
 | `WIFI_JOIN_FAILED`, `WIFI_LOST` | WLAN, nearby-device permission, system join confirmation and hotspot. |
+| `AIRPLAY_CONNECT_FAILED` | AirPlay TCP endpoint was not reached; this is not a pairing-authentication verdict. |
 | `PAIRING_FAILED` | AirPlay pairing responses and receiver state. |
 | `SETUP_FAILED` | SETUP status and advertised capabilities. |
 | `CARWITH_FAILED` | Component versions, entry, original permissions, handshake and source video. |

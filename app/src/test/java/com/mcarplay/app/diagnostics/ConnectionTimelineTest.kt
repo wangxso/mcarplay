@@ -175,6 +175,51 @@ class ConnectionTimelineTest {
     }
 
     @Test
+    fun airplayTcpFailureBeforePairingIsNotReportedAsPairingRejection() {
+        val id = timeline.begin("receiver")
+        timeline.stage(id, ConnectionStage.DISCOVERY)
+
+        timeline.abandon(id, cancelled = false, fallback = DiagnosticCode.AIRPLAY_CONNECT_FAILED)
+
+        assertEquals(DiagnosticCode.AIRPLAY_CONNECT_FAILED, timeline.snapshot()!!.code)
+        assertEquals("failed", timeline.snapshot()!!.status)
+    }
+
+    @Test
+    fun existingSpecificFailureIsNotOverwrittenByAirplayTcpFallback() {
+        val id = timeline.begin("receiver")
+        timeline.stage(id, ConnectionStage.DISCOVERY)
+        timeline.issue(id, DiagnosticCode.WIFI_LOST)
+
+        timeline.abandon(id, cancelled = false, fallback = DiagnosticCode.AIRPLAY_CONNECT_FAILED)
+
+        assertEquals(DiagnosticCode.WIFI_LOST, timeline.snapshot()!!.code)
+    }
+
+    @Test
+    fun pendingEndpointWarningDoesNotHideJoinFailure() {
+        // 空端点 → ctrl 邀请/晚到 KNOWN_SSID 复用同一轮次；入网失败发生在 DISCOVERY 之前。
+        val id = timeline.begin("receiver")
+        timeline.stage(id, ConnectionStage.BLUETOOTH)
+        timeline.issue(id, DiagnosticCode.ENDPOINT_PENDING)
+
+        timeline.abandon(id, cancelled = false, fallback = DiagnosticCode.WIFI_JOIN_FAILED)
+
+        assertEquals(DiagnosticCode.WIFI_JOIN_FAILED, timeline.snapshot()!!.code)
+    }
+
+    @Test
+    fun audioWarningDoesNotHideAirplayConnectFailure() {
+        val id = timeline.begin("receiver")
+        timeline.stage(id, ConnectionStage.DISCOVERY)
+        timeline.issue(id, DiagnosticCode.AUDIO_UNAVAILABLE)
+
+        timeline.abandon(id, cancelled = false, fallback = DiagnosticCode.AIRPLAY_CONNECT_FAILED)
+
+        assertEquals(DiagnosticCode.AIRPLAY_CONNECT_FAILED, timeline.snapshot()!!.code)
+    }
+
+    @Test
     fun realCancelIsUserStopAndUncancelledJoinFailureUsesFallback() {
         val cancelled = timeline.begin("receiver")
         timeline.abandon(cancelled, cancelled = true, fallback = DiagnosticCode.WIFI_JOIN_FAILED)

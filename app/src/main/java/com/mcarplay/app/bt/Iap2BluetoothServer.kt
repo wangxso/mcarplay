@@ -38,11 +38,14 @@ class Iap2BluetoothServer(
     /** Phase 1 之后车机补发 0x4301（CarPlay 窗口晚开）时交给主控热更新端点。 */
     private val onEndpointUpdate: (Iap2SenderSession.CarPlayEndpoint) -> Unit = {},
     /** 发送端链路断开（保活泵退出）时通知主控（释放僵尸轮次，见 SessionController.onSenderLinkClosed）。 */
-    private val onLinkClosed: (String?) -> Unit = {},
+    /** 链路断开：同时携带 RFCOMM 观察归属（交接所有权）与对端地址（熔断隔离）。 */
+    private val onLinkClosed: (ReceiverObservation?, String?) -> Unit = { _, _ -> },
     /** 本进程已知的车机热点 SSID（本轮无新凭据时沿用，避免每轮 8 秒拆链）。 */
     private val knownCarSsid: () -> String? = { null },
     /** 车机是否已在 WiFi 上发过 ctrl 邀请（无凭据时据此不拆链）。 */
-    private val receiverInvited: () -> Boolean = { false },
+    private val receiverInvited: (ReceiverObservation?) -> Boolean = { false },
+    private val onObservation: (ReceiverObservation?, Boolean) -> Unit = { _, _ -> },
+    private val unverifiedInvitePending: () -> Boolean = { false },
     /** 0x1D01 画像判定的链路代际（Phase 1 完成后回调，AirPlay 阶段分派用）。 */
     private val onGeneration: (ReceiverProfile.LinkGeneration) -> Unit = {},
     /** 目标车机（动态读取：拒绝非目标设备的连入；null=来者不拒）。 */
@@ -294,6 +297,8 @@ class Iap2BluetoothServer(
                 onGeneration,
                 peerAddress = socket.remoteDevice?.address,
                 observation = observation,
+                onObservation = onObservation,
+                unverifiedInvitePending = unverifiedInvitePending,
                 onSession = { session ->
                     synchronized(channelLock) { if (activeChannel === channel) activeSession = session }
                 },

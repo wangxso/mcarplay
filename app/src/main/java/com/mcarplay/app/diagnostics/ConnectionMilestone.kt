@@ -20,7 +20,7 @@ enum class ConnectionMilestone(
     /** 已发 0xAA05 自报认证完成；不代表本机校验了证书/签名，也不代表 AirPlay 配对成功。 */
     IAP2_AUTHENTICATED(ConnectionStage.BLUETOOTH),
 
-    /** 拿到车机热点信息（0x5703，或带 SSID 的 0x4301）。 */
+    /** 拿到车机明确下发的完整热点配置（0x5703，或 0x4301 自带安全类型/密码）；仅已知 SSID 不算。 */
     WIFI_CREDENTIALS(ConnectionStage.BLUETOOTH),
 
     /** 进程已绑定车机网络；车机侧对应 DHCPACK。 */

@@ -8,6 +8,7 @@
     <string name="dc_wifi_lost">The car network was lost; check the receiver hotspot and the phone Wi-Fi, then reconnect</string>
     <string name="dc_wifi_permission">Allow the Nearby Wi-Fi devices permission and try again</string>
     <string name="dc_wifi_join_failed">Could not bind to the car network; check Wi-Fi, the Nearby devices permission and the system join prompt</string>
+    <string name="dc_airplay_connect_failed">Could not connect to the car\'s AirPlay port; check that both devices are on the same network and the receiver\'s AirPlay service is running</string>
     <string name="dc_pairing_failed">AirPlay pairing did not complete; check the receiver\'s prompts and restart it if needed</string>
     <string name="dc_setup_failed">The CarPlay session was not set up; send a diagnostic report so the receiver\'s response can be checked</string>
     <string name="dc_carwith_failed">CarWith did not start streaming; check the component versions, the factory connection switch and permissions</string>
@@ -71,7 +72,8 @@
     <string name="progress_since_bluetooth">%1$ds since the Bluetooth handshake</string>
     <string name="progress_blocker_active">Now: %1$s</string>
     <string name="progress_blocker_failed">Stopped at: %1$s</string>
-    <string name="progress_head_unit_window">No session after 30 s: the Arrizo 8 head unit resets and starts again at this point, so wait a moment</string>
+    <string name="progress_head_unit_window">No session after 30 s: the receiver may have reset this attempt; wait a moment or reconnect</string>
+    <string name="progress_head_unit_window_arrizo8">No session after 30 s: the Arrizo 8 head unit resets and starts again at this point, so wait a moment</string>
     <string name="blocker_bt_link">Waiting for the head unit\'s Bluetooth link (iAP2 not up)</string>
     <string name="blocker_iap2_auth">Bluetooth is up; iAP2 identification or authentication is not finished</string>
     <string name="blocker_wifi_info">iAP2 authenticated; waiting for the head unit\'s hotspot details</string>
