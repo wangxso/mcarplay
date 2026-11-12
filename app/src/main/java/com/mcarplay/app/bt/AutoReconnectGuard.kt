@@ -79,6 +79,9 @@ internal class ReconnectCircuitBreaker(
         // 没有对端地址就无法按接收端隔离：不计数，也不把这次失败归到其它车机头上。
         if (address.isNullOrBlank()) return Failure(state, tripped = false)
         val samePeer = state.address != null && state.address.equals(address, ignoreCase = true)
+        // 另一台车机的熔断仍在冷却：单槽状态不能为了记 B 的失败而抹掉 A 的熔断，
+        // 否则 A 的自动重连会在冷却期内被重新放开（跨接收端泄漏的另一方向）。
+        if (!samePeer && isBlockActive(state, nowMs)) return Failure(state, tripped = false)
         val base = if (samePeer) state else State(address = address)
         val blockExpired = base.blockedUntilMs > 0L && nowMs >= base.blockedUntilMs
         val withinWindow =

@@ -125,11 +125,37 @@ class ReconnectCircuitBreakerTest {
         val other = "AA:BB:CC:DD:EE:02"
         var state = fail(ReconnectCircuitBreaker.State(), t0).state
         state = fail(state, t0 + 1_000L, other).state
-        // 换一台车机后重新计数：A 的失败不累计到 B，B 也不会触发 A 的熔断。
+        // 没有熔断时换一台车机重新计数：A 的失败不累计到 B，B 也不会触发 A 的熔断。
         assertEquals(1, state.failures)
         assertEquals(other, state.address)
         assertFalse(breaker.isBlocked(state, address, t0 + 2_000L))
         assertFalse(breaker.isBlocked(state, other, t0 + 2_000L))
+    }
+
+    @Test
+    fun anotherReceiversFailureCannotClearAnActiveBlock() {
+        val other = "AA:BB:CC:DD:EE:02"
+        var state = ReconnectCircuitBreaker.State()
+        repeat(3) { index ->
+            state = fail(state, t0 + index * 1_000L).state
+        }
+        val blocked = state
+        assertTrue(breaker.isBlocked(blocked, address, t0 + 5_000L))
+
+        // A 熔断期间 B 失败：不能把整份状态替换成 B，否则 A 在冷却期内会被重新放开。
+        val byOther = fail(blocked, t0 + 6_000L, other)
+        assertFalse(byOther.tripped)
+        assertEquals(blocked, byOther.state)
+        assertTrue(breaker.isBlocked(byOther.state, address, t0 + 6_000L))
+        assertFalse(breaker.isBlocked(byOther.state, other, t0 + 6_000L))
+
+        // A 的冷却结束后，B 才重新开始自己的计数。
+        val afterCooldown = fail(byOther.state, blocked.blockedUntilMs + 1_000L, other)
+        assertFalse(afterCooldown.tripped)
+        assertEquals(1, afterCooldown.state.failures)
+        assertEquals(other, afterCooldown.state.address)
+        assertFalse(breaker.isBlocked(afterCooldown.state, address, blocked.blockedUntilMs + 1_000L))
+        assertFalse(breaker.isBlocked(afterCooldown.state, other, blocked.blockedUntilMs + 1_000L))
     }
 
     @Test
