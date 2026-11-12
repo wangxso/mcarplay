@@ -157,6 +157,20 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
+    fun arrizo8HintSharesTheCheryIdentityNormalization() {
+        // 自报值带空格/大小写差异时，单 RECORD 与 30 s 提示必须同进同退。
+        val observed = ReceiverProfile.Signals(manufacturer = " chery ", model = "TIGGO ", srcvers = " 320.17.7")
+        val policy = ReceiverCompatibility.resolve(observed)
+        assertTrue(policy.arrizo8ConnectWindowHint)
+        assertEquals(policy.singleRecordPerSession, policy.arrizo8ConnectWindowHint)
+        assertFalse(ReceiverCompatibility.resolve(observed.copy(srcvers = "320.17.8")).arrizo8ConnectWindowHint)
+        assertTrue(
+            "手动车型只改适配开关，不改车型提示",
+            ReceiverCompatibility.resolve(observed, preset = VehiclePreset.GENERIC).arrizo8ConnectWindowHint,
+        )
+    }
+
+    @Test
     fun timeoutAndResetNeverAuthorizePlaintextOrUnknownBluetoothRetirement() {
         listOf(winPlay, mib3, ReceiverProfile.Signals()).forEach { signals ->
             val decision = failedPairing(signals)

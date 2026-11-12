@@ -2,6 +2,7 @@ package com.mcarplay.app.iap2
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -207,6 +208,132 @@ class Iap2LinkEngineTest {
         assertEquals(100, parseFrames(first).single { it.control == 0xC0 }.sequence)
     }
 
+    /**
+     * 普通蓝牙链路已 NORMAL 时，对端重放**同一条**已采纳 SYN 必须收到同一份
+     * SYN|ACK，而不是被静默丢弃拖到控制请求超时。重放不得回退数据序号或重置控制会话。
+     */
+    @Test
+    fun normalLinkReplaysTheSameAdoptedSynWithoutResettingTheSession() {
+        val handshake = normalHandshake()
+        val phone = handshake.phone
+        val accessory = handshake.accessory
+        phone.rebuildOnNewSyn = true
+        val adopted = phone.peerSynchronization
+        val originalAck = parseFrames(handshake.firstEcho).single { it.control == 0xC0 }.ack
+
+        // 先让接收序号前进，再重放旧 SYN：回包仍应确认原 SYN 序号，而不是当前数据序号。
+        accessory.sendControl(Iap2Csm.encode(0x5003), tick())
+        phone.feed(accessory.takeOutput(), tick())
+        phone.takeOutput()
+
+        phone.feed(handshake.accessorySyn, tick())
+
+        assertFalse(phone.isDead)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+        val replay = phone.takeOutput()
+        assertArrayEquals(handshake.firstEcho, replay)
+        assertEquals(originalAck, parseFrames(replay).single { it.control == 0xC0 }.ack)
+        assertEquals(adopted, phone.peerSynchronization)
+
+        // 旧 SYN 回放后，控制通道仍可用且序号没有退回。
+        val payload = Iap2Csm.encode(0x5001)
+        assertTrue(phone.sendControl(payload, tick()))
+        accessory.feed(phone.takeOutput(), tick())
+        assertArrayEquals(payload, pollControls(accessory).single())
+    }
+
+    /**
+     * 普通蓝牙链路在 NORMAL 收到不同序号/会话表的新 SYN：当前没有足够证据安全地
+     * 原地复用旧认证与热点状态。选择有界重建——立即结束本轮链路，而不是忽略后
+     * 让上层控制请求等到未确认超时。
+     */
+    @Test
+    fun newSynInNormalEndsTheOldLinkForBoundedRebuild() {
+        val handshake = normalHandshake()
+        val phone = handshake.phone
+        phone.rebuildOnNewSyn = true
+        val adopted = phone.peerSynchronization
+        // 链路已承载过控制数据：此后的新 SYN 无法再当作协商重试。
+        assertTrue(phone.sendControl(Iap2Csm.encode(0x5001), tick()))
+        handshake.accessory.feed(phone.takeOutput(), tick())
+        phone.takeOutput()
+
+        phone.feed(synFrame(peerSequence = 161), tick())
+
+        assertTrue("新协商必须结束旧链路", phone.isDead)
+        assertEquals("旧端点的会话表不能被新 SYN 覆盖", adopted, phone.peerSynchronization)
+        val dead =
+            generateSequence { phone.pollEvent() }
+                .filterIsInstance<Iap2LinkEngine.Event.Dead>()
+                .firstOrNull()
+        assertTrue("必须记录有界重建原因，实际 ${dead?.reason}", dead?.reason?.contains("restarted iAP2 negotiation") == true)
+        assertFalse("链路死后旧控制请求不能继续排队", phone.sendControl(Iap2Csm.encode(0x5002), tick()))
+        assertTrue("链路死时不得输出半截回复", phone.takeOutput().isEmpty())
+    }
+
+    @Test
+    fun virtualLinkDoesNotTearDownOnNewSynWithoutRebuildCapability() {
+        val handshake = normalHandshake()
+        val phone = handshake.phone
+
+        phone.feed(synFrame(peerSequence = 161), tick())
+
+        assertFalse("无重建能力的虚拟链路不能因新 SYN 死亡", phone.isDead)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+        assertTrue("旧语义下新 SYN 不应产生半截响应", phone.takeOutput().isEmpty())
+    }
+
+    /**
+     * BMW 式重试：对端每次重发 SYN 都换新序号（会话表不变）。若这条重试与我方 SYN|ACK
+     * 交叉、而双方此后都还没发过数据，链路上只发生过协商——必须按新序号回显，不能拆链。
+     */
+    @Test
+    fun crossedSynRetryWithSameTableBeforeAnyDataIsReEchoed() {
+        val phone = Iap2LinkEngine()
+        phone.rebuildOnNewSyn = true
+        phone.start(0)
+        phone.takeOutput()
+        phone.feed(synFrame(peerSequence = 161), tick())
+        phone.takeOutput()
+        phone.feed(ackFrame(), tick())
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+        val adopted = phone.peerSynchronization
+
+        phone.feed(synFrame(peerSequence = 191), tick())
+
+        assertFalse("协商期交叉的同表重试不能拆链", phone.isDead)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+        assertEquals("同一张会话表，不应被替换", adopted, phone.peerSynchronization)
+        val echo = parseFrames(phone.takeOutput()).single { it.control == 0xC0 }
+        assertEquals("回显必须确认最新的对端 SYN 序号", 191, echo.ack)
+        assertTrue(phone.sendControl(Iap2Csm.encode(0x5001), tick()))
+    }
+
+    /**
+     * 协商期间可收到多条不同会话表的 SYN；lastEchoPeerSequence 指向最新一条，
+     * 因此 NORMAL 的幂等判断也必须比较最新回显载荷，而不是首次 adoptedSynchronization。
+     */
+    @Test
+    fun normalLinkRecognizesTheLatestNegotiationSynPayload() {
+        val phone = Iap2LinkEngine()
+        phone.rebuildOnNewSyn = true
+        phone.start(0)
+        phone.takeOutput()
+        phone.feed(synFrame(peerSequence = 161), tick())
+        phone.takeOutput()
+
+        phone.feed(synFrameWithMaxOutgoing(peerSequence = 191, maxOutgoing = 8), tick())
+        val latestEcho = phone.takeOutput()
+        phone.feed(ackFrame(), tick())
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+
+        phone.feed(synFrameWithMaxOutgoing(peerSequence = 191, maxOutgoing = 8), tick())
+
+        assertFalse("最新 SYN 的重传不能被误判为链路重启", phone.isDead)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+        assertArrayEquals(latestEcho, phone.takeOutput())
+    }
+
     /** 裸 ACK 不能与已发出的 SYN|ACK 撞序号（BMW 会把同序号帧当重复丢弃）。 */
     @Test
     fun ackSequenceNeverDuplicatesTheSynAck() {
@@ -271,8 +398,13 @@ class Iap2LinkEngineTest {
      * 帧头是 **9 字节**：`FF5A | u16 长度 | u8 控制 | u8 seq | u8 ack | u8 会话 | u8 头校验和`，
      * 所以 seq 在帧内偏移 5、头校验和在偏移 8（不是 7——那一位是会话 ID）。
      */
-    private fun synFrame(peerSequence: Int): ByteArray {
-        val engine = Iap2LinkEngine()
+    private fun synFrame(peerSequence: Int): ByteArray = synFrameWithMaxOutgoing(peerSequence, maxOutgoing = 4)
+
+    private fun synFrameWithMaxOutgoing(
+        peerSequence: Int,
+        maxOutgoing: Int,
+    ): ByteArray {
+        val engine = Iap2LinkEngine(maxOutgoing = maxOutgoing)
         engine.start(0)
         val raw = engine.takeOutput()
         val synOffset = 6 // 前置 marker 6 字节
@@ -282,6 +414,23 @@ class Iap2LinkEngineTest {
         for (index in synOffset until synOffset + 8) sum += raw[index].toInt() and 0xFF
         raw[synOffset + 8] = (-sum and 0xFF).toByte()
         return raw
+    }
+
+    /** Bare ACK frame with no payload, enough to complete negotiation after a SYN echo. */
+    private fun ackFrame(): ByteArray {
+        val frame = ByteArray(Iap2LinkEngine.HEADER_BYTES)
+        frame[0] = 0xFF.toByte()
+        frame[1] = 0x5A
+        frame[2] = 0
+        frame[3] = Iap2LinkEngine.HEADER_BYTES.toByte()
+        frame[4] = 0x40
+        frame[5] = 0
+        frame[6] = 0
+        frame[7] = 0
+        var sum = 0
+        for (index in 0 until Iap2LinkEngine.HEADER_BYTES - 1) sum += frame[index].toInt() and 0xFF
+        frame[Iap2LinkEngine.HEADER_BYTES - 1] = (-sum and 0xFF).toByte()
+        return frame
     }
 
     private fun exchange(
@@ -302,6 +451,30 @@ class Iap2LinkEngineTest {
         ) {
             exchange(a, b)
         }
+    }
+
+    private data class NormalHandshake(
+        val phone: Iap2LinkEngine,
+        val accessory: Iap2LinkEngine,
+        val accessorySyn: ByteArray,
+        val firstEcho: ByteArray,
+    )
+
+    private fun normalHandshake(): NormalHandshake {
+        val phone = Iap2LinkEngine()
+        val accessory = Iap2LinkEngine()
+        phone.start(0)
+        accessory.start(0)
+        val phoneSyn = phone.takeOutput()
+        val accessorySyn = accessory.takeOutput()
+        accessory.feed(phoneSyn, tick())
+        phone.feed(accessorySyn, tick())
+        val firstEcho = phone.takeOutput()
+        accessory.feed(firstEcho, tick())
+        exchangeUntilNormal(phone, accessory)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+        assertEquals(Iap2LinkEngine.State.NORMAL, accessory.state)
+        return NormalHandshake(phone, accessory, accessorySyn, firstEcho)
     }
 
     private fun pollControls(engine: Iap2LinkEngine): List<ByteArray> {

@@ -22,17 +22,20 @@ internal fun Iap2LinkChannel.runSenderSession(
     onEndpoint: (Iap2SenderSession.CarPlayEndpoint) -> Unit,
     onWifiCredentials: (Iap2SenderSession.WifiConfiguration) -> Unit,
     onEndpointUpdate: (Iap2SenderSession.CarPlayEndpoint) -> Unit,
-    onLinkClosed: (String?) -> Unit = {},
+    /** 链路断开：同时携带 RFCOMM 观察归属（交接所有权）与对端地址（熔断隔离）。 */
+    onLinkClosed: (ReceiverObservation?, String?) -> Unit = { _, _ -> },
     /** 本进程已知的车机热点 SSID（无新凭据时沿用，避免每轮拆链）。 */
     knownCarSsid: () -> String? = { null },
     /** 车机是否已在 WiFi 上发过 ctrl 邀请（无凭据时据此不拆链）。 */
-    receiverInvited: () -> Boolean = { false },
+    receiverInvited: (ReceiverObservation?) -> Boolean = { false },
     /** 0x1D01 画像判定的链路代际（CLASSIC_MIB3/EVENT_LINK），Phase 1 完成后回调。 */
     onGeneration: (ReceiverProfile.LinkGeneration) -> Unit = {},
     peerAddress: String? = null,
     observation: ReceiverObservation? = ReceiverDetectionRuntime.observation(peerAddress),
     /** 会话对象建好、开始 bring-up 之前回调；供退役链路时发 0xEA01（见 [retireControlLink]）。 */
     onSession: (Iap2SenderSession) -> Unit = {},
+    onObservation: (ReceiverObservation?, Boolean) -> Unit = { _, _ -> },
+    unverifiedInvitePending: () -> Boolean = { false },
 ) {
     val session =
         Iap2SenderSession(
@@ -40,14 +43,14 @@ internal fun Iap2LinkChannel.runSenderSession(
             { line -> log(line) },
             resolveBluetoothMac(context, log),
             DeviceIdentity.deviceName(context),
-            { wifi -> if (ReceiverDetectionRuntime.isCurrent(observation)) onWifiCredentials(wifi) },
+            { wifi -> if (ReceiverDetectionRuntime.isCurrent(observation)) onWifiCredentials(wifi.copy(observation = observation)) },
             { update ->
                 if (ReceiverDetectionRuntime.isCurrent(observation)) {
                     onEndpointUpdate(update.copy(observation = observation, peerAddress = peerAddress))
                 }
             },
             knownCarSsid,
-            receiverInvited,
+            { receiverInvited(observation) },
             // MFi 挑战长度按车机身份持久化（省掉 20B 静默 6 秒的试探）
             context.applicationContext,
             receiverBinding = observation?.binding,
@@ -55,17 +58,28 @@ internal fun Iap2LinkChannel.runSenderSession(
             onMilestone = { milestone ->
                 if (ReceiverDetectionRuntime.isCurrent(observation)) ConnectionDiagnostics.milestoneCurrent(milestone)
             },
+            unverifiedInvitePending = unverifiedInvitePending,
         )
     onSession(session)
-    val endpoint = session.run(timeoutMillis)
-    onGeneration(session.linkGeneration)
-    if (!ReceiverDetectionRuntime.isCurrent(observation)) return
-    onEndpoint(endpoint.copy(observation = observation, peerAddress = peerAddress))
-    // Phase 2 过渡：保持控制通道存活记录配件消息；AirPlay 配对由 onEndpoint 回调发起
-    session.pumpIncomingForever()
-    // 链路断开（保活泵退出）：通知主控释放「会话处理中」——否则车机拆链后重连带来的
-    // 新端点会被僵尸轮次堵门（2026-10-22 奥迪 3315 真机定谳，见 SessionController.onSenderLinkClosed）
-    if (ReceiverDetectionRuntime.isCurrent(observation)) onLinkClosed(peerAddress)
+    onObservation(observation, true)
+    var endpointDelivered = false
+    try {
+        val endpoint = session.run(timeoutMillis)
+        onGeneration(session.linkGeneration)
+        if (!ReceiverDetectionRuntime.isCurrent(observation)) return
+        endpointDelivered = true
+        onEndpoint(endpoint.copy(observation = observation, peerAddress = peerAddress))
+        // Phase 2 过渡：保持控制通道存活记录配件消息；AirPlay 配对由 onEndpoint 回调发起
+        session.pumpIncomingForever()
+    } finally {
+        onObservation(observation, false)
+        if (endpointDelivered && ReceiverDetectionRuntime.isCurrent(observation)) {
+            // 只有交付过端点的链路才可能拥有当前交接；Phase 1 前失败的候选链路
+            // 不得取消另一条已经进入入网/配对的健康链路。
+            session.linkTerminationReason?.let { log("SESSION 链路终止原因: $it") }
+            onLinkClosed(observation, peerAddress)
+        }
+    }
 }
 
 /** 退役链路时，0xEA01 交给 socket 后到关闭 RFCOMM 之间的冲刷宽限。 */

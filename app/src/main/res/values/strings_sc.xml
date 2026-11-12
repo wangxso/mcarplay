@@ -58,6 +58,10 @@
     <string name="sc_use_current_title">使用当前 Wi-Fi？</string>
     <string name="sc_use_current_body">如果手机和接收端都已连接同一路由器（例如 DiPlay 同局域网模式），可以直接使用当前 Wi-Fi。\n\n请确认两端网络相同；若接收端提供独立热点，请前往 WLAN 设置加入 \"%1$s\"。</string>
     <string name="sc_use_current">使用当前 Wi-Fi</string>
+    <string name="sc_current_network">当前网络</string>
+    <string name="sc_known_ssid_title">请手动加入车机热点</string>
+    <string name="sc_known_ssid_body">本轮只拿到热点名称 \"%1$s\"，没有安全类型或密码，不能自动按开放热点加入。请到系统 WLAN 手动加入该热点，完成后回到本应用。</string>
+    <string name="sc_bt_link_closed_while_joining">蓝牙链路已断开，已停止等待车机网络；等待车机重新连接…</string>
     <string name="sc_join_title">连接车机热点</string>
     <string name="sc_join_body">将自动加入 \"%1$s\" 热点。该热点无互联网，系统可能自动切回原 WiFi。\n\n出现断连时，请到 WLAN 设置中主动连接 \"%2$s\"（手动连接不会被切回）。</string>
     <string name="sc_join_continue">继续自动加入</string>

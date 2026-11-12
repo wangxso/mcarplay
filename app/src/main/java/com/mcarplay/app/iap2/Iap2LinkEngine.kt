@@ -138,6 +138,13 @@ class Iap2LinkEngine(
      */
     var echoFirst: Boolean = false
 
+    /**
+     * NORMAL 下收到新序号/新会话表 SYN 时是否允许结束旧链路。
+     * 只有具备上层重建能力的传输启用；AirPlay 虚拟链路收到 Dead 后只记日志，
+     * 继续沿用旧的忽略语义，避免视频期间丢失触控/控制消息。
+     */
+    var rebuildOnNewSyn: Boolean = false
+
     /** 诊断：首次采纳对端会话表时回调（打印对端提议的会话表，便于真车排查）。 */
     var onPeerSynchronizationAdopted: ((SynchronizationPayload) -> Unit)? = null
 
@@ -170,7 +177,9 @@ class Iap2LinkEngine(
 
     /** 上一次回显 SYN 时对端的 SYN 序号与我方序号（重传同一 SYN 时原样重放）。 */
     private var lastEchoPeerSequence: Int? = null
+    private var lastEchoPeerSync: SynchronizationPayload? = null
     private var lastEchoOwnSequence = 0
+    private var lastEchoAck = 0
 
     val isDead: Boolean get() = state == State.DEAD
 
@@ -404,6 +413,39 @@ class Iap2LinkEngine(
             // 发起方 SYN，属于「它已应答」的信号（见下方 ACK 分支），再回一条就会形成
             // 双方互回 SYN|ACK 的无限乒乓（单测暴露：两个引擎互相喂帧时协商永不收敛）。
             val isPureSyn = (control and CONTROL_ACKNOWLEDGEMENT) == 0
+            if (sync != null && isPureSyn && state == State.NORMAL && !echoFirst && rebuildOnNewSyn) {
+                val sameAdoptedSyn =
+                    sequence == lastEchoPeerSequence &&
+                        sync == lastEchoPeerSync
+                // 对端换新序号重发**同一张**会话表，且回显之后双方都还没有任何数据帧：
+                // 链路上只发生过协商，这正是 BMW 式「每次重试换序号」与我方 SYN|ACK 交叉的形态
+                // （2026-10-19 BMW 87866：161→191→40…）。按协商期同样的方式采纳新序号并回显，
+                // 不能当成重启协商拆链——否则交叉一次就把健康链路整条重建。
+                val negotiationOnlyRetry =
+                    !sameAdoptedSyn &&
+                        lastEchoPeerSequence != null &&
+                        sync == lastEchoPeerSync &&
+                        lastReceivedInOrder == lastEchoPeerSequence &&
+                        sentSequence == lastEchoOwnSequence
+                if (sameAdoptedSyn) {
+                    // 普通蓝牙链路：对端重放同一条已采纳 SYN。原样重放 SYN|ACK，
+                    // 不推进收发序号、不重置控制会话，也不重复交付上层控制消息。
+                    sendSynchronizationEcho(sync, sequence)
+                } else if (negotiationOnlyRetry) {
+                    lastReceivedInOrder = sequence
+                    sendSynchronizationEcho(sync, sequence)
+                } else {
+                    // 序号或会话表变了，无法证明只是旧 SYN 重传。继续沿用旧认证/热点
+                    // 状态发送请求会把两代协议混在一起；选择有界重建：终止本链路，
+                    // 由 Iap2LinkChannel 关闭 socket，上层释放本轮并等待车机重新连接。
+                    val sessions = sync.sessions.joinToString(",") { "${it.id}/k${it.kind}/v${it.version}" }
+                    die(
+                        "peer restarted iAP2 negotiation (seq=$sequence oldSeq=${lastEchoPeerSequence ?: "?"} " +
+                            "sessions=$sessions)",
+                    )
+                }
+                return
+            }
             if (sync != null && isPureSyn && (state == State.NEGOTIATING || echoFirst)) {
                 val firstAdoption = adoptedSynchronization == null
                 peerSynchronization = sync
@@ -524,15 +566,30 @@ class Iap2LinkEngine(
         sync: SynchronizationPayload,
         peerSequence: Int,
     ) {
-        if (lastEchoPeerSequence == peerSequence) {
-            writePacket(ownSyncOf(sync).encode(), lastEchoOwnSequence, CONTROL_SYNCHRONIZE or CONTROL_ACKNOWLEDGEMENT, 0)
+        if (lastEchoPeerSequence == peerSequence && lastEchoPeerSync == sync) {
+            writePacket(
+                ownSyncOf(sync).encode(),
+                lastEchoOwnSequence,
+                CONTROL_SYNCHRONIZE or CONTROL_ACKNOWLEDGEMENT,
+                0,
+                ack = lastEchoAck,
+            )
             onSynchronizationEchoSent?.invoke()
             return
         }
         val ownSequence = nextSequence(sentSequence).also { sentSequence = it }
-        writePacket(ownSyncOf(sync).encode(), ownSequence, CONTROL_SYNCHRONIZE or CONTROL_ACKNOWLEDGEMENT, 0)
+        val ack = lastReceivedInOrder
+        writePacket(
+            ownSyncOf(sync).encode(),
+            ownSequence,
+            CONTROL_SYNCHRONIZE or CONTROL_ACKNOWLEDGEMENT,
+            0,
+            ack = ack,
+        )
         lastEchoPeerSequence = peerSequence
+        lastEchoPeerSync = sync
         lastEchoOwnSequence = ownSequence
+        lastEchoAck = ack
         onSynchronizationEchoSent?.invoke()
     }
 
@@ -640,9 +697,10 @@ class Iap2LinkEngine(
         sequence: Int,
         control: Int,
         sessionId: Int,
+        ack: Int = lastReceivedInOrder,
     ) {
         if (state == State.DEAD) return
-        onFrameSent?.invoke(control, sequence, lastReceivedInOrder, sessionId, payload?.size ?: 0)
+        onFrameSent?.invoke(control, sequence, ack, sessionId, payload?.size ?: 0)
         val length = payload?.size?.plus(HEADER_BYTES + 1) ?: HEADER_BYTES
         val frame = ByteArray(length)
         frame[0] = 0xFF.toByte()
@@ -651,7 +709,7 @@ class Iap2LinkEngine(
         frame[3] = length.toByte()
         frame[4] = control.toByte()
         frame[5] = sequence.toByte()
-        frame[6] = lastReceivedInOrder.toByte()
+        frame[6] = ack.toByte()
         frame[7] = sessionId.toByte()
         var sum = 0
         for (index in 0 until HEADER_BYTES - 1) sum += u8(frame[index])

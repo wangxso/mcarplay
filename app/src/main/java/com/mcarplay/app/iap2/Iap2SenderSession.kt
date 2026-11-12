@@ -10,6 +10,26 @@ import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
+ * 端点携带的 Wi-Fi 信息来源。
+ *
+ * 不能再用「空密码 + securityType=0」同时表示“未知”和“开放热点”：
+ * 只有 [ACCESSORY] 才代表车机明确下发的完整配置，其中 securityType=0 才是真正的开放热点。
+ */
+enum class WifiCredentialSource {
+    /** 车机在 0x5703 / 0x4301 中明确下发的完整配置（开放热点也属于此）。 */
+    ACCESSORY,
+
+    /** 只知道 SSID，安全类型和密码都未知；只能核对后复用或请用户手动入网。 */
+    KNOWN_SSID,
+
+    /** 已由 ctrl 邀请或用户确认验证过的当前网络；只能绑定，不能按 SSID 重新加入。 */
+    CURRENT_NETWORK,
+
+    /** 没有可用网络信息（等待晚到 0x4301）。 */
+    NONE,
+}
+
+/**
  * iAP2 发送端（iPhone 角色）控制会话：完整走通无线 CarPlay 的 bring-up 序列，
  * 最终从 0x5703 / 0x4301 解析出接收端热点与 AirPlay 端点 —— Phase 1 的 Go/No-Go 交付。
  *
@@ -73,6 +93,8 @@ class Iap2SenderSession(
     private val rememberMfi: Boolean = true,
     /** 链路就绪、识别接受、认证完成三个里程碑（诊断用，不影响协议流程）。 */
     private val onMilestone: (ConnectionMilestone) -> Unit = {},
+    /** 有新邀请但尚无法安全关联当前链路时，保活交由主控请求用户确认。 */
+    private val unverifiedInvitePending: () -> Boolean = { false },
 ) {
     /** 从 0x5703 + 0x4301 解析出的接收端信息。 */
     data class CarPlayEndpoint(
@@ -108,9 +130,30 @@ class Iap2SenderSession(
          * null = 未知（例如合成端点）。
          */
         val peerAddress: String? = null,
-    )
+        /**
+         * Wi-Fi 信息来源。旧字段 [ssid]/[passphrase]/[securityType] 保留给既有解析与日志；
+         * 是否允许“加入网络”只能由本字段判定。
+         */
+        val wifiCredentialSource: WifiCredentialSource = WifiCredentialSource.NONE,
+    ) {
+        /** 只有车机明确下发的完整配置才允许交给 WifiNetworkSpecifier / connect-network。 */
+        val hasCompleteWifiCredentials: Boolean
+            get() = wifiCredentialSource == WifiCredentialSource.ACCESSORY && ssid.isNotBlank()
+
+        /** 完整配置的显式转换；仅已知 SSID 时返回 null，绝不合成开放网络。 */
+        fun accessoryWifiOrNull(): WifiConfiguration? =
+            if (hasCompleteWifiCredentials) {
+                WifiConfiguration(ssid, passphrase, channel, securityType)
+            } else {
+                null
+            }
+    }
 
     private val parser = Iap2Csm.Parser()
+
+    /** 链路终止原因（由 Iap2LinkChannel 填充），用于在上层记录有界重建的触发点。 */
+    val linkTerminationReason: String?
+        get() = channel.terminationReason
 
     /** 刚解析、尚未分类的帧（到达顺序）。 */
     private val receivedFrames = ArrayDeque<Iap2Csm.Frame>()
@@ -134,6 +177,9 @@ class Iap2SenderSession(
     /** 0x5703 解析结果（保活期间车机重发 0x5702 时需重新应答）。 */
     @Volatile
     private var wifi: WifiConfiguration? = null
+
+    /** 只知道名称时不得合成凭据，但晚到的地址/端口仍需沿用这条链路的名称。 */
+    private var knownSessionSsid: String? = null
 
     /** 0x4301 原始体是否已记录（每轮会话一次，避免周期补发刷屏）。 */
     private var startSessionRawLogged = false
@@ -381,6 +427,7 @@ class Iap2SenderSession(
                     "（清单不完整不能反证「不支持」；车机对未声明消息通常照常处理）",
             )
         }
+        var knownWifiSsidFromExchange: String? = null
         val wifiFromExchange: WifiConfiguration? =
             if (!legacyWifiExchange) {
                 null
@@ -413,8 +460,10 @@ class Iap2SenderSession(
                                 Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
                                 wifiRescueDeadline(deadline, INVITE_POLL_MILLIS),
                             )
-                        if (wifiConfiguration == null && receiverInvited?.invoke() == true) {
-                            log("iap2 0x5703 未到但车机已在 WiFi 上发 ctrl 邀请——停止等待凭据，转入兜底")
+                        if (wifiConfiguration == null &&
+                            (receiverInvited?.invoke() == true || unverifiedInvitePending())
+                        ) {
+                            log("iap2 0x5703 未到但已收到 ctrl 邀请——停止等待凭据，转入兜底")
                             break
                         }
                         if (!channel.isAlive) break
@@ -426,15 +475,30 @@ class Iap2SenderSession(
                 } else {
                     // 显式断言：上面按分段等待赋值过 3 次，避免依赖 var 的智能转换
                     val parsed = parseWifiConfiguration(wifiConfiguration!!)
-                    log(
-                        "iap2 rx=0x5703 ssid=${parsed.ssid} channel=${parsed.channel} " +
-                            "security=${parsed.securityType} psk=${if (parsed.passphrase.isEmpty()) "(空)" else "***"}",
-                    )
-                    // 真车死锁解药（catplay CarPlayInviter 实证）：车机在 WiFi 网络上发现手机的
-                    // _carplay-ctrl._tcp 后主动发 GET /ctrl-int/1/connect 邀请，**邀请成功才发 0x4301**。
-                    // 因此这里必须立即通知主控绑 WiFi + 广播 ctrl（带真实蓝牙 MAC 作 TXT id）。
-                    onWifiCredentials?.invoke(parsed)
-                    parsed
+                    if (parsed == null) {
+                        log("iap2 rx=0x5703 缺少 SSID/安全类型或非开放网络缺少密码——不当作完整凭据，继续等 0x4301")
+                        null
+                    } else {
+                        val complete = parsed.configuration
+                        if (complete == null) {
+                            knownWifiSsidFromExchange = parsed.ssid
+                            log(
+                                "iap2 rx=0x5703 只有 SSID，缺少安全类型/密码——" +
+                                    "降级为 KNOWN_SSID，不自动按热点加入",
+                            )
+                            null
+                        } else {
+                            log(
+                                "iap2 rx=0x5703 SSID 已读取 channel=${complete.channel} " +
+                                    "security=${complete.securityType} psk=${if (complete.passphrase.isEmpty()) "(空)" else "***"}",
+                            )
+                            // 真车死锁解药（catplay CarPlayInviter 实证）：车机在 WiFi 网络上发现手机的
+                            // _carplay-ctrl._tcp 后主动发 GET /ctrl-int/1/connect 邀请，**邀请成功才发 0x4301**。
+                            // 因此这里必须立即通知主控绑 WiFi + 广播 ctrl（带真实蓝牙 MAC 作 TXT id）。
+                            onWifiCredentials?.invoke(complete)
+                            complete
+                        }
+                    }
                 }
             }
 
@@ -474,7 +538,7 @@ class Iap2SenderSession(
                     minOf(deadline, System.nanoTime() + startSessionWindow),
                 )
         }
-        val endpoint =
+        var endpoint =
             if (startSession != null) {
                 parseStartSession(startSession, wifiFromExchange)
             } else {
@@ -502,18 +566,19 @@ class Iap2SenderSession(
                         publicKey = null,
                         sourceVersion = null,
                         ipAddresses = emptyList(),
+                        wifiCredentialSource = WifiCredentialSource.ACCESSORY,
                     )
                 } else {
                     // 无 0x5703。四级兜底，前三级都不拆链：
                     // ① 已知热点（上一轮拿过/已入网过，2026-10-22 奥迪：第 2 轮起手机已在
                     //    车机热点上，空端点会让主控走 mDNS/网关，0x4301 晚到仍热更新）
-                    val knownSsid = knownCarSsid?.invoke()
+                    val knownSsid = knownWifiSsidFromExchange ?: knownCarSsid?.invoke()
                     val invited = receiverInvited?.invoke() == true
-                    when (credentiallessFallback(knownSsid, declaresStartSession, invited)) {
+                    when (credentiallessFallback(knownSsid, declaresStartSession, invited, unverifiedInvitePending())) {
                         CredentiallessFallback.KNOWN_SSID -> {
                             val fallback = credentiallessEndpoint(knownSsid)!!
                             log(
-                                "iap2 无新凭据——沿用已知热点 \"${fallback.ssid}\" 继续" +
+                                "iap2 无新凭据——沿用已知热点继续" +
                                     "（绑定当前网络后走 mDNS/网关，晚到的 0x4301 会热更新端点），不拆链",
                             )
                             fallback
@@ -521,6 +586,7 @@ class Iap2SenderSession(
 
                         CredentiallessFallback.AWAIT_LATE_START_SESSION,
                         CredentiallessFallback.RECEIVER_INVITED,
+                        CredentiallessFallback.AWAIT_USER_CONFIRMATION,
                         -> {
                             // ② 新协议车机（GM/Cinemo、BMW iD9 同族：无 0x5702/0x5703，AP 信息只在
                             //    0x4301 里）声明会发但窗口内未到。凯迪拉克 CT5 实测（2026-10-21 日志）：
@@ -535,9 +601,11 @@ class Iap2SenderSession(
                                 if (invited) {
                                     "iap2 无 0x5703/0x4301，但车机已在 WiFi 上发过 ctrl 邀请——不拆链，" +
                                         "返回空端点，由主控按手机当前 WiFi 接邀请"
-                                } else {
+                                } else if (declaresStartSession == true) {
                                     "iap2 0x4301 窗口内未到但车机声明会发——不拆链，返回空端点进入保活；" +
                                         "晚到 0x4301 将重新触发配对（Audi MMI 9310 先例：2 分 35 秒）"
+                                } else {
+                                    "iap2 收到尚未核验归属的 ctrl 邀请——保活并等待用户确认当前网络"
                                 },
                             )
                             CarPlayEndpoint(
@@ -550,6 +618,7 @@ class Iap2SenderSession(
                                 publicKey = null,
                                 sourceVersion = null,
                                 ipAddresses = emptyList(),
+                                wifiCredentialSource = WifiCredentialSource.NONE,
                             )
                         }
 
@@ -562,6 +631,13 @@ class Iap2SenderSession(
                     }
                 }
             }
+        if (endpoint.ssid.isEmpty() && knownWifiSsidFromExchange != null) {
+            endpoint =
+                endpoint.copy(
+                    ssid = knownWifiSsidFromExchange!!,
+                    wifiCredentialSource = WifiCredentialSource.KNOWN_SSID,
+                )
+        }
         if (startSession != null) {
             logStartSessionRaw(startSession)
             log(
@@ -586,15 +662,11 @@ class Iap2SenderSession(
         // 空端点（声明会发 0x4301 但窗口内未到）必须保持 wifi=null：否则保活期
         // parseStartSession 的 `ap = wifi ?: fromSession` 会用空凭据覆盖晚到 0x4301
         // 自带的 AP 信息，把唯一的凭据来源丢掉。
-        if (endpoint.ssid.isNotEmpty()) {
-            this.wifi =
-                wifiFromExchange ?: WifiConfiguration(
-                    ssid = endpoint.ssid,
-                    passphrase = endpoint.passphrase,
-                    channel = endpoint.channel,
-                    securityType = endpoint.securityType,
-                )
+        val completeWifi = wifiFromExchange ?: endpoint.accessoryWifiOrNull()
+        if (completeWifi != null) {
+            this.wifi = completeWifi
         }
+        knownSessionSsid = endpoint.ssid.takeIf { it.isNotBlank() }
         return endpoint.copy(receiverSignals = receiverSignals)
     }
 
@@ -661,21 +733,22 @@ class Iap2SenderSession(
      */
     private fun handleLateStartSession(frame: Iap2Csm.Frame) {
         logStartSessionRaw(frame)
-        val endpoint = parseStartSession(frame, wifi)
-        if (wifi == null && endpoint.ssid.isNotEmpty()) {
-            wifi =
-                WifiConfiguration(
-                    ssid = endpoint.ssid,
-                    passphrase = endpoint.passphrase,
-                    channel = endpoint.channel,
-                    securityType = endpoint.securityType,
-                )
-            log("iap2 0x4301 自带 AP 信息：ssid=${endpoint.ssid}——已缓存，供后续 0x5703/0x4301 复用")
+        var endpoint = parseStartSession(frame, wifi)
+        if (endpoint.ssid.isBlank()) {
+            knownSessionSsid?.let { known ->
+                endpoint = endpoint.copy(ssid = known, wifiCredentialSource = WifiCredentialSource.KNOWN_SSID)
+            }
+        }
+        val accessoryWifi = endpoint.accessoryWifiOrNull()
+        if (wifi == null && accessoryWifi != null) {
+            wifi = accessoryWifi
+            log("iap2 0x4301 自带 AP 信息：SSID 已读取——已缓存，供后续 0x5703/0x4301 复用")
         }
         if (endpoint.ssid.isEmpty()) {
             log("iap2 rx=0x4301（晚到）——无线组里没解析出 SSID，本条忽略")
             return
         }
+        knownSessionSsid = endpoint.ssid
         // 车机可能周期性重发同一份 0x4301：详情只在端点变化时打，避免刷日志。
         if (endpoint.hashCode() != lastLateStartSessionSignature) {
             lastLateStartSessionSignature = endpoint.hashCode()
@@ -1071,25 +1144,41 @@ class Iap2SenderSession(
         val passphrase: String,
         val channel: Int,
         val securityType: Int,
+        /** 下发这份凭据的 RFCOMM 链路（BtSession 注入）；凭据缓存与 0x4301 端点按同一车机实例取键。 */
+        val observation: ReceiverObservation? = null,
     )
 
-    private fun parseWifiConfiguration(frame: Iap2Csm.Frame): WifiConfiguration {
+    private data class ParsedWifiConfiguration(
+        val ssid: String,
+        val configuration: WifiConfiguration?,
+    )
+
+    private fun parseWifiConfiguration(frame: Iap2Csm.Frame): ParsedWifiConfiguration? {
         val params = Iap2Csm.parseParams(frame.body).associateBy { it.id }
-        return WifiConfiguration(
-            ssid = params[1]?.value?.asStringOrEmpty() ?: "",
-            passphrase = params[2]?.value?.asStringOrEmpty() ?: "",
-            securityType =
-                params[3]
-                    ?.value
-                    ?.firstOrNull()
-                    ?.toInt()
-                    ?.and(0xFF) ?: 0,
-            channel =
-                params[4]
-                    ?.value
-                    ?.firstOrNull()
-                    ?.toInt()
-                    ?.and(0xFF) ?: 0,
+        val ssid = params[1]?.value?.asStringOrEmpty() ?: return null
+        if (ssid.isBlank()) return null
+        val security =
+            params[3]
+                ?.value
+                ?.firstOrNull()
+                ?.toInt()
+                ?.and(0xFF)
+                ?: return ParsedWifiConfiguration(ssid, null)
+        val passphrase = params[2]?.value?.asStringOrEmpty() ?: ""
+        if (security != 0 && passphrase.isEmpty()) return ParsedWifiConfiguration(ssid, null)
+        return ParsedWifiConfiguration(
+            ssid,
+            WifiConfiguration(
+                ssid = ssid,
+                passphrase = passphrase,
+                securityType = security,
+                channel =
+                    params[4]
+                        ?.value
+                        ?.firstOrNull()
+                        ?.toInt()
+                        ?.and(0xFF) ?: 0,
+            ),
         )
     }
 
@@ -1128,15 +1217,26 @@ class Iap2SenderSession(
             )
         }
         val fromSession = wireless?.let { parseWirelessAp(it) }
-        val ap = wifi ?: fromSession
+        val ap = wifi ?: fromSession?.configuration
+        val sessionConfig = fromSession?.configuration
+        val knownSsid =
+            when {
+                wifi != null && wifi.ssid.isNotBlank() -> wifi.ssid
+                else -> fromSession?.ssid
+            }
         if (wifi == null && fromSession != null) {
-            log(
-                "iap2 0x4301 自带 AP：ssid=${fromSession.ssid} channel=${fromSession.channel} " +
-                    "security=${fromSession.securityType} psk=${if (fromSession.passphrase.isEmpty()) "(空)" else "***"}",
-            )
+            if (sessionConfig != null) {
+                log(
+                    "iap2 0x4301 自带 AP：SSID 已读取 channel=${sessionConfig.channel} " +
+                        "security=${sessionConfig.securityType} " +
+                        "psk=${if (sessionConfig.passphrase.isEmpty()) "(空)" else "***"}",
+                )
+            } else {
+                log("iap2 0x4301 无线组只有 SSID，缺少安全类型/密码——按 KNOWN_SSID 交给主控核对")
+            }
         }
         return CarPlayEndpoint(
-            ssid = ap?.ssid ?: "",
+            ssid = knownSsid ?: "",
             passphrase = ap?.passphrase ?: "",
             channel = ap?.channel ?: 0,
             securityType = ap?.securityType ?: 0,
@@ -1146,6 +1246,14 @@ class Iap2SenderSession(
             sourceVersion = params[5]?.value?.asStringOrEmpty(),
             ipAddresses = addresses,
             receiverSignals = receiverSignals,
+            wifiCredentialSource =
+                if (ap != null && ap.ssid.isNotBlank()) {
+                    WifiCredentialSource.ACCESSORY
+                } else if (knownSsid != null) {
+                    WifiCredentialSource.KNOWN_SSID
+                } else {
+                    WifiCredentialSource.NONE
+                },
         )
     }
 
@@ -1156,7 +1264,13 @@ class Iap2SenderSession(
      * 单字节字段按取值范围归类（信道 1..196、安全类型 0..4），信道优先 id=2、
      * 其次 id=4/id=3 中不是安全类型的那个。解析不出来返回 null（调用方会报错并留日志）。
      */
-    private fun parseWirelessAp(group: List<Iap2Csm.Param>): WifiConfiguration? {
+    private data class ParsedWirelessAp(
+        val ssid: String,
+        /** 只有安全类型和口令都足够时才非空；否则仍保留 SSID 供主控核对。 */
+        val configuration: WifiConfiguration?,
+    )
+
+    private fun parseWirelessAp(group: List<Iap2Csm.Param>): ParsedWirelessAp? {
         val ipv4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
         val strings =
             group
@@ -1169,13 +1283,17 @@ class Iap2SenderSession(
         val security =
             singles[4]?.takeIf { it in 0..4 }
                 ?: singles[3]?.takeIf { it in 0..4 }
-                ?: 0
+                ?: return ParsedWirelessAp(ssid, null)
+        if (security != 0 && passphrase.isEmpty()) return ParsedWirelessAp(ssid, null)
         val channel =
             singles[2]?.takeIf { it in 1..196 }
                 ?: singles[4]?.takeIf { it in 1..196 && it != security }
                 ?: singles[3]?.takeIf { it in 1..196 && it != security }
                 ?: 0
-        return WifiConfiguration(ssid = ssid, passphrase = passphrase, channel = channel, securityType = security)
+        return ParsedWirelessAp(
+            ssid,
+            WifiConfiguration(ssid = ssid, passphrase = passphrase, channel = channel, securityType = security),
+        )
     }
 
     /**
@@ -1345,6 +1463,9 @@ internal enum class CredentiallessFallback {
     /** 车机已在 WiFi 上发过 ctrl 邀请：空端点，主控按当前 WiFi 接邀请。 */
     RECEIVER_INVITED,
 
+    /** 有邀请但无法关联当前链路：保持连接，交给用户确认。 */
+    AWAIT_USER_CONFIRMATION,
+
     /** 没有任何线索：拆链。 */
     ABORT,
 }
@@ -1353,11 +1474,13 @@ internal fun credentiallessFallback(
     knownSsid: String?,
     declaresStartSession: Boolean?,
     receiverInvited: Boolean,
+    unverifiedInvitePending: Boolean = false,
 ): CredentiallessFallback =
     when {
         credentiallessEndpoint(knownSsid) != null -> CredentiallessFallback.KNOWN_SSID
         declaresStartSession == true -> CredentiallessFallback.AWAIT_LATE_START_SESSION
         receiverInvited -> CredentiallessFallback.RECEIVER_INVITED
+        unverifiedInvitePending -> CredentiallessFallback.AWAIT_USER_CONFIRMATION
         else -> CredentiallessFallback.ABORT
     }
 
@@ -1373,7 +1496,8 @@ internal fun credentiallessFallback(
  * mDNS/网关，晚到的 0x4301 仍会热更新端点。
  */
 internal fun credentiallessEndpoint(cachedSsid: String?): Iap2SenderSession.CarPlayEndpoint? {
-    val ssid = cachedSsid?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    // SSID 首尾空格可能是真实名称的一部分：只拒绝全空白，不要 trim 后使用。
+    val ssid = cachedSsid?.takeIf { it.isNotBlank() } ?: return null
     return Iap2SenderSession.CarPlayEndpoint(
         ssid = ssid,
         passphrase = "",
@@ -1384,5 +1508,6 @@ internal fun credentiallessEndpoint(cachedSsid: String?): Iap2SenderSession.CarP
         publicKey = null,
         sourceVersion = null,
         ipAddresses = emptyList(),
+        wifiCredentialSource = WifiCredentialSource.KNOWN_SSID,
     )
 }

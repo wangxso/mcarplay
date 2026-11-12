@@ -97,7 +97,7 @@ class CarPlayCtrlAdvertiser(
      * 连接阶段的邀请仍由 [inviteCount] / [lastInviteAtMillis] 消费。
      */
     @Volatile
-    var onInvite: (() -> Unit)? = null
+    var onInvite: ((localAddress: String?) -> Unit)? = null
 
     /** 新一轮连接开始时清零（避免把上一轮的邀请当成本轮信号）。 */
     fun resetInviteCount() {
@@ -319,7 +319,7 @@ class CarPlayCtrlAdvertiser(
                 inviteCount++
                 lastInviteAtMillis = android.os.SystemClock.uptimeMillis()
                 log("$TAG: ✓ 车机 ctrl 邀请（第 $inviteCount 次，receiver=${receiverId ?: "?"}）——AirPlay 窗口已开启")
-                runCatching { onInvite?.invoke() }
+                runCatching { onInvite?.invoke(client.localAddress?.hostAddress) }
             }
 
             val output = client.getOutputStream()

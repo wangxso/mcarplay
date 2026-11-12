@@ -135,6 +135,16 @@ class DiagnosticRedactorTest {
     }
 
     @Test
+    fun waitingJoinLogHidesTheUnrelatedCurrentWifi() {
+        val safe =
+            DiagnosticRedactor(listOf("Car_AP")).redact(
+                "WIFI: [手动入网] 等待用户在系统 WLAN 加入 \"Car_AP\"（当前 WiFi（SSID 已读取））…",
+            )
+        assertFalse(safe, safe.contains("Car_AP"))
+        assertTrue(safe, safe.contains("SSID 已读取"))
+    }
+
+    @Test
     fun ssidWithSpacesIsHiddenWithoutRemovingFollowingTechnicalFields() {
         val safe = DiagnosticRedactor().redact("ssid=Private Family WiFi channel=48 security=2\njoining Private Family WiFi")
         assertFalse(safe.contains("Private Family WiFi"))

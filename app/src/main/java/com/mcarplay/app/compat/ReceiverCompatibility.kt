@@ -59,6 +59,11 @@ object ReceiverCompatibility {
         /** 对已核对的车机栈，同一会话只发送一次 RECORD，避免重复启动遗留定时器。 */
         val singleRecordPerSession: Boolean = false,
         /**
+         * 连接等待超过 30 s 时显示艾瑞泽 8 专属提示（该车机此时会自行重置并重新发起）。只影响界面文案，
+         * 与 [singleRecordPerSession] 同一份 CHERY/Tiggo/320.17.7 身份判定；手动车型不改变它（车还是那台车）。
+         */
+        val arrizo8ConnectWindowHint: Boolean = false,
+        /**
          * 推流中收到车机 ctrl 邀请（`GET /ctrl-int/1/connect`）时退役当前会话并按邀请重连。大众 Cinemo 栈车机
          * （ID7 `VW4131`、帕萨特 `VW4211`）推流中发邀请表示要重建会话：手机不接，车机约 18 s 后自行拆会话，
          * 用户看到黑屏（ID7 黑屏诊断：15 次断流前各有一次邀请）。其余车机推流中的邀请只记日志。
@@ -203,6 +208,7 @@ object ReceiverCompatibility {
             iphoneAuthSequence = cheryReleasesBluetooth,
             pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
             singleRecordPerSession = cherySingleRecord,
+            arrizo8ConnectWindowHint = cherySingleRecord,
             reconnectOnStreamingInvite = vwStreamingInvite,
         )
     }

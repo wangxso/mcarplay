@@ -45,6 +45,7 @@ class Iap2SenderSessionTest {
             synchronized(milestones) { milestones.toList() },
         )
         assertEquals("MockAP", endpoint.ssid)
+        assertEquals(WifiCredentialSource.ACCESSORY, endpoint.wifiCredentialSource)
         assertEquals("secret-passphrase", endpoint.passphrase)
         assertEquals(36, endpoint.channel)
         assertEquals(2, endpoint.securityType)
@@ -202,6 +203,66 @@ class Iap2SenderSessionTest {
         pump.join(2_000)
     }
 
+    @Test
+    fun addressOnlyLateEndpointKeepsKnownSsidWithoutInventingCredentials() {
+        for (ssidFromExchange in listOf(true, false)) {
+            val pair = InMemoryStreamPair()
+            val phone = Iap2LinkChannel(pair.sideA, name = "phone-known-ssid")
+            val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-address-only")
+            val accessory =
+                MockAccessory(
+                    accessoryChannel,
+                    shape = MockAccessory.Shape.AUDI_9310,
+                    lateStartSession = true,
+                    completeWifiConfiguration = false,
+                    provideWifiSsid = ssidFromExchange,
+                    includeWirelessSsid = false,
+                    completeWirelessAp = false,
+                )
+            val worker =
+                Thread({ accessory.run() }, "mock-address-only").apply {
+                    isDaemon = true
+                    start()
+                }
+            val update = AtomicReference<Iap2SenderSession.CarPlayEndpoint?>()
+            val received = CountDownLatch(1)
+            val session =
+                Iap2SenderSession(
+                    phone,
+                    log = {},
+                    bluetoothMac = "02:00:00:00:00:01",
+                    knownCarSsid = { "MockAP" },
+                    onEndpointUpdate = {
+                        update.set(it)
+                        received.countDown()
+                    },
+                )
+            var pump: Thread? = null
+            try {
+                val initial = session.run(timeoutMillis = 10_000L)
+                assertEquals("MockAP", initial.ssid)
+                assertEquals(WifiCredentialSource.KNOWN_SSID, initial.wifiCredentialSource)
+                pump =
+                    Thread({ session.pumpIncomingForever() }, "phone-pump-address-only").apply {
+                        isDaemon = true
+                        start()
+                    }
+                assertTrue("晚到地址/端口未被交付", received.await(5, TimeUnit.SECONDS))
+                val late = update.get()!!
+                assertEquals("MockAP", late.ssid)
+                assertEquals(WifiCredentialSource.KNOWN_SSID, late.wifiCredentialSource)
+                assertNull(late.accessoryWifiOrNull())
+                assertEquals(49152, late.airPlayPort)
+                assertEquals(listOf("192.168.49.1", "fd00::1"), late.ipAddresses)
+            } finally {
+                phone.close()
+                accessoryChannel.close()
+                pump?.join(2_000)
+                worker.join(2_000)
+            }
+        }
+    }
+
     /**
      * PR #19（凯迪拉克 CT5）：新协议车机声明会发 0x4301 但窗口内未到——
      * **不拆链**，返回空端点进入保活；保活泵把晚到的 0x4301 解析成完整端点
@@ -340,9 +401,112 @@ class Iap2SenderSessionTest {
         val endpoint = credentiallessEndpoint("Audi_MMI_3315_5GHz")
         assertNotNull("已知热点时必须合成兜底端点，而不是拆链", endpoint)
         assertEquals("Audi_MMI_3315_5GHz", endpoint!!.ssid)
+        assertEquals(WifiCredentialSource.KNOWN_SSID, endpoint.wifiCredentialSource)
+        assertNull("仅 SSID 不得被当成可加入的开放热点", endpoint.accessoryWifiOrNull())
         // 必须是「不自足端点」：主控据此才走「等 ctrl 邀请 → mDNS/网关」路径
         assertEquals(0, endpoint.airPlayPort)
         assertTrue(endpoint.ipAddresses.isEmpty())
+    }
+
+    @Test
+    fun explicitOpenAccessoryConfigurationRemainsJoinable() {
+        val endpoint =
+            Iap2SenderSession.CarPlayEndpoint(
+                ssid = "OpenCarAP",
+                passphrase = "",
+                channel = 6,
+                securityType = 0,
+                airPlayPort = 7000,
+                deviceIdentifier = null,
+                publicKey = null,
+                sourceVersion = null,
+                ipAddresses = emptyList(),
+                wifiCredentialSource = WifiCredentialSource.ACCESSORY,
+            )
+
+        assertEquals(
+            Iap2SenderSession.WifiConfiguration("OpenCarAP", "", 6, 0),
+            endpoint.accessoryWifiOrNull(),
+        )
+    }
+
+    /**
+     * 重连的 0x4301 可能只带 SSID、缺少安全类型/口令。此时不能把它当完整凭据，
+     * 但也不能丢掉 SSID：主控还要用目标+SSID 缓存或当前同名网络恢复。
+     */
+    @Test
+    fun incompleteStartSessionKeepsSsidAsKnownOnly() {
+        val ssid = "Guest\"PrivateWing"
+        val logs = mutableListOf<String>()
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-incomplete-ap")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-incomplete-ap")
+        val accessory =
+            MockAccessory(
+                accessoryChannel,
+                shape = MockAccessory.Shape.BMW_ID9,
+                completeWirelessAp = false,
+                wifiConfiguration = Iap2SenderSession.WifiConfiguration(ssid, "secret-passphrase", 36, 2),
+            )
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory-incomplete-ap")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+        try {
+            val endpoint =
+                Iap2SenderSession(
+                    phoneChannel,
+                    log = { line -> logs.add(line) },
+                    bluetoothMac = "34:86:DA:86:BB:96",
+                    deviceName = "test-device",
+                ).run(timeoutMillis = 10_000L)
+
+            assertEquals(ssid, endpoint.ssid)
+            assertEquals(WifiCredentialSource.KNOWN_SSID, endpoint.wifiCredentialSource)
+            assertNull("缺少安全类型/密码不得生成完整入网配置", endpoint.accessoryWifiOrNull())
+            assertEquals(49152, endpoint.airPlayPort)
+            assertTrue("SSID 不应出现在协议日志中", logs.none { it.contains("PrivateWing") })
+        } finally {
+            phoneChannel.close()
+            accessoryChannel.close()
+            accessoryThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun incompleteWifiConfigurationKeepsSsidAsKnownOnly() {
+        val ssid = "Guest\"PrivateWing"
+        val logs = mutableListOf<String>()
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-incomplete-5703")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-incomplete-5703")
+        val accessory =
+            MockAccessory(
+                accessoryChannel,
+                completeWifiConfiguration = false,
+                providesStartSession = false,
+                wifiConfiguration = Iap2SenderSession.WifiConfiguration(ssid, "secret-passphrase", 36, 2),
+            )
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory-incomplete-5703")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+        try {
+            val endpoint =
+                Iap2SenderSession(
+                    phoneChannel,
+                    log = { line -> logs.add(line) },
+                    bluetoothMac = "34:86:DA:86:BB:96",
+                    deviceName = "test-device",
+                ).run(timeoutMillis = 10_000L)
+
+            assertEquals(ssid, endpoint.ssid)
+            assertEquals(WifiCredentialSource.KNOWN_SSID, endpoint.wifiCredentialSource)
+            assertNull("不完整 0x5703 不能生成完整入网配置", endpoint.accessoryWifiOrNull())
+            assertTrue("SSID 不应出现在协议日志中", logs.none { it.contains("PrivateWing") })
+        } finally {
+            phoneChannel.close()
+            accessoryChannel.close()
+            accessoryThread.join(2_000)
+        }
     }
 
     /** 连 SSID 都不知道才允许失败（继续等只会空转）。 */
@@ -351,6 +515,14 @@ class Iap2SenderSessionTest {
         assertEquals(null, credentiallessEndpoint(null))
         assertEquals(null, credentiallessEndpoint(""))
         assertEquals(null, credentiallessEndpoint("   "))
+    }
+
+    @Test
+    fun credentiallessEndpointPreservesSsidWhitespace() {
+        val endpoint = credentiallessEndpoint(" Car_AP ")
+        assertNotNull(endpoint)
+        assertEquals(" Car_AP ", endpoint!!.ssid)
+        assertEquals(WifiCredentialSource.KNOWN_SSID, endpoint.wifiCredentialSource)
     }
 
     /**
@@ -431,6 +603,35 @@ class Iap2SenderSessionTest {
     }
 
     @Test
+    fun unverifiedRecentInviteKeepsLinkForUserConfirmation() {
+        val pair = InMemoryStreamPair()
+        val phone = Iap2LinkChannel(pair.sideA, name = "phone-unverified-invite")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-unverified-invite")
+        val accessory = MockAccessory(accessoryChannel, shape = MockAccessory.Shape.VW_PASSAT)
+        val worker =
+            Thread({ accessory.run() }, "mock-unverified-invite").apply {
+                isDaemon = true
+                start()
+            }
+        try {
+            val endpoint =
+                Iap2SenderSession(
+                    phone,
+                    log = {},
+                    receiverInvited = { false },
+                    unverifiedInvitePending = { true },
+                ).run(timeoutMillis = 10_000L)
+            assertEquals("", endpoint.ssid)
+            assertEquals(WifiCredentialSource.NONE, endpoint.wifiCredentialSource)
+            assertEquals(0, endpoint.airPlayPort)
+        } finally {
+            phone.close()
+            accessoryChannel.close()
+            worker.join(2_000)
+        }
+    }
+
+    @Test
     fun credentiallessFallbackPriorityIsKnownSsidThenStartSessionThenInvite() {
         assertEquals(
             CredentiallessFallback.KNOWN_SSID,
@@ -439,6 +640,15 @@ class Iap2SenderSessionTest {
         assertEquals(
             CredentiallessFallback.AWAIT_LATE_START_SESSION,
             credentiallessFallback(knownSsid = null, declaresStartSession = true, receiverInvited = true),
+        )
+        assertEquals(
+            CredentiallessFallback.AWAIT_USER_CONFIRMATION,
+            credentiallessFallback(
+                knownSsid = null,
+                declaresStartSession = false,
+                receiverInvited = false,
+                unverifiedInvitePending = true,
+            ),
         )
         assertEquals(
             CredentiallessFallback.ABORT,
@@ -735,6 +945,12 @@ class Iap2SenderSessionTest {
             Iap2SenderSession.WifiConfiguration("MockAP", "secret-passphrase", 36, 2),
         private val providesStartSession: Boolean = true,
         private val airPlayPort: Int = 49152,
+        /** false = 0x4301 无线组只给 SSID，模拟重连时缺少安全类型/口令。 */
+        private val completeWirelessAp: Boolean = true,
+        /** false = 0x5703 只给 SSID，模拟缺少安全类型/口令的旧协议凭据。 */
+        private val completeWifiConfiguration: Boolean = true,
+        private val provideWifiSsid: Boolean = true,
+        private val includeWirelessSsid: Boolean = true,
     ) {
         private val parser = Iap2Csm.Parser()
         private val pending = ArrayDeque<Iap2Csm.Frame>()
@@ -853,13 +1069,16 @@ class Iap2SenderSessionTest {
                 // 它必须被暂存而不是在 expectOrNull 里被反复重读——旧实现把非预期帧塞回
                 // 「自己下一轮优先读取」的队列，同一帧无限循环（2026-10-18 日志刷屏根因）。
                 send(Iap2MessageIds.START_NOW_PLAYING_UPDATES)
-                send(
-                    Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
-                    Iap2Csm.string(1, wifiConfiguration.ssid),
-                    Iap2Csm.string(2, wifiConfiguration.passphrase),
-                    Iap2Csm.u8(3, wifiConfiguration.securityType),
-                    Iap2Csm.u8(4, wifiConfiguration.channel),
-                )
+                val wifiParams =
+                    mutableListOf<ByteArray>().apply {
+                        if (provideWifiSsid) add(Iap2Csm.string(1, wifiConfiguration.ssid))
+                        if (completeWifiConfiguration) {
+                            add(Iap2Csm.string(2, wifiConfiguration.passphrase))
+                            add(Iap2Csm.u8(3, wifiConfiguration.securityType))
+                            add(Iap2Csm.u8(4, wifiConfiguration.channel))
+                        }
+                    }
+                send(Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION, *wifiParams.toTypedArray())
             }
 
             // CarPlay 启动
@@ -953,17 +1172,18 @@ class Iap2SenderSessionTest {
             }
 
         private fun sendStartSession() {
+            val wireless = ArrayList<ByteArray>()
+            if (includeWirelessSsid) wireless += Iap2Csm.string(0, wifiConfiguration.ssid)
+            if (completeWirelessAp) {
+                wireless += Iap2Csm.string(1, "secret-passphrase")
+                wireless += Iap2Csm.u8(2, 36)
+            }
+            wireless += addressParam(3, "192.168.49.1", padTo = 17)
+            wireless += addressParam(3, "fd00::1", padTo = 47)
+            if (completeWirelessAp) wireless += Iap2Csm.u8(4, 2)
             send(
                 Iap2MessageIds.CARPLAY_START_SESSION,
-                Iap2Csm.group(
-                    1,
-                    Iap2Csm.string(0, "MockAP"),
-                    Iap2Csm.string(1, "secret-passphrase"),
-                    Iap2Csm.u8(2, 36),
-                    addressParam(3, "192.168.49.1", padTo = 17),
-                    addressParam(3, "fd00::1", padTo = 47),
-                    Iap2Csm.u8(4, 2),
-                ),
+                Iap2Csm.group(1, *wireless.toTypedArray()),
                 Iap2Csm.u32(2, airPlayPort.toLong()),
                 Iap2Csm.string(3, "mock-device-id"),
                 Iap2Csm.string(4, "a".repeat(64) + "publickeyhex"),

@@ -69,6 +69,71 @@ class WifiCarPlayConnector(
 
     val currentNetwork: Network? get() = binding.current()
 
+    /** 已核验 SSID 对应的 Network 句柄；只接受绑定网络或系统 active Wi-Fi。 */
+    fun currentWifiNetwork(): Network? {
+        fun isWifi(network: Network): Boolean =
+            runCatching {
+                connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            }.getOrDefault(false)
+        return chooseWifiNetworkTarget(binding.current(), connectivityManager.activeNetwork, ::isWifi)
+    }
+
+    /**
+     * 在同一次网络回调中同时取得目标 Network 与其 SSID；无定位权限时宁可失败也不猜网络。
+     * 不能先 isConnectedTo(A) 再重新 currentWifiNetwork() 选到 B。
+     */
+    fun verifiedWifiNetwork(ssid: String): Network? {
+        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return null
+        val target = currentWifiNetwork() ?: return null
+        val result = AtomicReference<String?>(null)
+        val latch = CountDownLatch(1)
+        val observer =
+            object : ConnectivityManager.NetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    capabilities: NetworkCapabilities,
+                ) {
+                    if (network != target) return
+                    val actual = WifiIdentity.normalizeSsid((capabilities.transportInfo as? WifiInfo)?.ssid) ?: return
+                    if (result.compareAndSet(null, actual)) latch.countDown()
+                }
+            }
+        val request =
+            NetworkRequest
+                .Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+        return try {
+            connectivityManager.registerNetworkCallback(request, observer)
+            latch.await(1_000, TimeUnit.MILLISECONDS)
+            if (WifiIdentity.matches(ssid, result.get())) target else null
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { connectivityManager.unregisterNetworkCallback(observer) }
+        }
+    }
+
+    /** 从 ctrl 入站连接的本机地址反查实际承载它的 Wi-Fi Network。 */
+    fun wifiNetworkWithLocalAddress(address: String): Network? {
+        val target = address.substringBefore('%')
+        return runCatching {
+            connectivityManager.allNetworks.firstOrNull { network ->
+                connectivityManager
+                    .getNetworkCapabilities(network)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
+                    connectivityManager
+                        .getLinkProperties(network)
+                        ?.linkAddresses
+                        ?.any { it.address.hostAddress?.substringBefore('%') == target } == true
+            }
+        }.getOrNull()
+    }
+
     /**
      * 应用专属网络被系统断开（热点关闭/离开范围）时回调。会话层据此提示用户；
      * 空实现 = 不关心（例如手动绑定路径）。
@@ -126,6 +191,18 @@ class WifiCarPlayConnector(
     @WorkerThread
     fun currentWifiSsid(): String? {
         if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return null
+
+        fun isWifi(network: Network): Boolean =
+            runCatching {
+                connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            }.getOrDefault(false)
+        // 明确选择：优先本进程绑定的车机网络；未绑定（或绑定的网络已不在）时只接受系统 active Wi-Fi。
+        // 不能取“任一 Wi-Fi 回调的第一个结果”——手机热点、P2P 与车机热点并存时会选错。
+        // 已失效的绑定网络不会再有回调，选它只会白等满 1 s 的 latch。
+        // minSdk 31：同步 getNetworkCapabilities 的 SSID 恒被脱敏，只能走下方带定位信息的回调。
+        val target =
+            chooseWifiNetworkTarget(binding.current(), connectivityManager.activeNetwork, ::isWifi)
+                ?: return null
         val result = AtomicReference<String?>(null)
         val latch = CountDownLatch(1)
         val observer =
@@ -134,6 +211,7 @@ class WifiCarPlayConnector(
                     network: Network,
                     capabilities: NetworkCapabilities,
                 ) {
+                    if (network != target) return
                     val ssid = WifiIdentity.normalizeSsid((capabilities.transportInfo as? WifiInfo)?.ssid) ?: return
                     if (result.compareAndSet(null, ssid)) latch.countDown()
                 }
@@ -350,7 +428,7 @@ class WifiCarPlayConnector(
             if (!shouldKeepWaiting(now, deadline, holdDeadline, holding)) break
             if (holding && now >= deadline && !holdLogged) {
                 holdLogged = true
-                log("WiFi: 系统选择框正等待用户选择——继续等待，不撤回重发")
+                log("WiFi: Activity 生命周期提示系统选择框可能正在等待用户——继续等待，不撤回重发（未确认弹窗实际可见）")
             }
             if (isCancelled()) return null
             try {
@@ -501,6 +579,63 @@ class WifiCarPlayConnector(
         }
     }
 
+    /**
+     * 直接绑定已由调用方核验过的 [network]，不再发通配 requestNetwork。
+     * 两张 Wi-Fi 并存或核验后切网时，避免回调把进程绑到另一张网络。
+     */
+    fun bindVerifiedNetwork(
+        network: Network,
+        ssidHint: String? = null,
+    ): Boolean {
+        if (!runCatching {
+                connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            }.getOrDefault(false)
+        ) {
+            log("WiFi: 已核验的网络 $network 不再是 Wi-Fi——丢弃")
+            return false
+        }
+        release()
+        val callback =
+            object : ConnectivityManager.NetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
+                override fun onLost(lost: Network) {
+                    if (binding.lost(this, lost)) {
+                        log("WiFi: 已绑定的网络已断开（$lost）")
+                        ssidHint?.let { onNetworkLost?.invoke(it) }
+                    }
+                }
+            }
+        binding.replaceRequest(callback)?.let {
+            runCatching { connectivityManager.unregisterNetworkCallback(it) }
+        }
+        if (!binding.bind(callback, network)) {
+            log("WiFi: 绑定已核验网络 $network 失败")
+            return false
+        }
+        if (!binding.isCurrent(callback)) {
+            return false
+        }
+        val request =
+            NetworkRequest
+                .Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+        val registered =
+            runCatching {
+                connectivityManager.registerNetworkCallback(request, callback)
+                true
+            }.getOrElse {
+                log("WiFi: 已核验网络已绑定，但断开监听注册失败（${it.message}）")
+                false
+            }
+        if (registered && !binding.isCurrent(callback)) {
+            runCatching { connectivityManager.unregisterNetworkCallback(callback) }
+            return false
+        }
+        log("WiFi: 已按已核验 Network 绑定 $network（SSID 已知=${!ssidHint.isNullOrBlank()}）")
+        return true
+    }
+
     fun release() {
         binding.replaceRequest(null)?.let {
             runCatching { connectivityManager.unregisterNetworkCallback(it) }
@@ -508,6 +643,13 @@ class WifiCarPlayConnector(
     }
 
     companion object {
+        /** 仍在的绑定 Wi-Fi 优先；否则使用 active Wi-Fi，绝不从多个 Wi-Fi 回调里任取第一个。 */
+        internal fun <T> chooseWifiNetworkTarget(
+            bound: T?,
+            active: T?,
+            isWifi: (T) -> Boolean,
+        ): T? = bound?.takeIf(isWifi) ?: active?.takeIf(isWifi)
+
         /** 窗口内继续等；窗口已过但选择框仍在等用户时，等到 [holdDeadline]。 */
         internal fun shouldKeepWaiting(
             now: Long,
