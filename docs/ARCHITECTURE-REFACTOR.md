@@ -2,7 +2,7 @@
 
 基线：`main` @ `ab0cb93`（v0.1.6，文中行号与统计均以此为准，搬移后会漂移）。
 状态：**Phase 0 的代码护栏已在 `refactor/session-phase0-guardrails` 完成（只加测试与工具，不改生产代码）；基线实车报告待采集；
-Phase 1 起尚未开始。** 2026-11-10 对照代码复查后修订过一次，改动见文末「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
+Phase 1a 已在 `refactor/session-1a-interfaces` 完成，待 T1 回归后合并；其余尚未开始。** 2026-11-10 对照代码复查后修订过一次，改动见文末「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 
 ## 1. 背景与目标
 
@@ -66,7 +66,7 @@ Phase 1 起尚未开始。** 2026-11-10 对照代码复查后修订过一次，�
 
 | 行（约） | 职责 | 去向 |
 | --- | --- | --- |
-| 94–380 | 常量、`ensure`、日志缓冲、媒体键分发 | `session/SessionLog`；媒体键 → `input/` |
+| 94–380 | 常量、`ensure`、日志缓冲、媒体键分发 | 日志缓冲留在门面；媒体键 → `input/` |
 | 380–779 | 状态字段、UI 钩子、`ensureSessionObjects` | `ConnectionSession`；UI 钩子 → `SessionUiPort` |
 | 779–869 | 正式 CarLife 源与路由 | `session/StreamPipeline` |
 | 869–1073 | `startConnection` / `disconnect` | `ConnectionSession.start/close` |
@@ -197,24 +197,34 @@ enum class EndReason { ROUND_RESET, RECEIVER_ENDED, TERMINAL }
 
 ### 3.3 `AttemptScope`：统一归属与取消（接口先行）
 
+Phase 1a 已落地的部分（[`session/AttemptScope.kt`](../app/src/main/java/com/mcarplay/app/session/AttemptScope.kt)）：
+
 ```kotlin
 interface AttemptScope {
-    val id: String                       // 即诊断时间线的 attempt id（ConnectionDiagnostics.receiverAttempt()）
+    val id: String                        // 诊断时间线的 attempt id（ConnectionDiagnostics.receiverAttempt()）
     val observation: ReceiverObservation? // 检测侧的 (binding, epoch, session)
-    val isActive: Boolean
-    val cancelReason: DiagnosticCode?
-
-    fun cancel(reason: DiagnosticCode)    // 幂等；唤醒本轮所有等待并关闭登记的资源
-    fun checkActive()                     // 已取消则抛 AttemptCancelled（单点 catch）
-    fun <T : AutoCloseable> own(resource: T): T
-    fun await(latch: CountDownLatch, timeoutMs: Long): Boolean  // 取消即返回 false
-    fun sleep(ms: Long)                   // 可被 cancel 打断
+    val isCurrent: Boolean                // 本轮仍拥有连接；用户取消后仍为 true
+    val isActive: Boolean                 // isCurrent 且未被取消
 }
 ```
 
-**接口在抽模块之前定义**（Phase 1），先给一个 `LegacyAttemptScope` 实现：`isActive` 读现有的 `connectCancelled` 与
-`ReceiverDetectionRuntime.isCurrent(observation)`，`await/sleep` 仍是分片轮询。这样 Phase 2 抽出的模块从第一天就面向最终接口，
-Phase 3 只替换实现，不再回头改调用点。
+归属要两个判断，不是一个：用户取消后，本轮仍负责释放「会话建立中」互斥和记诊断（基线里的 `if (ownsConnection()) sessionStarting.set(false)`），
+所以「还拥有连接」和「还该继续推进」必须分开。`LegacyAttemptScope` 直接读现有的 `connectCancelled` 与
+`ReceiverDetectionRuntime.isCurrent(observation)`，与原来的 `ownsConnection()`、`wasCancelled()` 逐字等价（含短路顺序）。
+
+后续按需加入的成员（在第一个用到它们的 PR 里加，避免先写出没人调用、语义靠猜的过渡实现）：
+
+```kotlin
+    val cancelReason: DiagnosticCode?
+    fun cancel(reason: DiagnosticCode)    // 幂等；唤醒本轮所有等待并关闭登记的资源（Phase 3）
+    fun checkActive()                     // 已取消则抛 AttemptCancelled（单点 catch，Phase 3/4a）
+    fun <T : AutoCloseable> own(resource: T): T   // Phase 3
+    fun await(latch: CountDownLatch, timeoutMs: Long): Boolean  // 2c：先用分片轮询实现，Phase 3 改为可打断
+    fun sleep(ms: Long)                   // 同上
+```
+
+注意：基线里 Wi-Fi 入网等函数只查 `connectCancelled`，不查归属。2c 把它们改成 `scope.isActive` 会让「被新一轮取代」的旧轮也停下，
+这是行为变化，要么在 2c 里显式保留只查取消标志的语义，要么另开行为变更 PR，不能在抽取里顺手改。
 
 编号统一：一轮只有一个 id，即诊断时间线的 attempt id；检测侧的 `ReceiverObservation` 挂在 scope 上，不再各自判断。
 
@@ -222,7 +232,7 @@ Phase 3 只替换实现，不再回头改调用点。
 
 - #1 `sessionStarting` → 「`ConnectionSession.activeAttempt != null`」；外部只读 `SessionSnapshot.phase`。
 - #2 `connectCancelled` → `scope.cancel(USER_STOP)` 或 `scope.cancel(BT_LINK_CLOSED)`，原因不再混用一个布尔。
-- #3、#5 → `scope.isActive`。
+- #3 → `scope.isCurrent` / `scope.isActive`（1a 已完成：`onCarPlayEndpoint` 内的 `ownsConnection()`、`wasCancelled()` 已替换）；#5 → `scope.isActive`。
 - #4 `AirPlayClient.connectionGeneration` 保留在客户端内部：同一轮里客户端会被重建（BT 退役重试）或重连，它回答的是
   「这条控制连接还活着吗」。编排层的延时任务同时检查 `scope.isActive` 与该代际，但不再用它判断跨轮归属。
 - #6 CarLife lease 保留（它还管诊断自检的互斥），lease 归 Attempt 持有，迟到回调先过 `scope.isActive`。
@@ -363,7 +373,7 @@ interface SessionEnvironment {
 
 | PR | 内容 | 规模 | 测试 |
 | --- | --- | --- | --- |
-| 1a | 定义 `AttemptScope`（先用 `LegacyAttemptScope`，读现有标志）、`SessionUiPort`（`phaseHint`/`uiHintSink`/`dialogSink`/`ssidSink`）、`SessionLog`；`SessionController` 内部改为经这些接口访问，不搬代码 | M | `LegacyAttemptScope` 与旧判断等价的表驱动测试 |
+| 1a ✅ | 定义 `AttemptScope`（`LegacyAttemptScope` 读现有标志）与 `SessionUiPort`（阶段提示、提示、SSID、确认框），`DialogSpec` 移到 `session/`；`onCarPlayEndpoint` 的 36 处归属判断与全文件 54 处界面写入改为经接口，不搬代码，门面字段保留 | M | 等价性表驱动测试；界面端口的转发测试；「界面状态只经端口写入」的源码守护 |
 | 1b | 引入 `SessionEnvironment`，先只收 `ConnectionDiagnostics`、`BtSessionGate`、屏幕相关对象（收尾清单要用的那些） | M | 假环境可记录调用顺序 |
 | 1c | 收尾合一：`retireSession()`、`VideoSender.onEnded` 的收尾段、`disconnect()` 改为调用同一份 `endAttempt(EndReason)` 清单，各原因的步骤集合与 2.5 的表逐项相同 | M | 三种原因各一条「步骤集合与顺序」测试；`ROUND_RESET` 不触发 BT detach；附录 B-4、B-13、B-14 |
 
@@ -382,7 +392,7 @@ interface SessionEnvironment {
 | 2e | 帕萨特回屏改为 `Policy` 上的中性字段（不搬代码） | S | `ReceiverCompatibility` 测试覆盖原有各策略 |
 | 2f | `airplay/ScreenOwnership`：`ModesAction` 队列、`enqueueModesAssert`、`scheduleModesReclaim`、`scheduleTakeBackCheck`、回屏策略、推流中邀请重连 | M | 合并语义、让出/拿回间隔；附录 B-11、B-17 |
 | 2g | `session/StreamPipeline`：正式 CarLife 源与路由、`newScreenSender`、主屏流重建（779–869、3717–3955） | L | 入流门控、旧源迟到回调隔离；附录 B-18 |
-| 2h | `session/SessionLog`、`service/ScreenPowerController`；消除 3.1 列出的反向依赖 | S | 架构测试允许清单删去对应项 |
+| 2h | `service/ScreenPowerController`；消除 3.1 列出的反向依赖 | S | 架构测试允许清单删去对应项 |
 
 完成标准：`SessionController` 的 `@Volatile` 字段从 46 降到 15 以内；全局单例的直接调用只剩在 `SessionEnvironment` 的生产实现里；T2 回归通过。
 
@@ -557,6 +567,13 @@ CarWith：<版本>    小米 CarLife：<版本>
 `AUDIO_PROFILE_PROBE_MS` 20 秒（2026-10-19，拆链发生在起流后 6.5 秒）、`WIFI_BIND_WAIT_S` 15 秒。
 
 ## 修订记录
+
+**2026-11-10 Phase 1a 实施时的调整：**
+
+- `AttemptScope` 拆成 `isCurrent` 与 `isActive` 两个判断（3.3），原稿只有 `isActive`，无法表达「已取消但仍负责收尾」。
+- `cancel`/`own`/`await`/`sleep` 等成员推迟到第一个用到它们的 PR 再加。
+- 不再单独定义 `SessionLog`：代码库现有模块统一用 `log: (String) -> Unit` 构造参数，抽出的模块沿用即可，另起接口没有收益。
+- 记下 2c 的行为风险：Wi-Fi 入网代码只查取消标志、不查归属，换成 `scope.isActive` 不是等价替换。
 
 **2026-11-10 第一次修订**（对照 `ab0cb93` 复查后）：
 
