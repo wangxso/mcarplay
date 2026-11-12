@@ -9,7 +9,7 @@
 - **11 月 10 日会话编排层重构 Phase 0（`refactor/session-phase0-guardrails`，仅护栏测试，未改生产代码，无实车验证）：**
   重构方案见 `docs/ARCHITECTURE-REFACTOR.md`（基线 `main` @ `ab0cb93`）。新增 `ArchitectureRulesTest`（引擎层不得引用
   `SessionController`/界面层，6 处现有例外登记在只减不增的允许清单）、`LogContractTest`（`tools/logbot/rules.py` 依赖的日志短语、
-  阶段文案与错误码，以及对比脚本依赖的报告格式）和 `KotlinSourceTest`，共 17 项；新增报告对比脚本 `tools/compare_diagnostics.py`（28 项测试）。本地 916 项 standard JVM 测试 + 24 项 remote 调试桥测试、84 项 Python 工具测试、Spotless、
+  阶段文案与错误码，以及对比脚本依赖的报告格式）和 `KotlinSourceTest`，共 17 项；新增报告对比脚本 `tools/compare_diagnostics.py`（31 项测试）。本地 916 项 standard JVM 测试 + 24 项 remote 调试桥测试、87 项 Python 工具测试、Spotless、
   standard lint/debug 构建通过。对比脚本尚未在真实支持报告上运行；四台接收端的基线支持报告尚未采集；Phase 1 起的改动在当前 `main` 的四台接收端回归完成后开始。
 
 - **11 月 6 日 v0.1.6 正式版（本地构建，未推 tag）：** 汇总 PR #42 屏幕归属门控、#44 主音频仲裁、#43 手机端 SDP 生命周期与 #41 CarWith 入口诊断；
