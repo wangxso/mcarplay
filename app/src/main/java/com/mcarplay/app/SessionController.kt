@@ -498,6 +498,9 @@ object SessionController {
     @Volatile
     var audioSender: AudioSender? = null
 
+    /** 音频通道启动 single-flight 闸门（见 [startAudioChannel]）。 */
+    private val audioStartGate = AudioStartGate()
+
     @Volatile
     var currentClient: AirPlayClient? = null
 
@@ -1337,8 +1340,9 @@ object SessionController {
     }
 
     /**
-     * claim 因车机约束被拒后，`changeModes` 归还主音频时重试一次音频通道。
-     * 只由 [ModeArbiter.consumeAudioClaimRetry] 触发；仍受音频开关、会话代次和发送器状态约束。
+     * claim 因车机约束被拒后重试一次音频通道。
+     * 由 [ModeArbiter.consumeAudioClaimRetry] 原子消费 pending claim 后触发（changeModes 归还
+     * 与 requestUI 重进两条入口共用）；仍受音频开关、会话代次和发送器状态约束。
      */
     private fun retryAudioAfterClaimReturned(client: AirPlayClient) {
         // 只把状态检查放在短临界区里；SETUP 最长数秒，不能占着会话锁（disconnect 是
@@ -2290,6 +2294,31 @@ object SessionController {
         sharedSecret: ByteArray?,
         host: String?,
     ): Boolean {
+        // SETUP 协商可持续数秒，期间 audioSender 尚未赋值：连接建立、动态补启、requestUI
+        // 重进和 changeModes 归还重试都可能在赋值前通过状态检查。没有闸门时会并发建立
+        // 多条流，后写入的 audioSender 覆盖先前的，另一条流仍启动却失去引用（双流 + 泄漏）。
+        if (!audioStartGate.tryAcquire()) {
+            appendLog("AUDIO: 已有音频通道正在建立——跳过本次重复启动")
+            return false
+        }
+        return try {
+            startAudioChannelLocked(context, client, sharedSecret, host)
+        } finally {
+            audioStartGate.release()
+        }
+    }
+
+    /** [startAudioChannel] 的单飞临界区；进入前已持有 [audioStartGate]。 */
+    private fun startAudioChannelLocked(
+        context: Context,
+        client: AirPlayClient,
+        sharedSecret: ByteArray?,
+        host: String?,
+    ): Boolean {
+        if (audioSender?.isRunning == true) {
+            appendLog("AUDIO: 已有音频发送器在运行——跳过重复启动")
+            return false
+        }
         val connectionGeneration = client.connectionGeneration
         if (!client.isConnectionCurrent(connectionGeneration)) return false
         val diagnosticAttempt = ConnectionDiagnostics.timeline.snapshot()?.id
@@ -3803,10 +3832,12 @@ object SessionController {
                                             retakeScreen = request.retake,
                                             rebuildStream = PassatReturnPolicy.rebuildStream(passatReturnStrategy(), request.rebuildStream),
                                         )
-                                        if (audio.retryAfterPendingClaim) {
+                                        if (audio.retryAfterPendingClaim && client.modes.consumeAudioClaimRetry()) {
                                             // 音频 SETUP 此前因车机以高约束持有/借用主音频而推迟：用户重进
                                             // CarPlay 是用户发起动作，后台按正常路径重试一次；归属仍由
                                             // onAudioStreamStarting 按当时的约束判断决定（倒车提示音等不抢）。
+                                            // 先原子消费 pending claim，避免 requestUI 与 changeModes 各跑一遍；
+                                            // startAudioChannel 的单飞闸门再兜住 SETUP 窗口内的并发。
                                             appendLog("AUDIO: requestUI 重进——主音频此前未接管，后台重试建立音频流")
                                             Bg.run("audio-request-ui-retry") { retryAudioAfterClaimReturned(client) }
                                         }
@@ -4363,3 +4394,20 @@ internal fun requestUiAudioDecision(
         takeMainAudio = audioStreamRunning,
         retryAfterPendingClaim = audioEnabled && !audioStreamRunning && audioClaimAwaitingReturn,
     )
+
+/**
+ * 音频通道启动的 single-flight 闸门。
+ *
+ * 音频 SETUP 协商可持续数秒，期间 `audioSender` 尚未赋值；连接建立、动态补启、
+ * requestUI 重进和 changeModes 归还重试等多个入口若并发进入，会各自建立一条流，
+ * 后写入的 `audioSender` 覆盖先前的，另一条流仍启动却失去引用（双流 + 持续泄漏）。
+ */
+internal class AudioStartGate {
+    private val inFlight = AtomicBoolean(false)
+
+    /** 获得启动权返回 true；已有启动在进行中返回 false。 */
+    fun tryAcquire(): Boolean = inFlight.compareAndSet(false, true)
+
+    /** 释放启动权；必须放在 finally 里。 */
+    fun release() = inFlight.set(false)
+}

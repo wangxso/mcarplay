@@ -119,4 +119,22 @@ class RequestUiAudioDecisionTest {
         assertFalse(decision.takeMainAudio)
         assertFalse(decision.retryAfterPendingClaim)
     }
+
+    @Test
+    fun requestUiAndChangeModesConsumeThePendingClaimOnlyOnce() {
+        // requestUI 与 changeModes 都看到 pending claim：先原子消费的一方调度重试，
+        // 后到的一方不得再起一条音频流（配合 startAudioChannel 的单飞闸门）。
+        val arbiter = ModeArbiter()
+        arbiter.onChangeModes(
+            mapOf("resources" to listOf(audioResource(ModeArbiter.TRANSFER_TAKE.toLong(), ModeArbiter.CONSTRAINT_NEVER.toLong()))),
+        )
+        assertFalse(arbiter.onAudioStreamStarting().claimed)
+        assertTrue(arbiter.audioClaimAwaitingReturn)
+        arbiter.onChangeModes(
+            mapOf("resources" to listOf(audioResource(ModeArbiter.TRANSFER_UNTAKE.toLong(), ModeArbiter.CONSTRAINT_ANYTIME.toLong()))),
+        )
+
+        assertTrue("requestUI consumes the pending claim", arbiter.consumeAudioClaimRetry())
+        assertFalse("changeModes must not schedule a second retry", arbiter.consumeAudioClaimRetry())
+    }
 }
