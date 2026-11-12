@@ -3,8 +3,8 @@
 
 Regression oracle for behaviour-preserving refactors (docs/ARCHITECTURE-REFACTOR.md, section 6). It checks two things:
 
-* the connection timeline of the compared attempts: stage order, milestone order, end status/code, warnings, notes and
-  which media counters moved;
+* the connection timeline of the compared attempts: stage order, milestone order, end status/code, warnings, notes,
+  screen-output suspend/resume order and which media counters moved;
 * the runtime log inside the time window of those attempts: per tag, the set of distinct normalised lines and the order in
   which each line first appears.
 
@@ -248,6 +248,7 @@ def attempt_signature(attempt: Attempt) -> dict:
     milestones: list[str] = []
     warnings: list[str] = []
     notes: list[str] = []
+    screen_output: list[str] = []
     firsts: set[str] = set()
     last: dict = {}
     end = None
@@ -274,6 +275,8 @@ def attempt_signature(attempt: Attempt) -> dict:
         elif isinstance(kind, str) and kind.startswith("FIRST_"):
             firsts.add(kind)
             elapsed.setdefault(kind, event.get("elapsedMs"))
+        elif kind == "SCREEN_OUTPUT":
+            screen_output.append("suspended" if event.get("screenSuspended") else "resumed")
         elif kind == "UNCAUGHT_EXCEPTION":
             notes.append("UNCAUGHT_EXCEPTION")
     if end is not None:
@@ -285,6 +288,7 @@ def attempt_signature(attempt: Attempt) -> dict:
         "warnings": warnings,
         "notes": notes,
         "firsts": sorted(firsts),
+        "screenOutput": screen_output,
         "media": {
             "sourceVideo": bool(last.get("sourceVideoFrames", 0)),
             "video": bool(last.get("videoFrames", 0)),
@@ -302,6 +306,7 @@ TIMELINE_FIELDS = (
     ("warnings", "告警码"),
     ("notes", "记录项"),
     ("firsts", "首包事件"),
+    ("screenOutput", "屏幕输出暂停/恢复顺序"),
     ("media", "媒体计数是否前进"),
 )
 
@@ -319,7 +324,7 @@ def compare_timelines(base: list[Attempt], cand: list[Attempt], count: int, resu
         for name, label in TIMELINE_FIELDS:
             if mine[name] != theirs[name]:
                 result.diffs.append(Diff(
-                    "timeline", (name, position),
+                    "timeline", (name, position, _key_value(mine[name]), _key_value(theirs[name])),
                     f"[尝试 {position}/{usable}] {label}不同：基准 {_show(mine[name])}；候选 {_show(theirs[name])}",
                 ))
         result.info.extend(_timing_info(position, usable, mine["elapsedMs"], theirs["elapsedMs"]))
@@ -331,6 +336,15 @@ def _show(value) -> str:
     if isinstance(value, dict):
         return "、".join(f"{key}={'是' if flag else '否'}" for key, flag in value.items())
     return " → ".join(value) if value else "(空)"
+
+
+def _key_value(value):
+    """A hashable identity for a signature field, so a noise baseline only demotes the same difference."""
+    if isinstance(value, dict):
+        return tuple(value.items())
+    if isinstance(value, list):
+        return tuple(value)
+    return value
 
 
 def _timing_info(position: int, total: int, base: dict, cand: dict) -> list[str]:
@@ -390,7 +404,7 @@ def compare_logs(base: dict[str, dict[str, int]], cand: dict[str, dict[str, int]
         for index, (left, right) in enumerate(zip(common_mine, common_theirs), start=1):
             if left != right:
                 result.diffs.append(Diff(
-                    "log", ("order", tag),
+                    "log", ("order", tag, left, right),
                     f"首次出现顺序不同（标签 {tag} 第 {index} 条起）：基准「{left}」；候选「{right}」",
                 ))
                 break
@@ -436,13 +450,16 @@ def compare(base_text: str, cand_text: str, options: Options | None = None) -> R
     base_profile = log_profile(base_lines, options.ignored_tags, options.ignored_lines)
     cand_profile = log_profile(cand_lines, options.ignored_tags, options.ignored_lines)
     compare_logs(base_profile, cand_profile, options.strict_counts, result)
+    base_effective = sum(sum(bucket.values()) for bucket in base_profile.values())
+    cand_effective = sum(sum(bucket.values()) for bucket in cand_profile.values())
     result.log_lines = (len(base_lines), len(cand_lines))
     result.log_tags = len(set(base_profile) | set(cand_profile))
     result.log_window = window
-    if not base_lines or not cand_lines:
+    if not base_profile or not cand_profile:
         result.diffs.append(Diff(
             "log", ("empty",),
-            f"时间窗内没有可比较的日志行（基准 {len(base_lines)} 行 / 候选 {len(cand_lines)} 行）",
+            f"没有可比较的日志行（基准 {len(base_lines)} 行、过滤后 {base_effective} 行；"
+            f"候选 {len(cand_lines)} 行、过滤后 {cand_effective} 行）",
         ))
     for name, report in (("基准", base), ("候选", cand)):
         if report.truncated:
@@ -450,9 +467,13 @@ def compare(base_text: str, cand_text: str, options: Options | None = None) -> R
     return result
 
 
+# Failures about the inputs themselves, not differences between two runs: a noise baseline must not demote them.
+STRUCTURAL_DIFFS = frozenset({"empty", "attempt-count"})
+
+
 def apply_noise(result: Result, noise: Result) -> None:
-    """Demote findings that also show up between two runs of the baseline build."""
-    noisy = {diff.key for diff in noise.diffs}
+    """Demote findings that also show up between two runs of the baseline build, but only the identical finding."""
+    noisy = {diff.key for diff in noise.diffs if diff.key[0] not in STRUCTURAL_DIFFS}
     result.diffs = [
         Diff(diff.area, diff.key, diff.message, "noise") if diff.key in noisy and diff.severity != "noise" else diff
         for diff in result.diffs

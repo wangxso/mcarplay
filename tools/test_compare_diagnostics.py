@@ -156,6 +156,18 @@ class TimelineTest(unittest.TestCase):
         found = messages(compare(report(streaming_attempt(), BASE_LOG), report(streaming_attempt()[:-1], BASE_LOG)))
         self.assertTrue(any("(无 END)" in line for line in found))
 
+    def test_screen_output_suspend_and_resume_transitions_are_compared(self):
+        events = streaming_attempt()
+        paused = events[:-1] + [
+            event("SCREEN_OUTPUT", 10.0, stage="STREAMING", screenSuspended=True),
+            event("SCREEN_OUTPUT", 12.0, stage="STREAMING", screenSuspended=False),
+        ] + events[-1:]
+        found = messages(compare(report(paused, BASE_LOG), report(events, BASE_LOG)))
+        self.assertEqual(1, len(found))
+        self.assertIn("屏幕输出暂停/恢复顺序不同", found[0])
+        self.assertIn("suspended → resumed", found[0])
+        self.assertIn("(空)", found[0])
+
 
 class LogTest(unittest.TestCase):
     def setUp(self):
@@ -264,6 +276,18 @@ class LogTest(unittest.TestCase):
         result = self.compare_logs(BASE_LOG, [])
         self.assertTrue(any("没有可比较的日志行" in line for line in messages(result)))
 
+    def test_profile_filtered_to_nothing_is_a_failure_not_a_pass(self):
+        entries = [(5.0, "ENV: wifi=-52dBm thermal=1"), (5.1, "DIAGNOSTICS: 诊断状态已刷新")]
+        result = self.compare_logs(entries, entries)
+        found = messages(result)
+        self.assertEqual(1, len(found))
+        self.assertIn("没有可比较的日志行", found[0])
+        self.assertIn("过滤后 0 行", found[0])
+        # A noise baseline cannot turn "no comparable evidence" into a pass.
+        apply_noise(result, self.compare_logs(entries, entries))
+        self.assertEqual(1, len(messages(result)))
+        self.assertEqual([], messages(result, "noise"))
+
 
 class NoiseTest(unittest.TestCase):
     def test_differences_between_two_baseline_runs_are_demoted(self):
@@ -278,6 +302,23 @@ class NoiseTest(unittest.TestCase):
         apply_noise(result, compare(base, second_baseline))
         self.assertEqual(1, len(messages(result, "noise")))
         self.assertEqual(["新增（候选有、基准无）：AIRPLAY: 新增的一行"], messages(result))
+
+    def test_noise_does_not_hide_a_different_order_change(self):
+        events = streaming_attempt()
+        pairing = "AIRPLAY: 配对开始 host=<IP-1>:7000"
+        event_channel = "AIRPLAY: 事件通道已连接"
+        keepalive = "AIRPLAY: 保活已启动"
+        audio = "AIRPLAY: 音频协商开始"
+        base = report(events, [(6.1, pairing), (6.2, event_channel), (6.3, keepalive), (6.4, audio)])
+        # The second baseline swaps keepalive/audio; the candidate swaps pairing/event_channel at another position.
+        second_baseline = report(events, [(6.1, pairing), (6.2, event_channel), (6.3, audio), (6.4, keepalive)])
+        candidate = report(events, [(6.0, event_channel), (6.1, pairing), (6.3, keepalive), (6.4, audio)])
+        result = compare(base, candidate)
+        self.assertEqual(1, len(messages(result)))
+        apply_noise(result, compare(base, second_baseline))
+        self.assertEqual([], messages(result, "noise"))
+        self.assertEqual(1, len(messages(result)))
+        self.assertIn("第 1 条起", messages(result)[0])
 
 
 class CliTest(unittest.TestCase):
