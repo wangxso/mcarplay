@@ -3,6 +3,7 @@ package com.mcarplay.app.media
 import android.provider.Settings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -81,15 +82,16 @@ class NotificationAccessTest {
         assertFalse(NotificationAccess.isLiveIn("no such section", spec))
     }
 
-    /** ROM 不认「直达本应用」的详情页时，必须回退到监听器列表页。 */
+    /**
+     * 详情页必须收到扁平化组件名（AOSP Settings 用 `getStringExtra` 读取），
+     * ROM 不认详情页时再回退到不带 extra 的监听器列表页。
+     */
     @Test
-    fun settingsFallBackFromDetailToListenerList() {
-        assertEquals(
-            listOf(
-                Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS,
-                Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS,
-            ),
-            NotificationAccess.listenerSettingsActions(),
-        )
+    fun detailSettingsPassesFlattenedComponentAndFallsBackToList() {
+        val targets = NotificationAccess.listenerSettingsTargets(spec)
+        assertEquals(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS, targets[0].first)
+        assertEquals(spec, targets[0].second)
+        assertEquals(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS, targets[1].first)
+        assertNull(targets[1].second)
     }
 }

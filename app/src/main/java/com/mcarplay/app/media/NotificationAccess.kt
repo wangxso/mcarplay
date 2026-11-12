@@ -67,25 +67,31 @@ object NotificationAccess {
      * @return true = 至少有一个设置页成功启动
      */
     fun openSettings(context: Context): Boolean {
-        val component = ComponentName(context, MediaListenerService::class.java)
-        return listenerSettingsActions().any { action ->
+        val spec = componentSpec(context)
+        return listenerSettingsTargets(spec).any { (action, componentExtra) ->
             val intent =
                 Intent(action)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     .apply {
-                        if (action == Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS) {
-                            putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, component)
+                        if (componentExtra != null) {
+                            // AOSP Settings 用 getStringExtra 读取，必须传扁平化字符串而不是 ComponentName。
+                            putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, componentExtra)
                         }
                     }
             runCatching { context.startActivity(intent) }.isSuccess
         }
     }
 
-    /** 设置页候选动作：先直达本应用，再回退到监听器列表。 */
-    internal fun listenerSettingsActions(): List<String> =
+    /**
+     * 设置页目标：先直达本应用（附带扁平化组件名），再回退到监听器列表（无 extra）。
+     *
+     * extra 的值必须是 `包/类` 字符串——传 [ComponentName] 时 AOSP Settings 读不到，
+     * 详情页无法定位监听器，而且 startActivity 仍然成功，列表页回退不会触发。
+     */
+    internal fun listenerSettingsTargets(componentSpec: String): List<Pair<String, String?>> =
         listOf(
-            Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS,
-            Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS,
+            Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS to componentSpec,
+            Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS to null,
         )
 
     /**
