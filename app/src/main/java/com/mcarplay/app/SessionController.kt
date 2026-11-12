@@ -754,6 +754,10 @@ object SessionController {
         }
         // 用户断开 / 正在清理时的链路关闭不是车机故障，不计入熔断
         val teardownInProgress = connectCancelled || disconnectCompletion != null
+        // 空端点候选会先写入 pendingStartSessionEndpoint 再释放 handoff ownership；
+        // 必须在清理前记住它，否则这条链路的真实失败会被熔断过滤掉。
+        val pendingStart = pendingStartSessionEndpoint.get()
+        val ownsPendingStartSession = pendingStart != null && pendingStart.observation == observation
         // cancelIfOwnedBy 在“已被取消”时也会释放所有权但返回 false；先记住是否 owner，
         // 以免漏掉对仍 active 的其他 observation 的唤醒。
         val ownedHandoff = handoffOwnership.owns(observation)
@@ -795,7 +799,7 @@ object SessionController {
         // 链路。只有当前交接 owner（或已交付当前会话的链路）的关闭才是失败——
         // 另一条链路关闭不能把健康交接记成 BT_LINK_CLOSED，否则连续三次就误熔断。
         val ownsCurrentSession = currentClient?.currentEndpoint?.observation == observation
-        if (!countsLinkCloseForAutoReconnect(ownedHandoffEnded, ownedHandoff, ownsCurrentSession)) {
+        if (!countsLinkCloseForAutoReconnect(ownedHandoffEnded, ownedHandoff, ownsCurrentSession, ownsPendingStartSession)) {
             appendLog(">>> 非当前交接链路的关闭通知——不计入自动重连熔断")
             return
         }
@@ -5587,11 +5591,13 @@ internal fun usableKnownCarSsid(
  * 链路关闭是否应进入自动重连熔断记账。
  *
  * 熔断按对端地址累计，但同一台车机可能同时有多条 RFCOMM 链路（客户端/服务端并存、
- * 空端点候选）。只有当前交接 owner、取消回调已释放的 owner，或已交付当前会话的链路
- * 关闭才算失败；其余链路关闭只清理自身状态，不能把健康交接累计成 BT_LINK_CLOSED。
+ * 空端点候选）。只有当前交接 owner、取消回调已释放的 owner、已交付当前会话的链路、
+ * 或正在等待晚到 0x4301 的空端点候选关闭才算失败；其余链路关闭只清理自身状态，
+ * 不能把健康交接累计成 BT_LINK_CLOSED。
  */
 internal fun countsLinkCloseForAutoReconnect(
     ownedHandoffEnded: Boolean,
     ownedHandoff: Boolean,
     ownsCurrentSession: Boolean,
-): Boolean = ownedHandoffEnded || ownedHandoff || ownsCurrentSession
+    ownsPendingStartSession: Boolean,
+): Boolean = ownedHandoffEnded || ownedHandoff || ownsCurrentSession || ownsPendingStartSession
