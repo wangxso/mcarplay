@@ -127,9 +127,6 @@ class AudioSender(
 
     @Volatile private var nonceCounter = 0L
 
-    /** 音频包发送失败的宽限判定（只在推流线程访问）。 */
-    private val sendGate = UdpSendGate()
-
     /** 首个音频包标记（打完就清）；AAC 自检只跑一次。 */
     private var markerPending = true
     private var selfChecked = false
@@ -438,6 +435,7 @@ class AudioSender(
         val frame = ByteArray(framePcmBytes)
         val silence = ByteArray(framePcmBytes)
         val pacer = ExternalAudioPacer(samplesPerPacket.toInt(), sampleRate)
+        val sendGate = UdpSendGate()
         var lastStatsAt = System.nanoTime()
         var gapFrames = 0L
         var gapCount = 0L
@@ -465,11 +463,11 @@ class AudioSender(
                         gapFrames = 0
                     }
                     externalPending = 0
-                    if (!sendExternalFrame(frame, real = true)) return
+                    if (!sendExternalFrame(frame, real = true, sendGate)) return
                 }
                 ExternalAudioPacer.Step.Fill -> {
                     gapFrames++
-                    if (!sendExternalFrame(silence, real = false)) return
+                    if (!sendExternalFrame(silence, real = false, sendGate)) return
                 }
                 is ExternalAudioPacer.Step.Skip -> {
                     // 发送线程被拖住：按丢包处理，seq 与时间戳一起前进
@@ -519,10 +517,11 @@ class AudioSender(
     private fun sendExternalFrame(
         pcm: ByteArray,
         real: Boolean,
+        sendGate: UdpSendGate,
     ): Boolean {
         val payloads = if (codec == AudioCodec.AAC_LC) aacEncoder?.encode(pcm, pcm.size).orEmpty() else listOf(pcm)
         for (payload in payloads) {
-            if (!running.get() || !sendPayload(payload)) return false
+            if (!running.get() || !sendPayload(payload, sendGate)) return false
             if (real && !selfChecked && codec == AudioCodec.AAC_LC) {
                 selfChecked = true
                 verifyEncodedFrame(payload)
@@ -609,6 +608,7 @@ class AudioSender(
 
     private fun runCaptureLoop() {
         val recorder = record ?: return
+        val sendGate = UdpSendGate()
         val frameBytes = framePcmBytes
         val pcm = ByteArray(frameBytes)
         // 诊断抽样节拍：PCM 约 125 包/s（每 20s 一次）；AAC 约 47 帧/s
@@ -675,7 +675,7 @@ class AudioSender(
 
                 var sendFailed = false
                 for (payload in payloads) {
-                    if (!sendPayload(payload)) {
+                    if (!sendPayload(payload, sendGate)) {
                         sendFailed = true
                         break
                     }
@@ -702,7 +702,10 @@ class AudioSender(
      * 封包 + 发送一包（同步更新 seq/ts/nonce 游标）。返回 false 表示链路已断。
      * 短暂断路时丢弃当前包仍推进游标，接收端据此按丢包处理。
      */
-    private fun sendPayload(payload: ByteArray): Boolean {
+    private fun sendPayload(
+        payload: ByteArray,
+        sendGate: UdpSendGate,
+    ): Boolean {
         val marker = markerPending
         val wire = sealPacket(payload, sequence, timestamp, nonceCounter, marker)
         sequence = (sequence + 1) and 0xFFFF

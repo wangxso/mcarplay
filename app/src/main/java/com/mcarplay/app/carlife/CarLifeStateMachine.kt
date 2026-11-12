@@ -36,6 +36,7 @@ class CarLifeStateMachine(
         val changed: Boolean = false,
     )
 
+    @Volatile
     var state: State = State.CONNECTED
         private set
 
