@@ -209,6 +209,9 @@ class CarLifeSession(
         return sendTouchAction(action, x, y)
     }
 
+    /** CarWith 是否已进入视频阶段；硬按键/触摸只有此时才会被接受。 */
+    fun isVideoRunning(): Boolean = stateMachine.state == CarLifeStateMachine.State.VIDEO_RUNNING
+
     fun requestKeyFrame(): Boolean {
         if (stateMachine.state != CarLifeStateMachine.State.VIDEO_RUNNING) return false
         return sendCommand(

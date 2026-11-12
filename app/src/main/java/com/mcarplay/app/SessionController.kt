@@ -300,6 +300,98 @@ object SessionController {
         )
     }
 
+    /**
+     * 开关打开时的主动起播。CarWith 的音乐走原生 PCM，不产生系统媒体会话/通知，普通媒体键
+     * 无法恢复；这里在 CarWith **视频就绪后**用「媒体开始」硬按键起播一次。
+     * 无法确认媒体卡是否可见，因此不自动注入触摸。若已经收到 MEDIA PCM（正在播放）则不动。
+     * 开关关闭时仍走 [armAutoPlaySuppression]。
+     */
+    private fun armAutoPlayBehavior(session: CarLifeSession) {
+        val context = appContext ?: return
+        if (!MediaPrefs.autoPlayOnConnect(context)) {
+            armAutoPlaySuppression()
+            return
+        }
+        if (!audioEnabledForSession) {
+            appendLog("AUTO-PLAY: 本次连接未开启车机侧声音，不主动起播")
+            return
+        }
+        Bg.run("auto-play-start") {
+            try {
+                val readyDeadline = SystemClock.uptimeMillis() + AUTO_PLAY_READY_TIMEOUT_MS
+                Thread.sleep(2_000L)
+                if (currentCarLifeSession !== session) return@run
+                // CarWith 的硬按键/触摸在 VIDEO_RUNNING 之前会被静默拒绝；冷启动可能远慢于 2s。
+                if (!awaitVideoRunning(session, readyDeadline)) {
+                    appendLog("AUTO-PLAY: CarWith 视频未就绪（等待超时），跳过自动起播")
+                    return@run
+                }
+                var bridge = nativeAudioBridge
+                while (bridge == null && SystemClock.uptimeMillis() < readyDeadline) {
+                    Thread.sleep(500L)
+                    if (currentCarLifeSession !== session) return@run
+                    bridge = nativeAudioBridge
+                }
+                if (bridge == null) {
+                    // 此入口只用于 CarWith；桥未建立可能是音频协商失败，不能误播手机其他媒体。
+                    appendLog("AUTO-PLAY: CarWith 音频桥未就绪，跳过自动起播")
+                    return@run
+                }
+                if (bridge.lastMediaPcmAtMs > 0L) {
+                    appendLog("AUTO-PLAY: CarWith 媒体已在播放，跳过")
+                    return@run
+                }
+                // 1) 先发 CarWith「媒体开始」硬按键；只有 CarWith 媒体处于可恢复状态时才生效。
+                if (session.sendHardKey(CarLifeProtocol.HARD_KEY_MEDIA_START)) {
+                    appendLog("AUTO-PLAY: 已发送 CarWith 媒体开始键，等待媒体 PCM")
+                    if (awaitMediaPcm(session, bridge, 6_000L)) {
+                        appendLog("AUTO-PLAY: CarWith 媒体已起播（媒体开始键）")
+                        return@run
+                    }
+                }
+                appendLog("AUTO-PLAY: 未能自动起播（可在车机上手动点播放键）")
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+    }
+
+    /** 等待 CarWith 媒体 PCM 出现；true = 已开始播放。 */
+    private fun awaitMediaPcm(
+        session: CarLifeSession,
+        bridge: CarLifeAudioBridge,
+        timeoutMs: Long,
+    ): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (currentCarLifeSession !== session) return false
+            if (bridge.lastMediaPcmAtMs > 0L) return true
+            Thread.sleep(200L)
+        }
+        return bridge.lastMediaPcmAtMs > 0L && currentCarLifeSession === session
+    }
+
+    /** CarWith 冷启动可能慢于 2s；等视频阶段最多 25s（与连接等待上限一致）。 */
+    private const val AUTO_PLAY_READY_TIMEOUT_MS = 25_000L
+
+    /** 等待 CarWith 进入视频阶段；硬按键/触摸在此之前会被静默拒绝。 */
+    private fun awaitVideoRunning(
+        session: CarLifeSession,
+        deadlineMs: Long,
+    ): Boolean {
+        var logged = false
+        while (SystemClock.uptimeMillis() < deadlineMs) {
+            if (currentCarLifeSession !== session) return false
+            if (session.isVideoRunning()) return true
+            if (!logged) {
+                appendLog("AUTO-PLAY: 等待 CarWith 视频就绪（最多 25s）")
+                logged = true
+            }
+            Thread.sleep(200L)
+        }
+        return session.isVideoRunning() && currentCarLifeSession === session
+    }
+
     private fun stopAutoPlayWatch() {
         autoPlayListener?.let(MediaSessionsState::removeListener)
         autoPlayListener = null
@@ -405,6 +497,9 @@ object SessionController {
 
     @Volatile
     var audioSender: AudioSender? = null
+
+    /** 音频通道启动 single-flight 闸门（见 [startAudioChannel]）。 */
+    private val audioStartGate = AudioStartGate()
 
     @Volatile
     var currentClient: AirPlayClient? = null
@@ -1245,8 +1340,9 @@ object SessionController {
     }
 
     /**
-     * claim 因车机约束被拒后，`changeModes` 归还主音频时重试一次音频通道。
-     * 只由 [ModeArbiter.consumeAudioClaimRetry] 触发；仍受音频开关、会话代次和发送器状态约束。
+     * claim 因车机约束被拒后重试一次音频通道。
+     * 由 [ModeArbiter.consumeAudioClaimRetry] 原子消费 pending claim 后触发（changeModes 归还
+     * 与 requestUI 重进两条入口共用）；仍受音频开关、会话代次和发送器状态约束。
      */
     private fun retryAudioAfterClaimReturned(client: AirPlayClient) {
         // 只把状态检查放在短临界区里；SETUP 最长数秒，不能占着会话锁（disconnect 是
@@ -2198,6 +2294,31 @@ object SessionController {
         sharedSecret: ByteArray?,
         host: String?,
     ): Boolean {
+        // SETUP 协商可持续数秒，期间 audioSender 尚未赋值：连接建立、动态补启、requestUI
+        // 重进和 changeModes 归还重试都可能在赋值前通过状态检查。没有闸门时会并发建立
+        // 多条流，后写入的 audioSender 覆盖先前的，另一条流仍启动却失去引用（双流 + 泄漏）。
+        if (!audioStartGate.tryAcquire()) {
+            appendLog("AUDIO: 已有音频通道正在建立——跳过本次重复启动")
+            return false
+        }
+        return try {
+            startAudioChannelLocked(context, client, sharedSecret, host)
+        } finally {
+            audioStartGate.release()
+        }
+    }
+
+    /** [startAudioChannel] 的单飞临界区；进入前已持有 [audioStartGate]。 */
+    private fun startAudioChannelLocked(
+        context: Context,
+        client: AirPlayClient,
+        sharedSecret: ByteArray?,
+        host: String?,
+    ): Boolean {
+        if (audioSender?.isRunning == true) {
+            appendLog("AUDIO: 已有音频发送器在运行——跳过重复启动")
+            return false
+        }
         val connectionGeneration = client.connectionGeneration
         if (!client.isConnectionCurrent(connectionGeneration)) return false
         val diagnosticAttempt = ConnectionDiagnostics.timeline.snapshot()?.id
@@ -3686,14 +3807,40 @@ object SessionController {
                                         // 车机始终停在原生界面。与 changeModes 同样回 modesChanged 接管主屏，
                                         // 并补一个 I 帧，让车机切屏后马上有可解码的画面。
                                         requestUiCount++
-                                        val request = client.modes.onUserRequestedUi()
+                                        // 只有本轮音频流真的在跑才把主音频声明给手机：audioEnabledForSession
+                                        // 只是用户的选择，无共享密钥、无投屏授权或全部档位 SETUP 失败时
+                                        // startAudioChannel 返回 false，此时声明 resourceID=2 会让车机停掉
+                                        // 自己的音频而 CarPlay 没有发送端接替（重进后静音/抢走车机本地音频）。
+                                        val audio =
+                                            requestUiAudioDecision(
+                                                audioEnabled = audioEnabledForSession,
+                                                audioStreamRunning = audioSender?.isRunning == true,
+                                                audioClaimAwaitingReturn = client.modes.audioClaimAwaitingReturn,
+                                            )
+                                        val request = client.modes.onUserRequestedUi(takeAudio = audio.takeMainAudio)
+                                        val audioSuffix =
+                                            if (audioEnabledForSession && !audio.takeMainAudio) {
+                                                "；音频流未建立，暂不声明主音频"
+                                            } else {
+                                                ""
+                                            }
                                         enqueueModesAssert(
                                             client,
-                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；${request.note}）",
+                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；" +
+                                                "${request.note}$audioSuffix）",
                                             requestKeyFrame = request.allowed,
                                             retakeScreen = request.retake,
                                             rebuildStream = PassatReturnPolicy.rebuildStream(passatReturnStrategy(), request.rebuildStream),
                                         )
+                                        if (audio.retryAfterPendingClaim && client.modes.consumeAudioClaimRetry()) {
+                                            // 音频 SETUP 此前因车机以高约束持有/借用主音频而推迟：用户重进
+                                            // CarPlay 是用户发起动作，后台按正常路径重试一次；归属仍由
+                                            // onAudioStreamStarting 按当时的约束判断决定（倒车提示音等不抢）。
+                                            // 先原子消费 pending claim，避免 requestUI 与 changeModes 各跑一遍；
+                                            // startAudioChannel 的单飞闸门再兜住 SETUP 窗口内的并发。
+                                            appendLog("AUDIO: requestUI 重进——主音频此前未接管，后台重试建立音频流")
+                                            Bg.run("audio-request-ui-retry") { retryAudioAfterClaimReturned(client) }
+                                        }
                                     }
 
                                     else ->
@@ -3916,7 +4063,9 @@ object SessionController {
                                             }
                                             if (!replacement.openDataPort() ||
                                                 wasCancelled() ||
-                                                !client.record() ||
+                                                // 屏幕流已 TEARDOWN/SETUP：单次 RECORD 车机也必须重发一次，
+                                                // 否则新流没有激活（艾瑞泽 8 重进后触控/按键失效）。
+                                                !client.record(force = true) ||
                                                 wasCancelled() ||
                                                 !replacement.start {} ||
                                                 wasCancelled()
@@ -3992,7 +4141,7 @@ object SessionController {
                                     if (videoStarted) carLifeOutput = output
                                     // 在 CarWith 启动前布防：CarWith 可能在 start() 内就恢复媒体，
                                     // 启动后再取 nowPlaying 会把自动播放误当成“连接前已在播放”。
-                                    if (videoStarted) armAutoPlaySuppression()
+                                    if (videoStarted) armAutoPlayBehavior(createdCarLife)
                                     val carLifeStarted = videoStarted && createdCarLife.start()
                                     appendLog(
                                         "MODE: CarWith ${if (carLifeStarted) "已请求连接，等待真实视频" else "连接请求失败"} " +
@@ -4213,4 +4362,52 @@ internal fun pairingFallback(
             allowPlainAfterFailure,
         )
     return PairingFallback(decision.useBtRetireHack, decision.usePlainSession)
+}
+
+/** [requestUiAudioDecision] 的结果。 */
+internal data class RequestUiAudioDecision(
+    /** 是否在 requestUI 的 modesChanged 里把主音频（resourceID=2）声明给手机。 */
+    val takeMainAudio: Boolean,
+    /** 是否应后台重试建立音频流（此前 SETUP 因车机高约束占用主音频被推迟）。 */
+    val retryAfterPendingClaim: Boolean,
+)
+
+/**
+ * 用户点 CarPlay 图标（`requestUI`）时的主音频决策。
+ *
+ * [audioEnabled] 只是用户在「启动连接」里的选择，不代表本轮音频流已建立：无共享密钥、
+ * 无投屏授权或所有音频档位 SETUP 失败时 `startAudioChannel` 都返回 false，发送器不存在。
+ * 此时若在 modesChanged 里把主音频声明给手机，车机会停掉自己的音频，而 CarPlay 没有
+ * 发送端接替——重进 CarPlay 后静音，或抢走车机正在播放的本地音频。因此只在
+ * [audioStreamRunning] 时随 requestUI 接管主音频。
+ *
+ * [audioClaimAwaitingReturn] 表示音频 SETUP 因车机以高于 userInitiated 的约束持有/借用
+ * 主音频而推迟。这条路径不在这里声明归属，而是交给 [retryAfterPendingClaim] 的后台重试，
+ * 由 `ModeArbiter.onAudioStreamStarting()` 按重试时的约束决定是否接管（倒车提示音等不抢）。
+ */
+internal fun requestUiAudioDecision(
+    audioEnabled: Boolean,
+    audioStreamRunning: Boolean,
+    audioClaimAwaitingReturn: Boolean,
+): RequestUiAudioDecision =
+    RequestUiAudioDecision(
+        takeMainAudio = audioStreamRunning,
+        retryAfterPendingClaim = audioEnabled && !audioStreamRunning && audioClaimAwaitingReturn,
+    )
+
+/**
+ * 音频通道启动的 single-flight 闸门。
+ *
+ * 音频 SETUP 协商可持续数秒，期间 `audioSender` 尚未赋值；连接建立、动态补启、
+ * requestUI 重进和 changeModes 归还重试等多个入口若并发进入，会各自建立一条流，
+ * 后写入的 `audioSender` 覆盖先前的，另一条流仍启动却失去引用（双流 + 持续泄漏）。
+ */
+internal class AudioStartGate {
+    private val inFlight = AtomicBoolean(false)
+
+    /** 获得启动权返回 true；已有启动在进行中返回 false。 */
+    fun tryAcquire(): Boolean = inFlight.compareAndSet(false, true)
+
+    /** 释放启动权；必须放在 finally 里。 */
+    fun release() = inFlight.set(false)
 }

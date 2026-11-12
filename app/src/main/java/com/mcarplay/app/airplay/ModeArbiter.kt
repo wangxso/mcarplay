@@ -67,22 +67,45 @@ internal class ModeArbiter {
         val allowed: Boolean = true,
     )
 
-    /** 用户在车机上点了 CarPlay 图标：用户发起的拿回主屏。 */
+    /**
+     * 用户在车机上点了 CarPlay 图标：用户发起的拿回主屏。
+     *
+     * 与 [onUserReturnedToCar] 对称：返回车机时主屏与主音频一起交还，重新进入时也必须
+     * 一起拿回。只拿回主屏会让 `modesChanged` 继续报「主音频=车机」，车机不会播放
+     * CarPlay 声音（艾瑞泽 8，2026-11-06：0x10021 返回车机后点图标重进无声）。
+     */
     @Synchronized
-    fun onUserRequestedUi(): UiRequest {
+    fun onUserRequestedUi(takeAudio: Boolean = true): UiRequest {
         val screen = resources.getValue(SCREEN)
         if (screen.owner == Entity.CONTROLLER) {
-            return UiRequest("主屏本就归手机，先报让出再拿回", retake = true, rebuildStream = screenRelinquished)
+            val audioNote = if (takeAudio) retakeMainAudioForUserRequest() else ""
+            return UiRequest("主屏本就归手机，先报让出再拿回$audioNote", retake = true, rebuildStream = screenRelinquished)
         }
         val constraint = if (screen.borrowed) screen.unborrowConstraint else screen.takeConstraint
         if (constraint > PRIORITY_USER_INITIATED) {
             return UiRequest("车机持有主屏的约束高于 userInitiated，不抢", retake = false, allowed = false)
         }
+        val audioNote = if (takeAudio) retakeMainAudioForUserRequest() else ""
         screen.owner = Entity.CONTROLLER
         screen.permanent = Entity.CONTROLLER
         screen.borrowed = false
         val rebuild = screenRelinquished
-        return UiRequest("用户点图标，拿回主屏（车机约束 $constraint ≤ userInitiated）", retake = false, rebuildStream = rebuild)
+        return UiRequest("用户点图标，拿回主屏（车机约束 $constraint ≤ userInitiated）$audioNote", retake = false, rebuildStream = rebuild)
+    }
+
+    /** 用户发起重进 CarPlay 时顺带拿回主音频；约束高于 userInitiated（如倒车提示音）时不抢。 */
+    private fun retakeMainAudioForUserRequest(): String {
+        val audio = resources.getValue(MAIN_AUDIO)
+        if (audio.owner == Entity.CONTROLLER) return ""
+        val constraint = if (audio.borrowed) audio.unborrowConstraint else audio.takeConstraint
+        if (constraint > PRIORITY_USER_INITIATED) {
+            return "；主音频约束 $constraint 高于 userInitiated，不抢"
+        }
+        audio.owner = Entity.CONTROLLER
+        audio.permanent = Entity.CONTROLLER
+        audio.borrowed = false
+        audio.takeConstraint = CONSTRAINT_ANYTIME
+        return "；同时拿回主音频（约束 $constraint）"
     }
 
     /** [claimed] = 是否真的改成手机持有；车机约束高于 userInitiated 时保持原归属。 */

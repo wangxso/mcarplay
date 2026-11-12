@@ -2628,8 +2628,14 @@ class AirPlayClient(
     /**
      * RECORD 激活会话。受影响的车机每个连接最多发一次：并发调用共享结果，超时也不能在原会话重发。
      * 其他接收端保留音频后补发 RECORD 的既有行为。等待网络响应时不持有客户端锁，close 可随时终止。
+     *
+     * [force] 只给“屏幕流已 TEARDOWN 并重新 SETUP”的恢复路径用：新流必须重新激活，
+     * 不能被上面的单次 RECORD 缓存挡掉（艾瑞泽 8，2026-11-06：重进 CarPlay 后触控/按键失效）。
      */
-    fun record(timeoutMillis: Int = 10_000): Boolean {
+    fun record(
+        timeoutMillis: Int = 10_000,
+        force: Boolean = false,
+    ): Boolean {
         val epoch: Long
         val attempt: java.util.concurrent.CompletableFuture<Boolean>?
         val owner: Boolean
@@ -2638,7 +2644,7 @@ class AirPlayClient(
             epoch = connectionEpoch
             val single = singleRecordMode ?: receiverCompatibility().singleRecordPerSession.also { singleRecordMode = it }
             val previous = recordAttempt
-            if (single && previous != null) {
+            if (single && previous != null && !force) {
                 attempt = previous
                 owner = false
             } else {
@@ -3113,8 +3119,12 @@ class AirPlayClient(
             if (sessionStopping && !allowDuringStop) throw IOException("会话正在结束（$method $path）")
             startReader(client)
             cseq = ++cSeq
-            // 先登记再写：响应可能在 write 返回前就到达
-            pendingResponses[cseq] = queue
+            // 先登记再写：响应可能在 write 返回前就到达。登记与 failAllPending 的
+            // 快照/清空共用 pendingLock；通道已关时直接失败，绝不登记后白等超时。
+            synchronized(pendingLock) {
+                if (controlChannelClosed) throw IOException("控制通道已关闭（$method $path）")
+                pendingResponses[cseq] = queue
+            }
             try {
                 val head =
                     "$method $path RTSP/1.0\r\n" +
@@ -3137,7 +3147,7 @@ class AirPlayClient(
                 output.write(wire)
                 output.flush()
             } catch (error: Throwable) {
-                pendingResponses.remove(cseq)
+                synchronized(pendingLock) { pendingResponses.remove(cseq) }
                 throw error
             }
         }
@@ -3149,7 +3159,7 @@ class AirPlayClient(
                 Thread.currentThread().interrupt()
                 throw IOException("RTSP 被中断（CSeq=$cseq $method $path）")
             } finally {
-                pendingResponses.remove(cseq)
+                synchronized(pendingLock) { pendingResponses.remove(cseq) }
             }
         // 慢应答留痕：>1.5s 说明车机在内部仲裁（同类问题排查的第一手证据）
         val elapsed = SystemClock.uptimeMillis() - startedAt
@@ -3224,7 +3234,6 @@ class AirPlayClient(
         } finally {
             // 只由「当前」读线程清账：重连会换 socket 与新读线程，旧线程不得误伤新会话
             if (generation == readerGeneration) {
-                controlChannelClosed = true
                 failAllPending("控制通道读线程结束")
             }
         }
@@ -3298,8 +3307,16 @@ class AirPlayClient(
     private var unmatchedMessages = 0
 
     private fun failAllPending(reason: String) {
-        val waiting = pendingResponses.values.toList()
-        pendingResponses.clear()
+        // 2026-11-06 21:59 掉线时 airplay-rtsp-reader 在 CHM.values.toList() 上 FATAL
+        // （NoSuchElementException）。现在注册/移除/快照/清空全部由 pendingLock 串行化：
+        // 快照与清空是原子的，且 controlChannelClosed 与清空同时置位，晚到的 request()
+        // 会直接抛「控制通道已关闭」，不会登记后等满超时。
+        var waiting = emptyList<java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>>()
+        synchronized(pendingLock) {
+            controlChannelClosed = true
+            waiting = pendingResponses.values.toList()
+            pendingResponses.clear()
+        }
         if (waiting.isEmpty()) return
         log("AIRPLAY: $reason——唤醒 ${waiting.size} 个待响应请求")
         waiting.forEach { it.offer(RTSP_CLOSED_MARK to ByteArray(0)) }
@@ -3316,7 +3333,7 @@ class AirPlayClient(
             previous = readerSocket
             readerSocket = client
             val generation = ++readerGeneration
-            controlChannelClosed = false
+            synchronized(pendingLock) { controlChannelClosed = false }
             readerThread =
                 Thread({ readLoop(client, generation) }, "airplay-rtsp-reader").apply {
                     isDaemon = true
@@ -3333,6 +3350,9 @@ class AirPlayClient(
     /** 待响应的 CSeq → 响应队列（异步派发；feedback 不再被长请求饿死）。 */
     private val pendingResponses =
         java.util.concurrent.ConcurrentHashMap<Int, java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>>()
+
+    /** 保护 pendingResponses 的登记/移除/快照/清空与 controlChannelClosed 的置位。 */
+    private val pendingLock = Any()
 
     /** 写侧串行：CSeq 分配 + 加密器写计数 + socket 写必须原子（读侧在独立线程）。 */
     private val rtspWriteLock = Any()

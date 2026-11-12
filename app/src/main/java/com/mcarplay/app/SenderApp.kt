@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.i18n.AppLanguage
+import com.mcarplay.app.service.WifiLowLatencyForce
 import com.mcarplay.app.util.DebugFileLog
 
 /**
@@ -20,6 +21,8 @@ open class SenderApp : Application() {
         // 都会让它被算进「历史」。
         DebugFileLog.markSessionStart(this)
         ConnectionDiagnostics.initialize(this)
+        // 上次进程被系统杀死时可能没走到 StreamingWifiLock.release()；Shizuku 就绪后恢复。
+        WifiLowLatencyForce.restoreAfterCrash(this)
         // 界面语言：未选过时落到默认中文（不跟随系统语言）
         AppLanguage.applyAtStartup(this)
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->

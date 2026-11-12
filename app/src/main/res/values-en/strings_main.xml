@@ -37,7 +37,7 @@
     <string name="main_dim_desc">Tap anywhere on the phone screen to restore</string>
     <string name="cd_auto_play">Auto-play</string>
     <string name="main_auto_play_title">Auto-play music on connect</string>
-    <string name="main_auto_play_desc">When off, connecting does not start phone music automatically; music already playing is left alone and can still be started from the car</string>
+    <string name="main_auto_play_desc">When on, connecting sends CarWith a media-start key without skipping tracks; music already playing is left alone. If playback does not start, press play on the car screen</string>
     <string name="cd_landscape">Landscape</string>
     <string name="main_car_settings_desc">Stream resolution · frame rate · screen off · fallbacks · nav ducking</string>
     <string name="cd_terminal">Terminal</string>
