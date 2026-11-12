@@ -18,6 +18,11 @@
     <string name="dc_carwith_listeners_pending">已观察到 CarWith 通知，但七路端口未就绪；请打开 CarWith 设置手动选择百度 CarLife 无线连接，并核对 CarWith/CarLife 组件版本</string>
     <string name="dc_carwith_protocol_silent">七路端口已连接，但未收到 CarLife 协议响应；端口监听不等于有效投屏会话。请停止现有 CarWith 连接，再从 CarWith 设置重新发起百度 CarLife 无线连接</string>
     <string name="dc_carwith_busy">CarWith 正被独立自检占用，请先停止自检，再启动 CarPlay 连接</string>
+    <string name="diag_notification_access_title">通知使用权</string>
+    <string name="diag_notification_access_desc_granted">已开启：音乐卡可显示歌名，CarWith 入口诊断可用</string>
+    <string name="diag_notification_access_desc_missing">未开启：音乐卡没有歌名，CarWith 入口诊断只能显示「未知」；点右侧前往系统设置开启</string>
+    <string name="diag_notification_access_open">去开启</string>
+    <string name="diag_notification_access_unavailable">无法打开系统设置，请到「设置 → 通知与状态栏 → 通知使用权」手动开启</string>
     <string name="dc_video_closed">视频连接已结束；仅凭此不能确认接收端崩溃，请检查网络和接收端</string>
     <string name="dc_audio_unavailable">音频未能启用，画面可以继续；请提供报告核对音频协商</string>
     <string name="dc_connection_incomplete">连接尚未完成，请结合最后阶段和接收端提示排查</string>

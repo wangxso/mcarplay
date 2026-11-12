@@ -2,6 +2,8 @@ package com.mcarplay.app.media
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import com.mcarplay.app.shizuku.Shell
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -43,6 +45,54 @@ object NotificationAccess {
         enabledListeners
             ?.split(':')
             ?.any { it.trim().equals(componentSpec, ignoreCase = true) } == true
+
+    /**
+     * 直接从系统安全设置读取授权状态；不需要 Shizuku，也不会触发 shell。
+     *
+     * 界面用它显示当前状态。注意这里只回答「在不在授权列表里」，监听器是否已绑定
+     * 由 [ensureGranted] 的自愈逻辑和 [MediaListenerService] 的连接回调决定。
+     */
+    fun isGrantedInSettings(context: Context): Boolean =
+        isGrantedIn(
+            Settings.Secure.getString(context.contentResolver, ENABLED_NOTIFICATION_LISTENERS),
+            componentSpec(context),
+        )
+
+    /**
+     * 打开系统「通知使用权」页，优先直达本应用，ROM 不认时回退到监听器列表页。
+     *
+     * 为什么需要它：Shizuku 未运行时 [ensureGranted] 无法静默授予，而旧界面只在
+     * 诊断文案里说「可允许通知使用权」，用户不知道入口在哪里（issue #51）。
+     *
+     * @return true = 至少有一个设置页成功启动
+     */
+    fun openSettings(context: Context): Boolean {
+        val spec = componentSpec(context)
+        return listenerSettingsTargets(spec).any { (action, componentExtra) ->
+            val intent =
+                Intent(action)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .apply {
+                        if (componentExtra != null) {
+                            // AOSP Settings 用 getStringExtra 读取，必须传扁平化字符串而不是 ComponentName。
+                            putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, componentExtra)
+                        }
+                    }
+            runCatching { context.startActivity(intent) }.isSuccess
+        }
+    }
+
+    /**
+     * 设置页目标：先直达本应用（附带扁平化组件名），再回退到监听器列表（无 extra）。
+     *
+     * extra 的值必须是 `包/类` 字符串——传 [ComponentName] 时 AOSP Settings 读不到，
+     * 详情页无法定位监听器，而且 startActivity 仍然成功，列表页回退不会触发。
+     */
+    internal fun listenerSettingsTargets(componentSpec: String): List<Pair<String, String?>> =
+        listOf(
+            Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS to componentSpec,
+            Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS to null,
+        )
 
     /**
      * 确保已授予通知使用权（幂等、可重试；**后台线程调用**，内部含 shell 往返）。
@@ -172,4 +222,7 @@ object NotificationAccess {
     }
 
     private val rebinding = AtomicBoolean(false)
+
+    /** `Settings.Secure` 中保存通知监听器授权列表的键。 */
+    private const val ENABLED_NOTIFICATION_LISTENERS = "enabled_notification_listeners"
 }

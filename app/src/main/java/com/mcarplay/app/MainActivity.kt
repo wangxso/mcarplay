@@ -1196,6 +1196,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.btnCarWithSettings).setOnClickListener {
             if (!CarLifeLauncher.openSettings(this)) snack(getString(R.string.ma_carwith_settings_failed))
         }
+        findViewById<View>(R.id.btnNotificationAccess).setOnClickListener { openNotificationAccessSettings() }
+        findViewById<View>(R.id.rowNotificationAccess).setOnClickListener { openNotificationAccessSettings() }
+        updateNotificationAccessRow()
         findViewById<TextView>(R.id.btnWifi).setOnClickListener {
             val ssid = ssidInput.text.toString().trim()
             // 自动加入不可用时的手动兜底：密码先进剪贴板，系统 WLAN 页粘贴即可
@@ -1518,6 +1521,25 @@ class MainActivity : AppCompatActivity() {
         carLifeSelfTestDesc.text = CarLifeDiagnostics.status(this)
     }
 
+    /** 通知使用权是音乐卡与 CarWith 入口诊断的共同前置条件：显示状态并提供系统设置入口。 */
+    private fun updateNotificationAccessRow() {
+        val granted = NotificationAccess.isGrantedInSettings(this)
+        findViewById<TextView>(R.id.notificationAccessDesc).text =
+            getString(
+                if (granted) {
+                    R.string.diag_notification_access_desc_granted
+                } else {
+                    R.string.diag_notification_access_desc_missing
+                },
+            )
+    }
+
+    private fun openNotificationAccessSettings() {
+        if (!NotificationAccess.openSettings(this)) {
+            snack(getString(R.string.diag_notification_access_unavailable))
+        }
+    }
+
     private fun toggleExternalHu() {
         val snapshot = ExternalHuController.snapshot()
         if (snapshot.running) {
@@ -1801,6 +1823,8 @@ class MainActivity : AppCompatActivity() {
         }
         // 横屏时英雄卡是 contentArea 里的固定层（见 applyContentLayout），只属于连接页
         findViewById<View>(R.id.heroCard).visibility = if (index == 0) View.VISIBLE else View.GONE
+        // 用户可能刚从系统设置返回：进入诊断页时刷新授权状态。
+        if (index == 2) updateNotificationAccessRow()
     }
 
     private fun setReadyExpanded(expanded: Boolean) {
@@ -2196,6 +2220,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         SessionController.onMainUiVisibilityChanged(true)
         mainHandler.post(heroTick)
+        updateNotificationAccessRow()
         // 旋转/重建后尚未接受：用原截止时刻续弹（不重新等 10 秒）
         if (needsDisclaimerAtLaunch(
                 DisclaimerPrefs.acceptedVersion(this),
