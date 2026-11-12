@@ -3778,14 +3778,38 @@ object SessionController {
                                         // 车机始终停在原生界面。与 changeModes 同样回 modesChanged 接管主屏，
                                         // 并补一个 I 帧，让车机切屏后马上有可解码的画面。
                                         requestUiCount++
-                                        val request = client.modes.onUserRequestedUi(takeAudio = audioEnabledForSession)
+                                        // 只有本轮音频流真的在跑才把主音频声明给手机：audioEnabledForSession
+                                        // 只是用户的选择，无共享密钥、无投屏授权或全部档位 SETUP 失败时
+                                        // startAudioChannel 返回 false，此时声明 resourceID=2 会让车机停掉
+                                        // 自己的音频而 CarPlay 没有发送端接替（重进后静音/抢走车机本地音频）。
+                                        val audio =
+                                            requestUiAudioDecision(
+                                                audioEnabled = audioEnabledForSession,
+                                                audioStreamRunning = audioSender?.isRunning == true,
+                                                audioClaimAwaitingReturn = client.modes.audioClaimAwaitingReturn,
+                                            )
+                                        val request = client.modes.onUserRequestedUi(takeAudio = audio.takeMainAudio)
+                                        val audioSuffix =
+                                            if (audioEnabledForSession && !audio.takeMainAudio) {
+                                                "；音频流未建立，暂不声明主音频"
+                                            } else {
+                                                ""
+                                            }
                                         enqueueModesAssert(
                                             client,
-                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；${request.note}）",
+                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；" +
+                                                "${request.note}$audioSuffix）",
                                             requestKeyFrame = request.allowed,
                                             retakeScreen = request.retake,
                                             rebuildStream = PassatReturnPolicy.rebuildStream(passatReturnStrategy(), request.rebuildStream),
                                         )
+                                        if (audio.retryAfterPendingClaim) {
+                                            // 音频 SETUP 此前因车机以高约束持有/借用主音频而推迟：用户重进
+                                            // CarPlay 是用户发起动作，后台按正常路径重试一次；归属仍由
+                                            // onAudioStreamStarting 按当时的约束判断决定（倒车提示音等不抢）。
+                                            appendLog("AUDIO: requestUI 重进——主音频此前未接管，后台重试建立音频流")
+                                            Bg.run("audio-request-ui-retry") { retryAudioAfterClaimReturned(client) }
+                                        }
                                     }
 
                                     else ->
@@ -4308,3 +4332,34 @@ internal fun pairingFallback(
         )
     return PairingFallback(decision.useBtRetireHack, decision.usePlainSession)
 }
+
+/** [requestUiAudioDecision] 的结果。 */
+internal data class RequestUiAudioDecision(
+    /** 是否在 requestUI 的 modesChanged 里把主音频（resourceID=2）声明给手机。 */
+    val takeMainAudio: Boolean,
+    /** 是否应后台重试建立音频流（此前 SETUP 因车机高约束占用主音频被推迟）。 */
+    val retryAfterPendingClaim: Boolean,
+)
+
+/**
+ * 用户点 CarPlay 图标（`requestUI`）时的主音频决策。
+ *
+ * [audioEnabled] 只是用户在「启动连接」里的选择，不代表本轮音频流已建立：无共享密钥、
+ * 无投屏授权或所有音频档位 SETUP 失败时 `startAudioChannel` 都返回 false，发送器不存在。
+ * 此时若在 modesChanged 里把主音频声明给手机，车机会停掉自己的音频，而 CarPlay 没有
+ * 发送端接替——重进 CarPlay 后静音，或抢走车机正在播放的本地音频。因此只在
+ * [audioStreamRunning] 时随 requestUI 接管主音频。
+ *
+ * [audioClaimAwaitingReturn] 表示音频 SETUP 因车机以高于 userInitiated 的约束持有/借用
+ * 主音频而推迟。这条路径不在这里声明归属，而是交给 [retryAfterPendingClaim] 的后台重试，
+ * 由 `ModeArbiter.onAudioStreamStarting()` 按重试时的约束决定是否接管（倒车提示音等不抢）。
+ */
+internal fun requestUiAudioDecision(
+    audioEnabled: Boolean,
+    audioStreamRunning: Boolean,
+    audioClaimAwaitingReturn: Boolean,
+): RequestUiAudioDecision =
+    RequestUiAudioDecision(
+        takeMainAudio = audioStreamRunning,
+        retryAfterPendingClaim = audioEnabled && !audioStreamRunning && audioClaimAwaitingReturn,
+    )
