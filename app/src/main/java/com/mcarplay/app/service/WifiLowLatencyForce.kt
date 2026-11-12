@@ -3,6 +3,7 @@ package com.mcarplay.app.service
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import com.mcarplay.app.BuildConfig
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.util.DebugFileLog
@@ -24,18 +25,21 @@ object WifiLowLatencyForce {
     @Volatile
     private var reconciler: WifiLowLatencyReconciler? = null
 
+    internal val supportedForBuild: Boolean get() = WifiLowLatencyPolicy.supportsForce(BuildConfig.FLAVOR)
+
     fun enable(context: Context) {
-        if (Build.VERSION.SDK_INT < 34) return
+        if (Build.VERSION.SDK_INT < 34 || !supportedForBuild) return
         initialize(context.applicationContext).setDesired(true)
     }
 
     fun disable() {
+        if (!supportedForBuild) return
         reconciler?.setDesired(false)
     }
 
     /** 进程启动时登记监听；Shizuku 稍后启动或授权时也会重试恢复。 */
     fun restoreAfterCrash(context: Context) {
-        if (Build.VERSION.SDK_INT < 34) return
+        if (Build.VERSION.SDK_INT < 34 || !supportedForBuild) return
         initialize(context.applicationContext).retry()
     }
 
@@ -73,13 +77,14 @@ object WifiLowLatencyForce {
                 setForced = { forced ->
                     val mode = if (forced) "enabled" else "disabled"
                     val result = Shell.exec("cmd wifi force-low-latency-mode $mode")
-                    if (result.ok) {
+                    val succeeded = WifiLowLatencyPolicy.commandSucceeded(result.exitCode, result.output)
+                    if (succeeded) {
                         val message = if (forced) "已通过 Shizuku 强制 Wi‑Fi 低延迟" else "已恢复 Wi‑Fi 低延迟自动管理"
                         DebugFileLog.append(app, "WIFI: $message")
                     } else {
                         DebugFileLog.append(app, "WIFI: 设置 Wi‑Fi 低延迟失败 - ${result.output.take(120)}")
                     }
-                    result.ok
+                    succeeded
                 },
             )
         reconciler = created

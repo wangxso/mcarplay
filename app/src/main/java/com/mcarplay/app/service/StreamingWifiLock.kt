@@ -54,7 +54,7 @@ object StreamingWifiLock {
             context,
             "WIFI: 推流锁已持（低延迟=${lowLatency?.isHeld == true} 高性能=${highPerf?.isHeld == true}" + note,
         )
-        if (Build.VERSION.SDK_INT >= 34) {
+        if (Build.VERSION.SDK_INT >= 34 && WifiLowLatencyForce.supportedForBuild) {
             DebugFileLog.append(
                 context,
                 "WIFI: 真锁屏会关闭 Wi‑Fi 低延迟；正在尝试通过 Shizuku 强制（未运行/未授权时请用「连接时真息屏」）",

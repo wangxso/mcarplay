@@ -302,8 +302,8 @@ object SessionController {
 
     /**
      * 开关打开时的主动起播。CarWith 的音乐走原生 PCM，不产生系统媒体会话/通知，普通媒体键
-     * 无法恢复；这里在 CarWith **视频就绪后**用「媒体开始」硬按键起播一次；硬按键无效时，
-     * 仅在已适配的 DiPlay 布局上点击媒体卡播放键。若已经收到 MEDIA PCM（正在播放）则不动。
+     * 无法恢复；这里在 CarWith **视频就绪后**用「媒体开始」硬按键起播一次。
+     * 无法确认媒体卡是否可见，因此不自动注入触摸。若已经收到 MEDIA PCM（正在播放）则不动。
      * 开关关闭时仍走 [armAutoPlaySuppression]。
      */
     private fun armAutoPlayBehavior(session: CarLifeSession) {
@@ -333,9 +333,8 @@ object SessionController {
                     bridge = nativeAudioBridge
                 }
                 if (bridge == null) {
-                    // 非 CarWith 原生音频路径：只在已有媒体会话时恢复一次。
-                    appendLog("AUTO-PLAY: 无 CarWith 原生音频桥，发送一次系统播放键")
-                    dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+                    // 此入口只用于 CarWith；桥未建立可能是音频协商失败，不能误播手机其他媒体。
+                    appendLog("AUTO-PLAY: CarWith 音频桥未就绪，跳过自动起播")
                     return@run
                 }
                 if (bridge.lastMediaPcmAtMs > 0L) {
@@ -349,27 +348,6 @@ object SessionController {
                         appendLog("AUTO-PLAY: CarWith 媒体已起播（媒体开始键）")
                         return@run
                     }
-                }
-                // 2) 硬按键无效时复现用户在车机屏上点 CarWith 媒体卡播放键的触摸。
-                // 只有实测过的 DiPlay 16:9 布局才允许盲点击，其他接收端只保留硬按键。
-                if (!canTapCarWithMediaCard(session)) {
-                    appendLog("AUTO-PLAY: 当前接收端/画面比例不在已适配的 DiPlay 布局，跳过媒体卡点击")
-                    return@run
-                }
-                repeat(2) { index ->
-                    if (currentCarLifeSession !== session) return@run
-                    if (bridge.lastMediaPcmAtMs > 0L) {
-                        appendLog("AUTO-PLAY: CarWith 媒体已自行起播，跳过")
-                        return@run
-                    }
-                    if (tapCarWithMediaPlay(session)) {
-                        appendLog("AUTO-PLAY: 已点击 CarWith 媒体卡播放键（第 ${index + 1} 次）")
-                        if (awaitMediaPcm(session, bridge, 3_000L)) {
-                            appendLog("AUTO-PLAY: CarWith 媒体已起播（媒体卡播放键）")
-                            return@run
-                        }
-                    }
-                    Thread.sleep(300L)
                 }
                 appendLog("AUTO-PLAY: 未能自动起播（可在车机上手动点播放键）")
             } catch (_: InterruptedException) {
@@ -393,10 +371,6 @@ object SessionController {
         return bridge.lastMediaPcmAtMs > 0L && currentCarLifeSession === session
     }
 
-    /** CarWith 媒体卡播放键在 CarWith 视频中的相对坐标（实测 DiPlay 1920x1080：(1531,1011)）。 */
-    private const val AUTO_PLAY_TAP_X_FRACTION = 0.7975f
-    private const val AUTO_PLAY_TAP_Y_FRACTION = 0.9361f
-
     /** CarWith 冷启动可能慢于 2s；等视频阶段最多 25s（与连接等待上限一致）。 */
     private const val AUTO_PLAY_READY_TIMEOUT_MS = 25_000L
 
@@ -416,41 +390,6 @@ object SessionController {
             Thread.sleep(200L)
         }
         return session.isVideoRunning() && currentCarLifeSession === session
-    }
-
-    /**
-     * 媒体卡点击坐标只在 DiPlay 1920×1080 布局上实测过；其他接收端或画面比例不执行盲点击，
-     * 只保留安全的「媒体开始」硬按键，避免点到 CarWith 的其他控件。
-     */
-    private fun canTapCarWithMediaCard(session: CarLifeSession): Boolean {
-        val policy = currentClient?.receiverCompatibility() ?: return false
-        if (policy.family != ReceiverCompatibility.Family.DIPLAY) return false
-        val width = session.videoWidth
-        val height = session.videoHeight
-        if (width <= 0 || height <= 0) return false
-        val ratio = width.toDouble() / height
-        return kotlin.math.abs(ratio - 16.0 / 9.0) <= 0.05
-    }
-
-    /**
-     * 点击 CarWith 媒体卡的播放键。坐标按 CarWith 视频宽高比例给出：
-     * DiPlay 台架 1920x1080 上用户手动点击 (1531,1011) 可起播，对应 0.7975 / 0.9361。
-     * 只有 DOWN 与 UP 都发出才算完成；UP 失败时补发一次原始 UP，避免 CarWith 留下按下态。
-     */
-    private fun tapCarWithMediaPlay(session: CarLifeSession): Boolean {
-        val width = session.videoWidth
-        val height = session.videoHeight
-        if (width <= 0 || height <= 0) return false
-        val x = (width * AUTO_PLAY_TAP_X_FRACTION).toInt().coerceIn(0, width - 1)
-        val y = (height * AUTO_PLAY_TAP_Y_FRACTION).toInt().coerceIn(0, height - 1)
-        val down = session.sendTouch(x, y, true)
-        Thread.sleep(80L)
-        var up = session.sendTouch(x, y, false)
-        if (down && !up) {
-            // sendTouch 已把 touchState 清成空闲；这里绕过状态机补一个原始 UP。
-            up = session.sendTouchUp(x, y)
-        }
-        return down && up
     }
 
     private fun stopAutoPlayWatch() {
@@ -3839,7 +3778,7 @@ object SessionController {
                                         // 车机始终停在原生界面。与 changeModes 同样回 modesChanged 接管主屏，
                                         // 并补一个 I 帧，让车机切屏后马上有可解码的画面。
                                         requestUiCount++
-                                        val request = client.modes.onUserRequestedUi()
+                                        val request = client.modes.onUserRequestedUi(takeAudio = audioEnabledForSession)
                                         enqueueModesAssert(
                                             client,
                                             "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；${request.note}）",

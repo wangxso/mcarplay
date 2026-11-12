@@ -75,17 +75,17 @@ internal class ModeArbiter {
      * CarPlay 声音（艾瑞泽 8，2026-11-06：0x10021 返回车机后点图标重进无声）。
      */
     @Synchronized
-    fun onUserRequestedUi(): UiRequest {
+    fun onUserRequestedUi(takeAudio: Boolean = true): UiRequest {
         val screen = resources.getValue(SCREEN)
         if (screen.owner == Entity.CONTROLLER) {
-            val audioNote = retakeMainAudioForUserRequest()
+            val audioNote = if (takeAudio) retakeMainAudioForUserRequest() else ""
             return UiRequest("主屏本就归手机，先报让出再拿回$audioNote", retake = true, rebuildStream = screenRelinquished)
         }
         val constraint = if (screen.borrowed) screen.unborrowConstraint else screen.takeConstraint
         if (constraint > PRIORITY_USER_INITIATED) {
             return UiRequest("车机持有主屏的约束高于 userInitiated，不抢", retake = false, allowed = false)
         }
-        val audioNote = retakeMainAudioForUserRequest()
+        val audioNote = if (takeAudio) retakeMainAudioForUserRequest() else ""
         screen.owner = Entity.CONTROLLER
         screen.permanent = Entity.CONTROLLER
         screen.borrowed = false

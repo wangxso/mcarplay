@@ -349,6 +349,21 @@ class ModeArbiterTest {
     }
 
     @Test
+    fun videoOnlyRequestRetakesScreenWithoutClaimingAudio() {
+        val arbiter = ModeArbiter()
+        arbiter.onUserReturnedToCar()
+        val request = arbiter.onUserRequestedUi(takeAudio = false)
+        assertTrue(request.allowed)
+        assertTrue(arbiter.phoneOwnsScreen)
+        assertFalse(arbiter.phoneOwnsAudio)
+
+        // 即使主屏已经归手机，再收到 requestUI 也不能把主音频一并抢回。
+        val repeated = arbiter.onUserRequestedUi(takeAudio = false)
+        assertTrue(repeated.retake)
+        assertFalse(arbiter.phoneOwnsAudio)
+    }
+
+    @Test
     fun userRequestedUiDoesNotStealBorrowedAudioAboveUserInitiated() {
         val arbiter = ModeArbiter()
         arbiter.onUserReturnedToCar()
