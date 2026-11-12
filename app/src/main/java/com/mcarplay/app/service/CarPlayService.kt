@@ -62,6 +62,13 @@ class CarPlayService : Service() {
         // ACL 断开不一定是下车：WinPlay 在网络 iAP 接入后会释放蓝牙。
         // 已启动的 Wi-Fi 视频由媒体通道结束/网络失效负责收尾，不能被蓝牙交接误停。
         if (intent?.action == ACTION_AUTO_STOP_SESSION) {
+            // 只处理本轮车机的 ACL 断开；另一台已配对车机的蓝牙动作不能收掉当前会话，
+            // 也不能把 BT_LINK_CLOSED 记到当前接收端的熔断计数上。
+            val stopPeer = intent?.getStringExtra(EXTRA_PEER_ADDRESS)?.takeIf { it.isNotBlank() }
+            if (SessionController.isSessionRunning() && !SessionController.matchesActivePeer(stopPeer)) {
+                fileLog("AUTO: 蓝牙断开的是非本轮车机（$stopPeer）——保留当前会话")
+                return START_STICKY
+            }
             if (SessionController.bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) {
                 val frames = SessionController.videoSender?.framesSentTotal ?: 0
                 Bg.run("bt-handoff-log") {

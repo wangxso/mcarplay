@@ -52,4 +52,18 @@ class AutoReconnectOutcomeTest {
             ),
         )
     }
+
+    @Test
+    fun peerComparisonIsCaseInsensitiveAndUnknownNeverConflicts() {
+        assertTrue(sameKnownPeer("AA:BB:CC:DD:EE:01", "aa:bb:cc:dd:ee:01"))
+        assertFalse(sameKnownPeer("AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"))
+        assertFalse(sameKnownPeer(null, "AA:BB:CC:DD:EE:01"))
+        assertFalse(sameKnownPeer("AA:BB:CC:DD:EE:01", null))
+
+        // 迟到链路 / 自动收摊：地址未知时不能当成“另一台车”，两边都已知且不同才冲突。
+        assertTrue(peerUnknownOrMatches(null, "AA:BB:CC:DD:EE:01"))
+        assertTrue(peerUnknownOrMatches("AA:BB:CC:DD:EE:01", null))
+        assertTrue(peerUnknownOrMatches("AA:BB:CC:DD:EE:01", "aa:bb:cc:dd:ee:01"))
+        assertFalse(peerUnknownOrMatches("AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"))
+    }
 }

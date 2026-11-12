@@ -23,6 +23,7 @@ import com.mcarplay.app.bt.Iap2BluetoothClient
 import com.mcarplay.app.bt.Iap2BluetoothServer
 import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.bt.countsAsAutoReconnectFailure
+import com.mcarplay.app.bt.peerUnknownOrMatches
 import com.mcarplay.app.carlife.CarLifeAudioEvent
 import com.mcarplay.app.carlife.CarLifeJoinGate
 import com.mcarplay.app.carlife.CarLifeLaunchStrategy
@@ -124,6 +125,12 @@ object SessionController {
      */
     @Volatile
     private var activePeerAddress: String? = null
+
+    /**
+     * [address] 是否属于本轮车机；任一方地址未知时按兼容处理（true）。
+     * 自动收摊、迟到链路断开用它避免把另一台车机的动作算到当前会话上。
+     */
+    fun matchesActivePeer(address: String?): Boolean = peerUnknownOrMatches(activePeerAddress, address)
 
     /**
      * 空端点（车机声明会发 0x4301 但窗口内未到）的等待上限。
@@ -594,8 +601,15 @@ object SessionController {
      * 能走到那里说明 BT 组件仍在运行（用户取消路径 disconnect 会停组件、被端点
      * 守卫拦截），清除是安全的。
      */
-    fun onSenderLinkClosed() {
+    fun onSenderLinkClosed(peerAddress: String? = null) {
         if (bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) return
+        // BT 客户端与服务端可能同时各有一条链路：迟到的非本轮链路断开不能释放本轮互斥，
+        // 也不能把失败记到当前车机头上。
+        val attemptPeer = activePeerAddress
+        if (!peerUnknownOrMatches(peerAddress, attemptPeer)) {
+            appendLog(">>> 非本轮控制链路（$peerAddress）断开——忽略（本轮 ${attemptPeer ?: "未知"}）")
+            return
+        }
         // 用户断开 / 正在清理时的链路关闭不是车机故障，不计入熔断
         val teardownInProgress = connectCancelled || disconnectCompletion != null
         if (sessionStarting.compareAndSet(true, false)) {
@@ -609,7 +623,7 @@ object SessionController {
                 .snapshot()
                 ?.takeIf { it.status == "waiting" || it.status == "streaming" }
                 ?: return
-        if (recordAutoReconnectOutcome(active.id, DiagnosticCode.BT_LINK_CLOSED)) {
+        if (recordAutoReconnectOutcome(active.id, DiagnosticCode.BT_LINK_CLOSED, peerAddress ?: attemptPeer)) {
             appContext?.let { disconnect(it, DiagnosticCode.BT_LINK_CLOSED) }
         }
     }

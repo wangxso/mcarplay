@@ -96,7 +96,9 @@ class CarBluetoothReceiver : BroadcastReceiver() {
             runCatching {
                 context.startService(
                     Intent(context, CarPlayService::class.java)
-                        .setAction(CarPlayService.ACTION_AUTO_STOP_SESSION),
+                        .setAction(CarPlayService.ACTION_AUTO_STOP_SESSION)
+                        // 只有断开的就是本轮车机时才收摊/记账，见 CarPlayService 的地址校验。
+                        .putExtra(CarPlayService.EXTRA_PEER_ADDRESS, address),
                 )
             }
         }

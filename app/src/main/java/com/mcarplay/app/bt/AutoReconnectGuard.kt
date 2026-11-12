@@ -40,6 +40,21 @@ internal fun countsAsAutoReconnectFailure(
         videoFrames == 0L &&
         elapsedMs < AUTO_RECONNECT_FAST_FAILURE_MAX_MS
 
+/** 两个**已知**地址是否为同一接收端（大小写不敏感）；任一未知返回 false。 */
+internal fun sameKnownPeer(
+    a: String?,
+    b: String?,
+): Boolean = !a.isNullOrBlank() && !b.isNullOrBlank() && a.equals(b, ignoreCase = true)
+
+/**
+ * 地址未知时无法判定为「另一台车机」，按兼容处理；只有两边都已知且不同才算冲突。
+ * 用于迟到链路断开、自动收摊等不能误伤既有路径的判断。
+ */
+internal fun peerUnknownOrMatches(
+    a: String?,
+    b: String?,
+): Boolean = a.isNullOrBlank() || b.isNullOrBlank() || a.equals(b, ignoreCase = true)
+
 /**
  * 自动重连失败熔断（2026-11-12 宝马 MGU-86 报告）。
  *
@@ -78,7 +93,7 @@ internal class ReconnectCircuitBreaker(
     ): Failure {
         // 没有对端地址就无法按接收端隔离：不计数，也不把这次失败归到其它车机头上。
         if (address.isNullOrBlank()) return Failure(state, tripped = false)
-        val samePeer = state.address != null && state.address.equals(address, ignoreCase = true)
+        val samePeer = sameKnownPeer(state.address, address)
         // 另一台车机的熔断仍在冷却：单槽状态不能为了记 B 的失败而抹掉 A 的熔断，
         // 否则 A 的自动重连会在冷却期内被重新放开（跨接收端泄漏的另一方向）。
         if (!samePeer && isBlockActive(state, nowMs)) return Failure(state, tripped = false)
@@ -196,7 +211,7 @@ internal object AutoReconnectGuard {
         // 不知道是哪台车机出画时不能清空计数：可能把另一台车的连续失败一起抹掉。
         if (address.isNullOrBlank()) return
         val current = read(context)
-        if (current.address != null && !current.address.equals(address, ignoreCase = true)) return
+        if (current.address != null && !sameKnownPeer(current.address, address)) return
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val state = breaker.onSuccess(current)
         prefs
