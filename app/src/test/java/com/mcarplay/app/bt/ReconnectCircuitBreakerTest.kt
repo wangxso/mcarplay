@@ -2,6 +2,8 @@ package com.mcarplay.app.bt
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -133,29 +135,82 @@ class ReconnectCircuitBreakerTest {
     }
 
     @Test
-    fun anotherReceiversFailureCannotClearAnActiveBlock() {
+    fun anotherReceiversFailuresAreCountedWhileTheFirstIsCoolingDown() {
         val other = "AA:BB:CC:DD:EE:02"
-        var state = ReconnectCircuitBreaker.State()
+        val store = ReconnectCircuitBreakerStore(breaker)
+        var states = emptyMap<String, ReconnectCircuitBreaker.State>()
         repeat(3) { index ->
-            state = fail(state, t0 + index * 1_000L).state
+            states = store.recordFailure(states, address, "a$index", t0 + index * 1_000L).first
         }
-        val blocked = state
-        assertTrue(breaker.isBlocked(blocked, address, t0 + 5_000L))
+        assertNotNull(store.block(states, address, t0 + 5_000L))
 
-        // A 熔断期间 B 失败：不能把整份状态替换成 B，否则 A 在冷却期内会被重新放开。
-        val byOther = fail(blocked, t0 + 6_000L, other)
-        assertFalse(byOther.tripped)
-        assertEquals(blocked, byOther.state)
-        assertTrue(breaker.isBlocked(byOther.state, address, t0 + 6_000L))
-        assertFalse(breaker.isBlocked(byOther.state, other, t0 + 6_000L))
+        // A 冷却期间 B 的失败照常累计，但不会解除 A 的熔断。
+        repeat(2) { index ->
+            states = store.recordFailure(states, other, "b$index", t0 + 6_000L + index * 1_000L).first
+        }
+        assertNull(store.block(states, other, t0 + 8_000L))
+        assertEquals(2, states[store.keyOf(other)]!!.failures)
+        assertNotNull(store.block(states, address, t0 + 8_000L))
 
-        // A 的冷却结束后，B 才重新开始自己的计数。
-        val afterCooldown = fail(byOther.state, blocked.blockedUntilMs + 1_000L, other)
-        assertFalse(afterCooldown.tripped)
-        assertEquals(1, afterCooldown.state.failures)
-        assertEquals(other, afterCooldown.state.address)
-        assertFalse(breaker.isBlocked(afterCooldown.state, address, blocked.blockedUntilMs + 1_000L))
-        assertFalse(breaker.isBlocked(afterCooldown.state, other, blocked.blockedUntilMs + 1_000L))
+        // B 的第 3 次也独立熔断；A、B 各自持有自己的冷却期。
+        val (afterThird, thirdBlock) = store.recordFailure(states, other, "b2", t0 + 9_000L)
+        assertNotNull(thirdBlock)
+        assertNotNull(store.block(afterThird, other, t0 + 9_000L))
+        assertNotNull(store.block(afterThird, address, t0 + 9_000L))
+
+        // A 的冷却结束后只解除 A；B 仍在自己的冷却期内。
+        assertNull(store.block(afterThird, address, t0 + 3_000L + ReconnectCircuitBreaker.COOLDOWN_MILLIS))
+        assertNotNull(store.block(afterThird, other, t0 + 3_000L + ReconnectCircuitBreaker.COOLDOWN_MILLIS))
+    }
+
+    @Test
+    fun duplicateAttemptForTheSameReceiverIsRecordedOnce() {
+        val store = ReconnectCircuitBreakerStore(breaker)
+        val states = store.recordFailure(emptyMap(), address, "attempt-a", t0).first
+        val (deduped, block) = store.recordFailure(states, address, "attempt-a", t0 + 1_000L)
+        assertNull(block)
+        assertEquals(1, deduped[store.keyOf(address)]!!.failures)
+    }
+
+    @Test
+    fun successClearsOnlyThatReceiversFailures() {
+        val other = "AA:BB:CC:DD:EE:02"
+        val store = ReconnectCircuitBreakerStore(breaker)
+        var states = store.recordFailure(emptyMap(), address, "a", t0).first
+        states = store.recordFailure(states, other, "b", t0 + 1_000L).first
+
+        states = store.recordHealthy(states, address)
+        assertNull(states[store.keyOf(address)])
+        assertEquals(1, states[store.keyOf(other)]!!.failures)
+    }
+
+    @Test
+    fun persistedStateCodecRoundTripsEachReceiver() {
+        val other = "AA:BB:CC:DD:EE:02"
+        val states =
+            mapOf(
+                address.uppercase() to
+                    ReconnectCircuitBreaker.State(
+                        address = address,
+                        failures = 2,
+                        firstFailureAtMs = 10L,
+                        lastFailureAtMs = 20L,
+                        blockedUntilMs = 0L,
+                        recordedAttempt = "attempt-a",
+                    ),
+                other.uppercase() to
+                    ReconnectCircuitBreaker.State(
+                        address = other,
+                        failures = 3,
+                        firstFailureAtMs = 15L,
+                        lastFailureAtMs = 25L,
+                        blockedUntilMs = 30L,
+                        recordedAttempt = "attempt-b",
+                    ),
+            )
+        assertEquals(states, decodeAutoReconnectStates(encodeAutoReconnectStates(states)))
+        assertEquals(emptyMap<String, ReconnectCircuitBreaker.State>(), decodeAutoReconnectStates("not-json"))
+        assertEquals(emptyMap<String, ReconnectCircuitBreaker.State>(), decodeAutoReconnectStates(null))
     }
 
     @Test
