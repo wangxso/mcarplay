@@ -100,6 +100,14 @@ class Iap2SenderSession(
         val observation: ReceiverObservation? = null,
         /** 端口仅为网关兜底；现场声明或 mDNS 解析出的端口永不据此轮询。 */
         val portIsFallback: Boolean = false,
+        /**
+         * 本轮控制链路的对端蓝牙地址（ACL peer）。
+         *
+         * 自动重连熔断按它隔离接收端：未选定目标车机（默认自动模式）时
+         * `TargetDevicePrefs` 为空，只有真实地址能避免「A 车失败拦住 B 车」。
+         * null = 未知（例如合成端点）。
+         */
+        val peerAddress: String? = null,
     )
 
     private val parser = Iap2Csm.Parser()

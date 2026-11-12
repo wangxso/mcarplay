@@ -96,7 +96,10 @@ class CarPlayService : Service() {
             return START_NOT_STICKY
         }
         if (intent?.action == ACTION_AUTO_START_SESSION) {
-            val block = AutoReconnectGuard.block(applicationContext, TargetDevicePrefs.get(applicationContext)?.address)
+            val autoPeer =
+                intent?.getStringExtra(EXTRA_PEER_ADDRESS)?.takeIf { it.isNotBlank() }
+                    ?: TargetDevicePrefs.get(applicationContext)?.address
+            val block = AutoReconnectGuard.block(applicationContext, autoPeer)
             if (block != null) {
                 fileLog(
                     "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
@@ -150,7 +153,11 @@ class CarPlayService : Service() {
                 SessionController.audioEnabledForSession =
                     CarLifeLauncher.isAvailable(app) ||
                     acquireProjectionSilently()
-                SessionController.startConnection(app, automatic = true)
+                SessionController.startConnection(
+                    app,
+                    automatic = true,
+                    automaticPeerAddress = intent?.getStringExtra(EXTRA_PEER_ADDRESS)?.takeIf { it.isNotBlank() },
+                )
             }
         } else if (intent?.action == ACTION_START_DIAGNOSTIC) {
             fileLog("SVC: 收到「启动 CarWith 自检」")
@@ -264,6 +271,9 @@ class CarPlayService : Service() {
 
         /** 上车自动连接：车机蓝牙 ACL 连上时由 CarBluetoothReceiver 投递。 */
         const val ACTION_AUTO_START_SESSION = "com.mcarplay.app.action.AUTO_START"
+
+        /** 触发自动连接的那台车机的 ACL 地址（熔断按它隔离，默认自动模式也有效）。 */
+        const val EXTRA_PEER_ADDRESS = "com.mcarplay.app.extra.AUTO_PEER_ADDRESS"
 
         /** 目标蓝牙 ACL 断开时检查是否自动收摊；Wi-Fi 视频已启动时保留会话。 */
         const val ACTION_AUTO_STOP_SESSION = "com.mcarplay.app.action.AUTO_STOP"

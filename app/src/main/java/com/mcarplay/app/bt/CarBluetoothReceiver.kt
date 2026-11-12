@@ -79,7 +79,9 @@ class CarBluetoothReceiver : BroadcastReceiver() {
             runCatching {
                 context.startForegroundService(
                     Intent(context, CarPlayService::class.java)
-                        .setAction(CarPlayService.ACTION_AUTO_START_SESSION),
+                        .setAction(CarPlayService.ACTION_AUTO_START_SESSION)
+                        // 未选定目标车机（自动模式）时，熔断仍按这条 ACL 的对端地址隔离。
+                        .putExtra(CarPlayService.EXTRA_PEER_ADDRESS, address),
                 )
             }.onFailure { error ->
                 DebugFileLog.append(

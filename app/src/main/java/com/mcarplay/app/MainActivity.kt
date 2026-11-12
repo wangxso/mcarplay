@@ -1438,7 +1438,7 @@ class MainActivity : AppCompatActivity() {
         // 自动重连熔断：空闲时明确告诉用户「不是没连上，是暂缓自动重连」，并给出剩余时间。
         // 有残留屏要清理时让残留提示优先（用户需要先处理那一项）。
         if (s == HeroState.IDLE && pendingResidualDisplays == null) {
-            val block = AutoReconnectGuard.block(this, TargetDevicePrefs.get(this)?.address)
+            val block = AutoReconnectGuard.activeBlock(this)
             if (block != null) {
                 idleAutoPauseShown = true
                 heroStateText.text = getString(R.string.main_hero_auto_paused)

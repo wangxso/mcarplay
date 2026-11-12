@@ -81,6 +81,58 @@ class ReconnectCircuitBreakerTest {
     }
 
     @Test
+    fun failuresWithoutAKnownPeerAreNeitherCountedNorMatched() {
+        var state = ReconnectCircuitBreaker.State()
+        repeat(3) { index ->
+            val failure = breaker.onFastFailure(state, null, t0 + index * 1_000L)
+            assertFalse(failure.tripped)
+            assertEquals(0, failure.state.failures)
+            assertEquals(0L, failure.state.blockedUntilMs)
+            state = failure.state
+        }
+        assertFalse(breaker.isBlocked(state, address, t0 + 5_000L))
+        assertFalse(breaker.isBlocked(state, null, t0 + 5_000L))
+    }
+
+    @Test
+    fun aBlockForOneReceiverDoesNotMatchAnUnknownAutomaticTarget() {
+        var state = ReconnectCircuitBreaker.State()
+        repeat(3) { index ->
+            state = fail(state, t0 + index * 1_000L).state
+        }
+        assertTrue(breaker.isBlocked(state, address, t0 + 5_000L))
+        // 默认自动模式没有 TargetDevicePrefs：A 车的熔断不能拦住“所有接收端”。
+        assertFalse(breaker.isBlocked(state, null, t0 + 5_000L))
+    }
+
+    @Test
+    fun legacyStoredStateWithoutAnAddressNeverBlocksAConcreteReceiver() {
+        val legacy =
+            ReconnectCircuitBreaker.State(
+                address = null,
+                failures = 3,
+                firstFailureAtMs = t0,
+                lastFailureAtMs = t0 + 2_000L,
+                blockedUntilMs = t0 + ReconnectCircuitBreaker.COOLDOWN_MILLIS,
+            )
+        assertTrue(breaker.isBlockActive(legacy, t0 + 1_000L))
+        assertFalse(breaker.isBlocked(legacy, address, t0 + 1_000L))
+        assertFalse(breaker.isBlocked(legacy, null, t0 + 1_000L))
+    }
+
+    @Test
+    fun failuresAreKeyedPerReceiverSoOneCarCannotTripAnother() {
+        val other = "AA:BB:CC:DD:EE:02"
+        var state = fail(ReconnectCircuitBreaker.State(), t0).state
+        state = fail(state, t0 + 1_000L, other).state
+        // 换一台车机后重新计数：A 的失败不累计到 B，B 也不会触发 A 的熔断。
+        assertEquals(1, state.failures)
+        assertEquals(other, state.address)
+        assertFalse(breaker.isBlocked(state, address, t0 + 2_000L))
+        assertFalse(breaker.isBlocked(state, other, t0 + 2_000L))
+    }
+
+    @Test
     fun clockRollbackCannotExtendTheBlockForever() {
         var state = ReconnectCircuitBreaker.State()
         repeat(3) { index ->

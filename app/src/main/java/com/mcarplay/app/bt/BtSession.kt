@@ -42,7 +42,9 @@ internal fun Iap2LinkChannel.runSenderSession(
             DeviceIdentity.deviceName(context),
             { wifi -> if (ReceiverDetectionRuntime.isCurrent(observation)) onWifiCredentials(wifi) },
             { update ->
-                if (ReceiverDetectionRuntime.isCurrent(observation)) onEndpointUpdate(update.copy(observation = observation))
+                if (ReceiverDetectionRuntime.isCurrent(observation)) {
+                    onEndpointUpdate(update.copy(observation = observation, peerAddress = peerAddress))
+                }
             },
             knownCarSsid,
             receiverInvited,
@@ -58,7 +60,7 @@ internal fun Iap2LinkChannel.runSenderSession(
     val endpoint = session.run(timeoutMillis)
     onGeneration(session.linkGeneration)
     if (!ReceiverDetectionRuntime.isCurrent(observation)) return
-    onEndpoint(endpoint.copy(observation = observation))
+    onEndpoint(endpoint.copy(observation = observation, peerAddress = peerAddress))
     // Phase 2 过渡：保持控制通道存活记录配件消息；AirPlay 配对由 onEndpoint 回调发起
     session.pumpIncomingForever()
     // 链路断开（保活泵退出）：通知主控释放「会话处理中」——否则车机拆链后重连带来的
