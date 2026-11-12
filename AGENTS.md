@@ -29,7 +29,8 @@ Resources and assets are in `app/src/main/res/` and `app/src/main/assets/`; the 
   `:app:testRemoteDebugUnitTest` in the gate.
 
 Python tools in `tools/`: `carlife_probe.py` (CarLife loopback probe, writes raw H.264), `analyze_diagnostics.py` (offline summary
-of a redacted support report), `release_notes.py` (extracts a changelog entry for a tag) and `prepare_upload.py` (source-only
+of a redacted support report), `compare_diagnostics.py` (diffs two reports of the same scenario: timeline order plus normalised
+log lines per tag; the regression oracle for behaviour-preserving refactors), `release_notes.py` (extracts a changelog entry for a tag) and `prepare_upload.py` (source-only
 upload bundle under `dist/`), each with `test_*.py`. `logbot/` is a QQ official-bot webhook service that diagnoses uploaded
 reports with rules (mirroring `DiagnosticCode`) plus an optional OpenAI-compatible AI pass; keep `logbot/rules.py` in sync with
 `diagnostics/` and `docs/DIAGNOSTICS.md`. `tools/debug-bridge/agent-api.mjs` is the read-only, redacted log API that
@@ -43,6 +44,8 @@ hook nor CI runs them; test with `node --test tools/debug-bridge/*.test.mjs` (No
 - `IMPLEMENTATION_PLAN.md` (Chinese): milestones, current baseline and acceptance criteria; update it when status changes.
 - `docs/CARWITH-ENTRY-FINDINGS.md`: dated, redacted device evidence and corrections of earlier conclusions.
 - `docs/DIAGNOSTICS.md`: report contents, retention and error codes; keep it in sync with `diagnostics/`.
+- `docs/ARCHITECTURE-REFACTOR.md` (Chinese): staged plan for thinning `SessionController` into explicit session/attempt
+  lifecycles, the dependency rules and the per-PR regression template; update its status line as phases land.
 - `docs/GITHUB_SETUP.md`: keystore and tag publishing. `README.md` and `README.zh-CN.md` must stay equivalent.
 
 ## Build, Test, and Development Commands
@@ -84,6 +87,12 @@ parsing, framing, crypto, state transitions, lifecycle/shutdown races and regres
 tests (`isReturnDefaultValues`), and `org.json` is replaced by the reference implementation. Recorded vehicle replay fixtures
 (`*.jsonl`) are git-ignored because they hold device and hotspot identifiers; tests must not depend on them being present.
 There is no coverage threshold.
+
+`app/src/test/java/com/mcarplay/app/architecture/` holds guard tests that read the source tree. `ArchitectureRulesTest` keeps
+engine packages (`airplay/`, `bt/`, `carlife/`, `net/`, `diagnostics/`, …) from referencing `SessionController`, `service/` or UI
+packages; its allowlist of existing exceptions may only shrink, and a new top-level package must be classified there.
+`LogContractTest` fails when a log phrase, stage label or diagnostic code that `tools/logbot/rules.py` matches is renamed, so
+change the app text, `rules.py` and that test together.
 
 Builds and bench results do not establish vehicle compatibility. For device changes, record the phone model, HyperOS, CarWith
 and Xiaomi CarLife versions, the receiver and firmware, connection steps, and observed video, audio and touch, then add dated

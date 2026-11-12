@@ -244,7 +244,9 @@ A capture shows only what was on the air during that run; it is not vehicle-comp
 python3 tools/analyze_diagnostics.py /path/to/mcarplay-log-...-diagnostics.txt
 ```
 
-The offline tool summarizes the last five retained attempts. The QQ bot in
+The offline tool summarizes the last five retained attempts. `python3 tools/compare_diagnostics.py baseline.txt candidate.txt`
+compares two reports of the same scenario (timeline order and normalised log lines per tag) and exits non-zero on a difference;
+see `docs/ARCHITECTURE-REFACTOR.md` section 6. The QQ bot in
 [`tools/logbot/`](../tools/logbot/README.md) builds a user-facing diagnosis on top of it;
 update its `rules.py` when adding a `DiagnosticCode`. Correlate `process`,
 `attempt`, `stage`, `elapsedMs`, `code` and counters with logs and user observations.
