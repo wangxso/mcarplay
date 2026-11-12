@@ -28,6 +28,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
+import com.mcarplay.app.bt.AutoReconnectGuard
 import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
@@ -134,6 +135,9 @@ class MainActivity : AppCompatActivity() {
 
     // ---- 英雄卡状态机（1s 轮询 SessionController 对账）----
     private var heroState: HeroState? = null
+
+    /** 首页是否正显示「自动重连已暂停」；熔断到期后需要恢复默认空闲文案。 */
+    private var idleAutoPauseShown = false
     private var connectedAt = 0L
 
     // 启动残留屏检查进行中（英雄卡显示「检查中」）；发现的残留暂缓清理时
@@ -1430,6 +1434,26 @@ class MainActivity : AppCompatActivity() {
             heroStateText.text =
                 getString(if (s == HeroState.CONNECTING) R.string.ma_hero_waiting_reconnect else R.string.ma_hero_incomplete)
             heroSubline.text = diagnosis.code?.let { DiagnosticText.advice(this, it) }
+        }
+        // 自动重连熔断：空闲时明确告诉用户「不是没连上，是暂缓自动重连」，并给出剩余时间。
+        // 有残留屏要清理时让残留提示优先（用户需要先处理那一项）。
+        if (s == HeroState.IDLE && pendingResidualDisplays == null) {
+            val block = AutoReconnectGuard.block(this, TargetDevicePrefs.get(this)?.address)
+            if (block != null) {
+                idleAutoPauseShown = true
+                heroStateText.text = getString(R.string.main_hero_auto_paused)
+                heroSubline.text =
+                    getString(R.string.main_hero_auto_paused_hint, block.failures, block.remainingSeconds.toInt())
+            } else if (idleAutoPauseShown) {
+                idleAutoPauseShown = false
+                if (diagnosis?.status == "failed") {
+                    heroStateText.text = getString(R.string.ma_hero_incomplete)
+                    heroSubline.text = diagnosis.code?.let { DiagnosticText.advice(this, it) }
+                } else {
+                    heroStateText.text = getString(R.string.main_hero_idle)
+                    heroSubline.text = getString(R.string.main_hero_idle_hint)
+                }
+            }
         }
         // 启动残留屏检查进行中：状态与副标题临时切换为检查提示
         if (s == HeroState.IDLE && startupCheckRunning) {

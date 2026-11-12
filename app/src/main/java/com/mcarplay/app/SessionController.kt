@@ -14,6 +14,7 @@ import com.mcarplay.app.audio.AudioSender
 import com.mcarplay.app.audio.AudioTuning
 import com.mcarplay.app.audio.CarLifeAudioBridge
 import com.mcarplay.app.bt.AutoConnectPrefs
+import com.mcarplay.app.bt.AutoReconnectGuard
 import com.mcarplay.app.bt.BluetoothDiagnostics
 import com.mcarplay.app.bt.BtProfiles
 import com.mcarplay.app.bt.BtSessionGate
@@ -114,6 +115,26 @@ object SessionController {
 
     /** 加入确认弹窗的应答等待上限（无人应答按中止处理）。 */
     private const val JOIN_DIALOG_TIMEOUT_S = 90L
+
+    /**
+     * 计入自动重连熔断的结束原因：接收端/会话链路失败，而不是用户操作或权限/组件问题。
+     * 用户手动断开（USER_STOP）与新尝试替代（SUPERSEDED）不计。
+     */
+    private val AUTO_RECONNECT_FAILURE_CODES =
+        setOf(
+            DiagnosticCode.BT_LINK_CLOSED,
+            DiagnosticCode.VIDEO_CLOSED,
+            DiagnosticCode.WIFI_LOST,
+            DiagnosticCode.PAIRING_FAILED,
+            DiagnosticCode.SETUP_FAILED,
+            DiagnosticCode.CONNECTION_INCOMPLETE,
+        )
+
+    /**
+     * 只把「短命且零帧」的轮次计入熔断。主屏归车机时 0.1.6 的门控会主动丢帧，
+     * 长时间停在原车界面（例如倒车影像）后正常结束的会话不应被当成车机故障。
+     */
+    private const val AUTO_RECONNECT_FAST_FAILURE_MAX_MS = 60_000L
 
     /**
      * 空端点（车机声明会发 0x4301 但窗口内未到）的等待上限。
@@ -586,10 +607,21 @@ object SessionController {
      */
     fun onSenderLinkClosed() {
         if (bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) return
+        // 用户断开 / 正在清理时的链路关闭不是车机故障，不计入熔断
+        val teardownInProgress = connectCancelled || disconnectCompletion != null
         if (sessionStarting.compareAndSet(true, false)) {
             ConnectionDiagnostics.issueCurrent(DiagnosticCode.BT_LINK_CLOSED)
             connectCancelled = true
             appendLog(">>> 本轮蓝牙链路断开——释放「会话处理中」，等待车机重连端点接手")
+        }
+        if (teardownInProgress) return
+        val active =
+            ConnectionDiagnostics.timeline
+                .snapshot()
+                ?.takeIf { it.status == "waiting" || it.status == "streaming" }
+                ?: return
+        if (recordAutoReconnectOutcome(active.id, videoSender?.framesSentTotal ?: 0L, active.elapsedMs)) {
+            appContext?.let { disconnect(it, DiagnosticCode.BT_LINK_CLOSED) }
         }
     }
 
@@ -874,6 +906,15 @@ object SessionController {
             appendLog("AUTO: 手动断开后的 30 秒冷却期——丢弃已排队的自动连接")
             return
         }
+        if (automatic) {
+            AutoReconnectGuard.block(context, TargetDevicePrefs.get(context)?.address)?.let { block ->
+                appendLog(
+                    "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
+                        "（可在 App 内手动连接）",
+                )
+                return
+            }
+        }
         val stopping = disconnectCompletion
         if (stopping != null) {
             val stopGeneration = userStopGeneration
@@ -888,7 +929,11 @@ object SessionController {
             }
             return
         }
-        if (!automatic) AutoConnectPrefs.clearManualStop(context)
+        if (!automatic) {
+            AutoConnectPrefs.clearManualStop(context)
+            // 用户主动点「连接」= 明确的再试意愿：清空自动重连熔断，不拦手动路径
+            AutoReconnectGuard.clear(context)
+        }
         val alreadyRunning = isSessionRunning()
         val diagnosticAttempt =
             if (isSessionRunning()) {
@@ -975,9 +1020,16 @@ object SessionController {
         preserveDetection: Boolean = false,
     ) {
         connectCancelled = true
+        // 先读本轮结果再拆会话：retireSession 会把 videoSender 清空
+        val autoSnapshot = ConnectionDiagnostics.timeline.snapshot()
+        val autoAttempt = autoSnapshot?.id
+        val autoElapsed = autoSnapshot?.elapsedMs ?: 0L
+        val autoFrames = videoSender?.framesSentTotal ?: 0L
         if (reason == DiagnosticCode.USER_STOP) {
             userStopGeneration++
             AutoConnectPrefs.recordManualStop(context)
+            // 用户主动断开：自动重连熔断一并清零
+            AutoReconnectGuard.clear(context)
         }
         if (disconnectCompletion != null) return
         val completed = java.util.concurrent.CountDownLatch(1)
@@ -988,6 +1040,9 @@ object SessionController {
         val hadProjection = CarPlayService.mediaProjection != null
         try {
             ConnectionDiagnostics.finishCurrent(reason, false)
+            if (reason in AUTO_RECONNECT_FAILURE_CODES) {
+                recordAutoReconnectOutcome(autoAttempt, autoFrames, autoElapsed)
+            }
             if (preserveDetection) {
                 ReceiverDetectionRuntime.retireConnection()
             } else {
@@ -1047,6 +1102,31 @@ object SessionController {
         } else {
             appendLog("已${endAction}并停止保活服务（常亮已恢复）")
         }
+    }
+
+    /**
+     * 自动重连熔断的唯一记账点：只统计「零帧」轮次（车机在出画前拆链），成功出画重置。
+     * 返回 true 表示**本轮刚触发熔断**——调用方应收掉 BT 监听与保活服务，避免车机一
+     * ACL 连上就再拉一整轮（2026-11-12 宝马 MGU-86：2 分钟内 4 轮全在 RECORD 后秒断）。
+     */
+    private fun recordAutoReconnectOutcome(
+        attempt: String?,
+        videoFramesSent: Long,
+        elapsedMs: Long,
+    ): Boolean {
+        val app = appContext ?: return false
+        val address = TargetDevicePrefs.get(app)?.address
+        if (videoFramesSent > 0L) {
+            AutoReconnectGuard.recordHealthy(app, address, attempt)
+            return false
+        }
+        if (attempt.isNullOrBlank() || elapsedMs >= AUTO_RECONNECT_FAST_FAILURE_MAX_MS) return false
+        val block = AutoReconnectGuard.recordFastFailure(app, address, attempt) ?: return false
+        appendLog(
+            "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
+                "（可在 App 内手动连接）",
+        )
+        return true
     }
 
     // ---- 物理屏真息屏（同 scrcpy -S/--turn-screen-off）----
@@ -3156,6 +3236,11 @@ object SessionController {
 
         fun wasCancelled(): Boolean = connectCancelled || !ownsConnection()
         if (!ownsConnection()) return
+        // 自动重连熔断中：车机回连的端点也忽略。手动连接会先清空熔断，不受影响。
+        if (AutoReconnectGuard.block(context, TargetDevicePrefs.get(context)?.address) != null) {
+            appendLog(">>> [$source] 自动重连已暂停——忽略车机回连端点（手动连接可解除）")
+            return
+        }
         // 冗余端点防护：接收端控制器（DiPlay 实测）在我们配对推流后才完成既有的
         // RFCOMM 重连并重发 0x4301。此时重启配对会 retireSession 掉健康会话
         // （编码器 stop 竞态 = 「连上后自动断开」循环的根因）。推流中的端点一律忽略；
@@ -3799,6 +3884,7 @@ object SessionController {
 
                                     fun newScreenSender(screenInfo: AirPlayClient.ScreenStreamInfo): VideoSender {
                                         lateinit var sender: VideoSender
+                                        val firstFrameSent = AtomicBoolean(false)
                                         sender =
                                             VideoSender(
                                                 host = host,
@@ -3818,6 +3904,16 @@ object SessionController {
                                                 },
                                                 onExternalFrameSent = { bytes ->
                                                     ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
+                                                    if (firstFrameSent.compareAndSet(false, true)) {
+                                                        // 真出画了：清空自动重连熔断计数（本轮已是健康会话）
+                                                        appContext?.let { app ->
+                                                            AutoReconnectGuard.recordHealthy(
+                                                                app,
+                                                                TargetDevicePrefs.get(app)?.address,
+                                                                diagnosticAttempt,
+                                                            )
+                                                        }
+                                                    }
                                                     val now = android.os.SystemClock.uptimeMillis()
                                                     if (lastEnvironmentSampleAt == 0L ||
                                                         now - lastEnvironmentSampleAt >= ENVIRONMENT_SAMPLE_MS
@@ -3870,6 +3966,17 @@ object SessionController {
                                                     // 音频拆链归因：起过音频却很快被拆 → 记下该档位
                                                     // 不兼容，下次连接自动换档（见 attributeAudioTeardown）。
                                                     attributeAudioTeardown()
+                                                    // 零帧结束 = 车机在出画前拆链：连续多轮触发熔断后
+                                                    // 主动收摊，别再等车机回连把循环续下去。
+                                                    val sessionElapsedMs = ConnectionDiagnostics.timeline.snapshot()?.elapsedMs ?: 0L
+                                                    if (recordAutoReconnectOutcome(
+                                                            diagnosticAttempt,
+                                                            sender.framesSentTotal,
+                                                            sessionElapsedMs,
+                                                        )
+                                                    ) {
+                                                        appContext?.let { disconnect(it, DiagnosticCode.BT_LINK_CLOSED) }
+                                                    }
                                                 },
                                             )
                                         return sender

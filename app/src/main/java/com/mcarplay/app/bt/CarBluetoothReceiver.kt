@@ -67,6 +67,14 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                 DebugFileLog.append(app, "AUTO: 手动断开后的 30 秒冷却期——忽略蓝牙回连")
                 return
             }
+            AutoReconnectGuard.block(app, address)?.let { block ->
+                DebugFileLog.append(
+                    app,
+                    "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
+                        "（可在 App 内手动连接）",
+                )
+                return
+            }
             DebugFileLog.append(app, "AUTO: 车机蓝牙已连上 ${name ?: "?"}（$address）——自动拉起会话")
             runCatching {
                 context.startForegroundService(

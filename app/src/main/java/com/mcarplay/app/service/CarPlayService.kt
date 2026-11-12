@@ -14,6 +14,8 @@ import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.SilentProjectionActivity
 import com.mcarplay.app.bt.AutoConnectPrefs
+import com.mcarplay.app.bt.AutoReconnectGuard
+import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.compat.ReceiverCompatibility
@@ -92,6 +94,19 @@ class CarPlayService : Service() {
                 stopSelfResult(startId)
             }
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_AUTO_START_SESSION) {
+            val block = AutoReconnectGuard.block(applicationContext, TargetDevicePrefs.get(applicationContext)?.address)
+            if (block != null) {
+                fileLog(
+                    "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
+                        "（可在 App 内手动连接）",
+                )
+                if ((SessionController.isDisconnecting() || !SessionController.isSessionRunning()) && !CarLifeDiagnostics.isRunning()) {
+                    stopSelfResult(startId)
+                }
+                return START_NOT_STICKY
+            }
         }
         // 必须显式指定类型为 connectedDevice：
         // 2 参 startForeground 会拾取 manifest 声明的全部类型（含 mediaProjection），
