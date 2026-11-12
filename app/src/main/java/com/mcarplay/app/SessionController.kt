@@ -791,6 +791,14 @@ object SessionController {
             wakePendingHandoffs(observation, allowAfterCancel = true)
         }
         if (teardownInProgress) return
+        // 自动重连熔断按接收端地址累计；同一 peer 可能同时有客户端/服务端两条 RFCOMM
+        // 链路。只有当前交接 owner（或已交付当前会话的链路）的关闭才是失败——
+        // 另一条链路关闭不能把健康交接记成 BT_LINK_CLOSED，否则连续三次就误熔断。
+        val ownsCurrentSession = currentClient?.currentEndpoint?.observation == observation
+        if (!countsLinkCloseForAutoReconnect(ownedHandoffEnded, ownedHandoff, ownsCurrentSession)) {
+            appendLog(">>> 非当前交接链路的关闭通知——不计入自动重连熔断")
+            return
+        }
         val active =
             ConnectionDiagnostics.timeline
                 .snapshot()
@@ -5574,3 +5582,16 @@ internal fun usableKnownCarSsid(
 ): String? =
     listOf(bound, last)
         .firstOrNull { !it.isNullOrBlank() && it != SessionController.INVITED_WIFI_LABEL }
+
+/**
+ * 链路关闭是否应进入自动重连熔断记账。
+ *
+ * 熔断按对端地址累计，但同一台车机可能同时有多条 RFCOMM 链路（客户端/服务端并存、
+ * 空端点候选）。只有当前交接 owner、取消回调已释放的 owner，或已交付当前会话的链路
+ * 关闭才算失败；其余链路关闭只清理自身状态，不能把健康交接累计成 BT_LINK_CLOSED。
+ */
+internal fun countsLinkCloseForAutoReconnect(
+    ownedHandoffEnded: Boolean,
+    ownedHandoff: Boolean,
+    ownsCurrentSession: Boolean,
+): Boolean = ownedHandoffEnded || ownedHandoff || ownsCurrentSession
