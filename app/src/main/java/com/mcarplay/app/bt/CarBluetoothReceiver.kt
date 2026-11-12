@@ -67,11 +67,21 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                 DebugFileLog.append(app, "AUTO: 手动断开后的 30 秒冷却期——忽略蓝牙回连")
                 return
             }
+            AutoReconnectGuard.block(app, address)?.let { block ->
+                DebugFileLog.append(
+                    app,
+                    "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
+                        "（可在 App 内手动连接）",
+                )
+                return
+            }
             DebugFileLog.append(app, "AUTO: 车机蓝牙已连上 ${name ?: "?"}（$address）——自动拉起会话")
             runCatching {
                 context.startForegroundService(
                     Intent(context, CarPlayService::class.java)
-                        .setAction(CarPlayService.ACTION_AUTO_START_SESSION),
+                        .setAction(CarPlayService.ACTION_AUTO_START_SESSION)
+                        // 未选定目标车机（自动模式）时，熔断仍按这条 ACL 的对端地址隔离。
+                        .putExtra(CarPlayService.EXTRA_PEER_ADDRESS, address),
                 )
             }.onFailure { error ->
                 DebugFileLog.append(
@@ -86,7 +96,9 @@ class CarBluetoothReceiver : BroadcastReceiver() {
             runCatching {
                 context.startService(
                     Intent(context, CarPlayService::class.java)
-                        .setAction(CarPlayService.ACTION_AUTO_STOP_SESSION),
+                        .setAction(CarPlayService.ACTION_AUTO_STOP_SESSION)
+                        // 只有断开的就是本轮车机时才收摊/记账，见 CarPlayService 的地址校验。
+                        .putExtra(CarPlayService.EXTRA_PEER_ADDRESS, address),
                 )
             }
         }

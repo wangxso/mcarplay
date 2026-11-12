@@ -5,6 +5,8 @@
     <string name="main_hero_idle">未连接</string>
     <string name="main_cleanup_residual">清理残留屏</string>
     <string name="main_hero_idle_hint">与车机蓝牙完成配对后，点击下方按钮发起无线连接</string>
+    <string name="main_hero_auto_paused">自动重连已暂停</string>
+    <string name="main_hero_auto_paused_hint">车机连续 %1$d 次在出画前断开，%2$d 秒内不再自动重连；先在车机上重试或重新配对，再点下方按钮手动连接</string>
     <string name="main_hero_stats_sample" formatted="false">分辨率 100% · 30/30 fps</string>
     <string name="cd_action">操作</string>
     <string name="main_cta_start">启动连接</string>

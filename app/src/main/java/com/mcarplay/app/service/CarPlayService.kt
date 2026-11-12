@@ -14,6 +14,8 @@ import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.SilentProjectionActivity
 import com.mcarplay.app.bt.AutoConnectPrefs
+import com.mcarplay.app.bt.AutoReconnectGuard
+import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.compat.ReceiverCompatibility
@@ -60,6 +62,13 @@ class CarPlayService : Service() {
         // ACL 断开不一定是下车：WinPlay 在网络 iAP 接入后会释放蓝牙。
         // 已启动的 Wi-Fi 视频由媒体通道结束/网络失效负责收尾，不能被蓝牙交接误停。
         if (intent?.action == ACTION_AUTO_STOP_SESSION) {
+            // 只处理本轮车机的 ACL 断开；另一台已配对车机的蓝牙动作不能收掉当前会话，
+            // 也不能把 BT_LINK_CLOSED 记到当前接收端的熔断计数上。
+            val stopPeer = intent?.getStringExtra(EXTRA_PEER_ADDRESS)?.takeIf { it.isNotBlank() }
+            if (SessionController.isSessionRunning() && !SessionController.matchesActivePeer(stopPeer)) {
+                fileLog("AUTO: 蓝牙断开的是非本轮车机（$stopPeer）——保留当前会话")
+                return START_STICKY
+            }
             if (SessionController.bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) {
                 val frames = SessionController.videoSender?.framesSentTotal ?: 0
                 Bg.run("bt-handoff-log") {
@@ -92,6 +101,22 @@ class CarPlayService : Service() {
                 stopSelfResult(startId)
             }
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_AUTO_START_SESSION) {
+            val autoPeer =
+                intent?.getStringExtra(EXTRA_PEER_ADDRESS)?.takeIf { it.isNotBlank() }
+                    ?: TargetDevicePrefs.get(applicationContext)?.address
+            val block = AutoReconnectGuard.block(applicationContext, autoPeer)
+            if (block != null) {
+                fileLog(
+                    "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
+                        "（可在 App 内手动连接）",
+                )
+                if ((SessionController.isDisconnecting() || !SessionController.isSessionRunning()) && !CarLifeDiagnostics.isRunning()) {
+                    stopSelfResult(startId)
+                }
+                return START_NOT_STICKY
+            }
         }
         // 必须显式指定类型为 connectedDevice：
         // 2 参 startForeground 会拾取 manifest 声明的全部类型（含 mediaProjection），
@@ -135,7 +160,11 @@ class CarPlayService : Service() {
                 SessionController.audioEnabledForSession =
                     CarLifeLauncher.isAvailable(app) ||
                     acquireProjectionSilently()
-                SessionController.startConnection(app, automatic = true)
+                SessionController.startConnection(
+                    app,
+                    automatic = true,
+                    automaticPeerAddress = intent?.getStringExtra(EXTRA_PEER_ADDRESS)?.takeIf { it.isNotBlank() },
+                )
             }
         } else if (intent?.action == ACTION_START_DIAGNOSTIC) {
             fileLog("SVC: 收到「启动 CarWith 自检」")
@@ -249,6 +278,9 @@ class CarPlayService : Service() {
 
         /** 上车自动连接：车机蓝牙 ACL 连上时由 CarBluetoothReceiver 投递。 */
         const val ACTION_AUTO_START_SESSION = "com.mcarplay.app.action.AUTO_START"
+
+        /** 触发自动连接的那台车机的 ACL 地址（熔断按它隔离，默认自动模式也有效）。 */
+        const val EXTRA_PEER_ADDRESS = "com.mcarplay.app.extra.AUTO_PEER_ADDRESS"
 
         /** 目标蓝牙 ACL 断开时检查是否自动收摊；Wi-Fi 视频已启动时保留会话。 */
         const val ACTION_AUTO_STOP_SESSION = "com.mcarplay.app.action.AUTO_STOP"

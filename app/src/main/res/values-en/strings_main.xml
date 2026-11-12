@@ -5,6 +5,8 @@
     <string name="main_hero_idle">Not connected</string>
     <string name="main_cleanup_residual">Clean up leftover displays</string>
     <string name="main_hero_idle_hint">After pairing with the head unit over Bluetooth, tap the button below to connect wirelessly</string>
+    <string name="main_hero_auto_paused">Auto-connect paused</string>
+    <string name="main_hero_auto_paused_hint">The head unit dropped %1$d sessions before video started. Auto-connect is paused for %2$d s; retry or re-pair on the head unit, then tap the button below</string>
     <string name="main_hero_stats_sample" formatted="false">Resolution 100% · 30/30 fps</string>
     <string name="cd_action">Action</string>
     <string name="main_cta_start">Connect</string>

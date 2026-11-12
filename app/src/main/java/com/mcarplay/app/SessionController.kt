@@ -13,13 +13,17 @@ import com.mcarplay.app.audio.AudioProfileMemory
 import com.mcarplay.app.audio.AudioSender
 import com.mcarplay.app.audio.AudioTuning
 import com.mcarplay.app.audio.CarLifeAudioBridge
+import com.mcarplay.app.bt.AUTO_RECONNECT_FAILURE_CODES
 import com.mcarplay.app.bt.AutoConnectPrefs
+import com.mcarplay.app.bt.AutoReconnectGuard
 import com.mcarplay.app.bt.BluetoothDiagnostics
 import com.mcarplay.app.bt.BtProfiles
 import com.mcarplay.app.bt.BtSessionGate
 import com.mcarplay.app.bt.Iap2BluetoothClient
 import com.mcarplay.app.bt.Iap2BluetoothServer
 import com.mcarplay.app.bt.TargetDevicePrefs
+import com.mcarplay.app.bt.countsAsAutoReconnectFailure
+import com.mcarplay.app.bt.peerUnknownOrMatches
 import com.mcarplay.app.carlife.CarLifeAudioEvent
 import com.mcarplay.app.carlife.CarLifeJoinGate
 import com.mcarplay.app.carlife.CarLifeLaunchStrategy
@@ -114,6 +118,19 @@ object SessionController {
 
     /** 加入确认弹窗的应答等待上限（无人应答按中止处理）。 */
     private const val JOIN_DIALOG_TIMEOUT_S = 90L
+
+    /**
+     * 本轮接收端的蓝牙地址：自动重连熔断按它对接收端隔离。
+     * 来自端点（0x5703/0x4301 所在控制链路）或 ACL 广播；未知时为 null，此时不计数也不拦。
+     */
+    @Volatile
+    private var activePeerAddress: String? = null
+
+    /**
+     * [address] 是否属于本轮车机；任一方地址未知时按兼容处理（true）。
+     * 自动收摊、迟到链路断开用它避免把另一台车机的动作算到当前会话上。
+     */
+    fun matchesActivePeer(address: String?): Boolean = peerUnknownOrMatches(activePeerAddress, address)
 
     /**
      * 空端点（车机声明会发 0x4301 但窗口内未到）的等待上限。
@@ -679,12 +696,30 @@ object SessionController {
      * 能走到那里说明 BT 组件仍在运行（用户取消路径 disconnect 会停组件、被端点
      * 守卫拦截），清除是安全的。
      */
-    fun onSenderLinkClosed() {
+    fun onSenderLinkClosed(peerAddress: String? = null) {
         if (bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) return
+        // BT 客户端与服务端可能同时各有一条链路：迟到的非本轮链路断开不能释放本轮互斥，
+        // 也不能把失败记到当前车机头上。
+        val attemptPeer = activePeerAddress
+        if (!peerUnknownOrMatches(peerAddress, attemptPeer)) {
+            appendLog(">>> 非本轮控制链路（$peerAddress）断开——忽略（本轮 ${attemptPeer ?: "未知"}）")
+            return
+        }
+        // 用户断开 / 正在清理时的链路关闭不是车机故障，不计入熔断
+        val teardownInProgress = connectCancelled || disconnectCompletion != null
         if (sessionStarting.compareAndSet(true, false)) {
             ConnectionDiagnostics.issueCurrent(DiagnosticCode.BT_LINK_CLOSED)
             connectCancelled = true
             appendLog(">>> 本轮蓝牙链路断开——释放「会话处理中」，等待车机重连端点接手")
+        }
+        if (teardownInProgress) return
+        val active =
+            ConnectionDiagnostics.timeline
+                .snapshot()
+                ?.takeIf { it.status == "waiting" || it.status == "streaming" }
+                ?: return
+        if (recordAutoReconnectOutcome(active.id, DiagnosticCode.BT_LINK_CLOSED, peerAddress ?: attemptPeer)) {
+            appContext?.let { disconnect(it, DiagnosticCode.BT_LINK_CLOSED) }
         }
     }
 
@@ -964,10 +999,22 @@ object SessionController {
     fun startConnection(
         context: Context,
         automatic: Boolean = false,
+        /** 自动启动时可带的 ACL 对端地址；未选定目标车机时用它隔离熔断。 */
+        automaticPeerAddress: String? = null,
     ) {
         if (automatic && AutoConnectPrefs.isManualStopCoolingDown(context)) {
             appendLog("AUTO: 手动断开后的 30 秒冷却期——丢弃已排队的自动连接")
             return
+        }
+        if (automatic) {
+            val peer = automaticPeerAddress ?: TargetDevicePrefs.get(context)?.address
+            AutoReconnectGuard.block(context, peer)?.let { block ->
+                appendLog(
+                    "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
+                        "（可在 App 内手动连接）",
+                )
+                return
+            }
         }
         val stopping = disconnectCompletion
         if (stopping != null) {
@@ -978,13 +1025,22 @@ object SessionController {
                     return@run
                 }
                 synchronized(this) {
-                    if (userStopGeneration == stopGeneration) startConnection(context, automatic)
+                    if (userStopGeneration == stopGeneration) startConnection(context, automatic, automaticPeerAddress)
                 }
             }
             return
         }
-        if (!automatic) AutoConnectPrefs.clearManualStop(context)
+        if (!automatic) {
+            AutoConnectPrefs.clearManualStop(context)
+            // 用户主动点「连接」= 明确的再试意愿：清空自动重连熔断，不拦手动路径
+            AutoReconnectGuard.clear(context)
+        }
         val alreadyRunning = isSessionRunning()
+        if (!alreadyRunning) {
+            // 新一轮从已知对端起步；手动连接不沿用上一台车机的地址，避免失败记到别人头上。
+            val selected = TargetDevicePrefs.get(context)?.address
+            activePeerAddress = if (automatic) automaticPeerAddress ?: selected else selected
+        }
         val diagnosticAttempt =
             if (isSessionRunning()) {
                 ConnectionDiagnostics.timeline.snapshot()?.id ?: ConnectionDiagnostics.begin("user_start")
@@ -1070,9 +1126,13 @@ object SessionController {
         preserveDetection: Boolean = false,
     ) {
         connectCancelled = true
+        // 先读本轮 attempt：retireSession 后时间线仍保留结果，但这里尽早固定标识
+        val autoAttempt = ConnectionDiagnostics.timeline.snapshot()?.id
         if (reason == DiagnosticCode.USER_STOP) {
             userStopGeneration++
             AutoConnectPrefs.recordManualStop(context)
+            // 用户主动断开：自动重连熔断一并清零
+            AutoReconnectGuard.clear(context)
         }
         if (disconnectCompletion != null) return
         val completed = java.util.concurrent.CountDownLatch(1)
@@ -1083,6 +1143,7 @@ object SessionController {
         val hadProjection = CarPlayService.mediaProjection != null
         try {
             ConnectionDiagnostics.finishCurrent(reason, false)
+            recordAutoReconnectOutcome(autoAttempt, reason)
             if (preserveDetection) {
                 ReceiverDetectionRuntime.retireConnection()
             } else {
@@ -1142,6 +1203,36 @@ object SessionController {
         } else {
             appendLog("已${endAction}并停止保活服务（常亮已恢复）")
         }
+    }
+
+    /**
+     * 自动重连熔断的唯一记账点：只统计「零帧」轮次（车机在出画前拆链），成功出画重置。
+     * 返回 true 表示**本轮刚触发熔断**——调用方应收掉 BT 监听与保活服务，避免车机一
+     * ACL 连上就再拉一整轮（2026-11-12 宝马 MGU-86：2 分钟内 4 轮全在 RECORD 后秒断）。
+     *
+     * 所有不走 [disconnect] 的失败出口（SETUP/RECORD、配对、加入热点）也必须调用本函数：
+     * 这些出口只结束时间线并关客户端，漏记会让快速失败无限循环。
+     */
+    private fun recordAutoReconnectOutcome(
+        attempt: String?,
+        code: DiagnosticCode?,
+        address: String? = activePeerAddress,
+    ): Boolean {
+        if (code == null || code !in AUTO_RECONNECT_FAILURE_CODES) return false
+        val app = appContext ?: return false
+        val snapshot = ConnectionDiagnostics.timeline.snapshot() ?: return false
+        if (attempt.isNullOrBlank() || snapshot.id != attempt) return false
+        if (snapshot.videoFrames > 0L) {
+            AutoReconnectGuard.recordHealthy(app, address, attempt)
+            return false
+        }
+        if (!countsAsAutoReconnectFailure(code, snapshot.videoFrames, snapshot.elapsedMs)) return false
+        val block = AutoReconnectGuard.recordFastFailure(app, address, attempt) ?: return false
+        appendLog(
+            "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
+                "（可在 App 内手动连接）",
+        )
+        return true
     }
 
     // ---- 物理屏真息屏（同 scrcpy -S/--turn-screen-off）----
@@ -3276,7 +3367,14 @@ object SessionController {
         fun ownsConnection(): Boolean = ReceiverDetectionRuntime.isCurrent(endpoint.observation)
 
         fun wasCancelled(): Boolean = connectCancelled || !ownsConnection()
+        // 熔断按实际发起本轮的控制链路对端隔离；未选定目标车机时也不会误拦其它车机。
+        val peerAddress = endpoint.peerAddress ?: TargetDevicePrefs.get(context)?.address
         if (!ownsConnection()) return
+        // 自动重连熔断中：车机回连的端点也忽略。手动连接会先清空熔断，不受影响。
+        if (AutoReconnectGuard.block(context, peerAddress) != null) {
+            appendLog(">>> [$source] 自动重连已暂停——忽略车机回连端点（手动连接可解除）")
+            return
+        }
         // 冗余端点防护：接收端控制器（DiPlay 实测）在我们配对推流后才完成既有的
         // RFCOMM 重连并重发 0x4301。此时重启配对会 retireSession 掉健康会话
         // （编码器 stop 竞态 = 「连上后自动断开」循环的根因）。推流中的端点一律忽略；
@@ -3290,6 +3388,8 @@ object SessionController {
             return
         }
         val diagnosticAttempt = ConnectionDiagnostics.receiverAttempt()
+        // 本轮失败/成功的熔断记账都以这条控制链路的对端地址为键。
+        activePeerAddress = peerAddress
         ReceiverDetectionRuntime.attach(endpoint.observation, diagnosticAttempt)
         ConnectionDiagnostics.timeline.note(
             diagnosticAttempt,
@@ -3376,9 +3476,16 @@ object SessionController {
         val continueWithNetwork: (Boolean) -> Unit = proceed@{ bound ->
             if (!bound) {
                 ConnectionDiagnostics.timeline.abandon(diagnosticAttempt, wasCancelled(), DiagnosticCode.WIFI_JOIN_FAILED)
+                val joinCode = ConnectionDiagnostics.timeline.snapshot()?.code
                 phaseHint = t(R.string.sc_not_on_hotspot_endpoint, endpoint.ssid)
                 appendLog(">>> [$source] 手机当前不在该热点——请到 设置>WLAN 加入 \"${endpoint.ssid}\" 后断开重连")
                 if (ownsConnection()) sessionStarting.set(false)
+                // 加入热点失败不经过 disconnect：在这里记账，避免连续失败绕过熔断。
+                if (recordAutoReconnectOutcome(diagnosticAttempt, joinCode, peerAddress)) {
+                    appContext?.let { app ->
+                        Bg.run("auto-reconnect-trip") { disconnect(app, joinCode ?: DiagnosticCode.WIFI_JOIN_FAILED) }
+                    }
+                }
                 return@proceed
             }
             ConnectionDiagnostics.timeline.milestone(diagnosticAttempt, ConnectionMilestone.WIFI_JOINED)
@@ -3946,6 +4053,7 @@ object SessionController {
 
                                     fun newScreenSender(screenInfo: AirPlayClient.ScreenStreamInfo): VideoSender {
                                         lateinit var sender: VideoSender
+                                        val firstFrameSent = AtomicBoolean(false)
                                         sender =
                                             VideoSender(
                                                 host = host,
@@ -3965,6 +4073,16 @@ object SessionController {
                                                 },
                                                 onExternalFrameSent = { bytes ->
                                                     ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
+                                                    if (firstFrameSent.compareAndSet(false, true)) {
+                                                        // 真出画了：清空自动重连熔断计数（本轮已是健康会话）
+                                                        appContext?.let { app ->
+                                                            AutoReconnectGuard.recordHealthy(
+                                                                app,
+                                                                peerAddress,
+                                                                diagnosticAttempt,
+                                                            )
+                                                        }
+                                                    }
                                                     val now = android.os.SystemClock.uptimeMillis()
                                                     if (lastEnvironmentSampleAt == 0L ||
                                                         now - lastEnvironmentSampleAt >= ENVIRONMENT_SAMPLE_MS
@@ -4017,6 +4135,16 @@ object SessionController {
                                                     // 音频拆链归因：起过音频却很快被拆 → 记下该档位
                                                     // 不兼容，下次连接自动换档（见 attributeAudioTeardown）。
                                                     attributeAudioTeardown()
+                                                    // 零帧结束 = 车机在出画前拆链：连续多轮触发熔断后
+                                                    // 主动收摊，别再等车机回连把循环续下去。
+                                                    if (recordAutoReconnectOutcome(
+                                                            diagnosticAttempt,
+                                                            DiagnosticCode.VIDEO_CLOSED,
+                                                            peerAddress,
+                                                        )
+                                                    ) {
+                                                        appContext?.let { disconnect(it, DiagnosticCode.VIDEO_CLOSED) }
+                                                    }
                                                 },
                                             )
                                         return sender
@@ -4104,12 +4232,20 @@ object SessionController {
                                 if (!client.record()) {
                                     appendLog("AIRPLAY: RECORD 未确认——结束本轮，不启动视频或音频")
                                     ConnectionDiagnostics.timeline.finish(diagnosticAttempt, DiagnosticCode.SETUP_FAILED, true)
+                                    // 该出口只关客户端、不走 disconnect：必须在这里记账。
+                                    val tripped =
+                                        recordAutoReconnectOutcome(diagnosticAttempt, DiagnosticCode.SETUP_FAILED, peerAddress)
                                     if (ownsConnection() && currentClient === client) {
                                         phaseHint = t(R.string.sc_record_unconfirmed)
                                         uiHintSink?.invoke(t(R.string.sc_record_unconfirmed))
                                         retireSession()
                                     } else {
                                         client.close()
+                                    }
+                                    if (tripped) {
+                                        appContext?.let { app ->
+                                            Bg.run("auto-reconnect-trip") { disconnect(app, DiagnosticCode.SETUP_FAILED) }
+                                        }
                                     }
                                     return@run
                                 }
@@ -4188,9 +4324,17 @@ object SessionController {
                             // 「连上之后自动断开」，无从判断是会话建立失败。
                             phaseHint = t(R.string.sc_setup_rejected)
                             ConnectionDiagnostics.timeline.finish(diagnosticAttempt, DiagnosticCode.SETUP_FAILED, true)
+                            // 该出口只关客户端、不走 disconnect：必须在这里记账。
+                            val tripped =
+                                recordAutoReconnectOutcome(diagnosticAttempt, DiagnosticCode.SETUP_FAILED, peerAddress)
                             appendLog("AIRPLAY: 会话建立失败——主动关闭控制通道，本轮结束")
                             uiHintSink?.invoke(t(R.string.sc_setup_rejected_hint))
                             runCatching { client.close() }
+                            if (tripped) {
+                                appContext?.let { app ->
+                                    Bg.run("auto-reconnect-trip") { disconnect(app, DiagnosticCode.SETUP_FAILED) }
+                                }
+                            }
                         }
                     }
                 } catch (error: Throwable) {
@@ -4205,6 +4349,15 @@ object SessionController {
                     // 推流活跃时保持关闭，由 VideoSender.onEnded（推流终止）负责解除。
                     if (ownsConnection() && videoSender?.isRunning != true) {
                         ConnectionDiagnostics.timeline.abandon(diagnosticAttempt, wasCancelled())
+                        // 配对/加入/异常等失败都从这里收尾，且不经过 disconnect：按实际结束码记账。
+                        val abandonCode = ConnectionDiagnostics.timeline.snapshot()?.code
+                        if (recordAutoReconnectOutcome(diagnosticAttempt, abandonCode, peerAddress)) {
+                            appContext?.let { app ->
+                                Bg.run("auto-reconnect-trip") {
+                                    disconnect(app, abandonCode ?: DiagnosticCode.CONNECTION_INCOMPLETE)
+                                }
+                            }
+                        }
                         BtSessionGate.sessionActive = false
                         // 收尾竞态：晚到 0x4301 若恰好在「配对已失败、互斥尚未释放」的
                         // 窗口内到达，会被暂存但没人消费。此处补投一次——车机等 15s

@@ -22,7 +22,7 @@ internal fun Iap2LinkChannel.runSenderSession(
     onEndpoint: (Iap2SenderSession.CarPlayEndpoint) -> Unit,
     onWifiCredentials: (Iap2SenderSession.WifiConfiguration) -> Unit,
     onEndpointUpdate: (Iap2SenderSession.CarPlayEndpoint) -> Unit,
-    onLinkClosed: () -> Unit = {},
+    onLinkClosed: (String?) -> Unit = {},
     /** 本进程已知的车机热点 SSID（无新凭据时沿用，避免每轮拆链）。 */
     knownCarSsid: () -> String? = { null },
     /** 车机是否已在 WiFi 上发过 ctrl 邀请（无凭据时据此不拆链）。 */
@@ -42,7 +42,9 @@ internal fun Iap2LinkChannel.runSenderSession(
             DeviceIdentity.deviceName(context),
             { wifi -> if (ReceiverDetectionRuntime.isCurrent(observation)) onWifiCredentials(wifi) },
             { update ->
-                if (ReceiverDetectionRuntime.isCurrent(observation)) onEndpointUpdate(update.copy(observation = observation))
+                if (ReceiverDetectionRuntime.isCurrent(observation)) {
+                    onEndpointUpdate(update.copy(observation = observation, peerAddress = peerAddress))
+                }
             },
             knownCarSsid,
             receiverInvited,
@@ -58,12 +60,12 @@ internal fun Iap2LinkChannel.runSenderSession(
     val endpoint = session.run(timeoutMillis)
     onGeneration(session.linkGeneration)
     if (!ReceiverDetectionRuntime.isCurrent(observation)) return
-    onEndpoint(endpoint.copy(observation = observation))
+    onEndpoint(endpoint.copy(observation = observation, peerAddress = peerAddress))
     // Phase 2 过渡：保持控制通道存活记录配件消息；AirPlay 配对由 onEndpoint 回调发起
     session.pumpIncomingForever()
     // 链路断开（保活泵退出）：通知主控释放「会话处理中」——否则车机拆链后重连带来的
     // 新端点会被僵尸轮次堵门（2026-10-22 奥迪 3315 真机定谳，见 SessionController.onSenderLinkClosed）
-    if (ReceiverDetectionRuntime.isCurrent(observation)) onLinkClosed()
+    if (ReceiverDetectionRuntime.isCurrent(observation)) onLinkClosed(peerAddress)
 }
 
 /** 退役链路时，0xEA01 交给 socket 后到关闭 RFCOMM 之间的冲刷宽限。 */
