@@ -248,6 +248,21 @@ class WifiCarPlayConnector(
         }.getOrDefault(false)
 
     /**
+     * 系统里唯一的一张 Wi-Fi 网络；两张及以上并存时返回 null。
+     *
+     * 没有定位权限（`verifiedWifiNetwork` 拿不到 SSID）时，用它证明「唯一性」：
+     * Shizuku 读到的站端 SSID 与目标一致，而系统只有这一张 Wi-Fi，该句柄只能是目标。
+     * 多张并存时手机热点/P2P 都可能混进来，仍必须由用户确认，不做猜测。
+     */
+    fun singleWifiNetwork(): Network? =
+        runCatching {
+            connectivityManager.allNetworks
+                .filter {
+                    connectivityManager.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                }.singleOrNull()
+        }.getOrNull()
+
+    /**
      * 本机在当前绑定网络上的全部 IPv6 地址。
      *
      * mDNS 结果的网段验收用：奥迪 4xxx 的 `_airplay._tcp` 常只发链路本地 IPv6，

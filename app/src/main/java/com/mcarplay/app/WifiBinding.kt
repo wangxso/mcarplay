@@ -66,3 +66,45 @@ internal data class WifiNetworkToken<N : Any>(
             else -> false
         }
 }
+
+/**
+ * 目标 SSID 可安全绑定的 `Network` 句柄（无定位权限时的唯一性证明）。
+ *
+ * Android 13+ 上本应用只申请 `NEARBY_WIFI_DEVICES`，没有定位权限时
+ * `verifiedWifiNetwork` 恒为 null（它靠 `FLAG_INCLUDE_LOCATION_INFO` 同时读句柄与 SSID）。
+ * 此时唯一的依据是「Shizuku 读到的站端 SSID 是目标 + 系统只有这一张 Wi-Fi」。
+ *
+ * 句柄与 SSID 来自两次不同的系统查询，**一次快照不足以证明它们属于同一张网络**：
+ * 手机恰在这两次查询之间从 A 换到 B 时，会把 A 的句柄贴上 B 的 SSID。因此要求
+ * 连续两次采样都成立、且两次拿到的是同一个句柄（[confirmed]）。
+ */
+internal object VerifiedWifiSelection {
+    /** 一次采样：系统唯一 Wi-Fi 的句柄 + 同时可读的站端 SSID。 */
+    data class Sample<N : Any>(
+        val network: N?,
+        val ssid: String?,
+    )
+
+    fun <N : Any> choose(
+        ssid: String,
+        locationVerified: N?,
+        singleWifi: N?,
+        liveSsid: String?,
+    ): N? =
+        locationVerified
+            ?: singleWifi?.takeIf { WifiIdentity.matches(ssid, liveSsid) }
+
+    /**
+     * 连续两次采样都指向目标 SSID、且句柄相同才采信；任一采样不成立（换网、出现第二张
+     * Wi-Fi、SSID 读不到）都返回 null，交回用户确认。
+     */
+    fun <N : Any> confirmed(
+        ssid: String,
+        first: Sample<N>,
+        second: Sample<N>,
+    ): N? {
+        val a = first.network?.takeIf { WifiIdentity.matches(ssid, first.ssid) } ?: return null
+        val b = second.network?.takeIf { WifiIdentity.matches(ssid, second.ssid) } ?: return null
+        return a.takeIf { it == b }
+    }
+}
