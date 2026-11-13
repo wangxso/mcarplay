@@ -138,14 +138,49 @@ class WifiPromptBrokerTest {
     }
 
     @Test
-    fun clearReleasesWaitersOfThePreviousRound() {
+    fun clearInvalidatesThePreviousRoundsAnswersWithoutAnsweringForTheCaller() {
         val broker = broker()
         val car = Token("CarAP")
-        broker.claim("use-current", car)
+        val owner = broker.claim("use-current", car) as WifiPromptBroker.Claim.Owner
         val follower = broker.claim("use-current", car) as WifiPromptBroker.Claim.Follower
         broker.clear()
-        assertNull(broker.await(follower.future, 1_000))
+
+        // clear 不替仍在途的请求作答（会被当成用户拒绝而中止连接）。
+        assertFalse(follower.future.isDone)
+        assertFalse(owner.future.isDone)
+        // 旧回调作废，且新一轮必须重新询问。
+        broker.finish(owner, answer = true, cache = true)
+        assertFalse(owner.future.isDone)
         assertTrue(broker.claim("use-current", car) is WifiPromptBroker.Claim.Owner)
+    }
+
+    @Test
+    fun concurrentSnapshotLessRequestsKeepTheirOwnDialogsAndAnswers() {
+        // P2：两条链路都可能同时问同一个「没有网络身份」的问题，不能互相覆盖。
+        val broker = broker()
+        val first = broker.claim("use-current", null) as WifiPromptBroker.Claim.Owner
+        val second = broker.claim("use-current", null) as WifiPromptBroker.Claim.Owner
+
+        broker.finish(first, answer = true, cache = true)
+        broker.finish(second, answer = false, cache = true)
+
+        assertEquals("先展示的弹窗答案必须生效", true, broker.await(first.future, 1_000))
+        assertEquals(false, broker.await(second.future, 1_000))
+    }
+
+    @Test
+    fun aRequestForAnotherNetworkCanClaimAfterTheOldFlightEnds() {
+        // P2：为 A 展示中的弹窗不能让 B 的请求永远拿不到答案；旧请求收尾后 B 能重新提问。
+        val broker = broker()
+        val ownerA = broker.claim("use-current", Token("CarAP")) as WifiPromptBroker.Claim.Owner
+        val followerB = broker.claim("use-current", Token("HomeAP")) as WifiPromptBroker.Claim.Follower
+        assertFalse(followerB.matches)
+
+        broker.finish(ownerA, answer = true, cache = true)
+        assertEquals(true, broker.await(followerB.future, 1_000))
+
+        val retryB = broker.claim("use-current", Token("HomeAP"))
+        assertTrue("换网后必须重新询问 B", retryB is WifiPromptBroker.Claim.Owner)
     }
 
     @Test

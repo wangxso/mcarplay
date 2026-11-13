@@ -2516,33 +2516,39 @@ object SessionController {
     private fun askWifiJoinChoice(
         spec: DialogSpec,
         shownNetwork: WifiNetworkToken<Network>? = null,
-    ): Boolean? =
-        when (val claim = wifiPromptBroker.claim(spec, shownNetwork)) {
-            is WifiPromptBroker.Claim.Answered -> claim.answer
+    ): Boolean? {
+        // 旧请求可能正为另一张网络展示：等它收尾后重新提问，而不是把不匹配的答案
+        // 当成用户拒绝（那会让一次本可完成的交接直接失败）。
+        repeat(CONFIRM_CURRENT_MAX_ATTEMPTS) {
+            when (val claim = wifiPromptBroker.claim(spec, shownNetwork)) {
+                is WifiPromptBroker.Claim.Answered -> return claim.answer
 
-            is WifiPromptBroker.Claim.Follower -> {
-                val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000)
-                // 等待期间换了网络：那是给另一张网络的答案，不能当作本次确认。
-                if (claim.matches) answer else null
-            }
-
-            is WifiPromptBroker.Claim.Owner -> {
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    val sink = dialogSink
-                    if (sink == null) {
-                        // 无 UI 宿主（Activity 销毁窗口）：宁可中止也不默认替用户决定加入
-                        wifiPromptBroker.finish(claim, null, cache = false)
-                        return@post
-                    }
-                    sink(spec) { result ->
-                        wifiPromptBroker.finish(claim, result, cache = true)
-                    }
+                is WifiPromptBroker.Claim.Follower -> {
+                    val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000)
+                    if (claim.matches) return answer
+                    return@repeat
                 }
-                val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000)
-                if (!claim.future.isDone) wifiPromptBroker.timeout(claim)
-                answer
+
+                is WifiPromptBroker.Claim.Owner -> {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        val sink = dialogSink
+                        if (sink == null) {
+                            // 无 UI 宿主（Activity 销毁窗口）：宁可中止也不默认替用户决定加入
+                            wifiPromptBroker.finish(claim, null, cache = false)
+                            return@post
+                        }
+                        sink(spec) { result ->
+                            wifiPromptBroker.finish(claim, result, cache = true)
+                        }
+                    }
+                    val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000)
+                    if (!claim.future.isDone) wifiPromptBroker.timeout(claim)
+                    return answer
+                }
             }
         }
+        return null
+    }
 
     private fun openWlanSettings() {
         appContext?.let { ctx ->
