@@ -332,6 +332,16 @@ class DisplayPanelFragment : SettingsPanelFragment() {
                             ),
                         )
                     }
+                    if (plan?.level4RequestFpsLimited == true) {
+                        add(
+                            getString(
+                                R.string.lay_res_request_fps_warning,
+                                plan.carWithRequestWidth,
+                                plan.carWithRequestHeight,
+                                plan.requestFps,
+                            ),
+                        )
+                    }
                 }
             resolutionNote.text = (listOf(base) + warnings).joinToString("\n")
         }

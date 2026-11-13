@@ -273,6 +273,65 @@ class DisplayResolutionTest {
     }
 
     @Test
+    fun followCarRequestRateIsLimitedAgainstTheRequestedSize() {
+        // 评审场景：1920×1080 车机、50% 缩放、60fps。
+        // 画布 960×540 支持 60fps，但发给 CarWith 的请求是 1920×1080，level 4.0 只允许 30fps。
+        val plan =
+            DisplayResolution.plan(
+                displayWidth = 1920,
+                displayHeight = 1080,
+                mode = ResolutionMode.FOLLOW_CAR,
+                scalePercent = 50,
+                customWidth = 0,
+                customHeight = 0,
+                requestedFps = 60,
+            )
+        assertEquals(960 to 540, plan.streamWidth to plan.streamHeight)
+        assertEquals(1920 to 1080, plan.carWithRequestWidth to plan.carWithRequestHeight)
+        assertEquals(60, plan.targetFps)
+        assertFalse(plan.level4FpsLimited)
+        // 请求尺寸超限：请求帧率单独降为 30。
+        assertEquals(30, plan.requestFps)
+        assertTrue(plan.level4RequestFpsLimited)
+    }
+
+    @Test
+    fun followCarRequestRateStaysSixtyWhenTheRequestedSizeSupportsIt() {
+        // 1160×540 请求在 level 4.0 下允许 60fps：画布与请求都保持 60。
+        val small =
+            DisplayResolution.plan(
+                displayWidth = 1160,
+                displayHeight = 540,
+                mode = ResolutionMode.FOLLOW_CAR,
+                scalePercent = 100,
+                customWidth = 0,
+                customHeight = 0,
+                requestedFps = 60,
+            )
+        assertEquals(1160 to 540, small.carWithRequestWidth to small.carWithRequestHeight)
+        assertEquals(60, small.targetFps)
+        assertEquals(60, small.requestFps)
+        assertFalse(small.level4RequestFpsLimited)
+    }
+
+    @Test
+    fun fixedModesUseTheSameRateForRequestAndCanvas() {
+        val plan =
+            DisplayResolution.plan(
+                displayWidth = 1920,
+                displayHeight = 1080,
+                mode = ResolutionMode.FULL_HD_1080,
+                scalePercent = 100,
+                customWidth = 0,
+                customHeight = 0,
+                requestedFps = 60,
+            )
+        assertEquals(plan.targetFps, plan.requestFps)
+        assertEquals(plan.level4FpsLimited, plan.level4RequestFpsLimited)
+        assertEquals(30, plan.requestFps)
+    }
+
+    @Test
     fun heroShowsActualPassthroughOutputWhenCarWithIgnoresRequest() {
         // 请求 1280×720；透传时发送端画布被改成 CarWith 源 1920×1080。
         val size =

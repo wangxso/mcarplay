@@ -177,10 +177,13 @@ through, that is the CarWith source size, and the rejected request is labelled a
 When the source differs and the receiver repeatedly asks for key frames, the existing
 phone-side transcode path can scale it to the selected stream size.
 
-The selected frame rate is included in the CarWith `VIDEO_INIT` request. CarWith may ignore it:
-while frames pass through, the receiver gets whatever rate CarWith produces, and the phone
-encoder's rate only applies once transcoding starts. Changing it while connected applies on
-the next connection; the status card keeps showing this session's actual/target rate.
+The selected frame rate is included in the CarWith `VIDEO_INIT` request. The request rate is
+limited separately from the transcode canvas: in Follow car mode the request may use the full
+head-unit size (for example 1920×1080 from a 50% canvas), so level 4.0 caps that request at
+30 fps even when the 960×540 canvas could run at 60. CarWith may ignore the request: while
+frames pass through, the receiver gets whatever rate CarWith produces, and the phone encoder's
+rate only applies once transcoding starts. Changing it while connected applies on the next
+connection; the status card keeps showing this session's actual/target rate.
 
 H.264 remains level 4.0. Custom sizes are limited to 320×180–1920×1080 and aligned down to
 even pixels. Level 4.0 cannot carry 1920×1080 at 60 fps, so selecting 60 fps still encodes

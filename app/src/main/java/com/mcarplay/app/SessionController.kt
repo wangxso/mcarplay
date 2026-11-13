@@ -559,6 +559,10 @@ object SessionController {
     @Volatile
     var activeCarWithRequestHeight: Int = 0
 
+    /** 本会话请求的 CarWith 帧率：按请求尺寸单独做 level 4.0 约束，可能与画布帧率不同。 */
+    @Volatile
+    var activeCarWithRequestFps: Int = 30
+
     /**
      * 发送端当前**已知**的实际出流尺寸；null = 尚不可知。
      *
@@ -4684,6 +4688,7 @@ object SessionController {
                                     activeStreamHeight = streamH
                                     activeCarWithRequestWidth = displayPlan.carWithRequestWidth
                                     activeCarWithRequestHeight = displayPlan.carWithRequestHeight
+                                    activeCarWithRequestFps = displayPlan.requestFps
                                     appendLog(
                                         "DISPLAY: 输出模式=${displayPlan.mode.storageValue}" +
                                             if (displayPlan.mode == ResolutionMode.FOLLOW_CAR) {
@@ -4692,10 +4697,18 @@ object SessionController {
                                                 ""
                                             } +
                                             " 车机=${setup.displayWidth}x${setup.displayHeight} → " +
-                                            "流 ${streamW}x$streamH；" +
-                                            "CarWith 请求 ${displayPlan.carWithRequestWidth}x${displayPlan.carWithRequestHeight}@${fps}fps" +
+                                            "流 ${streamW}x$streamH@${fps}fps；" +
+                                            "CarWith 请求 ${displayPlan.carWithRequestWidth}x${displayPlan.carWithRequestHeight}" +
+                                            "@${displayPlan.requestFps}fps" +
                                             "（不保证采纳；透传按 CarWith 实际帧率出流，实际以 VIDEO_INIT_DONE 为准）",
                                     )
+                                    if (displayPlan.level4RequestFpsLimited) {
+                                        appendLog(
+                                            "DISPLAY: 请求尺寸 ${displayPlan.carWithRequestWidth}x" +
+                                                "${displayPlan.carWithRequestHeight} 在 H.264 level 4.0 下" +
+                                                "无法按 ${displayPlan.requestedFps}fps 出流，请求帧率降为 ${displayPlan.requestFps}fps",
+                                        )
+                                    }
                                     if (displayPlan.level4FrameClamped) {
                                         appendLog(
                                             "DISPLAY: 请求画布超出 H.264 level 4.0 单帧宏块上限" +
@@ -4939,8 +4952,8 @@ object SessionController {
                                         newFormalCarLifeSession(
                                             context,
                                             requestedCarWithSize,
-                                            // 与流画布计划同一份快照（level 4.0 可能已把 60 压到 30）。
-                                            activeTargetFps,
+                                            // 按请求尺寸（而非转码画布）单独约束后的请求帧率。
+                                            activeCarWithRequestFps,
                                         )
                                     carLife = createdCarLife
                                     val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)

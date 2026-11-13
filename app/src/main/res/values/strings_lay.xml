@@ -42,6 +42,7 @@
     <string name="lay_res_error_max">最大尺寸 1920×1080</string>
     <string name="lay_res_error_level4">该尺寸超出 H.264 level 4.0 单帧宏块上限</string>
     <string name="lay_res_fps_warning">H.264 level 4.0 下 %1$d×%2$d 最高 %3$d fps；选择 60 fps 时连接会按 %3$d fps 编码。</string>
+    <string name="lay_res_request_fps_warning">向 CarWith 请求的 %1$d×%2$d 在 H.264 level 4.0 下最高 %3$d fps，因此请求帧率为 %3$d fps。</string>
     <string name="lay_res_clamp_warning">该尺寸超出 H.264 level 4.0 单帧上限，连接时会缩至 %1$d×%2$d。</string>
     <string name="lay_scale_disabled">固定分辨率模式下百分比缩放不生效</string>
     <string name="sf_display_running">本连接流 %1$d×%2$d · %3$d fps</string>

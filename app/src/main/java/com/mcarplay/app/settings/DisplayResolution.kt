@@ -66,7 +66,9 @@ object DisplayResolution {
      *
      * [streamWidth]/[streamHeight] 是 CarPlay 流画布（编码器/转码输出尺寸）；
      * [carWithRequestWidth]/[carWithRequestHeight] 是 CarLife `VIDEO_INIT` 请求；
-     * [targetFps] 是经过 level 4.0 约束后的编码帧率，[requestedFps] 保留用户偏好。
+     * [targetFps] 是经过 level 4.0 约束后的**画布**编码帧率，[requestFps] 是按
+     * **请求尺寸**单独约束的请求帧率（跟随车机模式下两者可能不同），
+     * [requestedFps] 保留用户偏好。
      */
     data class Plan(
         val mode: ResolutionMode,
@@ -77,8 +79,10 @@ object DisplayResolution {
         val carWithRequestHeight: Int,
         val requestedFps: Int,
         val targetFps: Int,
+        val requestFps: Int,
         val level4FrameClamped: Boolean,
         val level4FpsLimited: Boolean,
+        val level4RequestFpsLimited: Boolean,
     )
 
     enum class CustomSizeError { BLANK, NOT_A_NUMBER, TOO_SMALL, TOO_LARGE, LEVEL4_UNSUPPORTED }
@@ -269,6 +273,10 @@ object DisplayResolution {
         val maxFps = level4MaxFps(stream.first, stream.second)
         // 只提供 30/60 两档：60fps 在 level 4.0 下不成立时明确按 30fps 编码。
         val target = if (requested >= 60 && maxFps < 60) 30 else requested
+        // 请求尺寸可能比画布大得多（跟随车机 + 缩放）：CarWith 若采纳并以该尺寸出流，
+        // 透传帧率就不能超过请求尺寸在 level 4.0 下的上限。两者分别判定。
+        val requestMaxFps = level4MaxFps(request.first, request.second)
+        val requestRate = if (requested >= 60 && requestMaxFps < 60) 30 else requested
         return Plan(
             mode = mode,
             scalePercent = scalePercent.coerceIn(DisplayPrefs.SCALE_MIN, DisplayPrefs.SCALE_MAX),
@@ -278,8 +286,10 @@ object DisplayResolution {
             carWithRequestHeight = request.second,
             requestedFps = requested,
             targetFps = target,
+            requestFps = requestRate,
             level4FrameClamped = macroblocks(raw.first, raw.second) > LEVEL4_MAX_FRAME_MACROBLOCKS,
             level4FpsLimited = target < requested,
+            level4RequestFpsLimited = requestRate < requested,
         )
     }
 

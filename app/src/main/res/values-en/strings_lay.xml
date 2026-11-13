@@ -42,6 +42,7 @@
     <string name="lay_res_error_max">Maximum size is 1920×1080</string>
     <string name="lay_res_error_level4">This size exceeds the H.264 level 4.0 per-frame macroblock limit</string>
     <string name="lay_res_fps_warning">At H.264 level 4.0, %1$d×%2$d is limited to %3$d fps; choosing 60 fps encodes this connection at %3$d fps.</string>
+    <string name="lay_res_request_fps_warning">The %1$d×%2$d requested from CarWith is limited to %3$d fps at H.264 level 4.0, so the request rate is %3$d fps.</string>
     <string name="lay_res_clamp_warning">This size exceeds the H.264 level 4.0 per-frame limit and will be reduced to %1$d×%2$d on connection.</string>
     <string name="lay_scale_disabled">Percentage scaling is ignored in fixed-resolution mode</string>
     <string name="sf_display_running">This session: stream %1$d×%2$d · %3$d fps</string>
