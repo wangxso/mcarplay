@@ -144,4 +144,67 @@ class WifiBindingTest {
             ),
         )
     }
+
+    @Test
+    fun theHandleIsOnlyTrustedWhenTwoSamplesAgree() {
+        // P1：句柄与 SSID 是两次系统查询，必须连续两次采样都成立且句柄相同。
+        assertEquals(
+            car,
+            VerifiedWifiSelection.confirmed(
+                ssid = "CarAP",
+                first = VerifiedWifiSelection.Sample(car, "\"CarAP\""),
+                second = VerifiedWifiSelection.Sample(car, "CarAP"),
+            ),
+        )
+    }
+
+    @Test
+    fun aNetworkSwitchBetweenTheTwoSamplesIsRejected() {
+        // 读 SSID 之前是 A、之后已切到 B：不能把 A 的句柄贴成 B。
+        assertNull(
+            VerifiedWifiSelection.confirmed(
+                ssid = "CarAP",
+                first = VerifiedWifiSelection.Sample(car, "CarAP"),
+                second = VerifiedWifiSelection.Sample(home, "HomeAP"),
+            ),
+        )
+        // 句柄变了但 SSID 仍可读成目标（两张同名/占位）：同样不采信。
+        assertNull(
+            VerifiedWifiSelection.confirmed(
+                ssid = "CarAP",
+                first = VerifiedWifiSelection.Sample(car, "CarAP"),
+                second = VerifiedWifiSelection.Sample(home, "CarAP"),
+            ),
+        )
+    }
+
+    @Test
+    fun aSecondWifiAppearingBetweenSamplesIsRejected() {
+        // 第二次采样时已不是唯一 Wi-Fi（singleWifiNetwork 返回 null）。
+        assertNull(
+            VerifiedWifiSelection.confirmed(
+                ssid = "CarAP",
+                first = VerifiedWifiSelection.Sample(car, "CarAP"),
+                second = VerifiedWifiSelection.Sample(null, "CarAP"),
+            ),
+        )
+    }
+
+    @Test
+    fun unreadableOrForeignSsidFailsTheProof() {
+        assertNull(
+            VerifiedWifiSelection.confirmed(
+                ssid = "CarAP",
+                first = VerifiedWifiSelection.Sample(car, null),
+                second = VerifiedWifiSelection.Sample(car, null),
+            ),
+        )
+        assertNull(
+            VerifiedWifiSelection.confirmed(
+                ssid = "CarAP",
+                first = VerifiedWifiSelection.Sample(car, "HomeAP"),
+                second = VerifiedWifiSelection.Sample(car, "HomeAP"),
+            ),
+        )
+    }
 }
