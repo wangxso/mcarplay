@@ -2532,7 +2532,10 @@ object SessionController {
 
                 is WifiPromptBroker.Claim.Follower -> {
                     val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000, ::expired)
-                    if (claim.matches || answer == null) return answer
+                    // null 不代表本请求过期：用户可能只是关掉了为**另一张网络**展示的框。
+                    // 只有本请求真的被取消/跨轮才放弃；否则为当前网络重新提问。
+                    if (claim.matches) return answer
+                    if (expired()) return null
                     return@repeat
                 }
 

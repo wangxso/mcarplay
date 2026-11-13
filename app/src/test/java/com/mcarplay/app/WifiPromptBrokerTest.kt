@@ -214,6 +214,23 @@ class WifiPromptBrokerTest {
     }
 
     @Test
+    fun aDismissedPromptForAnotherNetworkStillLetsTheNewNetworkAsk() {
+        // P2：用户用返回键关掉为 A 展示的框（答案 null），不能因此让 B 的请求
+        // 被当成「自己没人应答」；B 仍要能重新提问。
+        val broker = broker()
+        val ownerA = broker.claim("use-current", Token("CarAP")) as WifiPromptBroker.Claim.Owner
+        val followerB = broker.claim("use-current", Token("HomeAP")) as WifiPromptBroker.Claim.Follower
+        assertFalse(followerB.matches)
+
+        broker.finish(ownerA, answer = null, cache = false)
+        assertNull(broker.await(followerB.future, 1_000))
+
+        val round = broker.currentGeneration()
+        assertTrue("A 被关闭后 B 仍可重新提问", broker.claim("use-current", Token("HomeAP")) is WifiPromptBroker.Claim.Owner)
+        assertEquals("A 的关闭不算作新轮次", round, broker.currentGeneration())
+    }
+
+    @Test
     fun questionsWithoutANetworkSnapshotAreNeverMergedOrCached() {
         val broker = broker()
         val first = broker.claim("no-network", null) as WifiPromptBroker.Claim.Owner
