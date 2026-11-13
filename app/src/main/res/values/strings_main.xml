@@ -87,4 +87,5 @@
     <string name="vehicle_preset_winplay">WinPlay 接收端</string>
     <string name="vehicle_preset_diplay">DiPlay 接收端（比亚迪等）</string>
     <string name="vehicle_preset_classic_mib3">奥迪经典 MIB3</string>
+    <string name="vehicle_preset_mercedes_mb_dpp">奔驰 MB_D-PP（AirPlay 320.17.7）</string>
 </resources>

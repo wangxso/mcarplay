@@ -84,12 +84,19 @@ object ReceiverCompatibility {
         mediaCapabilities: String = "",
         receiverInstance: String? = null,
         preset: VehiclePreset = VehiclePresetRuntime.current,
-    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset)
+    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset, signals)
 
-    /** 用户在主页手动选择车型后，在自动判定结果之上叠加该车型的适配开关（[VehiclePreset.AUTO] 不改动）。 */
+    /**
+     * 用户在主页手动选择车型后，在自动判定结果之上叠加该车型的适配开关（[VehiclePreset.AUTO] 不改动）。
+     *
+     * [signals] 只用于**冲突守卫**：手动预设是为「自动判定认不出」准备的，不能把例外套到另一台
+     * 已知厂牌的车机上。例如选了奔驰 MB_D-PP 预设但车机自报 `CHERY`，则保持原策略并只记录规则，
+     * 不启用单次 RECORD。
+     */
     fun applyPreset(
         policy: Policy,
         preset: VehiclePreset,
+        signals: ReceiverProfile.Signals,
     ): Policy =
         when (preset) {
             VehiclePreset.AUTO -> policy
@@ -136,7 +143,24 @@ object ReceiverCompatibility {
                     linkGeneration = ReceiverProfile.LinkGeneration.CLASSIC_MIB3,
                     rules = policy.rules + "manual.classic-mib3",
                 )
+            // 奔驰 MB_D-PP（issue #55）：只登记单次 RECORD；不附带 Chery 的蓝牙/MFi 例外。
+            // 身份为空 = 自动判定拿不到型号/厂商，正是手动预设的用途；已知是别家车机则拒绝套用。
+            VehiclePreset.MERCEDES_MB_DPP ->
+                if (manualMercedesAllowed(signals)) {
+                    policy.copy(
+                        singleRecordPerSession = true,
+                        rules = policy.rules + "manual.mercedes-mb-dpp",
+                    )
+                } else {
+                    policy.copy(rules = policy.rules + "manual.mercedes-mb-dpp-blocked")
+                }
         }
+
+    /** 手动奔驰预设的冲突守卫：厂商未知时放行，已知时必须自报 Mercedes-Benz。 */
+    private fun manualMercedesAllowed(signals: ReceiverProfile.Signals): Boolean {
+        val manufacturer = normalize(signals.manufacturer)
+        return manufacturer.isEmpty() || manufacturer == "mercedes-benz"
+    }
 
     private fun resolveDetected(
         signals: ReceiverProfile.Signals,
