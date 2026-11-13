@@ -27,6 +27,11 @@ internal class WifiPromptBroker<K : Any, T : Any>(
     /** 两个网络快照是否指同一张网络。 */
     private val tokensMatch: (T, T) -> Boolean = { a, b -> a == b },
 ) {
+    private companion object {
+        /** 等待答案期间检查取消/轮次的间隔。 */
+        const val EXPIRY_POLL_MS = 250L
+    }
+
     sealed interface Claim<out K, out T> {
         /** 本轮已经为同一张网络问过同样的问题：复用答案，不再打扰用户。 */
         data class Answered<T>(
@@ -92,21 +97,36 @@ internal class WifiPromptBroker<K : Any, T : Any>(
         return Claim.Owner(key, null, generation, future)
     }
 
-    /** 等待展示结果；超时/中断按「无人应答」返回 null。 */
+    /** 当前轮次编号：调用方重试前据此确认自己仍在同一轮。 */
+    @Synchronized
+    fun currentGeneration(): Int = generation
+
+    /**
+     * 等待结果。`isExpired` 为真（取消/轮次已变）时立即返回 null，
+     * 不再继续阻塞——取消后仍开着的弹窗不能把调用线程拖到超时。
+     */
     fun await(
         future: CompletableFuture<Boolean?>,
         timeoutMs: Long,
-    ): Boolean? =
-        try {
-            future.get(timeoutMs, TimeUnit.MILLISECONDS)
-        } catch (_: TimeoutException) {
-            null
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            null
-        } catch (_: ExecutionException) {
-            null
+        isExpired: () -> Boolean = { false },
+    ): Boolean? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (true) {
+            if (isExpired()) return null
+            val remaining = deadline - System.currentTimeMillis()
+            if (remaining <= 0) return null
+            try {
+                return future.get(minOf(remaining, EXPIRY_POLL_MS), TimeUnit.MILLISECONDS)
+            } catch (_: TimeoutException) {
+                // 继续循环：既等答案，也等取消。
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return null
+            } catch (_: ExecutionException) {
+                return null
+            }
         }
+    }
 
     /**
      * 展示结束。只有仍属于当前轮次、且（有快照时）仍是该问题的在途请求时才算数：
@@ -152,16 +172,22 @@ internal class WifiPromptBroker<K : Any, T : Any>(
     }
 
     /**
-     * 新一轮连接开始/用户取消：上一轮的问答全部作废，迟到的回调不会再落账。
+     * 新一轮连接开始/用户取消：上一轮的问答全部作废，迟到的回调不会再落账，
+     * 并立刻唤醒所有在途等待者（否则用户取消后仍开着的弹窗会把调用线程卡满 90 秒）。
      *
-     * 不在这里替在途请求作答：调用方各自的 `isCancelled`/超时负责收尾，若这里补一个
-     * null，会被当成「用户没回答」而中止一次仍在进行的连接。
+     * 唤醒值一律为 null（「没有答案」）。调用方必须结合自己的取消标志/轮次判断：
+     * 取消或跨轮时 null 表示本请求已过期，不得据此继续展示新弹窗。
      */
-    @Synchronized
     fun clear() {
-        generation++
-        answers.clear()
-        inFlight.clear()
-        unkeyed.clear()
+        val pending =
+            synchronized(this) {
+                generation++
+                answers.clear()
+                val futures = inFlight.values.map { it.future } + unkeyed
+                inFlight.clear()
+                unkeyed.clear()
+                futures
+            }
+        pending.forEach { it.complete(null) }
     }
 }

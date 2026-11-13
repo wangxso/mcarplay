@@ -138,20 +138,50 @@ class WifiPromptBrokerTest {
     }
 
     @Test
-    fun clearInvalidatesThePreviousRoundsAnswersWithoutAnsweringForTheCaller() {
+    fun clearReleasesBlockedWaitersAndInvalidatesLateCallbacks() {
         val broker = broker()
         val car = Token("CarAP")
         val owner = broker.claim("use-current", car) as WifiPromptBroker.Claim.Owner
         val follower = broker.claim("use-current", car) as WifiPromptBroker.Claim.Follower
+
         broker.clear()
 
-        // clear 不替仍在途的请求作答（会被当成用户拒绝而中止连接）。
-        assertFalse(follower.future.isDone)
-        assertFalse(owner.future.isDone)
-        // 旧回调作废，且新一轮必须重新询问。
+        // 取消后仍开着的弹窗不能把调用线程卡满 90 秒：等待者立刻收到「没有答案」。
+        assertTrue(follower.future.isDone)
+        assertNull(broker.await(follower.future, 1_000))
+        assertTrue(owner.future.isDone)
+        // 迟到的点击仍不能落账，且新一轮必须重新询问。
         broker.finish(owner, answer = true, cache = true)
-        assertFalse(owner.future.isDone)
         assertTrue(broker.claim("use-current", car) is WifiPromptBroker.Claim.Owner)
+    }
+
+    @Test
+    fun awaitStopsPromptlyWhenTheRoundIsCancelled() {
+        val broker = broker()
+        val owner = broker.claim("use-current", Token("CarAP")) as WifiPromptBroker.Claim.Owner
+        val cancelled =
+            java.util.concurrent.atomic
+                .AtomicBoolean(false)
+        var answer: Boolean? = true
+        val waiter =
+            Thread {
+                answer = broker.await(owner.future, 30_000) { cancelled.get() }
+            }
+        waiter.start()
+        Thread.sleep(200)
+        cancelled.set(true)
+        waiter.join(3_000)
+        assertFalse("取消后必须立即返回，而不是等满超时", waiter.isAlive)
+        assertNull(answer)
+    }
+
+    @Test
+    fun retryIsSkippedWhenTheRoundChanged() {
+        // 换网后的重试不得为已结束的轮次补弹旧框：generation 变化后调用方会直接放弃。
+        val broker = broker()
+        val round = broker.currentGeneration()
+        broker.clear()
+        assertTrue(broker.currentGeneration() != round)
     }
 
     @Test

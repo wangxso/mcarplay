@@ -2512,20 +2512,27 @@ object SessionController {
      * 同一轮里相同问题只有在**同一张网络**上才复用答案：`shownNetwork` 是弹窗展示时
      * 采样的网络快照，手机换网后不会复用它，也不会并入正为旧网络展示的弹窗
      * （见 [WifiPromptBroker]）。`null` = 调用方没有网络快照，此问题不合并。
+     *
+     * 取消或轮次变化时立即返回 null，并且不再为新网络补弹旧轮次的框。
      */
     private fun askWifiJoinChoice(
         spec: DialogSpec,
         shownNetwork: WifiNetworkToken<Network>? = null,
+        isCancelled: () -> Boolean = { connectCancelled },
     ): Boolean? {
+        val round = wifiPromptBroker.currentGeneration()
+
+        fun expired(): Boolean = isCancelled() || wifiPromptBroker.currentGeneration() != round
         // 旧请求可能正为另一张网络展示：等它收尾后重新提问，而不是把不匹配的答案
         // 当成用户拒绝（那会让一次本可完成的交接直接失败）。
         repeat(CONFIRM_CURRENT_MAX_ATTEMPTS) {
+            if (expired()) return null
             when (val claim = wifiPromptBroker.claim(spec, shownNetwork)) {
                 is WifiPromptBroker.Claim.Answered -> return claim.answer
 
                 is WifiPromptBroker.Claim.Follower -> {
-                    val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000)
-                    if (claim.matches) return answer
+                    val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000, ::expired)
+                    if (claim.matches || answer == null) return answer
                     return@repeat
                 }
 
@@ -2541,7 +2548,7 @@ object SessionController {
                             wifiPromptBroker.finish(claim, result, cache = true)
                         }
                     }
-                    val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000)
+                    val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000, ::expired)
                     if (!claim.future.isDone) wifiPromptBroker.timeout(claim)
                     return answer
                 }
@@ -5308,6 +5315,7 @@ object SessionController {
                         negative = t(R.string.sc_open_wifi_settings),
                     ),
                     shownNetwork = shown,
+                    isCancelled = isCancelled,
                 )
             if (isCancelled()) {
                 onResult(false)
@@ -5442,6 +5450,7 @@ object SessionController {
                                     negative = t(R.string.sc_keep_waiting),
                                 ),
                                 shownNetwork = shown,
+                                isCancelled = isCancelled,
                             )
                         if (isCancelled()) {
                             onResult(false)
@@ -5479,6 +5488,7 @@ object SessionController {
                             negative = t(R.string.sc_keep_waiting),
                         ),
                         shownNetwork = shown,
+                        isCancelled = isCancelled,
                     )
                 if (isCancelled()) {
                     onResult(false)
