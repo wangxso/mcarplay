@@ -6,7 +6,7 @@
 
 ## 当前基线与结论
 
-- **11 月 13 日 v0.1.7-test.1 测试预览（待发布，仅门禁与离线验证）：** 汇总 11 月 12 日合入的 #45（重进 CarPlay 音频/输入、DiPlay 0.2.22 `/feedback` 500、自动播放改用 CarWith 硬按键、断链崩溃、Android 14+ Wi-Fi 低延迟）、#48（重连 Wi-Fi 交接与 iAP2 重新协商）、#52（自动重连断路器）、#53（通知使用权入口），以及 #47 的重构 Phase 0 护栏测试与 `tools/compare_diagnostics.py`。四接收端 DiPlay、WinPlay、macplay、艾瑞泽 8 未在本构建上回归；#45 仅有 2026-11-06 一次 `0.1.6-debug` 观察，其余改动无设备验证。已通过 1042 项 standard JVM 测试、25 项 remote 调试桥测试、87 项 Python 工具测试，以及 Spotless、standard lint/debug、`lintStandardRelease` 构建；未使用设备或实车。tag 创建与签名发布未执行。
+- **11 月 13 日 v0.1.7-test.1 测试预览（已建 tag，触发签名发布；仅门禁与离线验证）：** 汇总 11 月 12 日合入的 #45（重进 CarPlay 音频/输入、DiPlay 0.2.22 `/feedback` 500、自动播放改用 CarWith 硬按键、断链崩溃、Android 14+ Wi-Fi 低延迟）、#47 的重构 Phase 0 护栏测试与 `tools/compare_diagnostics.py`、#48（重连 Wi-Fi 交接与 iAP2 重新协商）、#52（自动重连断路器）、#53（通知使用权入口），以及 #57（奔驰 MB_D-PP 单次 RECORD、仅视频选择在自动回连时保留、音频拆链间隔归因）。四接收端 DiPlay、WinPlay、macplay、艾瑞泽 8 未在本构建上回归；#45 仅有 2026-11-06 一次 `0.1.6-debug` 观察，#57 的证据来自 #55 车主报告，其余改动无设备验证。已通过 1050 项 standard JVM 测试、25 项 remote 调试桥测试、87 项 Python 工具测试、20 项 Node debug-bridge 测试，以及 Spotless、standard lint/debug、`lintStandardRelease` 构建；未使用设备或实车。
 
 - **11 月 10 日会话编排层重构 Phase 0（`refactor/session-phase0-guardrails`，仅护栏测试，未改生产代码，无实车验证）：**
   重构方案见 `docs/ARCHITECTURE-REFACTOR.md`（基线 `main` @ `ab0cb93`）。新增 `ArchitectureRulesTest`（引擎层不得引用
