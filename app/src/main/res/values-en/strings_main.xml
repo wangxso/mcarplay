@@ -87,4 +87,5 @@
     <string name="vehicle_preset_winplay">WinPlay receiver</string>
     <string name="vehicle_preset_diplay">DiPlay receiver (BYD etc.)</string>
     <string name="vehicle_preset_classic_mib3">Audi classic MIB3</string>
+    <string name="vehicle_preset_mercedes_mb_dpp">Mercedes-Benz MB_D-PP (AirPlay 320.17.7)</string>
 </resources>

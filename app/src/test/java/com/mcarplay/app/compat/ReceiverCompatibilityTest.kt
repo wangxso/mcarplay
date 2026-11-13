@@ -185,6 +185,29 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
+    fun manualMercedesPresetIsGuardedByReportedManufacturer() {
+        // 手动预设只补「自动判定认不出」的部分，不能改写别家车机，也不能伪造 BMW 例外。
+        val cheryOther = ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo", srcvers = "320.18.1")
+        val blocked = ReceiverCompatibility.resolve(cheryOther, preset = VehiclePreset.MERCEDES_MB_DPP)
+        assertFalse("手动奔驰预设不得套到奇瑞", blocked.singleRecordPerSession)
+        assertTrue("manual.mercedes-mb-dpp-blocked" in blocked.rules)
+        // 预设是叠加而非覆盖：已被自动规则命中的奇瑞仍保留自己的单次 RECORD。
+        val cheryObserved = cheryOther.copy(srcvers = "320.17.7")
+        assertTrue(ReceiverCompatibility.resolve(cheryObserved, preset = VehiclePreset.MERCEDES_MB_DPP).singleRecordPerSession)
+        // 身份为空是手动预设的正当用途：允许补上单次 RECORD。
+        val blank = ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.MERCEDES_MB_DPP)
+        assertTrue(blank.singleRecordPerSession)
+        // 已知 Mercedes-Benz 但型号/固件未登记时由手动预设补齐；不能顺带启用 Chery 的蓝牙/MFi 规则。
+        val unrecognized = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_D-PP-9", srcvers = "320.18.1")
+        val manual = ReceiverCompatibility.resolve(unrecognized, preset = VehiclePreset.MERCEDES_MB_DPP)
+        assertTrue("manual.mercedes-mb-dpp" in manual.rules)
+        assertFalse(manual.releaseBluetoothAfterSetup)
+        assertNull(manual.pinnedMfiChallengeLength)
+        // 自动规则本身仍只认报告过的型号与 320.17.7；手动预设不会把自动规则扩到品牌。
+        assertFalse(ReceiverCompatibility.resolve(unrecognized, preset = VehiclePreset.AUTO).singleRecordPerSession)
+    }
+
+    @Test
     fun arrizo8HintSharesTheCheryIdentityNormalization() {
         // 自报值带空格/大小写差异时，单 RECORD 与 30 s 提示必须同进同退。
         val observed = ReceiverProfile.Signals(manufacturer = " chery ", model = "TIGGO ", srcvers = " 320.17.7")
