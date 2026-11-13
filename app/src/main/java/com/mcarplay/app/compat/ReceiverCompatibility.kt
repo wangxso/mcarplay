@@ -56,7 +56,10 @@ object ReceiverCompatibility {
          * `sem_wait` 无返回），后续挑战排队，会话结束仍有认证挂起；长度记忆还曾把 32B 误记为被拒（2026-11-02 车机日志）。
          */
         val pinnedMfiChallengeLength: Int? = null,
-        /** 对已核对的车机栈，同一会话只发送一次 RECORD，避免重复启动遗留定时器。 */
+        /**
+         * 对已取得日志证据的车机栈，同一会话只发送一次 RECORD，避免重复启动遗留定时器或触发拆链。
+         * 当前覆盖艾瑞泽 8（CHERY / Tiggo）与 issue #55 报告中的奔驰 MB_D-PP-3/4，均限定 AirPlay 320.17.7。
+         */
         val singleRecordPerSession: Boolean = false,
         /**
          * 连接等待超过 30 s 时显示艾瑞泽 8 专属提示（该车机此时会自行重置并重新发起）。只影响界面文案，
@@ -173,6 +176,13 @@ object ReceiverCompatibility {
         // 只登记已取得原厂库和崩溃证据的协议身份；srcvers 是 AirPlay 栈版本，不等于整车固件。
         val cherySingleRecord =
             cheryReleasesBluetooth && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
+        // 奔驰 MB_D-PP-3/4（issue #55 车主报告：iAP2 自报 Mercedes-Benz / MB_D-PP-3，/info 为 MB_D-PP-4）：
+        // 音频 SETUP 后补发 RECORD，16–559 ms 内屏幕口 EOF/reset；同一报告里不补发 RECORD 的视频会话正常。
+        // 只登记报告实际出现的型号与 AirPlay 栈版本，不把其他 320.17.7 接收端一并纳入。
+        val mercedesSingleRecord =
+            normalize(signals.manufacturer) == "mercedes-benz" &&
+                normalize(signals.model) in MERCEDES_D_PP_MODELS &&
+                normalize(signals.srcvers) == "320.17.7"
         // 大众车机型号自报 VWxxxx（ID7 VW4131、帕萨特 2025 VW4211），厂商字段并不统一（帕萨特报 Toppower）
         val vwStreamingInvite = VW_MODEL.matches(normalize(signals.model))
         val rules =
@@ -190,6 +200,7 @@ object ReceiverCompatibility {
                 if (cheryReleasesBluetooth) add("chery.iphone-auth-sequence")
                 if (cheryReleasesBluetooth) add("chery.mfi-32-only")
                 if (cherySingleRecord) add("chery.tiggo.320.17.7.single-record")
+                if (mercedesSingleRecord) add("mercedes.mb_d-pp.320.17.7.single-record")
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
             }
         return Policy(
@@ -207,7 +218,7 @@ object ReceiverCompatibility {
             sendAppleClientHeaders = cheryReleasesBluetooth,
             iphoneAuthSequence = cheryReleasesBluetooth,
             pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
-            singleRecordPerSession = cherySingleRecord,
+            singleRecordPerSession = cherySingleRecord || mercedesSingleRecord,
             arrizo8ConnectWindowHint = cherySingleRecord,
             reconnectOnStreamingInvite = vwStreamingInvite,
         )
@@ -283,6 +294,9 @@ object ReceiverCompatibility {
     private val WINPLAY_HANDOFF_FIRMWARE = setOf("1.2.4", "1.2.5")
 
     private val VW_MODEL = Regex("vw\\d{4}")
+
+    /** issue #55 报告中同一台奔驰的 iAP2（MB_D-PP-3）与 `/info`（MB_D-PP-4）自报型号。 */
+    private val MERCEDES_D_PP_MODELS = setOf("mb_d-pp-3", "mb_d-pp-4")
 
     private fun normalize(value: String?): String = value.orEmpty().trim().lowercase(java.util.Locale.ROOT)
 }

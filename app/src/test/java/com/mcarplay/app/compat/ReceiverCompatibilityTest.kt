@@ -157,6 +157,34 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
+    fun mercedesSingleRecordIsLimitedToTheReportedIdentity() {
+        // issue #55：iAP2 自报 model=MB_D-PP-3，`/info` 为 MB_D-PP-4，srcvers 均为 320.17.7。
+        val iap2 = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_D-PP-3", srcvers = "320.17.7")
+        val info = iap2.copy(model = "MB_D-PP-4")
+        for (observed in listOf(iap2, info, iap2.copy(manufacturer = " mercedes-benz ", model = " mb_d-pp-4 "))) {
+            val policy = ReceiverCompatibility.resolve(observed)
+            assertTrue("${observed.model} 应命中单次 RECORD", policy.singleRecordPerSession)
+            assertTrue("mercedes.mb_d-pp.320.17.7.single-record" in policy.rules)
+            assertFalse("单次 RECORD 不应扩大到其他 Chery 专属规则", policy.arrizo8ConnectWindowHint)
+        }
+        listOf(
+            iap2.copy(manufacturer = "OTHER"),
+            iap2.copy(model = "MB_D-PP-5"),
+            iap2.copy(srcvers = "320.17.8"),
+            iap2.copy(srcvers = null),
+            iap2.copy(manufacturer = null),
+            ReceiverProfile.Signals(model = "VW4131", manufacturer = "Volkswagen", srcvers = "320.17.7"),
+        ).forEach {
+            assertFalse(
+                "${it.manufacturer}/${it.model}/${it.srcvers} 不应命中奔驰单次 RECORD",
+                ReceiverCompatibility.resolve(it).singleRecordPerSession,
+            )
+        }
+        // 手动选择「通用」关闭全部按车机登记的例外（与艾瑞泽 8 一致）。
+        assertFalse(ReceiverCompatibility.resolve(iap2, preset = VehiclePreset.GENERIC).singleRecordPerSession)
+    }
+
+    @Test
     fun arrizo8HintSharesTheCheryIdentityNormalization() {
         // 自报值带空格/大小写差异时，单 RECORD 与 30 s 提示必须同进同退。
         val observed = ReceiverProfile.Signals(manufacturer = " chery ", model = "TIGGO ", srcvers = " 320.17.7")
