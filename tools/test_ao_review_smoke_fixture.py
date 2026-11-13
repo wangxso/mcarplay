@@ -8,6 +8,10 @@ class ReviewSmokeFixtureTest(unittest.TestCase):
         findings = [{"severity": "P0"}, {"severity": "P1"}, {"severity": "P3"}]
         self.assertEqual(findings[:2], blocking_findings(findings))
 
+    def test_p2_findings_are_blocking(self):
+        findings = [{"severity": "P2"}]
+        self.assertEqual(findings, blocking_findings(findings))
+
 
 if __name__ == "__main__":
     unittest.main()

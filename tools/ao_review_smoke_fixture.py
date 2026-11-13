@@ -2,4 +2,4 @@
 
 
 def blocking_findings(findings):
-    return [finding for finding in findings if finding["severity"] in {"P0", "P1"}]
+    return [finding for finding in findings if finding["severity"] in {"P0", "P1", "P2"}]
