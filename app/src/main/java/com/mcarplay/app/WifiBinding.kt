@@ -66,3 +66,24 @@ internal data class WifiNetworkToken<N : Any>(
             else -> false
         }
 }
+
+/**
+ * 目标 SSID 可安全绑定的 `Network` 句柄。
+ *
+ * Android 13+ 上本应用只申请 `NEARBY_WIFI_DEVICES`，没有定位权限时
+ * `verifiedWifiNetwork` 恒为 null（它靠 `FLAG_INCLUDE_LOCATION_INFO` 同时读句柄与 SSID）。
+ * 若 Shizuku 已读到站端 SSID 且与目标一致、系统又只有这一张 Wi-Fi，唯一性已经成立：
+ * 不必再弹「使用当前 Wi-Fi？」，直接绑定唯一句柄。
+ *
+ * 两张及以上 Wi-Fi 并存时 [singleWifi] 必须传 null，仍走用户确认——绝不猜网络。
+ */
+internal object VerifiedWifiSelection {
+    fun <N : Any> choose(
+        ssid: String,
+        locationVerified: N?,
+        singleWifi: N?,
+        liveSsid: String?,
+    ): N? =
+        locationVerified
+            ?: singleWifi?.takeIf { WifiIdentity.matches(ssid, liveSsid) }
+}

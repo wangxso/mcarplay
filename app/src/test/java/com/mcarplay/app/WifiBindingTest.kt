@@ -3,6 +3,7 @@ package com.mcarplay.app
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -81,5 +82,66 @@ class WifiBindingTest {
         assertFalse(empty.hasIdentity)
         assertFalse(empty.matches(null, null))
         assertFalse(empty.matches(car, "CarAP"))
+    }
+
+    @Test
+    fun singleWifiWithMatchingShellSsidProvesTheHandleWithoutLocation() {
+        // Android 13+ 没有定位权限时 verifiedWifiNetwork 恒为 null；
+        // 若 Shizuku 读到的站端 SSID 就是目标，系统又只有这一张 Wi-Fi，唯一性成立。
+        assertEquals(
+            car,
+            VerifiedWifiSelection.choose(
+                ssid = "CarAP",
+                locationVerified = null,
+                singleWifi = car,
+                liveSsid = "\"CarAP\"",
+            ),
+        )
+    }
+
+    @Test
+    fun singleWifiWithAnotherSsidDoesNotProveTheHandle() {
+        assertNull(
+            VerifiedWifiSelection.choose(
+                ssid = "CarAP",
+                locationVerified = null,
+                singleWifi = home,
+                liveSsid = "HomeAP",
+            ),
+        )
+        assertNull(
+            VerifiedWifiSelection.choose(
+                ssid = "CarAP",
+                locationVerified = null,
+                singleWifi = car,
+                liveSsid = null,
+            ),
+        )
+    }
+
+    @Test
+    fun ambiguousWifiListNeverPicksAHandleWithoutLocation() {
+        // 两张 Wi-Fi 并存（手机热点/P2P）：没有定位核验就不能猜，交给用户确认。
+        assertNull(
+            VerifiedWifiSelection.choose(
+                ssid = "CarAP",
+                locationVerified = null,
+                singleWifi = null,
+                liveSsid = "CarAP",
+            ),
+        )
+    }
+
+    @Test
+    fun locationVerifiedHandleWinsWithoutShellSsid() {
+        assertEquals(
+            car,
+            VerifiedWifiSelection.choose(
+                ssid = "CarAP",
+                locationVerified = car,
+                singleWifi = null,
+                liveSsid = null,
+            ),
+        )
     }
 }
