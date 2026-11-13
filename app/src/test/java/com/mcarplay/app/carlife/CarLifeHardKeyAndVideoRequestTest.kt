@@ -31,4 +31,18 @@ class CarLifeHardKeyAndVideoRequestTest {
     fun unknownDisplayFallsBackToProtocolDefault() {
         assertEquals(1280 to 720, CarLifeProtocol.videoRequestFor(0, 0))
     }
+
+    @Test
+    fun videoInitPayloadCarriesRequestedFrameRate() {
+        // 协议默认 30fps，与旧行为一致。
+        assertArrayEquals(
+            CarLifeProtocol.pbInt(1, 1280) + CarLifeProtocol.pbInt(2, 720) + CarLifeProtocol.pbInt(3, 30),
+            CarLifeProtocol.videoInitPayload(),
+        )
+        // 选择 60fps 时请求字段必须是 60，而不是固定 30。
+        assertArrayEquals(
+            CarLifeProtocol.pbInt(1, 1280) + CarLifeProtocol.pbInt(2, 720) + CarLifeProtocol.pbInt(3, 60),
+            CarLifeProtocol.videoInitPayload(1280, 720, 60),
+        )
+    }
 }

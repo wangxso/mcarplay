@@ -96,6 +96,34 @@ class CarLifeAuthenticationTest {
     }
 
     @Test
+    fun videoInitRequestCarriesTheSelectedFrameRate() {
+        val machine = connectedMachine(CarLifeSeedExchange())
+        machine.onInfo(infoPayload())
+        machine.onAuthResponse(CarLifeProtocol.pbString(1, proof))
+        machine.onFeatureRequest()
+        finishEncryption(machine)
+        // 与 encryptedLateAdmissionStillGatesVideoInitialization 相同的准入顺序：
+        // 手机渠道准入必须由加密的 MD_AUTH_RESULT 确认后才能发 VIDEO_INIT。
+        val admission =
+            CarLifeCommandRouter(machine).route(
+                CarLifeFrame(
+                    channel = CarLifeProtocol.PORT_COMMAND,
+                    kind = CarLifeProtocol.MD_AUTH_RESULT,
+                    timestamp = 0,
+                    reserved = 0,
+                    payload = machine.payloadCipher!!.encrypt(CarLifeProtocol.pbInt(1, 1)),
+                ),
+            )
+        assertTrue(admission.encryptionReady)
+        val action = machine.requestVideoInit(1280, 720, 60).single()
+        assertEquals(CarLifeProtocol.VIDEO_ENCODER_INIT, action.kind)
+        assertEquals(1280, CarLifeProtocol.firstIntField(action.payload, 1))
+        assertEquals(720, CarLifeProtocol.firstIntField(action.payload, 2))
+        assertEquals(60, CarLifeProtocol.firstIntField(action.payload, 3))
+        assertEquals(60, machine.requestedVideoFps)
+    }
+
+    @Test
     fun rejectedAdmissionAndTamperedProofNeverEmitSuccessOrFeatures() {
         val rejected = connectedMachine()
         rejected.onInfo(infoPayload())

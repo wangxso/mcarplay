@@ -84,13 +84,19 @@ object DisplayResolution {
     enum class CustomSizeError { BLANK, NOT_A_NUMBER, TOO_SMALL, TOO_LARGE, LEVEL4_UNSUPPORTED }
 
     /**
-     * 英雄卡的尺寸描述。**实际输出**取自发送端当前画布：透传时
-     * `VideoSender.setVideoDimensions` 会把画布改成 CarWith 源尺寸，因此计划/请求尺寸
-     * 不能冒充实际输出；只有转码开始后实际输出才等于计划流尺寸。
+     * 英雄卡的尺寸描述。**实际输出**只取自发送端的已知出流尺寸：
+     * 透传时发送端构造尺寸是计划值，首个带 SPS 的帧到达前不能当作实际输出；
+     * 协商值（VIDEO_INIT_DONE）只能作为「源」列出，不能声称已经出流。
      */
     enum class ActiveSizeKind {
-        /** 会话尚未建立流画布。 */
+        /** 会话尚未建立流画布，也没有任何协商值。 */
         UNKNOWN,
+
+        /** 已发出请求，但既未协商也未出流。 */
+        REQUESTED,
+
+        /** 已协商源尺寸，但发送端尚未出流（透传画布仍是计划值）。 */
+        SOURCE_NEGOTIATED,
 
         /** 发送端已在推流，但还没拿到 CarWith 实际源尺寸。 */
         SOURCE_PENDING,
@@ -116,7 +122,8 @@ object DisplayResolution {
     /**
      * 生成英雄卡的尺寸描述。
      *
-     * [outputWidth]/[outputHeight] 必须是发送端当前出流画布（透传时等于源尺寸），
+     * [outputWidth]/[outputHeight] 必须是发送端**已知**的出流画布：转码已开始，或
+     * 透传已收到 SPS。传 0 表示尚不可知，此时不得把计划尺寸或协商值当成实际输出。
      * [requestWidth]/[requestHeight] 是本次发给 CarWith 的请求，[source] 只在
      * `VIDEO_INIT_DONE`/SPS 真正到达后才非空。
      */
@@ -127,8 +134,15 @@ object DisplayResolution {
         outputHeight: Int,
         source: Pair<Int, Int>?,
     ): ActiveSize {
-        if (outputWidth <= 0 || outputHeight <= 0) {
-            return ActiveSize(ActiveSizeKind.UNKNOWN, 0, 0, 0, 0)
+        val hasOutput = outputWidth > 0 && outputHeight > 0
+        if (!hasOutput) {
+            return when {
+                source != null ->
+                    ActiveSize(ActiveSizeKind.SOURCE_NEGOTIATED, 0, 0, source.first, source.second)
+                requestWidth > 0 && requestHeight > 0 ->
+                    ActiveSize(ActiveSizeKind.REQUESTED, 0, 0, requestWidth, requestHeight)
+                else -> ActiveSize(ActiveSizeKind.UNKNOWN, 0, 0, 0, 0)
+            }
         }
         if (source == null) {
             return ActiveSize(ActiveSizeKind.SOURCE_PENDING, outputWidth, outputHeight, 0, 0)

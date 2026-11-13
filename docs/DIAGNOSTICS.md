@@ -148,10 +148,12 @@ still-redacted recent runtime history.
     and at stream end: slice/NAL composition, frame sizes, IDR intervals, send gaps, slow socket writes, queue drops,
     the time from the last sent IDR to each receiver `forceKeyFrame`, and how fast CarWith answers a key-frame request;
   - `VIDEO: 车机经屏幕数据口回传` / `车机关闭了屏幕数据口` when the receiver writes to or closes the video data port;
-  - `DISPLAY: 输出模式=…` records the selected resolution mode, stream canvas and CarWith request;
-    `DISPLAY: VIDEO_INIT_DONE 实际源 …（请求 …）` records the negotiated source size. A request is
-    not evidence that CarWith adopted it; the actual size comes from `VIDEO_INIT_DONE`/SPS.
-    Level 4.0 clamp and frame-rate-limit lines are written when the requested canvas is reduced;
+  - `DISPLAY: 输出模式=…` records the selected resolution mode, stream canvas and CarWith
+    request including its frame rate; `DISPLAY: VIDEO_INIT_DONE 实际源 …（请求 …）` records the
+    negotiated size and frame rate. A request is not evidence that CarWith adopted it; the
+    actual size and rate come from `VIDEO_INIT_DONE`/SPS, and passthrough output stays unknown
+    until the first SPS-bearing frame. Level 4.0 clamp and frame-rate-limit lines are written
+    when the requested canvas is reduced;
   - `TIMING:` drift of the receiver's clock against the phone's monotonic clock, and the timesync request interval;
   - `EVENT: 首次收到车机命令` (the structure of each new command type, never its values), `EVENT: 本轮车机命令统计`,
     non-200 event replies, the `modesChanged` reply shape and the full `/info modes`;

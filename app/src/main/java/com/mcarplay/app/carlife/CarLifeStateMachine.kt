@@ -54,6 +54,10 @@ class CarLifeStateMachine(
     var videoFormat: CarLifeProtocol.VideoFormat? = null
         private set
 
+    /** 本次 `VIDEO_ENCODER_INIT` 请求的帧率（协议默认 30；CarWith 可能不采纳）。 */
+    var requestedVideoFps: Int = CarLifeProtocol.DEFAULT_FPS
+        private set
+
     val canInitializeVideo: Boolean get() = state == State.ENCRYPTED && peerAuthAccepted
 
     private var versionSent = false
@@ -207,13 +211,15 @@ class CarLifeStateMachine(
     fun requestVideoInit(
         width: Int = CarLifeProtocol.DEFAULT_WIDTH,
         height: Int = CarLifeProtocol.DEFAULT_HEIGHT,
+        fps: Int = CarLifeProtocol.DEFAULT_FPS,
     ): List<Action> {
         if (state != State.ENCRYPTED || videoInitSent) return fail()
         if (!peerAuthAccepted) return emptyList()
         videoInitSent = true
+        requestedVideoFps = fps
         state = State.VIDEO_REQUESTED
         return listOf(
-            Action(CarLifeProtocol.VIDEO_ENCODER_INIT, CarLifeProtocol.videoInitPayload(width, height)),
+            Action(CarLifeProtocol.VIDEO_ENCODER_INIT, CarLifeProtocol.videoInitPayload(width, height, fps)),
         )
     }
 

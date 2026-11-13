@@ -1627,26 +1627,19 @@ class MainActivity : AppCompatActivity() {
     /**
      * 请求尺寸与实际输出尺寸分开显示。
      *
-     * 透传时发送端画布会被改成 CarWith 源尺寸，所以「输出」必须取 `activeOutputSize()`；
-     * `activeStreamWidth` 只是计划/请求尺寸，未被采纳时不能当成实际输出。
+     * 透传时发送端构造画布仍是计划值，直到首个带 SPS 的帧到达；`activeOutputSize()`
+     * 在那之前返回 null，这里只能显示「源已协商」或「请求」，不能声称已经出流。
      */
     private fun heroResolutionText(): String {
         val requestWidth = SessionController.activeCarWithRequestWidth
         val requestHeight = SessionController.activeCarWithRequestHeight
         val output = SessionController.activeOutputSize()
-        if (output == null) {
-            return if (requestWidth > 0 && requestHeight > 0) {
-                getString(R.string.ma_hero_res_requested, requestWidth, requestHeight)
-            } else {
-                getString(R.string.ma_hero_res_unknown)
-            }
-        }
         val size =
             DisplayResolution.describeOutput(
                 requestWidth = requestWidth,
                 requestHeight = requestHeight,
-                outputWidth = output.first,
-                outputHeight = output.second,
+                outputWidth = output?.first ?: 0,
+                outputHeight = output?.second ?: 0,
                 source = SessionController.activeVideoSourceSize(),
             )
         return when (size.kind) {
@@ -1658,6 +1651,10 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.ma_hero_res_stream_source, size.outputWidth, size.outputHeight, size.otherWidth, size.otherHeight)
             DisplayResolution.ActiveSizeKind.SOURCE_PENDING ->
                 getString(R.string.ma_hero_res_output_pending, size.outputWidth, size.outputHeight)
+            DisplayResolution.ActiveSizeKind.SOURCE_NEGOTIATED ->
+                getString(R.string.ma_hero_res_source_only, size.otherWidth, size.otherHeight)
+            DisplayResolution.ActiveSizeKind.REQUESTED ->
+                getString(R.string.ma_hero_res_requested, size.otherWidth, size.otherHeight)
             DisplayResolution.ActiveSizeKind.UNKNOWN ->
                 getString(R.string.ma_hero_res_unknown)
         }

@@ -338,7 +338,37 @@ class DisplayResolutionTest {
                 outputHeight = 0,
                 source = null,
             )
-        assertEquals(DisplayResolution.ActiveSizeKind.UNKNOWN, unknown.kind)
+        // 已发请求但既无输出也无协商值：显示为请求，不冒充实际输出。
+        assertEquals(DisplayResolution.ActiveSizeKind.REQUESTED, unknown.kind)
+        assertEquals(1280 to 720, unknown.otherWidth to unknown.otherHeight)
         assertEquals(0, unknown.outputWidth)
+    }
+
+    @Test
+    fun heroDoesNotTreatPlannedCanvasAsOutputWhenOnlyNegotiatedSizeExists() {
+        // 透传：VIDEO_INIT_DONE 已到（源 1920×1080），但首个 SPS 帧还没进发送端。
+        // 发送端构造画布仍是计划值 1280×720，不能当成实际输出。
+        val negotiated =
+            DisplayResolution.describeOutput(
+                requestWidth = 1280,
+                requestHeight = 720,
+                outputWidth = 0,
+                outputHeight = 0,
+                source = 1920 to 1080,
+            )
+        assertEquals(DisplayResolution.ActiveSizeKind.SOURCE_NEGOTIATED, negotiated.kind)
+        assertEquals(0, negotiated.outputWidth)
+        assertEquals(1920 to 1080, negotiated.otherWidth to negotiated.otherHeight)
+
+        // 既没有协商值也没有请求：完全未知。
+        val nothing =
+            DisplayResolution.describeOutput(
+                requestWidth = 0,
+                requestHeight = 0,
+                outputWidth = 0,
+                outputHeight = 0,
+                source = null,
+            )
+        assertEquals(DisplayResolution.ActiveSizeKind.UNKNOWN, nothing.kind)
     }
 }

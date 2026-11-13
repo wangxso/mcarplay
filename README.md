@@ -177,7 +177,9 @@ through, that is the CarWith source size, and the rejected request is labelled a
 When the source differs and the receiver repeatedly asks for key frames, the existing
 phone-side transcode path can scale it to the selected stream size.
 
-Frame rate is fixed when the encoder is created, so changing it while connected applies on
+The selected frame rate is included in the CarWith `VIDEO_INIT` request. CarWith may ignore it:
+while frames pass through, the receiver gets whatever rate CarWith produces, and the phone
+encoder's rate only applies once transcoding starts. Changing it while connected applies on
 the next connection; the status card keeps showing this session's actual/target rate.
 
 H.264 remains level 4.0. Custom sizes are limited to 320×180–1920×1080 and aligned down to

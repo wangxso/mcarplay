@@ -560,13 +560,18 @@ object SessionController {
     var activeCarWithRequestHeight: Int = 0
 
     /**
-     * 发送端当前实际出流尺寸（透传时是 CarWith 源尺寸，转码后是计划流尺寸）。
-     * 英雄卡必须用它，不能用 `activeStreamWidth`：后者只是计划的转码画布。
+     * 发送端当前**已知**的实际出流尺寸；null = 尚不可知。
+     *
+     * 转码开始后画布就是计划流尺寸。透传时 `VideoSender` 构造尺寸仍是计划值，
+     * 要等第一个带 SPS 的帧被入流门控接受后才会被源尺寸替换——那之前返回 null，
+     * 避免把计划画布当成实际输出。
      */
-    fun activeOutputSize(): Pair<Int, Int>? =
-        videoSender
-            ?.takeIf { it.isRunning && it.videoWidth > 0 && it.videoHeight > 0 }
-            ?.let { it.videoWidth to it.videoHeight }
+    fun activeOutputSize(): Pair<Int, Int>? {
+        val sender = videoSender ?: return null
+        if (!sender.isRunning || sender.videoWidth <= 0 || sender.videoHeight <= 0) return null
+        val known = sender.isTranscoding || sender.hasSourceDimensions
+        return if (known) sender.videoWidth to sender.videoHeight else null
+    }
 
     /**
      * CarWith 实际源尺寸：优先用已收到 SPS 的发送端，其次用 VIDEO_INIT_DONE 的协商值；
@@ -1167,6 +1172,7 @@ object SessionController {
     private fun newFormalCarLifeSession(
         context: Context,
         requestedVideoSize: Pair<Int, Int>? = null,
+        requestedVideoFps: Int = CarLifeProtocol.DEFAULT_FPS,
     ): CarLifeSession {
         lateinit var session: CarLifeSession
         session =
@@ -1232,6 +1238,7 @@ object SessionController {
                 },
                 log = { line -> appendLog(line) },
                 requestedVideoSize = requestedVideoSize,
+                requestedVideoFps = requestedVideoFps,
                 launchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
                 onReturnToCar = onReturnToCar@{
                     if (currentCarLifeSession !== session) return@onReturnToCar
@@ -4685,9 +4692,9 @@ object SessionController {
                                                 ""
                                             } +
                                             " 车机=${setup.displayWidth}x${setup.displayHeight} → " +
-                                            "流 ${streamW}x$streamH@${fps}fps；" +
-                                            "CarWith 请求 ${displayPlan.carWithRequestWidth}x${displayPlan.carWithRequestHeight}" +
-                                            "（不保证采纳，实际以 VIDEO_INIT_DONE 为准）",
+                                            "流 ${streamW}x$streamH；" +
+                                            "CarWith 请求 ${displayPlan.carWithRequestWidth}x${displayPlan.carWithRequestHeight}@${fps}fps" +
+                                            "（不保证采纳；透传按 CarWith 实际帧率出流，实际以 VIDEO_INIT_DONE 为准）",
                                     )
                                     if (displayPlan.level4FrameClamped) {
                                         appendLog(
@@ -4932,6 +4939,8 @@ object SessionController {
                                         newFormalCarLifeSession(
                                             context,
                                             requestedCarWithSize,
+                                            // 与流画布计划同一份快照（level 4.0 可能已把 60 压到 30）。
+                                            activeTargetFps,
                                         )
                                     carLife = createdCarLife
                                     val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)

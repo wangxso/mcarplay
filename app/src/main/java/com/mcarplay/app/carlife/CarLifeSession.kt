@@ -30,6 +30,11 @@ class CarLifeSession(
     private val launchStrategy: CarLifeLaunchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
     /** 向 CarWith 请求的编码尺寸；null 时沿用协议默认值。CarWith 可能不采纳。 */
     private val requestedVideoSize: Pair<Int, Int>? = null,
+    /**
+     * `VIDEO_INIT` 请求的帧率。透传时 CarWith 按自己的帧率出流，该值只是请求；
+     * 实际帧率仍以其返回/出流为准。
+     */
+    private val requestedVideoFps: Int = CarLifeProtocol.DEFAULT_FPS,
     private val isAppInForeground: () -> Boolean = CarLifeLauncher::isAppInForeground,
     private val connectorFactory: (String, (Int) -> Socket) -> CarLifeChannelConnector =
         { _, connect ->
@@ -405,8 +410,8 @@ class CarLifeSession(
         if (result.encryptionReady) {
             log("CARLIFE: AES 已就绪，请求视频初始化")
             val (width, height) = requestedVideoSize ?: (CarLifeProtocol.DEFAULT_WIDTH to CarLifeProtocol.DEFAULT_HEIGHT)
-            log("CARLIFE: 请求编码尺寸 ${width}x$height（以 VIDEO_INIT_DONE 返回为准）")
-            stateMachine.requestVideoInit(width, height).forEach(::sendAction)
+            log("CARLIFE: 请求编码尺寸 ${width}x$height@${requestedVideoFps}fps（以 VIDEO_INIT_DONE 返回为准）")
+            stateMachine.requestVideoInit(width, height, requestedVideoFps).forEach(::sendAction)
             startHeartbeat()
         }
         if (frame.kind == CarLifeProtocol.VIDEO_ENCODER_INIT_DONE &&
@@ -417,7 +422,11 @@ class CarLifeSession(
             val requested = requestedVideoSize
             log(
                 "DISPLAY: VIDEO_INIT_DONE 实际源 ${format.width}x${format.height}@${format.fps}" +
-                    if (requested != null) "（请求 ${requested.first}x${requested.second}）" else "（未指定请求尺寸）",
+                    if (requested != null) {
+                        "（请求 ${requested.first}x${requested.second}@${requestedVideoFps}fps）"
+                    } else {
+                        "（请求 ${requestedVideoFps}fps，未指定尺寸）"
+                    },
             )
             if (touchState.releasePoint() != null) {
                 sendTouchAction(CarLifeTouchAction.UP, videoWidth, videoHeight)
