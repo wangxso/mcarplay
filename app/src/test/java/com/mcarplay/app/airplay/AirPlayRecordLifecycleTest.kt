@@ -129,6 +129,27 @@ class AirPlayRecordLifecycleTest {
     }
 
     @Test
+    fun observedMercedesStackSendsOnlyOneRecordPerSession() {
+        // issue #55：音频 SETUP 成功后补发 RECORD，车机在 16–559 ms 内拆链。
+        Peer().use { peer ->
+            val client =
+                client(
+                    peer.port,
+                    signals = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_D-PP-3"),
+                )
+            try {
+                assertTrue(client.reconnect())
+                assertTrue(client.record())
+                assertTrue(client.record()) // 音频 SETUP 后补发
+                assertEquals("RECORD", peer.next()!!.method)
+                assertNull(peer.next(300))
+            } finally {
+                client.close()
+            }
+        }
+    }
+
+    @Test
     fun otherReceiversRetainTheirExistingRepeatedRecordBehavior() {
         Peer().use { peer ->
             val client = client(peer.port, chery = false)
@@ -234,6 +255,9 @@ class AirPlayRecordLifecycleTest {
     private fun client(
         port: Int,
         chery: Boolean = true,
+        signals: ReceiverProfile.Signals =
+            if (chery) ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo") else ReceiverProfile.Signals(),
+        sourceVersion: String? = if (chery) "320.17.7" else null,
     ): AirPlayClient {
         val endpoint =
             Iap2SenderSession.CarPlayEndpoint(
@@ -244,10 +268,9 @@ class AirPlayRecordLifecycleTest {
                 airPlayPort = port,
                 deviceIdentifier = null,
                 publicKey = null,
-                sourceVersion = if (chery) "320.17.7" else null,
+                sourceVersion = sourceVersion,
                 ipAddresses = listOf("127.0.0.1"),
-                receiverSignals =
-                    if (chery) ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo") else ReceiverProfile.Signals(),
+                receiverSignals = signals,
             )
         return AirPlayClient(endpoint, log = {})
     }

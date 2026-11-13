@@ -76,6 +76,12 @@ still-redacted recent runtime history.
   the screen, the report states that video is suspended instead of warning that no
   new frame was written. The state clears only after the first fresh IDR is sent;
   the screen stream socket, audio and keepAlive remain active.
+- Audio teardown attribution keeps the measured interval after audio start. Durations
+  below 1 s are written in milliseconds rather than rounded to `0s`, and a teardown is
+  called the observed ~10 s link-watchdog shape only when the interval is near that
+  value. A 16–559 ms teardown after the audio SETUP is reported as a short
+  post-audio teardown, not as an incompatible audio profile (issue #55, owner report;
+  not yet retested in that car).
 - `RECEIVER_DETECTION` and `DETECT` notes contain the local wizard's fixed state,
   trial/stage, storage status and media/input counters. Private receiver bindings,
   installation secrets and environment/capability digests are excluded. Counts do

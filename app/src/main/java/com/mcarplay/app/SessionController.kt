@@ -2918,6 +2918,7 @@ object SessionController {
         val profile = activeAudioProfile ?: return
         val startedAt = activeAudioStartedAt
         val identity = activeAudioReceiverKey
+        val lived = if (startedAt > 0) android.os.SystemClock.uptimeMillis() - startedAt else -1L
         // 链路看门狗守卫（2026-10-23 车主 0.1.17 日志定谳）：MIB3 布防了但控制会话
         // 没完成就被拆 = 车机 ~10s 链路看门狗（RECORD 后 10.18s，与 0.1.9 的 10.17s
         // 同款），与音频档位无关。不守卫的话 t102/media 档被误记「不兼容」，下一轮
@@ -2925,13 +2926,12 @@ object SessionController {
         // 从此永远没声。
         currentClient?.let { client ->
             if (client.mib3LinkArmed && !client.mib3ControlSessionDone) {
-                appendLog("AUDIO: 会话在链路协商完成前被车机拆掉（~10s 看门狗形态）——不记音频档位")
+                appendLog(audioLinkTeardownNote(lived))
                 activeAudioProfile = null
                 activeAudioStartedAt = 0L
                 return
             }
         }
-        val lived = if (startedAt > 0) android.os.SystemClock.uptimeMillis() - startedAt else -1L
         // 本轮记忆很快失效：下次连接重新按最新记忆选档
         activeAudioProfile = null
         activeAudioStartedAt = 0L
@@ -2946,7 +2946,7 @@ object SessionController {
         AudioProfileMemory.recordRejected(ctx, identity, profile.key, allKeys)
         val after = AudioProfileMemory.load(ctx, identity)
         appendLog(
-            "AUDIO: ⚠ 档位 ${profile.label} 起流 ${lived / 1000}s 后整条会话被车机拆掉——" +
+            "AUDIO: ⚠ 档位 ${profile.label} 起流 ${audioLivedLabel(lived)} 后整条会话被车机拆掉——" +
                 "判定为本车机不兼容档位（已记入名单）。" +
                 if (after.disabled) {
                     "全部档位均不兼容：下次连接将自动只推视频（车机侧无声音）。"
@@ -5601,3 +5601,30 @@ internal fun countsLinkCloseForAutoReconnect(
     ownsCurrentSession: Boolean,
     ownsPendingStartSession: Boolean,
 ): Boolean = ownedHandoffEnded || ownedHandoff || ownsCurrentSession || ownsPendingStartSession
+
+/** 音频起流后的存活时间：不足 1 s 用毫秒，避免报告里出现误导性的「0s」。 */
+internal fun audioLivedLabel(livedMillis: Long): String =
+    when {
+        livedMillis < 0 -> "未知间隔"
+        livedMillis < 1_000 -> "${livedMillis}ms"
+        else -> "${livedMillis / 1_000}s"
+    }
+
+/**
+ * 链路协商未完成时音频会话被拆的归因文案。
+ *
+ * 只有间隔接近实测 ~10s 看门狗时才写「看门狗形态」。issue #55 中奔驰车机在音频
+ * SETUP 后 16–559 ms 就关闭屏幕口，固定写成 ~10s 看门狗会误导排查；这里保留真实间隔。
+ */
+internal fun audioLinkTeardownNote(livedMillis: Long): String {
+    val shape =
+        when {
+            livedMillis < 0 -> "间隔未知"
+            livedMillis >= AUDIO_LINK_WATCHDOG_MIN_MS -> "~10s 看门狗形态"
+            else -> "${audioLivedLabel(livedMillis)}，短于 ~10s 看门狗"
+        }
+    return "AUDIO: 音频加入后会话被车机拆掉（链路协商未完成，$shape）——不记音频档位"
+}
+
+/** 低于该间隔的拆链不按 ~10s 链路看门狗归因（实测看门狗为 10.17–10.18 s）。 */
+private const val AUDIO_LINK_WATCHDOG_MIN_MS = 5_000L

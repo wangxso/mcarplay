@@ -157,9 +157,12 @@ class CarPlayService : Service() {
                 // 自动连接默认带声音：CarWith 原生音频无需投屏授权；否则先静默领取投屏令牌，
                 // 失败退回只推视频。（旧写法 `!isAvailable && …` 在 CarWith 可用时恒为 false，
                 // 会覆盖用户刚选的「开启声音」——2026-10-27 WinPlay 实测第二次会话无声。）
-                SessionController.audioEnabledForSession =
-                    CarLifeLauncher.isAvailable(app) ||
-                    acquireProjectionSilently()
+                // 但会话已在运行时不得改写本次会话的选择：车主选「仅视频」后，车机蓝牙回连
+                // 触发的自动连接曾把 audioEnabledForSession 重新置 true，下一次车机发起的
+                // AirPlay 会话又带音频（issue #55）。
+                automaticAudioDefault(SessionController.isSessionRunning()) {
+                    CarLifeLauncher.isAvailable(app) || acquireProjectionSilently()
+                }?.let { SessionController.audioEnabledForSession = it }
                 SessionController.startConnection(
                     app,
                     automatic = true,
@@ -356,3 +359,17 @@ class CarPlayService : Service() {
             .build()
     }
 }
+
+/**
+ * 自动连接（车机蓝牙 ACL 回连）的音频选择。
+ *
+ * 返回 null 表示会话已在运行：沿用本次会话已有的选择，既不重新打开声音，也不为默认值
+ * 申请投屏授权。否则返回自动连接的默认值（CarWith 可用或能静默领取投屏）。
+ *
+ * issue #55 车主报告：已选「仅视频」后会话仍在运行，ACL 回连触发的自动连接把
+ * `audioEnabledForSession` 重新置为 true，车机随后发起的 AirPlay 会话又带音频并被拆链。
+ */
+internal fun automaticAudioDefault(
+    sessionRunning: Boolean,
+    default: () -> Boolean,
+): Boolean? = if (sessionRunning) null else default()
