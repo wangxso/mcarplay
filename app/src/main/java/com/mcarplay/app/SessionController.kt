@@ -5602,29 +5602,32 @@ internal fun countsLinkCloseForAutoReconnect(
     ownsPendingStartSession: Boolean,
 ): Boolean = ownedHandoffEnded || ownedHandoff || ownsCurrentSession || ownsPendingStartSession
 
-/** 音频起流后的存活时间：不足 1 s 用毫秒，避免报告里出现误导性的「0s」。 */
+/** 音频起流后的存活时间：不足 10 s 用毫秒，避免拆链窗口附近的整秒取整丢失间隔。 */
 internal fun audioLivedLabel(livedMillis: Long): String =
     when {
         livedMillis < 0 -> "未知间隔"
-        livedMillis < 1_000 -> "${livedMillis}ms"
-        else -> "${livedMillis / 1_000}s"
+        livedMillis < 10_000L -> "${livedMillis}ms"
+        else -> java.lang.String.format(java.util.Locale.ROOT, "%.1fs", livedMillis / 1_000.0)
     }
 
 /**
  * 链路协商未完成时音频会话被拆的归因文案。
  *
- * 只有间隔接近实测 ~10s 看门狗时才写「看门狗形态」。issue #55 中奔驰车机在音频
- * SETUP 后 16–559 ms 就关闭屏幕口，固定写成 ~10s 看门狗会误导排查；这里保留真实间隔。
+ * 只有间隔落在实测 ~10s 看门狗窗口内才写「看门狗形态」；更短或更长都保留实测间隔并明确
+ * 标出差异。issue #55 中奔驰车机在音频 SETUP 后 16–559 ms 就关闭屏幕口，固定写成
+ * ~10s 看门狗会误导排查。
  */
 internal fun audioLinkTeardownNote(livedMillis: Long): String {
     val shape =
         when {
             livedMillis < 0 -> "间隔未知"
-            livedMillis >= AUDIO_LINK_WATCHDOG_MIN_MS -> "~10s 看门狗形态"
-            else -> "${audioLivedLabel(livedMillis)}，短于 ~10s 看门狗"
+            livedMillis < AUDIO_LINK_WATCHDOG_MIN_MS -> "${audioLivedLabel(livedMillis)}，短于 ~10s 看门狗"
+            livedMillis <= AUDIO_LINK_WATCHDOG_MAX_MS -> "${audioLivedLabel(livedMillis)}，符合 ~10s 看门狗形态"
+            else -> "${audioLivedLabel(livedMillis)}，长于 ~10s 看门狗"
         }
     return "AUDIO: 音频加入后会话被车机拆掉（链路协商未完成，$shape）——不记音频档位"
 }
 
-/** 低于该间隔的拆链不按 ~10s 链路看门狗归因（实测看门狗为 10.17–10.18 s）。 */
-private const val AUDIO_LINK_WATCHDOG_MIN_MS = 5_000L
+/** 实测 ~10s 链路看门狗为 10.17–10.18 s；只有落在该窗口内才按看门狗形态归因。 */
+private const val AUDIO_LINK_WATCHDOG_MIN_MS = 8_000L
+private const val AUDIO_LINK_WATCHDOG_MAX_MS = 12_000L
