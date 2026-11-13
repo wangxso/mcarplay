@@ -560,6 +560,15 @@ object SessionController {
     var activeCarWithRequestHeight: Int = 0
 
     /**
+     * 发送端当前实际出流尺寸（透传时是 CarWith 源尺寸，转码后是计划流尺寸）。
+     * 英雄卡必须用它，不能用 `activeStreamWidth`：后者只是计划的转码画布。
+     */
+    fun activeOutputSize(): Pair<Int, Int>? =
+        videoSender
+            ?.takeIf { it.isRunning && it.videoWidth > 0 && it.videoHeight > 0 }
+            ?.let { it.videoWidth to it.videoHeight }
+
+    /**
      * CarWith 实际源尺寸：优先用已收到 SPS 的发送端，其次用 VIDEO_INIT_DONE 的协商值；
      * 都未知时返回 null，英雄卡不得把请求值冒充实际值。
      */

@@ -13,6 +13,5 @@
     <string name="sf_scale_saved">Resolution %1$d%% saved; applies on the next connection</string>
     <string name="sf_duck_saved">Music lowered to %1$d dB during navigation</string>
     <string name="sf_duck_off">Music not lowered during navigation</string>
-    <string name="sf_fps_set">Frame rate set to %1$d fps</string>
-    <string name="sf_fps_live">Frame rate set to %1$d fps (applied now)</string>
+    <string name="sf_fps_set">Frame rate set to %1$d fps; applies on the next connection</string>
 </resources>

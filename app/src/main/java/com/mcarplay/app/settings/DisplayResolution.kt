@@ -83,6 +83,68 @@ object DisplayResolution {
 
     enum class CustomSizeError { BLANK, NOT_A_NUMBER, TOO_SMALL, TOO_LARGE, LEVEL4_UNSUPPORTED }
 
+    /**
+     * 英雄卡的尺寸描述。**实际输出**取自发送端当前画布：透传时
+     * `VideoSender.setVideoDimensions` 会把画布改成 CarWith 源尺寸，因此计划/请求尺寸
+     * 不能冒充实际输出；只有转码开始后实际输出才等于计划流尺寸。
+     */
+    enum class ActiveSizeKind {
+        /** 会话尚未建立流画布。 */
+        UNKNOWN,
+
+        /** 发送端已在推流，但还没拿到 CarWith 实际源尺寸。 */
+        SOURCE_PENDING,
+
+        /** 实际输出即源尺寸，且与请求一致。 */
+        ACTUAL,
+
+        /** 请求尺寸未被采纳：实际输出与请求不同。 */
+        ACTUAL_WITH_REQUEST,
+
+        /** 转码中：实际输出是计划流尺寸，CarWith 源尺寸另列。 */
+        ACTUAL_WITH_SOURCE,
+    }
+
+    data class ActiveSize(
+        val kind: ActiveSizeKind,
+        val outputWidth: Int,
+        val outputHeight: Int,
+        val otherWidth: Int,
+        val otherHeight: Int,
+    )
+
+    /**
+     * 生成英雄卡的尺寸描述。
+     *
+     * [outputWidth]/[outputHeight] 必须是发送端当前出流画布（透传时等于源尺寸），
+     * [requestWidth]/[requestHeight] 是本次发给 CarWith 的请求，[source] 只在
+     * `VIDEO_INIT_DONE`/SPS 真正到达后才非空。
+     */
+    fun describeOutput(
+        requestWidth: Int,
+        requestHeight: Int,
+        outputWidth: Int,
+        outputHeight: Int,
+        source: Pair<Int, Int>?,
+    ): ActiveSize {
+        if (outputWidth <= 0 || outputHeight <= 0) {
+            return ActiveSize(ActiveSizeKind.UNKNOWN, 0, 0, 0, 0)
+        }
+        if (source == null) {
+            return ActiveSize(ActiveSizeKind.SOURCE_PENDING, outputWidth, outputHeight, 0, 0)
+        }
+        if (source.first != outputWidth || source.second != outputHeight) {
+            return ActiveSize(ActiveSizeKind.ACTUAL_WITH_SOURCE, outputWidth, outputHeight, source.first, source.second)
+        }
+        val requestedDiffers =
+            requestWidth > 0 && requestHeight > 0 && (requestWidth != outputWidth || requestHeight != outputHeight)
+        return if (requestedDiffers) {
+            ActiveSize(ActiveSizeKind.ACTUAL_WITH_REQUEST, outputWidth, outputHeight, requestWidth, requestHeight)
+        } else {
+            ActiveSize(ActiveSizeKind.ACTUAL, outputWidth, outputHeight, 0, 0)
+        }
+    }
+
     sealed interface CustomSizeResult {
         /** [adjusted] = 输入是奇数，已向下对齐到偶数。 */
         data class Valid(

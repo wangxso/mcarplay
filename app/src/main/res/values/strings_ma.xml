@@ -75,8 +75,10 @@
     <string name="ma_hu_step_idle">未运行</string>
     <string name="ma_hero_stats">%1$s · %2$d/%3$d fps</string>
     <string name="ma_hero_res_actual">分辨率 %1$d×%2$d</string>
-    <string name="ma_hero_res_requested">流 %1$d×%2$d（源待协商）</string>
-    <string name="ma_hero_res_stream_source">流 %1$d×%2$d · 源 %3$d×%4$d</string>
+    <string name="ma_hero_res_actual_request">分辨率 %1$d×%2$d（请求 %3$d×%4$d 未采纳）</string>
+    <string name="ma_hero_res_requested">请求 %1$d×%2$d（尚未出流）</string>
+    <string name="ma_hero_res_output_pending">输出 %1$d×%2$d（源待协商）</string>
+    <string name="ma_hero_res_stream_source">输出 %1$d×%2$d · 源 %3$d×%4$d</string>
     <string name="ma_hero_res_unknown">分辨率 —</string>
     <string name="ma_hero_connecting">正在连接</string>
     <string name="ma_hero_connected">已连接</string>

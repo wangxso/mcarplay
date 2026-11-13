@@ -5,7 +5,7 @@
     <string name="lay_decline">Don\'t use</string>
     <string name="cd_back">Back</string>
     <string name="cd_bt_device">Bluetooth device</string>
-    <string name="lay_display_desc">Output resolution can follow the head unit (percentage scaling) or use a fixed/custom size. Fixed modes ignore the percentage, and every resolution change applies on the next connection; frame rate changes apply immediately. CarWith may ignore the requested size; the connection log\'s VIDEO_INIT_DONE value is authoritative.</string>
+    <string name="lay_display_desc">Output resolution can follow the head unit (percentage scaling) or use a fixed/custom size. Fixed modes ignore the percentage, and resolution and frame-rate changes apply on the next connection. CarWith may ignore the requested size; the connection log\'s VIDEO_INIT_DONE value is authoritative.</string>
     <string name="lay_screen_off">Turn the panel off while connected</string>
     <string name="lay_on">On</string>
     <string name="lay_off_short">Off</string>
@@ -47,7 +47,7 @@
     <string name="sf_display_running">This session: stream %1$d×%2$d · %3$d fps</string>
     <string name="lay_next_connection">Applies on the next connection</string>
     <string name="lay_target_fps">Target frame rate</string>
-    <string name="lay_target_fps_desc">Changes apply immediately while connected; the status card shows actual/target frame rate</string>
+    <string name="lay_target_fps_desc">Changes while connected apply on the next connection (the encoder frame rate is fixed when the session starts); the status card shows this session\'s actual/target frame rate</string>
     <string name="lay_pick_target">Choose the target head unit</string>
     <string name="lay_pick_target_desc">Paired devices can be selected directly; tapping an unpaired device starts system Bluetooth pairing</string>
     <string name="lay_paired">Paired</string>

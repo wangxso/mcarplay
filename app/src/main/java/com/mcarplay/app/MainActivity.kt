@@ -52,6 +52,7 @@ import com.mcarplay.app.media.NotificationAccess
 import com.mcarplay.app.service.BatteryExemption
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ExternalHuService
+import com.mcarplay.app.settings.DisplayResolution
 import com.mcarplay.app.settings.MediaPrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
@@ -1604,8 +1605,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 英雄卡统计行（仅连接时显示）：运行时绝对分辨率 + 实际/目标帧率。
-     * 实际值只来自 SPS 或 VIDEO_INIT_DONE；尚未协商时显示「流 …（源待协商）」而不冒充实际尺寸。
+     * 英雄卡统计行（仅连接时显示）：运行时实际输出尺寸 + 实际/目标帧率。
+     * 实际值只来自发送端当前画布与 SPS/VIDEO_INIT_DONE；尚未协商时显示「源待协商」而不冒充实际尺寸。
      * 实际帧率 = 1s 轮询对已发帧计数取差值；新会话计数归零时先对齐基线。
      */
     private fun updateHeroStats() {
@@ -1623,27 +1624,42 @@ class MainActivity : AppCompatActivity() {
             )
     }
 
-    /** 请求流尺寸与实际源尺寸分开显示；实际值未知时明确标成「源待协商」。 */
+    /**
+     * 请求尺寸与实际输出尺寸分开显示。
+     *
+     * 透传时发送端画布会被改成 CarWith 源尺寸，所以「输出」必须取 `activeOutputSize()`；
+     * `activeStreamWidth` 只是计划/请求尺寸，未被采纳时不能当成实际输出。
+     */
     private fun heroResolutionText(): String {
-        val requestedWidth = SessionController.activeStreamWidth
-        val requestedHeight = SessionController.activeStreamHeight
-        if (requestedWidth <= 0 || requestedHeight <= 0) {
-            return getString(R.string.ma_hero_res_unknown)
+        val requestWidth = SessionController.activeCarWithRequestWidth
+        val requestHeight = SessionController.activeCarWithRequestHeight
+        val output = SessionController.activeOutputSize()
+        if (output == null) {
+            return if (requestWidth > 0 && requestHeight > 0) {
+                getString(R.string.ma_hero_res_requested, requestWidth, requestHeight)
+            } else {
+                getString(R.string.ma_hero_res_unknown)
+            }
         }
-        val source = SessionController.activeVideoSourceSize()
-        return when {
-            source == null ->
-                getString(R.string.ma_hero_res_requested, requestedWidth, requestedHeight)
-            source.first == requestedWidth && source.second == requestedHeight ->
-                getString(R.string.ma_hero_res_actual, requestedWidth, requestedHeight)
-            else ->
-                getString(
-                    R.string.ma_hero_res_stream_source,
-                    requestedWidth,
-                    requestedHeight,
-                    source.first,
-                    source.second,
-                )
+        val size =
+            DisplayResolution.describeOutput(
+                requestWidth = requestWidth,
+                requestHeight = requestHeight,
+                outputWidth = output.first,
+                outputHeight = output.second,
+                source = SessionController.activeVideoSourceSize(),
+            )
+        return when (size.kind) {
+            DisplayResolution.ActiveSizeKind.ACTUAL ->
+                getString(R.string.ma_hero_res_actual, size.outputWidth, size.outputHeight)
+            DisplayResolution.ActiveSizeKind.ACTUAL_WITH_REQUEST ->
+                getString(R.string.ma_hero_res_actual_request, size.outputWidth, size.outputHeight, size.otherWidth, size.otherHeight)
+            DisplayResolution.ActiveSizeKind.ACTUAL_WITH_SOURCE ->
+                getString(R.string.ma_hero_res_stream_source, size.outputWidth, size.outputHeight, size.otherWidth, size.otherHeight)
+            DisplayResolution.ActiveSizeKind.SOURCE_PENDING ->
+                getString(R.string.ma_hero_res_output_pending, size.outputWidth, size.outputHeight)
+            DisplayResolution.ActiveSizeKind.UNKNOWN ->
+                getString(R.string.ma_hero_res_unknown)
         }
     }
 

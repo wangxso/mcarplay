@@ -172,9 +172,13 @@ on the next connection, when the encoder and screen canvas are created.
 The chosen size is the CarPlay stream canvas and, in fixed/custom modes, the CarWith
 `VIDEO_INIT` request. CarWith may ignore that request, so the actual source size is whatever
 `VIDEO_INIT_DONE`/SPS reports; the connection log records request, stream and actual sizes
-separately, and the status card shows the request until an actual value is known. When the
-source differs and the receiver repeatedly asks for key frames, the existing phone-side
-transcode path can scale it to the selected stream size.
+separately. The status card shows the sender's actual output size: while passing frames
+through, that is the CarWith source size, and the rejected request is labelled as such.
+When the source differs and the receiver repeatedly asks for key frames, the existing
+phone-side transcode path can scale it to the selected stream size.
+
+Frame rate is fixed when the encoder is created, so changing it while connected applies on
+the next connection; the status card keeps showing this session's actual/target rate.
 
 H.264 remains level 4.0. Custom sizes are limited to 320×180–1920×1080 and aligned down to
 even pixels. Level 4.0 cannot carry 1920×1080 at 60 fps, so selecting 60 fps still encodes

@@ -278,12 +278,13 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             val runningNow =
                 SessionController.videoSender
                     ?.isRunning == true
+            val output = SessionController.activeOutputSize()
             scaleNote.text =
-                if (runningNow) {
+                if (runningNow && output != null) {
                     getString(
                         R.string.sf_display_running,
-                        SessionController.activeStreamWidth,
-                        SessionController.activeStreamHeight,
+                        output.first,
+                        output.second,
                         SessionController.activeTargetFps,
                     )
                 } else {
@@ -462,14 +463,9 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             DisplayPrefs.setFps(ctx, fps)
             refreshFps(fps < 60)
             refreshResolutionNote()
-            val live =
-                SessionController.videoSender
-                    ?.isRunning == true
-            hostToast(getString(if (live) R.string.sf_fps_live else R.string.sf_fps_set, fps))
-            if (live) {
-                // level 4.0 下 1080p 的 60fps 不成立：运行时快照也按实际编码帧率显示。
-                SessionController.activeTargetFps = previewPlan()?.targetFps ?: fps
-            }
+            // 编码器的帧率在 VideoSender 构造时定型，运行中改偏好不会改变本轮码流；
+            // 不能把「下次连接」的计划值写进运行中快照（英雄卡会显示成已生效）。
+            hostToast(getString(R.string.sf_fps_set, fps))
         }
         fps30.setOnClickListener { applyFps(30) }
         fps60.setOnClickListener { applyFps(60) }

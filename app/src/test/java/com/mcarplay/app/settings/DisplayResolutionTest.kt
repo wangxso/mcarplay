@@ -271,4 +271,74 @@ class DisplayResolutionTest {
         assertNull(DisplayResolution.sanitizeCustom(100, 100))
         assertEquals(1280 to 720, DisplayResolution.sanitizeCustom(1281, 721))
     }
+
+    @Test
+    fun heroShowsActualPassthroughOutputWhenCarWithIgnoresRequest() {
+        // 请求 1280×720；透传时发送端画布被改成 CarWith 源 1920×1080。
+        val size =
+            DisplayResolution.describeOutput(
+                requestWidth = 1280,
+                requestHeight = 720,
+                outputWidth = 1920,
+                outputHeight = 1080,
+                source = 1920 to 1080,
+            )
+        assertEquals(DisplayResolution.ActiveSizeKind.ACTUAL_WITH_REQUEST, size.kind)
+        assertEquals(1920 to 1080, size.outputWidth to size.outputHeight)
+        assertEquals(1280 to 720, size.otherWidth to size.otherHeight)
+    }
+
+    @Test
+    fun heroShowsActualOutputAndSourceWhileTranscoding() {
+        // 转码：输出是计划流 1280×720，源仍是 CarWith 1920×1080。
+        val size =
+            DisplayResolution.describeOutput(
+                requestWidth = 1280,
+                requestHeight = 720,
+                outputWidth = 1280,
+                outputHeight = 720,
+                source = 1920 to 1080,
+            )
+        assertEquals(DisplayResolution.ActiveSizeKind.ACTUAL_WITH_SOURCE, size.kind)
+        assertEquals(1280 to 720, size.outputWidth to size.outputHeight)
+        assertEquals(1920 to 1080, size.otherWidth to size.otherHeight)
+    }
+
+    @Test
+    fun heroReportsActualSizeWhenCarWithAdoptsTheRequest() {
+        val size =
+            DisplayResolution.describeOutput(
+                requestWidth = 1280,
+                requestHeight = 720,
+                outputWidth = 1280,
+                outputHeight = 720,
+                source = 1280 to 720,
+            )
+        assertEquals(DisplayResolution.ActiveSizeKind.ACTUAL, size.kind)
+        assertEquals(1280 to 720, size.outputWidth to size.outputHeight)
+    }
+
+    @Test
+    fun heroNeverInventsActualSizeBeforeSourceIsKnown() {
+        val pending =
+            DisplayResolution.describeOutput(
+                requestWidth = 1280,
+                requestHeight = 720,
+                outputWidth = 1280,
+                outputHeight = 720,
+                source = null,
+            )
+        assertEquals(DisplayResolution.ActiveSizeKind.SOURCE_PENDING, pending.kind)
+
+        val unknown =
+            DisplayResolution.describeOutput(
+                requestWidth = 1280,
+                requestHeight = 720,
+                outputWidth = 0,
+                outputHeight = 0,
+                source = null,
+            )
+        assertEquals(DisplayResolution.ActiveSizeKind.UNKNOWN, unknown.kind)
+        assertEquals(0, unknown.outputWidth)
+    }
 }

@@ -5,7 +5,7 @@
     <string name="lay_decline">放弃使用</string>
     <string name="cd_back">返回</string>
     <string name="cd_bt_device">蓝牙设备</string>
-    <string name="lay_display_desc">输出分辨率可选「跟随车机」（按车机分辨率百分比缩放）或固定档位/自定义宽高。固定模式忽略百分比，改动均在下次连接起效；帧率为推流刷新频率，切换实时生效。CarWith 可能不采纳请求尺寸，实际以连接日志中的 VIDEO_INIT_DONE 为准。</string>
+    <string name="lay_display_desc">输出分辨率可选「跟随车机」（按车机分辨率百分比缩放）或固定档位/自定义宽高。固定模式忽略百分比，分辨率与帧率改动均在下次连接起效。CarWith 可能不采纳请求尺寸，实际以连接日志中的 VIDEO_INIT_DONE 为准。</string>
     <string name="lay_screen_off">连接时真息屏</string>
     <string name="lay_on">开</string>
     <string name="lay_off_short">关</string>
@@ -47,7 +47,7 @@
     <string name="sf_display_running">本连接流 %1$d×%2$d · %3$d fps</string>
     <string name="lay_next_connection">保存后下次连接起效</string>
     <string name="lay_target_fps">目标帧率</string>
-    <string name="lay_target_fps_desc">连接中切换实时生效；英雄卡实时显示「实际/目标」帧率</string>
+    <string name="lay_target_fps_desc">连接中切换下次连接起效（编码器帧率在会话建立时定型）；英雄卡显示本轮实际/目标帧率</string>
     <string name="lay_pick_target">选择目标车机</string>
     <string name="lay_pick_target_desc">已配对设备可直接选用；点击未配对的设备会发起系统蓝牙配对</string>
     <string name="lay_paired">已配对</string>
