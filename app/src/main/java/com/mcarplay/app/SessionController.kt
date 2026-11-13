@@ -76,7 +76,9 @@ import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
 import com.mcarplay.app.settings.DisplayPrefs
+import com.mcarplay.app.settings.DisplayResolution
 import com.mcarplay.app.settings.MediaPrefs
+import com.mcarplay.app.settings.ResolutionMode
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
@@ -524,13 +526,48 @@ object SessionController {
 
     // ---- 「显示」运行时生效值（会话建立时快照；英雄卡展示运行时值而非偏好值）----
 
-    /** 本会话流分辨率缩放百分比（按车机分辨率的百分比生成；100=原尺寸）。 */
+    /** 本会话流分辨率缩放百分比（跟随车机模式使用；固定档位下仅保留用户旧设置）。 */
     @Volatile
     var activeScalePercent: Int = 100
 
     /** 本会话目标帧率（合成节奏上限；「显示」设置运行中切换可实时生效）。 */
     @Volatile
     var activeTargetFps: Int = 30
+
+    /** 本会话输出分辨率模式。 */
+    @Volatile
+    var activeResolutionMode: ResolutionMode = ResolutionMode.FOLLOW_CAR
+
+    /** 车机通告/接收端屏幕尺寸（设置页预览用；0 = 尚未会话）。 */
+    @Volatile
+    var activeDisplayWidth: Int = 0
+
+    @Volatile
+    var activeDisplayHeight: Int = 0
+
+    /** 本会话 CarPlay 流画布尺寸（编码器/转码输出；英雄卡显示「请求/流」）。 */
+    @Volatile
+    var activeStreamWidth: Int = 0
+
+    @Volatile
+    var activeStreamHeight: Int = 0
+
+    /** 本会话发给 CarWith 的 VIDEO_INIT 请求尺寸（不保证被采纳）。 */
+    @Volatile
+    var activeCarWithRequestWidth: Int = 0
+
+    @Volatile
+    var activeCarWithRequestHeight: Int = 0
+
+    /**
+     * CarWith 实际源尺寸：优先用已收到 SPS 的发送端，其次用 VIDEO_INIT_DONE 的协商值；
+     * 都未知时返回 null，英雄卡不得把请求值冒充实际值。
+     */
+    fun activeVideoSourceSize(): Pair<Int, Int>? {
+        videoSender?.takeIf { it.hasSourceDimensions }?.let { return it.sourceVideoWidth to it.sourceVideoHeight }
+        val session = currentCarLifeSession ?: return null
+        return if (session.hasNegotiatedVideoFormat) session.videoWidth to session.videoHeight else null
+    }
 
     @Volatile
     var audioSender: AudioSender? = null
@@ -1141,12 +1178,18 @@ object SessionController {
                     val sender = output.sender
                     val dimensions = frame.dimensions()
                     if (dimensions != null && sender.isNewSourceSize(dimensions.first, dimensions.second)) {
+                        sender.setVideoDimensions(dimensions.first, dimensions.second)
+                        appendLog(
+                            "CARLIFE: 实际视频尺寸 ${dimensions.first}x${dimensions.second}" +
+                                "（CarWith 请求 ${activeCarWithRequestWidth}x$activeCarWithRequestHeight，" +
+                                "流 ${activeStreamWidth}x$activeStreamHeight）",
+                        )
                         ConnectionDiagnostics.timeline.note(
                             output.attempt,
-                            "CARWITH_VIDEO_FORMAT ${dimensions.first}x${dimensions.second}",
+                            "CARWITH_VIDEO_FORMAT ${dimensions.first}x${dimensions.second} " +
+                                "requested=${activeCarWithRequestWidth}x$activeCarWithRequestHeight " +
+                                "stream=${activeStreamWidth}x$activeStreamHeight",
                         )
-                        sender.setVideoDimensions(dimensions.first, dimensions.second)
-                        appendLog("CARLIFE: 实际视频尺寸 ${dimensions.first}x${dimensions.second}")
                     }
                     if (!sender.submitExternalFrame(frame.toExternalVideoFrame())) output.gate.reset()
                 },
@@ -4586,33 +4629,77 @@ object SessionController {
                                 var carLife: CarLifeSession? = null
                                 lateinit var sessionVideoSender: VideoSender
                                 if (host != null) {
-                                    // 「显示」偏好：流画布/虚拟屏按车机分辨率百分比生成。
-                                    // 只在会话建立时生效——编码器与虚拟屏尺寸此时定型；
-                                    // 密度同步缩放，逻辑布局（dp）与 100% 完全一致。
-                                    val scalePct =
-                                        appContext
-                                            ?.let {
-                                                DisplayPrefs
-                                                    .scalePercent(it)
-                                            } ?: 100
-                                    val scale = scalePct / 100f
-                                    // 缩放后向下对齐偶数（H.264 要求）：虚拟屏/合成器/编码器
-                                    // 三方必须同一尺寸，故在源头对齐（VideoSender 内另有兜底）
-                                    val streamW =
-                                        ((setup.displayWidth * scale).toInt().coerceAtLeast(320) / 2) * 2
-                                    val streamH =
-                                        ((setup.displayHeight * scale).toInt().coerceAtLeast(180) / 2) * 2
-                                    val fps =
+                                    // 「显示」偏好：跟随车机 = 车机分辨率 × 百分比；固定档位/自定义
+                                    // = 绝对流画布。只在会话建立时生效——编码器与虚拟屏尺寸此时定型。
+                                    // 计划同时做偶数对齐、320×180 下限和 H.264 level 4.0 宏块钳制。
+                                    val requestedFps =
                                         appContext
                                             ?.let {
                                                 DisplayPrefs
                                                     .fps(it)
                                             } ?: 30
-                                    activeScalePercent = scalePct
+                                    val displayPlan =
+                                        appContext
+                                            ?.let {
+                                                DisplayPrefs.plan(
+                                                    it,
+                                                    setup.displayWidth,
+                                                    setup.displayHeight,
+                                                    requestedFps,
+                                                )
+                                            } ?: DisplayResolution.plan(
+                                            displayWidth = setup.displayWidth,
+                                            displayHeight = setup.displayHeight,
+                                            mode = ResolutionMode.FOLLOW_CAR,
+                                            scalePercent = DisplayPrefs.SCALE_DEFAULT,
+                                            customWidth = DisplayResolution.DEFAULT_CUSTOM_WIDTH,
+                                            customHeight = DisplayResolution.DEFAULT_CUSTOM_HEIGHT,
+                                            requestedFps = requestedFps,
+                                        )
+                                    val streamW = displayPlan.streamWidth
+                                    val streamH = displayPlan.streamHeight
+                                    val fps = displayPlan.targetFps
+                                    activeScalePercent = displayPlan.scalePercent
                                     activeTargetFps = fps
+                                    activeResolutionMode = displayPlan.mode
+                                    activeDisplayWidth = setup.displayWidth
+                                    activeDisplayHeight = setup.displayHeight
+                                    activeStreamWidth = streamW
+                                    activeStreamHeight = streamH
+                                    activeCarWithRequestWidth = displayPlan.carWithRequestWidth
+                                    activeCarWithRequestHeight = displayPlan.carWithRequestHeight
                                     appendLog(
-                                        "DISPLAY: 流 ${setup.displayWidth}x${setup.displayHeight} → " +
-                                            "${streamW}x$streamH（$scalePct%）@${fps}fps",
+                                        "DISPLAY: 输出模式=${displayPlan.mode.storageValue}" +
+                                            if (displayPlan.mode == ResolutionMode.FOLLOW_CAR) {
+                                                " 缩放=${displayPlan.scalePercent}%"
+                                            } else {
+                                                ""
+                                            } +
+                                            " 车机=${setup.displayWidth}x${setup.displayHeight} → " +
+                                            "流 ${streamW}x$streamH@${fps}fps；" +
+                                            "CarWith 请求 ${displayPlan.carWithRequestWidth}x${displayPlan.carWithRequestHeight}" +
+                                            "（不保证采纳，实际以 VIDEO_INIT_DONE 为准）",
+                                    )
+                                    if (displayPlan.level4FrameClamped) {
+                                        appendLog(
+                                            "DISPLAY: 请求画布超出 H.264 level 4.0 单帧宏块上限" +
+                                                "（${DisplayResolution.LEVEL4_MAX_FRAME_MACROBLOCKS} MB），" +
+                                                "已按比例缩至 ${streamW}x$streamH",
+                                        )
+                                    }
+                                    if (displayPlan.level4FpsLimited) {
+                                        appendLog(
+                                            "DISPLAY: ${streamW}x$streamH@${displayPlan.requestedFps} 超出 H.264 level 4.0 " +
+                                                "宏块/秒上限（${DisplayResolution.LEVEL4_MAX_MACROBLOCKS_PER_SECOND} MB/s），" +
+                                                "本次按 ${fps}fps 编码",
+                                        )
+                                    }
+                                    ConnectionDiagnostics.timeline.note(
+                                        diagnosticAttempt,
+                                        "DISPLAY_REQUEST mode=${displayPlan.mode.storageValue} " +
+                                            "stream=${streamW}x$streamH@$fps " +
+                                            "carwith=${displayPlan.carWithRequestWidth}x${displayPlan.carWithRequestHeight} " +
+                                            "cell=${setup.displayWidth}x${setup.displayHeight}",
                                     )
                                     pendingVideoW = streamW
                                     pendingVideoH = streamH
@@ -4824,11 +4911,18 @@ object SessionController {
                                     val videoW = pendingVideoW
                                     val videoH = pendingVideoH
                                     val output = CarLifeOutput(diagnosticAttempt, sessionVideoSender)
-                                    // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准
+                                    // 固定档位直接请求流画布尺寸；跟随车机沿用按接收端屏幕比例
+                                    // 的旧请求。CarWith 不采纳时以其 VIDEO_INIT_DONE 返回为准。
+                                    val requestedCarWithSize =
+                                        if (activeCarWithRequestWidth > 0) {
+                                            activeCarWithRequestWidth to activeCarWithRequestHeight
+                                        } else {
+                                            CarLifeProtocol.videoRequestFor(setup.displayWidth, setup.displayHeight)
+                                        }
                                     val createdCarLife =
                                         newFormalCarLifeSession(
                                             context,
-                                            CarLifeProtocol.videoRequestFor(setup.displayWidth, setup.displayHeight),
+                                            requestedCarWithSize,
                                         )
                                     carLife = createdCarLife
                                     val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)

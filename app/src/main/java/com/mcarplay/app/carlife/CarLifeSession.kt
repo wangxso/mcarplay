@@ -120,6 +120,11 @@ class CarLifeSession(
     var videoHeight: Int = CarLifeProtocol.DEFAULT_HEIGHT
         private set
 
+    /** 是否已收到 VIDEO_INIT_DONE（实际协商尺寸已知；首帧 SPS 到达前也不再是猜测）。 */
+    @Volatile
+    var hasNegotiatedVideoFormat: Boolean = false
+        private set
+
     private val stats = CarLifeVideoStats()
 
     val isRunning: Boolean get() = running.get()
@@ -409,11 +414,17 @@ class CarLifeSession(
         ) {
             // The router already decrypted and validated the negotiated format.
             val format = stateMachine.videoFormat ?: return
+            val requested = requestedVideoSize
+            log(
+                "DISPLAY: VIDEO_INIT_DONE 实际源 ${format.width}x${format.height}@${format.fps}" +
+                    if (requested != null) "（请求 ${requested.first}x${requested.second}）" else "（未指定请求尺寸）",
+            )
             if (touchState.releasePoint() != null) {
                 sendTouchAction(CarLifeTouchAction.UP, videoWidth, videoHeight)
             }
             videoWidth = format.width
             videoHeight = format.height
+            hasNegotiatedVideoFormat = true
         }
     }
 

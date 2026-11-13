@@ -424,6 +424,72 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/bg_segment"
+            android:orientation="horizontal"
+            android:padding="3dp">
+
+            <TextView
+                android:id="@+id/btnResFollow"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/bg_segment_sel"
+                android:gravity="center"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp"
+                android:text="@string/lay_res_follow"
+                android:textColor="@color/ui_on_accent"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnRes720"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="2dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp"
+                android:text="@string/lay_res_720"
+                android:textColor="@color/ui_text_secondary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnRes1080"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="2dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp"
+                android:text="@string/lay_res_1080"
+                android:textColor="@color/ui_text_secondary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnResCustom"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="2dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp"
+                android:text="@string/lay_res_custom"
+                android:textColor="@color/ui_text_secondary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/displayScaleRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:gravity="center_vertical"
             android:orientation="horizontal">
@@ -444,6 +510,84 @@
                 android:textColor="@color/ui_text_secondary"
                 android:textSize="12sp" />
         </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/displayCustomRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <EditText
+                android:id="@+id/displayCustomWidth"
+                style="@style/Widget.Ui.Field"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:digits="0123456789"
+                android:hint="@string/lay_res_width"
+                android:importantForAutofill="no"
+                android:inputType="number"
+                android:maxLength="4"
+                android:textSize="14sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="6dp"
+                android:layout_marginRight="6dp"
+                android:text="@string/lay_res_times"
+                android:textColor="@color/ui_text_secondary"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/displayCustomHeight"
+                style="@style/Widget.Ui.Field"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:digits="0123456789"
+                android:hint="@string/lay_res_height"
+                android:importantForAutofill="no"
+                android:inputType="number"
+                android:maxLength="4"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/btnResCustomApply"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="8dp"
+                android:background="@drawable/bg_tbtn"
+                android:gravity="center"
+                android:paddingLeft="14dp"
+                android:paddingTop="9dp"
+                android:paddingRight="14dp"
+                android:paddingBottom="9dp"
+                android:text="@string/lay_res_apply"
+                android:textColor="@color/m3_primary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/displayCustomError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/ui_error"
+            android:textSize="12sp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/displayResolutionNote"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="@color/ui_text_secondary"
+            android:textSize="12sp" />
 
         <TextView
             android:id="@+id/displayScaleNote"

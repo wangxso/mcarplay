@@ -1604,7 +1604,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 英雄卡统计行（仅连接时显示）：运行时分辨率 + 实际/目标帧率。
+     * 英雄卡统计行（仅连接时显示）：运行时绝对分辨率 + 实际/目标帧率。
+     * 实际值只来自 SPS 或 VIDEO_INIT_DONE；尚未协商时显示「流 …（源待协商）」而不冒充实际尺寸。
      * 实际帧率 = 1s 轮询对已发帧计数取差值；新会话计数归零时先对齐基线。
      */
     private fun updateHeroStats() {
@@ -1614,7 +1615,36 @@ class MainActivity : AppCompatActivity() {
         val fps = sent - lastSentFrames
         lastSentFrames = sent
         heroStats.text =
-            getString(R.string.ma_hero_stats, SessionController.activeScalePercent, fps.toInt(), SessionController.activeTargetFps)
+            getString(
+                R.string.ma_hero_stats,
+                heroResolutionText(),
+                fps.toInt(),
+                SessionController.activeTargetFps,
+            )
+    }
+
+    /** 请求流尺寸与实际源尺寸分开显示；实际值未知时明确标成「源待协商」。 */
+    private fun heroResolutionText(): String {
+        val requestedWidth = SessionController.activeStreamWidth
+        val requestedHeight = SessionController.activeStreamHeight
+        if (requestedWidth <= 0 || requestedHeight <= 0) {
+            return getString(R.string.ma_hero_res_unknown)
+        }
+        val source = SessionController.activeVideoSourceSize()
+        return when {
+            source == null ->
+                getString(R.string.ma_hero_res_requested, requestedWidth, requestedHeight)
+            source.first == requestedWidth && source.second == requestedHeight ->
+                getString(R.string.ma_hero_res_actual, requestedWidth, requestedHeight)
+            else ->
+                getString(
+                    R.string.ma_hero_res_stream_source,
+                    requestedWidth,
+                    requestedHeight,
+                    source.first,
+                    source.second,
+                )
+        }
     }
 
     private fun applyHeroState(s: HeroState) {

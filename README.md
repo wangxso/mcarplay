@@ -162,6 +162,30 @@ vehicle compatibility.
 Dark theme: [Connect](docs/screenshots/ui-connect-dark.png), [Settings](docs/screenshots/ui-settings-dark.png),
 [Diagnostics](docs/screenshots/ui-diagnostics-dark.png), [Car display settings](docs/screenshots/ui-display-dark.png).
 
+## Output resolution
+
+**Settings → 车机设置 → 显示 → 输出分辨率** offers **Follow car** (default; the existing
+30–160% scale of the head-unit resolution), fixed **1280×720** and **1920×1080**, and a
+**Custom** width/height. Fixed modes ignore the percentage slider. Resolution changes apply
+on the next connection, when the encoder and screen canvas are created.
+
+The chosen size is the CarPlay stream canvas and, in fixed/custom modes, the CarWith
+`VIDEO_INIT` request. CarWith may ignore that request, so the actual source size is whatever
+`VIDEO_INIT_DONE`/SPS reports; the connection log records request, stream and actual sizes
+separately, and the status card shows the request until an actual value is known. When the
+source differs and the receiver repeatedly asks for key frames, the existing phone-side
+transcode path can scale it to the selected stream size.
+
+H.264 remains level 4.0. Custom sizes are limited to 320×180–1920×1080 and aligned down to
+even pixels. Level 4.0 cannot carry 1920×1080 at 60 fps, so selecting 60 fps still encodes
+that combination at 30 fps; oversized follow-mode canvases are reduced proportionally. Both
+adjustments are written to the log. These are software checks only. Fixed-mode picture and
+touch have not been verified on a vehicle; see
+[vehicle evidence](docs/CARWITH-ENTRY-FINDINGS.md) for the current limits. To verify on a
+supported car, record the phone model, HyperOS and CarWith/CarLife versions, receiver and
+firmware, then check the log line `DISPLAY:` and `VIDEO_INIT_DONE`, confirm stable 720p
+output, and test touch at the edges and center before updating the findings document.
+
 ## Check for updates
 
 Open **检查更新** in the Settings tab while parked and disconnected. The app checks

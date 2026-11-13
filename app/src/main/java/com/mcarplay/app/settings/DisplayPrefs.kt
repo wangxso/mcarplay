@@ -3,15 +3,16 @@ package com.mcarplay.app.settings
 import android.content.Context
 
 /**
- * 「显示」面板偏好：视频流/虚拟屏的分辨率缩放与目标帧率。
+ * 「显示」面板偏好：输出分辨率模式/缩放、自定义宽高与目标帧率。
  *
- * - 分辨率缩放（30%–160%）：按车机通告分辨率的百分比生成流画布与虚拟屏，
- *   密度同步缩放（逻辑布局不变，只改像素量）。**仅下次连接生效**——
+ * - 分辨率模式：跟随车机（默认，按车机通告分辨率 × 百分比缩放）或固定档位
+ *   （1280×720 / 1920×1080 / 自定义宽高）。固定模式忽略百分比，**仅下次连接生效**——
  *   编码器与全部虚拟屏按会话建立时的尺寸创建，运行中改无意义。
- * - 帧率（30/60）：合成器出帧节奏上限，运行中可实时切换。
+ * - 帧率（30/60）：目标帧率；H.264 level 4.0 下 1080p 的 60fps 会在连接时按 30fps 编码。
  *
- * 「实际生效值」由 SessionController 在会话建立时记录（activeScalePercent /
- * activeTargetFps），英雄卡显示运行时值而非偏好值。
+ * 旧安装只有 `display_scale_percent`：模式缺失时回退「跟随车机」，百分比照旧生效。
+ * 「实际生效值」由 SessionController 在会话建立时记录（activeStreamWidth/Height 等），
+ * 英雄卡显示运行时值而非偏好值。
  */
 object DisplayPrefs {
     const val SCALE_MIN = 30
@@ -31,6 +32,9 @@ object DisplayPrefs {
 
     private const val PREFS_NAME = "settings"
     private const val KEY_SCALE = "display_scale_percent"
+    private const val KEY_RESOLUTION_MODE = "display_resolution_mode"
+    private const val KEY_CUSTOM_WIDTH = "display_custom_width"
+    private const val KEY_CUSTOM_HEIGHT = "display_custom_height"
     private const val KEY_FPS = "display_fps"
     private const val KEY_SCREEN_OFF = "screen_off_on_connect"
     private const val KEY_HID_RAW_LOG = "hid_raw_log"
@@ -93,6 +97,79 @@ object DisplayPrefs {
             .edit()
             .putInt(KEY_SCALE, percent.coerceIn(SCALE_MIN, SCALE_MAX))
             .apply()
+    }
+
+    /** 输出分辨率模式；缺失/未知值回退「跟随车机」，兼容只有百分比键的旧安装。 */
+    fun resolutionMode(context: Context): ResolutionMode =
+        ResolutionMode.fromStorage(
+            context
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_RESOLUTION_MODE, null),
+        )
+
+    fun setResolutionMode(
+        context: Context,
+        mode: ResolutionMode,
+    ) {
+        context
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_RESOLUTION_MODE, mode.storageValue)
+            .apply()
+    }
+
+    /** 自定义宽高；损坏/越界值回退 1280×720，绝不把非法尺寸交给编码器。 */
+    fun customSize(context: Context): Pair<Int, Int> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val width = prefs.getInt(KEY_CUSTOM_WIDTH, 0)
+        val height = prefs.getInt(KEY_CUSTOM_HEIGHT, 0)
+        return DisplayResolution.sanitizeCustom(width, height) ?: DisplayResolution.defaultCustomSize()
+    }
+
+    /** 只写入通过校验的尺寸；非法输入返回 false，调用方保留旧值。 */
+    fun setCustomSize(
+        context: Context,
+        width: Int,
+        height: Int,
+    ): Boolean {
+        val sanitized = DisplayResolution.sanitizeCustom(width, height) ?: return false
+        context
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_CUSTOM_WIDTH, sanitized.first)
+            .putInt(KEY_CUSTOM_HEIGHT, sanitized.second)
+            .apply()
+        return true
+    }
+
+    /** 一次性读取并规范化显示偏好（模式缺失的旧安装会保留百分比）。 */
+    fun storedSettings(context: Context): DisplayResolution.StoredSettings {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return DisplayResolution.fromStorage(
+            modeValue = prefs.getString(KEY_RESOLUTION_MODE, null),
+            scalePercent = prefs.getInt(KEY_SCALE, SCALE_DEFAULT),
+            customWidth = prefs.getInt(KEY_CUSTOM_WIDTH, 0),
+            customHeight = prefs.getInt(KEY_CUSTOM_HEIGHT, 0),
+        )
+    }
+
+    /** 按当前偏好生成一次连接的尺寸计划（纯逻辑在 [DisplayResolution.plan]）。 */
+    fun plan(
+        context: Context,
+        displayWidth: Int,
+        displayHeight: Int,
+        requestedFps: Int,
+    ): DisplayResolution.Plan {
+        val stored = storedSettings(context)
+        return DisplayResolution.plan(
+            displayWidth = displayWidth,
+            displayHeight = displayHeight,
+            mode = stored.mode,
+            scalePercent = stored.scalePercent,
+            customWidth = stored.customWidth,
+            customHeight = stored.customHeight,
+            requestedFps = requestedFps,
+        )
     }
 
     /** 目标帧率（30/60；驱动合成器出帧节奏，运行中切换实时生效）。 */

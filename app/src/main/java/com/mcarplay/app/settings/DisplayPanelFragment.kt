@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
 import android.widget.SeekBar
 import android.widget.TextView
 import com.mcarplay.app.R
@@ -32,6 +33,17 @@ class DisplayPanelFragment : SettingsPanelFragment() {
         val scaleSeek = view.findViewById<SeekBar>(R.id.displayScaleSeek)
         val scaleValue = view.findViewById<TextView>(R.id.displayScaleValue)
         val scaleNote = view.findViewById<TextView>(R.id.displayScaleNote)
+        val scaleRow = view.findViewById<View>(R.id.displayScaleRow)
+        val resFollow = view.findViewById<TextView>(R.id.btnResFollow)
+        val res720 = view.findViewById<TextView>(R.id.btnRes720)
+        val res1080 = view.findViewById<TextView>(R.id.btnRes1080)
+        val resCustom = view.findViewById<TextView>(R.id.btnResCustom)
+        val customRow = view.findViewById<View>(R.id.displayCustomRow)
+        val customWidthInput = view.findViewById<EditText>(R.id.displayCustomWidth)
+        val customHeightInput = view.findViewById<EditText>(R.id.displayCustomHeight)
+        val customApply = view.findViewById<TextView>(R.id.btnResCustomApply)
+        val customError = view.findViewById<TextView>(R.id.displayCustomError)
+        val resolutionNote = view.findViewById<TextView>(R.id.displayResolutionNote)
         val fps30 = view.findViewById<TextView>(R.id.btnFps30)
         val fps60 = view.findViewById<TextView>(R.id.btnFps60)
 
@@ -217,18 +229,190 @@ class DisplayPanelFragment : SettingsPanelFragment() {
         scaleSeek.progress = progressOf(saved)
         scaleValue.text = "$saved%"
 
+        val customSaved = DisplayPrefs.customSize(ctx)
+        var customWidth = customSaved.first
+        var customHeight = customSaved.second
+        var resolutionMode = DisplayPrefs.resolutionMode(ctx)
+        val modeButtons =
+            listOf(
+                ResolutionMode.FOLLOW_CAR to resFollow,
+                ResolutionMode.HD_720 to res720,
+                ResolutionMode.FULL_HD_1080 to res1080,
+                ResolutionMode.CUSTOM to resCustom,
+            )
+
+        fun currentScalePercent() = percentOf(scaleSeek.progress)
+
+        fun previewPlan(): DisplayResolution.Plan? {
+            val fps = DisplayPrefs.fps(ctx)
+            return if (resolutionMode == ResolutionMode.FOLLOW_CAR) {
+                val displayWidth = SessionController.activeDisplayWidth
+                val displayHeight = SessionController.activeDisplayHeight
+                if (displayWidth <= 0 || displayHeight <= 0) {
+                    null
+                } else {
+                    DisplayResolution.plan(
+                        displayWidth,
+                        displayHeight,
+                        resolutionMode,
+                        currentScalePercent(),
+                        customWidth,
+                        customHeight,
+                        fps,
+                    )
+                }
+            } else {
+                DisplayResolution.plan(
+                    0,
+                    0,
+                    resolutionMode,
+                    currentScalePercent(),
+                    customWidth,
+                    customHeight,
+                    fps,
+                )
+            }
+        }
+
         fun refreshScaleNote() {
             val runningNow =
                 SessionController.videoSender
                     ?.isRunning == true
             scaleNote.text =
                 if (runningNow) {
-                    getString(R.string.sf_scale_running, SessionController.activeScalePercent)
+                    getString(
+                        R.string.sf_display_running,
+                        SessionController.activeStreamWidth,
+                        SessionController.activeStreamHeight,
+                        SessionController.activeTargetFps,
+                    )
                 } else {
-                    getString(R.string.lay_next_connection)
+                    getString(
+                        if (resolutionMode == ResolutionMode.FOLLOW_CAR) {
+                            R.string.lay_next_connection
+                        } else {
+                            R.string.lay_scale_disabled
+                        },
+                    )
                 }
         }
-        refreshScaleNote()
+
+        fun refreshResolutionNote() {
+            val base =
+                when (resolutionMode) {
+                    ResolutionMode.FOLLOW_CAR -> getString(R.string.lay_res_note_follow, currentScalePercent())
+                    ResolutionMode.HD_720 ->
+                        getString(
+                            R.string.lay_res_note_fixed,
+                            DisplayResolution.PRESET_720_WIDTH,
+                            DisplayResolution.PRESET_720_HEIGHT,
+                        )
+                    ResolutionMode.FULL_HD_1080 ->
+                        getString(
+                            R.string.lay_res_note_fixed,
+                            DisplayResolution.PRESET_1080_WIDTH,
+                            DisplayResolution.PRESET_1080_HEIGHT,
+                        )
+                    ResolutionMode.CUSTOM -> getString(R.string.lay_res_note_custom, customWidth, customHeight)
+                }
+            val plan = previewPlan()
+            val warnings =
+                buildList {
+                    if (plan?.level4FrameClamped == true) {
+                        add(getString(R.string.lay_res_clamp_warning, plan.streamWidth, plan.streamHeight))
+                    }
+                    if (plan?.level4FpsLimited == true) {
+                        add(
+                            getString(
+                                R.string.lay_res_fps_warning,
+                                plan.streamWidth,
+                                plan.streamHeight,
+                                plan.targetFps,
+                            ),
+                        )
+                    }
+                }
+            resolutionNote.text = (listOf(base) + warnings).joinToString("\n")
+        }
+
+        fun refreshModeUi() {
+            val followCar = resolutionMode == ResolutionMode.FOLLOW_CAR
+            // 固定档位与百分比互斥：置灰并禁用滑条，选回「跟随车机」恢复。
+            scaleSeek.isEnabled = followCar
+            scaleRow.alpha = if (followCar) 1f else 0.4f
+            scaleValue.alpha = if (followCar) 1f else 0.4f
+            customRow.visibility = if (resolutionMode == ResolutionMode.CUSTOM) View.VISIBLE else View.GONE
+            modeButtons.forEach { (mode, button) ->
+                val selected = mode == resolutionMode
+                button.setBackgroundResource(if (selected) R.drawable.bg_segment_sel else R.drawable.bg_segment)
+                button.setTextColor(if (selected) selectedText else idleText)
+            }
+            refreshResolutionNote()
+            refreshScaleNote()
+        }
+
+        fun modeLabel(mode: ResolutionMode): String =
+            when (mode) {
+                ResolutionMode.FOLLOW_CAR -> getString(R.string.lay_res_follow)
+                ResolutionMode.HD_720 -> getString(R.string.lay_res_720)
+                ResolutionMode.FULL_HD_1080 -> getString(R.string.lay_res_1080)
+                ResolutionMode.CUSTOM -> "$customWidth×$customHeight"
+            }
+
+        fun selectMode(next: ResolutionMode) {
+            if (next == resolutionMode) {
+                refreshModeUi()
+                return
+            }
+            resolutionMode = next
+            DisplayPrefs.setResolutionMode(ctx, next)
+            customError.visibility = View.GONE
+            customWidthInput.setText(customWidth.toString())
+            customHeightInput.setText(customHeight.toString())
+            refreshModeUi()
+            hostToast(getString(R.string.lay_res_saved, modeLabel(next)))
+        }
+
+        fun errorText(error: DisplayResolution.CustomSizeError): Int =
+            when (error) {
+                DisplayResolution.CustomSizeError.BLANK -> R.string.lay_res_error_blank
+                DisplayResolution.CustomSizeError.NOT_A_NUMBER -> R.string.lay_res_error_number
+                DisplayResolution.CustomSizeError.TOO_SMALL -> R.string.lay_res_error_min
+                DisplayResolution.CustomSizeError.TOO_LARGE -> R.string.lay_res_error_max
+                DisplayResolution.CustomSizeError.LEVEL4_UNSUPPORTED -> R.string.lay_res_error_level4
+            }
+
+        customWidthInput.setText(customWidth.toString())
+        customHeightInput.setText(customHeight.toString())
+        modeButtons.forEach { (mode, button) ->
+            button.setOnClickListener { selectMode(mode) }
+        }
+        customApply.setOnClickListener {
+            when (
+                val result =
+                    DisplayResolution.parseCustomSize(
+                        customWidthInput.text.toString(),
+                        customHeightInput.text.toString(),
+                    )
+            ) {
+                is DisplayResolution.CustomSizeResult.Valid -> {
+                    customWidth = result.width
+                    customHeight = result.height
+                    DisplayPrefs.setCustomSize(ctx, result.width, result.height)
+                    DisplayPrefs.setResolutionMode(ctx, ResolutionMode.CUSTOM)
+                    resolutionMode = ResolutionMode.CUSTOM
+                    customWidthInput.setText(result.width.toString())
+                    customHeightInput.setText(result.height.toString())
+                    customError.visibility = View.GONE
+                    refreshModeUi()
+                    hostToast(getString(R.string.lay_res_custom_saved, result.width, result.height))
+                }
+                is DisplayResolution.CustomSizeResult.Invalid -> {
+                    customError.text = getString(errorText(result.error))
+                    customError.visibility = View.VISIBLE
+                }
+            }
+        }
 
         scaleSeek.setOnSeekBarChangeListener(
             object : SeekBar.OnSeekBarChangeListener {
@@ -248,9 +432,12 @@ class DisplayPanelFragment : SettingsPanelFragment() {
                     DisplayPrefs.setScalePercent(ctx, percent)
                     hostToast(getString(R.string.sf_scale_saved, percent))
                     refreshScaleNote()
+                    refreshResolutionNote()
                 }
             },
         )
+
+        refreshModeUi()
 
         fun refreshFps(active30: Boolean) {
             // 未选中片用暗色底（与容器同色）而非 null 背景，避免背景重置内边距
@@ -274,11 +461,15 @@ class DisplayPanelFragment : SettingsPanelFragment() {
         fun applyFps(fps: Int) {
             DisplayPrefs.setFps(ctx, fps)
             refreshFps(fps < 60)
+            refreshResolutionNote()
             val live =
                 SessionController.videoSender
                     ?.isRunning == true
             hostToast(getString(if (live) R.string.sf_fps_live else R.string.sf_fps_set, fps))
-            if (live) SessionController.activeTargetFps = fps
+            if (live) {
+                // level 4.0 下 1080p 的 60fps 不成立：运行时快照也按实际编码帧率显示。
+                SessionController.activeTargetFps = previewPlan()?.targetFps ?: fps
+            }
         }
         fps30.setOnClickListener { applyFps(30) }
         fps60.setOnClickListener { applyFps(60) }

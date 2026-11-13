@@ -99,6 +99,14 @@ class VideoSender(
     @Volatile
     private var sourceHeight = 0
 
+    /** CarWith 实际源尺寸（SPS）；未收到时为 0，调用方不得当成已知值展示。 */
+    val sourceVideoWidth: Int get() = sourceWidth
+
+    val sourceVideoHeight: Int get() = sourceHeight
+
+    /** 是否已经拿到 CarWith 的实际源尺寸（英雄卡区分「请求」与「实际」）。 */
+    val hasSourceDimensions: Boolean get() = sourceWidth > 0 && sourceHeight > 0
+
     /** 透传失败后的手机端转码（null = 透传）；只切换一次，失败不再重试。 */
     @Volatile
     private var transcoder: CarWithTranscoder? = null
@@ -366,11 +374,7 @@ class VideoSender(
          */
         baselineProfile: Boolean = false,
     ): Pair<MediaCodec, Surface> {
-        val bitrate =
-            (
-                ((encodeWidth * encodeHeight * 6L).toInt()).coerceIn(2_000_000, 10_000_000) *
-                    if (fps >= 60) 1.5f else 1f
-            ).toInt().coerceAtMost(15_000_000)
+        val bitrate = EncoderBitrate.forSize(encodeWidth, encodeHeight, fps)
         log("VIDEO: 启动编码器 ${encodeWidth}x$encodeHeight@$fps ${bitrate / 1_000_000}Mbps（端口已连通）")
 
         val format =

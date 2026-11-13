@@ -73,7 +73,11 @@
     <string name="ma_hu_step_accepted">10930 已接受</string>
     <string name="ma_hu_step_failed">失败</string>
     <string name="ma_hu_step_idle">未运行</string>
-    <string name="ma_hero_stats">分辨率 %1$d%% · %2$d/%3$d fps</string>
+    <string name="ma_hero_stats">%1$s · %2$d/%3$d fps</string>
+    <string name="ma_hero_res_actual">分辨率 %1$d×%2$d</string>
+    <string name="ma_hero_res_requested">流 %1$d×%2$d（源待协商）</string>
+    <string name="ma_hero_res_stream_source">流 %1$d×%2$d · 源 %3$d×%4$d</string>
+    <string name="ma_hero_res_unknown">分辨率 —</string>
     <string name="ma_hero_connecting">正在连接</string>
     <string name="ma_hero_connected">已连接</string>
     <string name="ma_hero_residual">上次会话异常退出，遗留 %1$d 个虚拟屏待清理</string>

@@ -10,7 +10,6 @@
     <string name="sf_plain_off">Off: no unencrypted retry after pairing fails</string>
     <string name="sf_audio_fallback_on">On: try audio when no format is declared (applies on the next connection)</string>
     <string name="sf_audio_fallback_off">Off: video only when no audio format is declared</string>
-    <string name="sf_scale_running">Applies on the next connection; the current one runs at %1$d%%</string>
     <string name="sf_scale_saved">Resolution %1$d%% saved; applies on the next connection</string>
     <string name="sf_duck_saved">Music lowered to %1$d dB during navigation</string>
     <string name="sf_duck_off">Music not lowered during navigation</string>
