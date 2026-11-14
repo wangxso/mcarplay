@@ -690,12 +690,14 @@ class AirPlayClient(
             activeAddress = null
             // 新连接总是从明文开始；旧 cipher 不得带到新连接。
             cipher = null
-            synchronized(rtspWriteLock) {
-                readerSocket = null
-                readerThread = null
-                readerGeneration++
-            }
-            failAllPending("控制通道关闭")
+            val waiting =
+                synchronized(rtspWriteLock) {
+                    readerSocket = null
+                    readerThread = null
+                    readerGeneration++
+                    takePendingResponses()
+                }
+            failPendingResponses(waiting, "控制通道关闭")
             runCatching { iapTunnel?.socket?.close() }
             iapTunnel = null
             // 事件通道与计时服务也属于这一轮会话。
@@ -3305,10 +3307,17 @@ class AirPlayClient(
             }
         } catch (_: IOException) {
         } finally {
-            // 只由「当前」读线程清账：重连会换 socket 与新读线程，旧线程不得误伤新会话
-            if (generation == readerGeneration) {
-                failAllPending("控制通道读线程结束")
-            }
+            // 与登记请求、切换读线程使用同一把锁：旧读线程不得清理新连接的待响应表。
+            val waiting =
+                synchronized(rtspWriteLock) {
+                    if (generation != readerGeneration) {
+                        null
+                    } else {
+                        controlChannelClosed = true
+                        takePendingResponses()
+                    }
+                }
+            if (waiting != null) failPendingResponses(waiting, "控制通道读线程结束")
         }
     }
 
@@ -3379,17 +3388,25 @@ class AirPlayClient(
     /** 无匹配报文计数（节流日志用）。 */
     private var unmatchedMessages = 0
 
-    private fun failAllPending(reason: String) {
-        // 2026-11-06 21:59 掉线时 airplay-rtsp-reader 在 CHM.values.toList() 上 FATAL
-        // （NoSuchElementException）。现在注册/移除/快照/清空全部由 pendingLock 串行化：
-        // 快照与清空是原子的，且 controlChannelClosed 与清空同时置位，晚到的 request()
-        // 会直接抛「控制通道已关闭」，不会登记后等满超时。
-        var waiting = emptyList<java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>>()
+    /** 调用方持有 rtspWriteLock，防止清理期间新连接登记请求。 */
+    private fun takePendingResponses(): List<java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>> {
+        val waiting = ArrayList<java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>>()
+        // 调用方持有 rtspWriteLock，防止新连接在代际切换后登记请求；表项自身的增删由
+        // pendingLock 保护，这里同时置位关闭标志，晚到的 request() 会直接失败。
         synchronized(pendingLock) {
             controlChannelClosed = true
-            waiting = pendingResponses.values.toList()
+            // 请求线程仍可能因超时/响应并发移除表项。不能用 values.toList()：Kotlin 在 size==1
+            // 时直接 next()，若表项恰好被移除会抛 NoSuchElementException，导致其余请求无法唤醒。
+            pendingResponses.forEach { _, queue -> waiting.add(queue) }
             pendingResponses.clear()
         }
+        return waiting
+    }
+
+    private fun failPendingResponses(
+        waiting: List<java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>>,
+        reason: String,
+    ) {
         if (waiting.isEmpty()) return
         log("AIRPLAY: $reason——唤醒 ${waiting.size} 个待响应请求")
         waiting.forEach { it.offer(RTSP_CLOSED_MARK to ByteArray(0)) }
