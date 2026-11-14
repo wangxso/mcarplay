@@ -129,6 +129,48 @@ class AirPlayRecordLifecycleTest {
     }
 
     @Test
+    fun receiverCloseWakesConcurrentRequestsAndDoesNotBreakTheNextConnection() {
+        Peer().use { peer ->
+            peer.reply = {}
+            val client = client(peer.port, chery = false)
+            val executor = Executors.newFixedThreadPool(8)
+            val firstSuccess = CountDownLatch(1)
+            try {
+                assertTrue(client.reconnect())
+                val requests =
+                    List(8) {
+                        executor.submit(
+                            Callable {
+                                client.record(10_000).also { if (it) firstSuccess.countDown() }
+                            },
+                        )
+                    }
+                val received = List(8) { peer.next()!! }
+                received.first().respond(200)
+                assertTrue(firstSuccess.await(2, TimeUnit.SECONDS))
+
+                // 一个请求已完成、其余请求仍在等响应时由接收端拆链。
+                received
+                    .first()
+                    .connection.socket
+                    .close()
+                val results = requests.map { it.get(2, TimeUnit.SECONDS) }
+                assertEquals(1, results.count { it })
+                assertTrue(client.controlChannelClosed)
+
+                client.close()
+                peer.reply = { it.respond(200) }
+                assertTrue(client.reconnect())
+                assertTrue(client.record())
+                assertTrue(peer.next()!!.connection != received.first().connection)
+            } finally {
+                client.close()
+                executor.shutdownNow()
+            }
+        }
+    }
+
+    @Test
     fun observedMercedesStackSendsOnlyOneRecordPerSession() {
         // issue #55：音频 SETUP 成功后补发 RECORD，车机在 16–559 ms 内拆链。
         Peer().use { peer ->
