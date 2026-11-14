@@ -648,6 +648,10 @@ class AirPlayClient(
     fun close() {
         sessionSetupAccepted = false
         screenStreamUuid = null
+        // 会话结束前记下 MIB3 订阅情况（issue #62）：突发后一条订阅都没有是「车机不认本会话」
+        // 的强证据，必须进报告而不是只靠缺席推断。iapLink 由 synchronized(this) 保护，快照必须在
+        // 锁内取；日志在锁外打，避免持锁做诊断 I/O。
+        var endingLink: VirtualIap2Link? = null
         val closing =
             synchronized(this) {
                 closingConnections++
@@ -656,6 +660,7 @@ class AirPlayClient(
                 recordAttempt?.complete(false)
                 recordAttempt = null
                 singleRecordMode = null
+                endingLink = iapLink
                 iapLink = null
                 recordAccepted = false
                 networkIapAuthenticated = false
@@ -668,6 +673,10 @@ class AirPlayClient(
                 }
             }
         try {
+            // 只在本轮真发过 MIB3 突发时记录，避免给 DiPlay 隧道/老会话刷无用行。
+            endingLink?.takeIf { it.mib3BurstSent }?.let { link ->
+                log("IAPLINK: MIB3 订阅汇总 " + link.mib3SubscriptionSummary())
+            }
             closing.second?.interrupt()
             closing.third?.interrupt()
             bluetoothReleaseRequested = false
@@ -768,6 +777,22 @@ class AirPlayClient(
     /** 车机对我们事件通道命令的非 200 应答计数（此前静默跳过）。 */
     @Volatile
     private var eventNonOkResponses = 0
+
+    /** 本轮 `modesChanged` 应答按语义分类计数（issue #62：42B `{}` 恒为空回执）。 */
+    private val modesAckCounts = java.util.concurrent.ConcurrentHashMap<ModesAckClassifier.Kind, Int>()
+
+    private fun countModesAck(kind: ModesAckClassifier.Kind) {
+        modesAckCounts.merge(kind, 1, Int::plus)
+    }
+
+    /** 本轮 `modesChanged` 应答分类汇总（会话结束与诊断读取）。 */
+    fun modesAckSummary(): String {
+        val counts = modesAckCounts.entries.sortedBy { it.key.ordinal }
+        if (counts.isEmpty()) return "本轮 modesChanged 无应答体记录"
+        val confirmed = counts.firstOrNull { it.key == ModesAckClassifier.Kind.APP_STATES }?.value ?: 0
+        return counts.joinToString(" ") { "${it.key.name}=${it.value}" } +
+            if (confirmed == 0) "（车机从未回显 appStates——可能是拒绝、也可能走别的确认通道）" else ""
+    }
 
     /** 事件通道建立后由 connectEventChannel 调用。cipher=null 表示明文通道。 */
     private fun registerEventCommandChannel(
@@ -871,13 +896,16 @@ class AirPlayClient(
                 )
             val responseShape =
                 if (response.isEmpty()) {
-                    ""
+                    null
                 } else {
-                    " 应答体 ${response.size}B " +
-                        (runCatching { PlistShape.describe(BinaryPlist.parseRecovered(response).value) }.getOrNull() ?: "非 plist")
+                    runCatching { PlistShape.describe(BinaryPlist.parseRecovered(response).value) }.getOrNull() ?: "非 plist"
                 }
+            val ack = ModesAckClassifier.classify(response)
+            countModesAck(ack)
+            val responseText =
+                if (response.isEmpty()) "" else " 应答体 " + ModesAckClassifier.describe(response, responseShape)
             val state = if (releaseScreen) "让出主屏，随后拿回" else modes.describe()
-            log("AIRPLAY: modesChanged（$state）[$statusLine]$responseShape")
+            log("AIRPLAY: modesChanged（$state）[$statusLine]$responseText")
             statusLine.contains("200")
         } catch (error: IOException) {
             log("AIRPLAY: modesChanged 失败 - ${error.message}")
@@ -1007,6 +1035,9 @@ class AirPlayClient(
      * 清单对照 catplay（真车验证的发送端，含 viewAreas/uiContext 等视频必需项）。
      */
     fun runSetup(): SetupInfo? {
+        // 同一 client 实例会被重试路径复用：计数按「本轮会话」重置，放在会话起点而不是 close()
+        // （close() 与事件读取线程的汇总日志并发，先清会把刚结束那轮的统计抹掉）。
+        modesAckCounts.clear()
         val deviceId = setupDeviceId()
         val policy = receiverCompatibility()
         log(ReceiverCompatibility.describe(policy))
@@ -1109,7 +1140,7 @@ class AirPlayClient(
         // uuid → HID 描述符（媒体键记录需按下标取 Usage，触摸记录不需要但一并留存）
         val parsedHidDescriptors = HashMap<String, ByteArray>()
         infoRoot?.let { root ->
-            val skipped = setOf("displays")
+            val skipped = setOf("displays", "displayPanels")
             val summary =
                 root.entries.joinToString("; ") { (key, value) ->
                     if (key in skipped) "$key=[${(value as? List<*>)?.size ?: "?"}项]" else "$key=${value.toString().take(200)}"
@@ -1118,7 +1149,7 @@ class AirPlayClient(
             // modes 决定车机如何仲裁主屏/主音频（requestUI 后能否切到 CarPlay），上一行被截断，单独完整记录
             root["modes"]?.let { log("AIRPLAY: /info modes=$it") }
             log("AIRPLAY: 资源仲裁初始 → ${modes.applyInitial(root["modes"] as? Map<*, *>)}")
-            // displays 已在 logInfoSummary 里逐条打印（含键值明细），此处不再重复
+            // displays / displayPanels 已在 logInfoSummary 里逐条打印（含键值与几何对照），此处不再重复
             // 音频能力逐条打印（整行 /info 被 take(200) 截断，audioFormats 恰好断在中间）：
             // 决定 audioType 只能靠这里——奥迪 type=100 到底声明了 compatibility 还是 media
             (root["audioFormats"] as? List<*>)?.forEachIndexed { index, entry ->
@@ -2861,6 +2892,7 @@ class AirPlayClient(
                                 .ifEmpty { "无" } +
                             "；解析失败 $badEventCommands 条、非 /command 请求 $unknownEventRequests 条、车机非 200 应答 $eventNonOkResponses 条",
                     )
+                    log("AIRPLAY: 模式切换应答统计 " + modesAckSummary())
                 }
             }, "event-reader").apply {
                 isDaemon = true
@@ -3561,7 +3593,8 @@ class AirPlayClient(
                 "deviceID=${root["deviceID"]}" +
                 if (features != null) " features=0x${features.toString(16)}" else "",
         )
-        (root["displays"] as? List<*>)?.forEachIndexed { index, display ->
+        val displays = root["displays"] as? List<*>
+        displays?.forEachIndexed { index, display ->
             log("AIRPLAY: /info displays[$index]=$display")
             if (display is Map<*, *>) {
                 log(
@@ -3571,6 +3604,13 @@ class AirPlayClient(
                         },
                 )
             }
+        }
+        // displayPanels 是车机自述的物理面板与它期望接收视频流的表面（initialVideoStreams），
+        // 可能与 displays[0] 的高度不同（issue #62 奔驰 MB_E-P-4：1728 vs 1278）。我们按
+        // displays[0] 编码，若车机按 panel 建画布就会「流送达却没画面」——两组几何并列记录。
+        val panels = root["displayPanels"] as? List<*>
+        if (displays != null || panels != null) {
+            log("AIRPLAY: /info 显示表面 → ${DisplaySurfaceReport.describe(displays?.firstOrNull() as? Map<*, *>, panels)}")
         }
         // 音频能力逐条打印（整行 /info 的日志会被截断，audioFormats 恰好落在截断处）：
         // 各车机为 type=100 声明的 audioType 档位与位图差异很大，协商依赖这些明细

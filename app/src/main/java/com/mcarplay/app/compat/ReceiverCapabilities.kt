@@ -22,6 +22,9 @@ object ReceiverCapabilities {
                     fields(info["audioFormats"], listOf("type", "audioType", "audioOutputFormats", "audioInputFormats")),
                     fields(info["audioLatencies"], listOf("type", "audioType", "inputLatencyMicros", "outputLatencyMicros")),
                     fields(info["displays"], listOf("widthPixels", "heightPixels", "maxFPS", "features")),
+                    // 车机自述的物理面板（含 initialVideoStreams 指向的视频表面）：与 displays 可能是
+                    // 两套几何（issue #62 MB_E-P-4 1728 vs 1278），面板变化必须让能力摘要失效。
+                    fields(info["displayPanels"], listOf("widthPixels", "heightPixels")),
                     fields(info["hidDevices"], listOf("hidDescriptor", "countryCode", "vendorID", "productID")),
                 )
         return ReceiverFingerprint.digest(values)

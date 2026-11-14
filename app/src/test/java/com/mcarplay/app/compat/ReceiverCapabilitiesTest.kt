@@ -44,6 +44,24 @@ class ReceiverCapabilitiesTest {
     }
 
     @Test
+    fun videoPanelGeometryChangesInvalidateCapabilities() {
+        // issue #62：displayPanels 的物理面板可能与 displays[0] 高度不同；面板分辨率一变，
+        // 我们按 displays 编出来的流就不再匹配，缓存的兼容能力必须失效。
+        val panel = mapOf("widthPixels" to 2288, "heightPixels" to 1728)
+        val withPanel = info + ("displayPanels" to listOf(panel))
+        val previous = ReceiverCapabilities.digest(signals, withPanel, "instance")
+        assertNotEquals(
+            previous,
+            ReceiverCapabilities.digest(
+                signals,
+                withPanel + ("displayPanels" to listOf(panel + ("heightPixels" to 1278))),
+                "instance",
+            ),
+        )
+        assertNotEquals(previous, ReceiverCapabilities.digest(signals, info, "instance"))
+    }
+
+    @Test
     fun handshakeMemoryUsesInstanceFirmwareAndCapabilitiesAndSkipsUnknown() {
         val first = ReceiverFingerprint.handshake("instance-a", signals)
         assertNotEquals(first, ReceiverFingerprint.handshake("instance-b", signals))
