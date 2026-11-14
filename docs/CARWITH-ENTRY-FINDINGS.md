@@ -1748,3 +1748,28 @@ APK 指纹、完整矩阵、截图/日志的证据边界及同车换手机步骤
 - **含义与边界：** 两轮（关/开）DiPlay 均正常，说明该设置对 DiPlay 组合的连接没有可观察影响；而车友反馈只涉及
   保时捷。这把焦点收窄到「保时捷 + 转换盒优先开启」的具体组合——DiPlay 不复现该问题。仍需在保时捷上开关对比
   多轮（各 ≥2 次，含冷启动，每轮导出报告）才能定因。
+
+## 保时捷 MIB2+ / ALPINE + 0.1.7 首份实车数据：WIFI_JOIN 已解、重连出现「退化 0x1d01」新形态（2026-11-14）
+
+- **来源：** 车友提供的脱敏支持报告 `e8d08d37…`（2026-11-14T11:10:29Z 导出，0.1.7 (1070000) standard/release，
+  Xiaomi 25113PN0EC，CarWith 4.0.20-20260923，CarLife 8.8.5）；分析见 issue
+  [wangxso/mcarplay#64](https://github.com/wangxso/mcarplay/issues/64)。
+- **WIFI_JOIN 已解决：** 保时捷长会话（attempt 6d0d398f，进程 7b1a8bfa）BT_LINK +34s → WIFI_CREDENTIALS
+  (source=endpoint) → WIFI_JOINED +73ms → PAIRING/SETUP 约 3.4s → STREAMING 1920x720 + AAC 44100（外部 PCM
+  累计 1.8 万+ 包），持续 652 秒后 VIDEO_CLOSED。0.1.6 卡 228 秒的 WIFI_JOIN 路径在 0.1.7 已消除（修复来自
+  `7775b64` 的热点交接策略与凭据缓存）。此前 8e70885c 等卡 WIFI 的小会话为 0.1.7 早期轮次，最终被 SUPERSEDED。
+- **重连阶段新形态「退化 0x1d01 + 协商重启」：** 导出时的活动会话 f3d73004（19:06 起）BLOCKED_AT
+  BLUETOOTH:WIFI_INFO 224s+。日志：出站连保时捷 CONNECT READ_FAILED（84ms，1/1）；车机回连后 0x1d01 只声明
+  2 条发送消息（0x5703、0xea03）、可收 7 条、CarPlayStartSession(0x4301)=不发（对照 DiPlay 正常轮次为 14 条
+  完整清单）；应用发 0x5702 后车机立刻重启 iAP2 协商（`LINK closed: peer restarted iAP2 negotiation seq=171
+  oldSeq=2`），19:07/19:08 两次重放后 19:09/19:10 两次「iAP2 链路协商超时」，凭据交换无法完成，UI 提示手动
+  选择热点。该形态只出现在**重连阶段**；上午首连与 652s 长推流均正常。
+- **息屏拆链仍在：** 6d0d398f 在 POWER SCREEN_OFF @652568ms 后 297ms 即 END（VIDEO_CLOSED）；另一轮日志
+  afterScreenOffMs=434。0.1.6 报告为 2786ms——仍是车机侧行为，非 app 主动拆链。
+- **CARWITH_ENTRY_BLOCKED 仍在但影响收窄：** attempt 9d4f1812 28.5s 失败一次；后续正常轮次七路入口重试有效
+  （尝试 1 对 7240 REFUSED → 尝试 2 全通，waitMs≈420ms）。
+- **DiPlay 佐证：** 同报告内 15:09:54 起的 DiPlay 会话稳定推流 7933 帧约 4.7 分钟后由用户 USER_STOP；DiPlay
+  头几轮也出现「会话在链路协商完成前被车机拆掉（~10s 看门狗形态）」（502/9 帧即被拆，第 5 轮起稳定），疑似
+  接收端会话启动看门狗，待单独归类。
+- **边界：** 车友单机单日数据；「退化 0x1d01」的触发条件（是否与「优先转换盒」开关、上会话残留状态、车机
+  电源状态相关）未确认，需要成对的成功/失败报告对比。不据此宣布保时捷已支持。
