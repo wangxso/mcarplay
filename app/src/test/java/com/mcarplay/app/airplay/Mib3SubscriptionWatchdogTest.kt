@@ -50,15 +50,28 @@ class Mib3SubscriptionWatchdogTest {
     }
 
     @Test
-    fun rearmingRestartsTheWindowWithoutDroppingSeenIds() {
+    fun rearmingStartsAFreshObservationWindow() {
         val watchdog = Mib3SubscriptionWatchdog(10_000)
         watchdog.arm(0)
         watchdog.observe(0x4157)
+        assertEquals(setOf(0x4157), watchdog.seenIds())
+        // 重发突发 = 新的观察窗口：上一轮的订阅不能算本轮（P2：reset the set on window start）。
         watchdog.arm(5_000)
         assertTrue(watchdog.armed)
-        assertEquals(setOf(0x4157), watchdog.seenIds())
-        // 已见订阅：窗口到期也不告警。
-        assertNull(watchdog.poll(16_000))
+        assertEquals(emptySet<Int>(), watchdog.seenIds())
+        val line = watchdog.poll(16_000)
+        assertTrue("上一轮订阅不得压掉本轮的告警：$line", line != null && line.contains("未发任何订阅"))
+        assertEquals("突发后 11000ms 收到订阅：无", watchdog.summary(16_000))
+    }
+
+    @Test
+    fun subscriptionsWithinTheCurrentWindowStillCount() {
+        val watchdog = Mib3SubscriptionWatchdog(10_000)
+        watchdog.arm(0)
+        watchdog.arm(5_000)
+        watchdog.observe(0x5000)
+        assertEquals(setOf(0x5000), watchdog.seenIds())
+        assertNull("本窗口有订阅就不告警", watchdog.poll(16_000))
     }
 
     @Test

@@ -22,11 +22,18 @@ internal class Mib3SubscriptionWatchdog(
     @get:Synchronized
     val armed: Boolean get() = armedAtMs >= 0
 
-    /** 布防（突发发出时调用）；重复调用只刷新起点，不重置已见订阅。 */
+    /**
+     * 布防：观察窗口从此刻开始，**清空此前记录的订阅**。
+     *
+     * 只有本窗口内的订阅才能证明车机收到了本次突发。旧实现保留已见集合，重发突发后
+     * 上一轮的订阅会被当成本轮的，既会压掉 60 s 告警，也会让汇总把「本轮没收到」写成
+     * 「已收到」（review finding P2：reset the set when the observation window starts）。
+     */
     @Synchronized
     fun arm(nowMillis: Long) {
         armedAtMs = nowMillis
         reported = false
+        seen.clear()
     }
 
     /**
