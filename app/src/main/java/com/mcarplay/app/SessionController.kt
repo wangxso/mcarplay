@@ -46,6 +46,7 @@ import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.diagnostics.ConnectionStage
 import com.mcarplay.app.diagnostics.ConnectionStagePolicy
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.diagnostics.DiagnosticRedactor
 import com.mcarplay.app.diagnostics.StreamEnvironment
 import com.mcarplay.app.i18n.AppLanguage
 import com.mcarplay.app.iap2.Iap2MessageIds
@@ -956,6 +957,8 @@ object SessionController {
         val message: String,
         val positive: String,
         val negative: String,
+        /** 本次询问的标识：取消等待时只关这一次的弹窗，不误关后续轮次的提问。 */
+        val requestId: Long = 0L,
     )
 
     /**
@@ -964,6 +967,17 @@ object SessionController {
      */
     @Volatile
     var dialogSink: ((DialogSpec, onChoice: (Boolean?) -> Unit) -> Unit)? = null
+
+    /**
+     * 关闭仍在等待的某一次询问（参数与 [DialogSpec.requestId] 相同）。
+     * 等待方因取消/链路断开提前返回时必须撤掉弹窗，否则用户会看到一个已经无人消费的确认框。
+     */
+    @Volatile
+    var dialogDismissSink: ((Long) -> Unit)? = null
+
+    private val dialogRequestIds =
+        java.util.concurrent.atomic
+            .AtomicLong()
 
     private fun ensureSessionObjects(context: Context) {
         if (bluetoothServer != null) return
@@ -1003,6 +1017,7 @@ object SessionController {
                     onWifiCredentials = wifiCredentialHook,
                     onEndpointUpdate = { endpoint -> onLateEndpoint(endpoint, "车机回连") },
                     onLinkClosed = ::onSenderLinkClosed,
+                    onPreEndpointFailure = ::onPreEndpointRoundFailed,
                     knownCarSsid = ::knownCarHotspotSsid,
                     receiverInvited = ::receiverHasInvited,
                     onObservation = ::onReceiverObservation,
@@ -1021,6 +1036,7 @@ object SessionController {
                     onWifiCredentials = wifiCredentialHook,
                     onEndpointUpdate = { endpoint -> onLateEndpoint(endpoint, "主动连车机") },
                     onLinkClosed = ::onSenderLinkClosed,
+                    onPreEndpointFailure = ::onPreEndpointRoundFailed,
                     knownCarSsid = ::knownCarHotspotSsid,
                     receiverInvited = ::receiverHasInvited,
                     onObservation = ::onReceiverObservation,
@@ -1417,6 +1433,95 @@ object SessionController {
         } else {
             appendLog("已${endAction}并停止保活服务（常亮已恢复）")
         }
+    }
+
+    /**
+     * Phase 1（拿到端点）之前就失败的 BT 轮次。
+     *
+     * [Iap2BluetoothServer]/[Iap2BluetoothClient] 的 `onLinkClosed` 只在已交付端点后触发
+     * （语义是「已交付会话的链路断了」），因此协商超时/识别失败/车机在 Phase 1 拆链这类
+     * 轮次此前只写一行 `SESSION 失败`：时间线不会结束，`elapsedMs` 一直累加到诊断报告里，
+     * 熔断也完全看不到这些失败（bug #66：保时捷退化 0x1d01 反复协商重启，卡在
+     * BLUETOOTH:WIFI_INFO 224s+，自动重连无限重试）。
+     *
+     * 只结束仍处于建立阶段的当前时间线，并在本轮仍是当前轮次、当前对端时记账；
+     * 用户断开/正在收尾、以及已被新一轮取代的轮次一律不动。
+     *
+     * 两个出口都必须处理，否则熔断在 #66 的形态下永远到不了阈值：
+     * - **正常记账后**（未触发熔断）立刻开一条新的 BLUETOOTH 时间线。客户端/服务端在线路
+     *   断开后会在自己的循环里再起一轮 `runSession`，但那不会调用 [startConnection]；
+     *   若沿用刚结束的 attempt，之后每轮都因 status=failed 被
+     *   [settlesOnPreEndpointFailure] 拒绝，而 `recordFastFailure` 又按 attempt 去重，
+     *   于是连续失败永远只记 1 次。
+     * - **触发熔断后**必须真正停掉 BT 客户端/服务端（与 [disconnect] 同路），否则只写一行
+     *   日志、它们的循环仍在重启会话，冷却期形同虚设。
+     */
+    private fun onPreEndpointRoundFailed(
+        reason: String,
+        peerAddress: String?,
+    ) {
+        if (isDisconnecting() || connectCancelled) return
+        if (!peerUnknownOrMatches(peerAddress, activePeerAddress)) {
+            appendLog(">>> 非本轮蓝牙链路（$peerAddress）在端点前结束——忽略（本轮 ${activePeerAddress ?: "未知"}）")
+            return
+        }
+        val app = appContext ?: return
+        val snapshot = ConnectionDiagnostics.timeline.snapshot() ?: return
+        // 空端点（等晚到 0x4301）也停在 waiting+BLUETOOTH，但那是**有意**的等待，
+        // 由 watchForPendingStartSession 自己收尾，不能被别的链路在这里结束。
+        // 还有别的链路活着时同样不判定：无法证明这条失败属于正在等待的那一轮，
+        // 宁可少收尾一次，也不能把别家的失败记到当前轮次头上（会误触发熔断）。
+        // 必须用 hasAny() 而不是 single()!=null：只要有未知身份的链路、或剩下两条以上
+        // 已知链路，single() 就返回 null，那正是「还有链路在协商/即将交付端点」的情形。
+        // 目标形态（协商超时后车机才重连）里失败链路已从集合移除，hasAny() 为 false。
+        if (!settlesOnPreEndpointFailure(
+                status = snapshot.status,
+                stage = snapshot.stage,
+                waitingForLateEndpoint = pendingStartSessionEndpoint.get() != null,
+                anotherLinkLive = activeReceiverObservations.hasAny(),
+            )
+        ) {
+            return
+        }
+        ConnectionDiagnostics.timeline.finish(
+            snapshot.id,
+            DiagnosticCode.BT_LINK_CLOSED,
+            true,
+            "endpoint not delivered: ${DiagnosticRedactor.scrubAtSource(reason).take(120)}",
+        )
+        // 与其它失败出口共用同一套判据，只额外说明这是「端点交付前」的轮次：
+        // 这类轮次从未进入界面交接，不受 60s 快速失败门限约束（见
+        // [countsAsAutoReconnectFailure] 的 beforeEndpoint）。
+        val ended = ConnectionDiagnostics.timeline.snapshot() ?: return
+        if (!countsAsAutoReconnectFailure(DiagnosticCode.BT_LINK_CLOSED, ended.videoFrames, ended.elapsedMs, beforeEndpoint = true)) {
+            return
+        }
+        val blocked = AutoReconnectGuard.recordFastFailure(app, peerAddress, snapshot.id)
+        // 无论是否触发熔断，本轮时间线都已结束；后续轮次需要自己的 attempt（见上方 KDoc）。
+        beginPreEndpointRetryAttempt()
+        if (blocked == null) return
+        appendLog(
+            "AUTO: 连续 ${blocked.failures} 轮在端点交付前失败——暂停自动重连 ${blocked.remainingSeconds} 秒" +
+                "（可在 App 内手动连接）",
+        )
+        // 熔断必须真正生效：只写日志的话，仍在运行的 BT 循环会马上再拉一轮。
+        // 与 onSenderLinkClosed 触发熔断时同样走 disconnect（BT_LINK_CLOSED 不是用户停止，
+        // 不会清空熔断状态）。
+        appContext?.let { disconnect(it, DiagnosticCode.BT_LINK_CLOSED) }
+    }
+
+    /**
+     * 端点前失败的轮次结束后，为仍在运行的 BT 循环准备一条新的 BLUETOOTH 时间线。
+     *
+     * 只在确实还有 BT 组件在跑时调用：真正收尾（用户断开/熔断）之后不得凭空造出一条
+     * 会一直累加 `elapsedMs` 的 waiting 记录。
+     */
+    private fun beginPreEndpointRetryAttempt() {
+        if (isDisconnecting() || connectCancelled) return
+        if (bluetoothClient?.isRunning != true && bluetoothServer?.isRunning != true) return
+        val attempt = ConnectionDiagnostics.begin("bt_retry")
+        bluetoothDiagnostics.begin(attempt)
+        ConnectionDiagnostics.timeline.stage(attempt, ConnectionStage.BLUETOOTH)
     }
 
     /**
@@ -2182,7 +2287,7 @@ object SessionController {
     }
 
     /** WiFi 未开启时的引导与等待；true = 已开启可继续。 */
-    private fun waitForWifiEnabled(): Boolean {
+    private fun waitForWifiEnabled(isCancelled: () -> Boolean = { connectCancelled }): Boolean {
         val open =
             askWifiJoinChoice(
                 DialogSpec(
@@ -2191,6 +2296,7 @@ object SessionController {
                     positive = t(R.string.sc_open_wifi_settings),
                     negative = t(R.string.sc_cancel),
                 ),
+                isCancelled,
             )
         if (connectCancelled) return false
         when (open) {
@@ -2236,6 +2342,7 @@ object SessionController {
     private fun promptSpecifierFailed(
         wifi: Iap2SenderSession.WifiConfiguration,
         shellReady: Boolean,
+        isCancelled: () -> Boolean = { connectCancelled },
     ) {
         if (connectCancelled) return
         val choice =
@@ -2247,13 +2354,14 @@ object SessionController {
                     positive = t(R.string.sc_retry),
                     negative = t(R.string.sc_open_wifi_settings),
                 ),
+                isCancelled,
             )
         if (connectCancelled) return
         when (choice) {
             true -> {
                 when (val retry = joinCarWifi(wifi, shellReady)) {
                     is WifiCarPlayConnector.JoinResult.Joined -> Unit
-                    WifiCarPlayConnector.JoinResult.Unsupported -> legacyJoinCarWifi(wifi, shellReady)
+                    WifiCarPlayConnector.JoinResult.Unsupported -> legacyJoinCarWifi(wifi, shellReady, isCancelled)
                     WifiCarPlayConnector.JoinResult.Unavailable -> {
                         phaseHint = t(R.string.sc_join_failed_manual)
                         appendLog("WIFI: 重试仍未加入 \"${wifi.ssid}\"——请到系统 WLAN 手动连接")
@@ -2261,7 +2369,7 @@ object SessionController {
                 }
             }
 
-            false -> manualJoinCarWifi(wifi)
+            false -> manualJoinCarWifi(wifi, isCancelled)
 
             null -> {
                 phaseHint = t(R.string.sc_join_failed_retry)
@@ -2271,7 +2379,10 @@ object SessionController {
     }
 
     /** 手动兜底：密码进剪贴板 + 跳 WLAN 设置，轮询用户是否连上。 */
-    private fun manualJoinCarWifi(wifi: Iap2SenderSession.WifiConfiguration) {
+    private fun manualJoinCarWifi(
+        wifi: Iap2SenderSession.WifiConfiguration,
+        isCancelled: () -> Boolean = { connectCancelled },
+    ) {
         val connector = wifiConnector
         if (connector != null && connector.hasExistingWifi() && connector.currentWifiSsid() == null) {
             val useCurrent =
@@ -2283,6 +2394,7 @@ object SessionController {
                         positive = t(R.string.sc_use_current),
                         negative = t(R.string.sc_open_wifi_settings),
                     ),
+                    isCancelled,
                 )
             if (connectCancelled || useCurrent == null) return
             if (useCurrent) {
@@ -2328,6 +2440,7 @@ object SessionController {
     private fun legacyJoinCarWifi(
         wifi: Iap2SenderSession.WifiConfiguration,
         shellReady: Boolean,
+        isCancelled: () -> Boolean = { connectCancelled },
     ) {
         if (!shellReady) {
             phaseHint = t(R.string.sc_not_on_hotspot, wifi.ssid)
@@ -2488,10 +2601,25 @@ object SessionController {
     /**
      * 弹窗询问用户（阻塞调用线程直到选择/关闭/90 秒超时）：
      * true=positive；false=negative；null=无人应答（调用方决定兜底）。
+     *
+     * [isCancelled] 必须传本轮的有效性判定（通常含 [connectCancelled] 与交接所有权）：
+     * 车机拆链后 [connectCancelled] 立即为 true，等待必须同时退出并撤掉弹窗。
+     * 此前这里只等 latch，不看取消——蓝牙链路断开后仍要等满 90 秒（确认当前网络
+     * 路径还会连续问 3 次，最长 270 秒），报告里 WIFI_JOIN 卡到 228 秒就是这条路径。
      */
-    private fun askWifiJoinChoice(spec: DialogSpec): Boolean? {
+    private fun askWifiJoinChoice(
+        spec: DialogSpec,
+        isCancelled: () -> Boolean = { connectCancelled },
+    ): Boolean? {
+        val requestId = dialogRequestIds.incrementAndGet()
+        val request = spec.copy(requestId = requestId)
         val latch = java.util.concurrent.CountDownLatch(1)
-        var choice: Boolean? = null
+        val answer =
+            java.util.concurrent.atomic
+                .AtomicReference<Boolean?>(null)
+        val answered =
+            java.util.concurrent.atomic
+                .AtomicBoolean(false)
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             val sink = dialogSink
             if (sink == null) {
@@ -2499,13 +2627,65 @@ object SessionController {
                 latch.countDown()
                 return@post
             }
-            sink(spec) { result ->
-                choice = result
+            sink(request) { result ->
+                answer.set(result)
+                answered.set(true)
                 latch.countDown()
             }
         }
-        latch.await(JOIN_DIALOG_TIMEOUT_S, java.util.concurrent.TimeUnit.SECONDS)
-        return choice
+        val deadline = SystemClock.uptimeMillis() + JOIN_DIALOG_TIMEOUT_S * 1_000
+        var timedOut = false
+        try {
+            val outcome =
+                awaitDialogChoice(
+                    isCancelled = isCancelled,
+                    deadlineMs = deadline,
+                    awaitSignal = { pollMs ->
+                        latch.await(pollMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    },
+                )
+            if (outcome == DialogWait.CANCELLED) {
+                appendLog("WIFI: 本轮已取消（蓝牙链路断开或用户取消）——中止热点确认询问")
+                return null
+            }
+            timedOut = outcome == DialogWait.TIMED_OUT
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return null
+        } finally {
+            // 提前退出（取消/中断）时撤掉仍显示的弹窗；已应答或本来就无人应答时
+            // dismiss 是无害 no-op（UI 侧按 requestId 只关对应那一个）。
+            if (!answered.get()) runCatching { dialogDismissSink?.invoke(requestId) }
+        }
+        if (timedOut) return null
+        return answer.get()
+    }
+
+    /** [awaitDialogChoice] 的结果：只有 [ANSWERED] 时 latch 携带的选择才有意义。 */
+    internal enum class DialogWait { ANSWERED, CANCELLED, TIMED_OUT }
+
+    /**
+     * 等用户应答，期间每 [pollMs] 检查一次取消。
+     *
+     * 抽出来是为了可单测：JVM 单测里没有 Looper/Handler，无法直接驱动 [askWifiJoinChoice]，
+     * 所以把「阻塞等一次信号」作为参数注入（生产传 latch.await）。**取消优先于超时**——
+     * 蓝牙链路断开发生在截止时刻附近时也必须报告 CANCELLED，否则调用方会把
+     * 「车机拆链」记成「用户没应答」。
+     *
+     * @param awaitSignal 最多阻塞 [pollMs] 毫秒；true = 用户已应答
+     */
+    internal fun awaitDialogChoice(
+        isCancelled: () -> Boolean,
+        deadlineMs: Long,
+        awaitSignal: (Long) -> Boolean,
+        pollMs: Long = 200L,
+        now: () -> Long = SystemClock::uptimeMillis,
+    ): DialogWait {
+        while (!awaitSignal(pollMs)) {
+            if (isCancelled()) return DialogWait.CANCELLED
+            if (now() >= deadlineMs) return DialogWait.TIMED_OUT
+        }
+        return DialogWait.ANSWERED
     }
 
     private fun openWlanSettings() {
@@ -5126,7 +5306,7 @@ object SessionController {
                         }
 
                         WifiCarPlayConnector.JoinResult.Unavailable -> {
-                            promptSpecifierFailed(wifi, shellReady)
+                            promptSpecifierFailed(wifi, shellReady, isCancelled)
                             settled = true
                             val bound = boundCarSsid == wifi.ssid && wifiConnector?.currentNetwork != null
                             onResult(bound)
@@ -5231,6 +5411,7 @@ object SessionController {
                         positive = t(R.string.sc_use_current),
                         negative = t(R.string.sc_open_wifi_settings),
                     ),
+                    isCancelled,
                 )
             if (isCancelled()) {
                 onResult(false)
@@ -5299,6 +5480,7 @@ object SessionController {
                     positive = t(R.string.sc_open_wifi_settings),
                     negative = t(R.string.sc_keep_waiting),
                 ),
+                isCancelled,
             )
         if (isCancelled()) {
             onResult(false)
@@ -5362,6 +5544,7 @@ object SessionController {
                                     positive = t(R.string.sc_use_current),
                                     negative = t(R.string.sc_keep_waiting),
                                 ),
+                                isCancelled,
                             )
                         if (isCancelled()) {
                             onResult(false)
@@ -5396,6 +5579,7 @@ object SessionController {
                             positive = t(R.string.sc_use_current),
                             negative = t(R.string.sc_keep_waiting),
                         ),
+                        isCancelled,
                     )
                 if (isCancelled()) {
                     onResult(false)
@@ -5586,6 +5770,26 @@ internal fun usableKnownCarSsid(
 ): String? =
     listOf(bound, last)
         .firstOrNull { !it.isNullOrBlank() && it != SessionController.INVITED_WIFI_LABEL }
+
+/**
+ * 端点交付前失败时，是否应结束当前时间线并计入自动重连熔断。
+ *
+ * 只收尾仍能继续的轮次：已失败/已结束的轮次不再覆盖记录；已经推进到 DISCOVERY
+ * 及以后的轮次说明端点早已交付（那属于 `onLinkClosed` 的语义），这里不重复处理。
+ * [waitingForLateEndpoint] 为 true 表示本轮已收到**空端点**、正在有意等待晚到的
+ * 0x4301——它同样停在 waiting+BLUETOOTH，但必须由 `watchForPendingStartSession`
+ * 自己收尾，不能当成失败。抽成纯函数是为了单测覆盖（bug #66）。
+ */
+internal fun settlesOnPreEndpointFailure(
+    status: String,
+    stage: ConnectionStage,
+    waitingForLateEndpoint: Boolean = false,
+    anotherLinkLive: Boolean = false,
+): Boolean =
+    status == "waiting" &&
+        stage == ConnectionStage.BLUETOOTH &&
+        !waitingForLateEndpoint &&
+        !anotherLinkLive
 
 /**
  * 链路关闭是否应进入自动重连熔断记账。

@@ -53,6 +53,98 @@ class AutoReconnectOutcomeTest {
         )
     }
 
+    /**
+     * bug #66：保时捷退化 0x1d01 形态下每轮都卡在 iAP2 协商超时（入站 60s、出站 90s），
+     * elapsedMs 必然越过 [AUTO_RECONNECT_FAST_FAILURE_MAX_MS]，旧的时长门限会把它们
+     * 全部放过，自动重连于是无限重试。端点未交付的轮次从未进入界面交接，
+     * 「主屏归车机导致长时间零帧」的例外不适用，因此跳过时长门限仍计入。
+     */
+    @Test
+    fun preEndpointFailuresCountEvenWhenTheRoundOutlivedTheFastFailureWindow() {
+        listOf(60_000L, 90_000L, 224_000L).forEach { elapsed ->
+            assertTrue(
+                "端点前失败 elapsed=${elapsed}ms 应计入熔断",
+                countsAsAutoReconnectFailure(
+                    DiagnosticCode.BT_LINK_CLOSED,
+                    videoFrames = 0L,
+                    elapsedMs = elapsed,
+                    beforeEndpoint = true,
+                ),
+            )
+        }
+        assertTrue(
+            countsAsAutoReconnectFailure(
+                DiagnosticCode.CONNECTION_INCOMPLETE,
+                videoFrames = 0L,
+                elapsedMs = 90_000L,
+                beforeEndpoint = true,
+            ),
+        )
+    }
+
+    @Test
+    fun preEndpointStillRequiresZeroFramesAndALinkFailureCode() {
+        // 时长放宽不等于放弃其它判据：出过帧的轮次不是「快速失败」，
+        // 用户停止也不会被算成车机问题。
+        assertFalse(
+            countsAsAutoReconnectFailure(
+                DiagnosticCode.BT_LINK_CLOSED,
+                videoFrames = 1L,
+                elapsedMs = 90_000L,
+                beforeEndpoint = true,
+            ),
+        )
+        assertFalse(
+            countsAsAutoReconnectFailure(
+                DiagnosticCode.USER_STOP,
+                videoFrames = 0L,
+                elapsedMs = 90_000L,
+                beforeEndpoint = true,
+            ),
+        )
+        assertFalse(
+            countsAsAutoReconnectFailure(
+                DiagnosticCode.SUPERSEDED,
+                videoFrames = 0L,
+                elapsedMs = 90_000L,
+                beforeEndpoint = true,
+            ),
+        )
+        assertFalse(
+            countsAsAutoReconnectFailure(null, videoFrames = 0L, elapsedMs = 90_000L, beforeEndpoint = true),
+        )
+    }
+
+    /**
+     * 端点已交付的轮次必须保持原有窄口：长时间停在原车界面（倒车影像等）后正常结束，
+     * 不能因为放宽预端点轮次而被误判成「车机在无限失败」。
+     */
+    @Test
+    fun postEndpointRoundsKeepTheFastFailureWindow() {
+        assertFalse(
+            countsAsAutoReconnectFailure(
+                DiagnosticCode.BT_LINK_CLOSED,
+                videoFrames = 0L,
+                elapsedMs = AUTO_RECONNECT_FAST_FAILURE_MAX_MS,
+            ),
+        )
+        assertFalse(
+            countsAsAutoReconnectFailure(
+                DiagnosticCode.SETUP_FAILED,
+                videoFrames = 0L,
+                elapsedMs = 224_000L,
+                beforeEndpoint = false,
+            ),
+        )
+        assertTrue(
+            countsAsAutoReconnectFailure(
+                DiagnosticCode.BT_LINK_CLOSED,
+                videoFrames = 0L,
+                elapsedMs = AUTO_RECONNECT_FAST_FAILURE_MAX_MS - 1L,
+            ),
+        )
+    }
+
     @Test
     fun peerComparisonIsCaseInsensitiveAndUnknownNeverConflicts() {
         assertTrue(sameKnownPeer("AA:BB:CC:DD:EE:01", "aa:bb:cc:dd:ee:01"))

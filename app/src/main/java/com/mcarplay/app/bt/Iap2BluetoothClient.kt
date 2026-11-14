@@ -42,6 +42,8 @@ class Iap2BluetoothClient(
     /** 发送端链路断开（保活泵退出）时通知主控（释放僵尸轮次，见 SessionController.onSenderLinkClosed）。 */
     /** 链路断开：同时携带 RFCOMM 观察归属（交接所有权）与对端地址（熔断隔离）。 */
     private val onLinkClosed: (ReceiverObservation?, String?) -> Unit = { _, _ -> },
+    /** Phase 1 之前失败（未交付端点）：主控据此结束时间线并计入自动重连熔断（bug #66）。 */
+    private val onPreEndpointFailure: (String, String?) -> Unit = { _, _ -> },
     /** 本进程已知的车机热点 SSID（本轮无新凭据时沿用，避免每轮 8 秒拆链）。 */
     private val knownCarSsid: () -> String? = { null },
     /** 车机是否已在 WiFi 上发过 ctrl 邀请（无凭据时据此不拆链）。 */
@@ -759,6 +761,7 @@ class Iap2BluetoothClient(
                 onWifiCredentials,
                 onEndpointUpdate,
                 onLinkClosed,
+                onPreEndpointFailure,
                 knownCarSsid,
                 receiverInvited,
                 onGeneration,

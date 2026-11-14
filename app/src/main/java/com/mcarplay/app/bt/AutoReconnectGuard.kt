@@ -31,16 +31,24 @@ internal const val AUTO_RECONNECT_FAST_FAILURE_MAX_MS = 60_000L
  *
  * SETUP/PAIRING/WIFI_JOIN 失败不经过 [com.mcarplay.app.SessionController.disconnect]，
  * 必须由各自的失败出口在结束时间线后调用本判定，否则反复快速失败会绕过熔断无限重连。
+ *
+ * [beforeEndpoint] 只用于「端点都还没交付」的轮次：这类轮次（iAP2 链路协商失败/超时、
+ * 车机在 Phase 1 前拆链）不适用「长时间停在原车界面」的例外——它们从未进入过界面交接，
+ * 也就不存在主屏归车机导致丢帧的情形。而它们恰恰最容易被 [AUTO_RECONNECT_FAST_FAILURE_MAX_MS]
+ * 放掉：bug #66 的保时捷形态每轮卡在协商超时（入站 60s、出站 90s），elapsedMs 必然 ≥60s，
+ * 于是连续失败一轮都不计数，自动重连可以无限重试。因此这类轮次跳过时长门限，
+ * 仍要求零帧且失败码属于可熔断集合。
  */
 internal fun countsAsAutoReconnectFailure(
     code: DiagnosticCode?,
     videoFrames: Long,
     elapsedMs: Long,
+    beforeEndpoint: Boolean = false,
 ): Boolean =
     code != null &&
         code in AUTO_RECONNECT_FAILURE_CODES &&
         videoFrames == 0L &&
-        elapsedMs < AUTO_RECONNECT_FAST_FAILURE_MAX_MS
+        (beforeEndpoint || elapsedMs < AUTO_RECONNECT_FAST_FAILURE_MAX_MS)
 
 /** 两个**已知**地址是否为同一接收端（大小写不敏感）；任一未知返回 false。 */
 internal fun sameKnownPeer(

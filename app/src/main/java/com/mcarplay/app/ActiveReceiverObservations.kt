@@ -21,6 +21,20 @@ internal class ActiveReceiverObservations {
     fun single(): ReceiverObservation? = if (unknown == 0) active.singleOrNull() else null
 
     /**
+     * 是否还有任何一条 RFCOMM 链路存活（身份未知的也算）。
+     *
+     * 不能用 `single() != null` 代替：只要有未知身份的链路，或剩下两条以上已知链路，
+     * [single] 就返回 null，那会被误读成「没有别的链路」。判断「另一条链路是否还活着、
+     * 因此不能替它收尾」时必须用它。
+     */
+    @Synchronized
+    fun hasAny(): Boolean = unknown > 0 || active.isNotEmpty()
+
+    /** 存活链路条数（身份未知的计入），只用于日志与判定。 */
+    @Synchronized
+    fun count(): Int = unknown + active.size
+
+    /**
      * 该 observation 所属 RFCOMM 链路是否仍存活。
      *
      * [com.mcarplay.app.compat.ReceiverDetectionRuntime.isCurrent] 只比较 epoch/session，
@@ -29,6 +43,5 @@ internal class ActiveReceiverObservations {
      * 已知链路在跑才认为存活——全关时不得复活。
      */
     @Synchronized
-    fun isActive(observation: ReceiverObservation?): Boolean =
-        if (observation == null) unknown > 0 || active.isNotEmpty() else active.contains(observation)
+    fun isActive(observation: ReceiverObservation?): Boolean = if (observation == null) hasAny() else active.contains(observation)
 }
