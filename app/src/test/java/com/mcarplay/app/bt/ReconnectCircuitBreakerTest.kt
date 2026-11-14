@@ -172,6 +172,33 @@ class ReconnectCircuitBreakerTest {
         assertEquals(1, deduped[store.keyOf(address)]!!.failures)
     }
 
+    /**
+     * 回归（PR #67 审查 P1）：端点前失败的轮次若一直复用同一条已结束的时间线，
+     * 每轮都会被按 attempt 去重，三次熔断永远攒不满。每轮拿到新 attempt 后必须能正常累计。
+     */
+    @Test
+    fun onlyFreshAttemptsAccumulateToTheCircuitBreaker() {
+        val store = ReconnectCircuitBreakerStore(breaker)
+        var states = emptyMap<String, ReconnectCircuitBreaker.State>()
+        // 三轮端点前失败：每轮一条新时间线（修复后的行为）→ 第三次触发熔断。
+        var block: ReconnectCircuitBreakerStore.Block? = null
+        repeat(3) { index ->
+            val recorded = store.recordFailure(states, address, "bt_retry-$index", t0 + index * 61_000L)
+            states = recorded.first
+            block = recorded.second
+        }
+        assertNotNull("每轮新 attempt 应在第 3 次触发熔断", block)
+        assertEquals(3, states[store.keyOf(address)]!!.failures)
+
+        // 对照：复用同一 attempt（修复前的行为）始终只记 1 次，永远不会熔断。
+        var reused = emptyMap<String, ReconnectCircuitBreaker.State>()
+        repeat(3) { index ->
+            reused = store.recordFailure(reused, address, "bt_retry", t0 + index * 61_000L).first
+        }
+        assertEquals(1, reused[store.keyOf(address)]!!.failures)
+        assertNull(store.block(reused, address, t0))
+    }
+
     @Test
     fun successClearsOnlyThatReceiversFailures() {
         val other = "AA:BB:CC:DD:EE:02"
