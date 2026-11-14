@@ -28,8 +28,22 @@ class DisplaySurfaceReportTest {
         val text = DisplaySurfaceReport.describe(display, listOf(panel))
         assertTrue(text, text.contains("displays[0]=2288x1278"))
         assertTrue(text, text.contains("2288x1728"))
-        assertTrue(text, text.contains(displayUuid))
+        assertTrue("同一 UUID 只写「同 displays[0]」", text.contains("uuid=同 displays[0]"))
         assertTrue("高度不同必须明确说出来", text.contains("高度不同"))
+    }
+
+    @Test
+    fun rawReceiverUuidNeverReachesTheLog() {
+        // P2 review finding: a canonical hyphenated UUID bypasses DiagnosticRedactor's longHex,
+        // so the report line must not carry the receiver-provided identifier at all.
+        val text = DisplaySurfaceReport.describe(display, listOf(panel))
+        assertFalse("原始 UUID 不得出现：$text", text.contains(displayUuid))
+        assertTrue(text, !text.contains("6d1c2f9a"))
+        // 仍然能比较表面：不同 UUID 给报告内别名，同一 UUID 写「同 displays[0]」
+        val other = panel + ("initialVideoStreams" to listOf(mapOf("uuid" to "11111111-2222-3333-4444-555555555555")))
+        val distinct = DisplaySurfaceReport.describe(display, listOf(other))
+        assertTrue(distinct, distinct.contains("<DISPLAY-2>"))
+        assertFalse(distinct, distinct.contains("11111111"))
     }
 
     @Test
@@ -60,10 +74,29 @@ class DisplaySurfaceReportTest {
     }
 
     @Test
+    fun repeatedSurfaceUuidKeepsOneAlias() {
+        // 同一别名必须复用，否则「两个表面是否相同」在报告里看不出来。
+        val other = "11111111-2222-3333-4444-555555555555"
+        val surfaces =
+            listOf(
+                panel + ("initialVideoStreams" to listOf(mapOf("uuid" to other))),
+                panel + ("initialVideoStreams" to listOf(mapOf("uuid" to other))),
+            )
+        val text = DisplaySurfaceReport.describe(display, surfaces)
+        assertTrue(text, text.contains("<DISPLAY-2>"))
+        assertFalse("不得出现第二个别名：$text", text.contains("<DISPLAY-3>"))
+        assertFalse(text, text.contains("11111111"))
+    }
+
+    @Test
     fun sixteenByteUuidIsFormattedLikeUuidText() {
+        // videoSurfaceGeometry 仍返回规范 UUID（供内部比较用），但 describe 不把它写进日志。
         val raw = ByteArray(16) { it.toByte() }
         val surfaces = DisplaySurfaceReport.videoSurfaceGeometry(listOf(panel + ("initialVideoStreams" to listOf(mapOf("uuid" to raw)))))
         assertEquals("00010203-0405-0607-0809-0a0b0c0d0e0f", surfaces.single().uuid)
+        val distinct = DisplaySurfaceReport.describe(display, listOf(panel + ("initialVideoStreams" to listOf(mapOf("uuid" to raw)))))
+        assertFalse(distinct, distinct.contains("00010203"))
+        assertTrue(distinct, distinct.contains("<DISPLAY-2>"))
     }
 
     @Test

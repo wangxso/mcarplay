@@ -29,9 +29,15 @@ internal class Mib3SubscriptionWatchdog(
         reported = false
     }
 
-    /** 记录一条车机发来的订阅类消息号。 */
+    /**
+     * 记录一条车机发来的订阅类消息号。
+     *
+     * 只统计**布防之后**到达的订阅：布防前的订阅早于本次突发，用它证明「车机收到了突发」
+     * 会把一次真实缺失误判成正常（review finding P2）。未布防时直接忽略。
+     */
     @Synchronized
     fun observe(messageId: Int) {
+        if (armedAtMs < 0) return
         seen += messageId
     }
 

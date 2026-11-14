@@ -29,19 +29,28 @@ internal object DisplaySurfaceReport {
     /**
      * 一行对照说明。`display` = `displays[0]`；`panels` = `displayPanels`；
      * 两者高度不同时明确写出，让「流送到却没画面」的报告能一眼看到几何冲突。
+     *
+     * **不打印原始 display UUID**：它是接收端提供的稳定标识，`DiagnosticRedactor` 的
+     * longHex 只匹配 32 位以上连续十六进制，带连字符的规范 UUID 会原样进支持报告（也会经
+     * 调试桥导出）。这里只报「是否与 `displays[0]` 同一表面」：相同写「同 displays[0]」，
+     * 不同则按本行首次出现顺序给 `<DISPLAY-2>` 这类**报告内别名**——既能比较各表面，
+     * 又不把接收端标识写出去。
      */
     fun describe(
         display: Map<*, *>?,
         panels: List<*>?,
     ): String {
         val displayGeometry = geometryOf(display, "displays[0]")
+        val displayUuid = uuidOf(display)
         val videoSurfaces = videoSurfaceGeometry(panels)
         if (displayGeometry == null && videoSurfaces.isEmpty()) return "无显示屏几何（/info 未声明 displays/displayPanels）"
-        val head = "displays[0]=${displayGeometry?.text ?: "缺"}"
+        val head = "displays[0]=${displayGeometry?.text ?: "缺"}" + if (displayUuid == null) "（无 uuid）" else ""
         if (videoSurfaces.isEmpty()) return "$head；displayPanels 未声明可用的初始视频表面"
+        // 同一表面多次出现必须拿同一个别名，否则「表面之间能否比较」就没了意义。
+        val otherAliases = LinkedHashMap<String, String>()
         val panelText =
             videoSurfaces.joinToString("; ") { surface ->
-                "${surface.source} uuid=${surface.uuid ?: "缺"} ${surface.text}"
+                "${surface.source} uuid=${uuidLabel(surface.uuid, displayUuid, otherAliases)} ${surface.text}"
             }
         val mismatch =
             displayGeometry?.height?.let { displayHeight ->
@@ -50,6 +59,22 @@ internal object DisplaySurfaceReport {
         return "$head；车机视频表面：$panelText" +
             if (mismatch) "（与 displays[0] 高度不同——按 displays 发送的流可能落在不显示的面板上）" else ""
     }
+
+    /**
+     * 表面 UUID 的可报告写法：缺失 / 与 `displays[0]` 相同 / 报告内稳定别名。
+     * [otherAliases] 让同一接收端 UUID 在多个表面条目上始终得到同一个 `<DISPLAY-N>`，
+     * 同时不把这个标识本身写进日志。
+     */
+    private fun uuidLabel(
+        uuid: String?,
+        displayUuid: String?,
+        otherAliases: MutableMap<String, String>,
+    ): String =
+        when {
+            uuid == null -> "缺"
+            uuid == displayUuid -> "同 displays[0]"
+            else -> otherAliases.getOrPut(uuid) { "<DISPLAY-${otherAliases.size + 2}>" }
+        }
 
     /** `displayPanels[].initialVideoStreams[]` 各自指向的表面与其父面板几何。 */
     fun videoSurfaceGeometry(panels: List<*>?): List<VideoSurface> {

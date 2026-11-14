@@ -585,6 +585,7 @@ class VirtualIap2Link(
         val ids = Iap2MessageIds
         // 订阅类消息（0x4157/0x4154/0x4170/0x5000/0x6800）到达即记：突发后一条都收不到是
         // 「车机不认这个 CarPlay 会话」的强证据（issue #62），见 [Mib3SubscriptionWatchdog]。
+        // 只记突发布防之后的：布防前到达的订阅早于本次突发，不能用来证明车机收到了突发。
         if (frame.messageId in SUBSCRIPTION_MESSAGE_IDS) mib3Subscriptions.observe(frame.messageId)
         when (frame.messageId) {
             ids.IDENTIFICATION_INFORMATION -> {
