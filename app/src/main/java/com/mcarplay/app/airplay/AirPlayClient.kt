@@ -649,8 +649,9 @@ class AirPlayClient(
         sessionSetupAccepted = false
         screenStreamUuid = null
         // 会话结束前记下 MIB3 订阅情况（issue #62）：突发后一条订阅都没有是「车机不认本会话」
-        // 的强证据，必须进报告而不是只靠缺席推断。在锁外读取与打印，避免持锁做诊断 I/O。
-        val endingLink = iapLink
+        // 的强证据，必须进报告而不是只靠缺席推断。iapLink 由 synchronized(this) 保护，快照必须在
+        // 锁内取；日志在锁外打，避免持锁做诊断 I/O。
+        var endingLink: VirtualIap2Link? = null
         val closing =
             synchronized(this) {
                 closingConnections++
@@ -659,6 +660,7 @@ class AirPlayClient(
                 recordAttempt?.complete(false)
                 recordAttempt = null
                 singleRecordMode = null
+                endingLink = iapLink
                 iapLink = null
                 recordAccepted = false
                 networkIapAuthenticated = false
