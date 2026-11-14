@@ -199,6 +199,37 @@ class ReconnectCircuitBreakerTest {
         assertNull(store.block(reused, address, t0))
     }
 
+    /**
+     * 回归（PR #67 审查第二轮 P2）：熔断触发后若再为「后续轮次」开一条空时间线，
+     * 随后的 disconnect 会拿这条新 attempt 再记一次失败——把 3 次改写成 4 次、
+     * 再延长一次冷却期，并把 recordedAttempt 指向一条几乎零时长的合成轮次。
+     * 修复后熔断分支不再开新 attempt，因此这里守住「第 3 次就是最后一次」。
+     */
+    @Test
+    fun aTrippedBreakerIsNotChargedASyntheticFourthFailure() {
+        val store = ReconnectCircuitBreakerStore(breaker)
+        var states = emptyMap<String, ReconnectCircuitBreaker.State>()
+        var block: ReconnectCircuitBreakerStore.Block? = null
+        repeat(ReconnectCircuitBreaker.FAILURES_TO_TRIP) { index ->
+            val recorded = store.recordFailure(states, address, "round-$index", t0 + index * 61_000L)
+            states = recorded.first
+            block = recorded.second
+        }
+        val tripped = requireNotNull(block)
+        val afterTrip = requireNotNull(states[store.keyOf(address)])
+        assertEquals(ReconnectCircuitBreaker.FAILURES_TO_TRIP, afterTrip.failures)
+        assertEquals("round-2", afterTrip.recordedAttempt)
+
+        // 反证：若在熔断后仍开一条合成 attempt 并记账，就会得到上面描述的错误状态。
+        val (synthetic, syntheticBlock) =
+            store.recordFailure(states, address, "bt_retry-synthetic", tripped.untilMs - tripped.remainingMs + 61_000L)
+        val polluted = requireNotNull(synthetic[store.keyOf(address)])
+        assertNull("熔断中的第 4 次不应再次触发", syntheticBlock)
+        assertEquals(ReconnectCircuitBreaker.FAILURES_TO_TRIP + 1, polluted.failures)
+        assertEquals("bt_retry-synthetic", polluted.recordedAttempt)
+        assertTrue("冷却期会被再延长", polluted.blockedUntilMs > afterTrip.blockedUntilMs)
+    }
+
     @Test
     fun successClearsOnlyThatReceiversFailures() {
         val other = "AA:BB:CC:DD:EE:02"

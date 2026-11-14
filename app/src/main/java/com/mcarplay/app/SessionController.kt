@@ -1464,13 +1464,13 @@ object SessionController {
      * 用户断开/正在收尾、以及已被新一轮取代的轮次一律不动。
      *
      * 两个出口都必须处理，否则熔断在 #66 的形态下永远到不了阈值：
-     * - **正常记账后**（未触发熔断）立刻开一条新的 BLUETOOTH 时间线。客户端/服务端在线路
-     *   断开后会在自己的循环里再起一轮 `runSession`，但那不会调用 [startConnection]；
-     *   若沿用刚结束的 attempt，之后每轮都因 status=failed 被
-     *   [settlesOnPreEndpointFailure] 拒绝，而 `recordFastFailure` 又按 attempt 去重，
-     *   于是连续失败永远只记 1 次。
+     * - **未触发熔断时**立刻开一条新的 BLUETOOTH 时间线。客户端/服务端在线路断开后会在
+     *   自己的循环里再起一轮 `runSession`，但那不会调用 [startConnection]；若沿用刚结束的
+     *   attempt，之后每轮都因 status=failed 被 [settlesOnPreEndpointFailure] 拒绝，而
+     *   `recordFastFailure` 又按 attempt 去重，于是连续失败永远只记 1 次。
      * - **触发熔断后**必须真正停掉 BT 客户端/服务端（与 [disconnect] 同路），否则只写一行
-     *   日志、它们的循环仍在重启会话，冷却期形同虚设。
+     *   日志、它们的循环仍在重启会话，冷却期形同虚设。此时**不得**再开新 attempt：
+     *   [disconnect] 会取当前时间线 id 再记一次失败，把第 3 次改写成第 4 次。
      */
     private fun onPreEndpointRoundFailed(
         reason: String,
@@ -1513,9 +1513,11 @@ object SessionController {
             return
         }
         val blocked = AutoReconnectGuard.recordFastFailure(app, peerAddress, snapshot.id)
-        // 无论是否触发熔断，本轮时间线都已结束；后续轮次需要自己的 attempt（见上方 KDoc）。
-        beginPreEndpointRetryAttempt()
-        if (blocked == null) return
+        if (blocked == null) {
+            // 未触发熔断：本轮时间线已结束，仍在运行的 BT 循环需要自己的 attempt（见上方 KDoc）。
+            beginPreEndpointRetryAttempt()
+            return
+        }
         appendLog(
             "AUTO: 连续 ${blocked.failures} 轮在端点交付前失败——暂停自动重连 ${blocked.remainingSeconds} 秒" +
                 "（可在 App 内手动连接）",
@@ -1523,13 +1525,20 @@ object SessionController {
         // 熔断必须真正生效：只写日志的话，仍在运行的 BT 循环会马上再拉一轮。
         // 与 onSenderLinkClosed 触发熔断时同样走 disconnect（BT_LINK_CLOSED 不是用户停止，
         // 不会清空熔断状态）。
+        //
+        // 这里**不能**先开新 attempt：disconnect 会取当前时间线的 id 再记一次失败
+        // （disconnect → finishCurrent/recordAutoReconnectOutcome）。那样会把
+        // failures 从 3 改成 4、再延长一次冷却期，并把 recordedAttempt 改写成一条
+        // 几乎零时长的合成轮次，支撑报告也就看不到真正触发熔断的那一轮。
         appContext?.let { disconnect(it, DiagnosticCode.BT_LINK_CLOSED) }
     }
 
     /**
-     * 端点前失败的轮次结束后，为仍在运行的 BT 循环准备一条新的 BLUETOOTH 时间线。
+     * 未触发熔断、端点前失败的轮次结束后，为仍在运行的 BT 循环准备一条新的 BLUETOOTH 时间线。
      *
-     * 只在确实还有 BT 组件在跑时调用：真正收尾（用户断开/熔断）之后不得凭空造出一条
+     * 只在「本轮尚未触发熔断」且确实还有 BT 组件在跑时调用：触发熔断后调用方会走
+     * [disconnect]，它会按当前时间线 id 再记一次失败；此时若先造一条空 attempt，
+     * 会把熔断次数与冷却期改写。真正收尾（用户断开/熔断）之后也不得凭空造出一条
      * 会一直累加 `elapsedMs` 的 waiting 记录。
      */
     private fun beginPreEndpointRetryAttempt() {
