@@ -1,5 +1,44 @@
 # CarWith 公开入口调查（2026-10-25）
 
+## 2026-11-14 issue #62：奔驰 MB_E-P-4「链路全通、视频 109 秒、车机无画面」（车主报告，未实车复测）
+
+- **来源：** `wangxso/mcarplay#62`，mcarplay `0.1.7` standard/release 的脱敏报告
+  `fa892f38-be89-4f33-82ee-1c7e8d2bdcae`（2026-11-14 09:58:39 UTC+8 导出）。手机 Xiaomi 24031PN0DC /
+  Android 17 / SDK 37；CarWith 4.0.20-20260923、CarLife 8.8.5 (274)；接收端 `/info` 为
+  `Mercedes-Benz / MB_E-P-4`、`firmwareRevision=E354.2_4221`、AirPlay `srcvers=480.7.4`、`features=0x6104040280`。
+  车主描述为 2025 款奔驰 GLC。与 #55 同为 MBUX 平台但 srcvers 代际不同（320.17.7 → 480.7.4）。
+- **日志支持的事实：** BT iAP2 认证、0x4301 热点凭据、pair-setup/verify、RECORD 激活、CarLife 七口与协议握手全部成功；
+  CarWith 透传 1392 帧 / 9.13 MB / 109 s 后由用户手动停止（`USER_STOP`）。全程无错误、无重连；通信侧
+  `WIFI: 已绑定 231（SSID 已知=true）`、rssi −50/−48 dBm、ENV `up=12000kbps`（后一次 2160kbps）；视频侧
+  `车机要帧 0 次`、`队满丢帧 0`、`最慢写入 21ms`；`EVENT: 本轮车机命令统计 iAPSendMessage=116`。
+  同期车机不显示画面，点绿色 CarPlay 图标无反应。
+- **报告里的三条可疑线索（均未定谳）：**
+  1. `/info` 有**两套自相矛盾的几何**，同一 display UUID：`displays[0] heightPixels=1278`（`primaryInputDevice=2`、
+     `type=110`，偏输入/HID 表面）与 `displayPanels[0] heightPixels=1728 + initialVideoStreams`（车机期望接收视频的表面）。
+     我们按 `displays[0]` 的 UUID 与 1278 高编码发送，若车机按 panel 建解码画布，流会「送达但不显示」。
+  2. `modesChanged` 应答在 109 s 内恒为 **42B `{}`**，从未出现成功案例里的 `appStateID=1, state=true`；
+     车机也从未用 `changeModes` 收回主屏。可能是车机拒绝模式切换，也可能是该固件用别的通道确认。
+  3. 隧道 MFi（0xaa02/0xaa03）自报成功后，我们推送了 MIB3 状态突发（0x4157/0x4154/0x4170/0x5000 → 0x4158/0x4155/0x4171/0x5001），
+     此后车机**没有任何订阅往返**（0x4156/0x4170 订阅、0x5002 等都没出现）。「图标变绿但点击无反应」更像车机不认为
+     这是有效 CarPlay 会话。
+  另有一条次要线索：NTP 基准两次采样间出现 ±83 ms 钟差跳变，AirPlay 媒体时钟未稳定；若车机按时间戳调度视频，也可能导致不渲染。
+- **本提交只补诊断，不改协议行为（离线验证，无实车）：** 上述三条线索此前在报告里都只能靠「缺席」推断，日志没有直接结论。
+  现在：
+  - `/info` 解析并列打印 `displays[0]` 与 `displayPanels[].initialVideoStreams` 的几何，高度不同时明确写出
+    （`AIRPLAY: /info 显示表面 → …`）；`displayPanels` 尺寸也纳入能力摘要，面板变化会让缓存能力失效；
+  - `modesChanged` 应答体按语义归类并计数（空 / 无 appStates / 有 appStates，是否含 `state=true`），
+    事件通道结束时汇总一行（`AIRPLAY: 模式切换应答统计 …`）；
+  - MIB3 突发后布防订阅观察：60 s 内 0x4157/0x4154/0x4170/0x5000/0x6800 一条都没有时明确告警，
+    会话结束时汇总实际收到的订阅消息号（`IAPLINK: MIB3 订阅汇总 …`）。
+  **没有**按 `displayPanels` 1728 高发送、没有跳过或改写 `modesChanged` 时序——这两项都需要先有实车对照，
+  否则会拿现有可工作的接收端（奥迪 MIB3、DiPlay、WinPlay、艾瑞泽 8）去赌一个未验证的假设。
+- **下一步（需下一次车主报告）：** 用本构建复现后看三行新增日志：几何是否冲突、`modesChanged` 是否仍恒为空回执、
+  MIB3 是否仍无订阅。三者同时成立才支持「模式切换/资源仲裁未生效」；若只有几何冲突，则优先试
+  「按 `displayPanels` 协商」，并同步改触摸坐标映射（`mapCarLifeTouch` 的 source 尺寸）。
+- **验证边界：** 仅新增 JVM 单元测试（`DisplaySurfaceReportTest`、`ModesAckClassifierTest`、
+  `Mib3SubscriptionWatchdogTest`、`ReceiverCapabilitiesTest` 的面板摘要用例）与本地门禁；**没有在 2025 款 GLC、
+  #55 的 S 级或任何其他车上验证**。本条目不代表该车型兼容，也不证明根因。
+
 ## 2026-11-13 issue #55：奔驰 MB_D-PP-4「开声音后 16–559 ms 拆链」（车主报告，未实车复测）
 
 - **来源：** `wangxso/mcarplay#55`，mcarplay `0.1.6` standard/release 的脱敏报告
