@@ -2323,7 +2323,7 @@ object SessionController {
                 ),
                 isCancelled = isCancelled,
             )
-        if (connectCancelled) return false
+        if (isCancelled()) return false
         when (open) {
             true -> {
                 openWlanSettings()
@@ -2343,7 +2343,8 @@ object SessionController {
             }
         }
         var waited = 0
-        while (shellWifiDisabled() && waited < WLAN_WAIT_TIMEOUT_MS && !connectCancelled) {
+        // 用调用方的判据而不是全局标志：交接被别的链路接手时全局标志可能仍为 false。
+        while (shellWifiDisabled() && waited < WLAN_WAIT_TIMEOUT_MS && !isCancelled()) {
             if (waited == 0) {
                 phaseHint = t(R.string.sc_waiting_wifi)
                 appendLog("WIFI: 等待用户打开 WLAN（最长 120 秒，取消连接可中止）")
@@ -2351,7 +2352,7 @@ object SessionController {
             Thread.sleep(2_000)
             waited += 2_000
         }
-        if (connectCancelled) {
+        if (isCancelled()) {
             phaseHint = t(R.string.sc_cancelled)
             return false
         }
@@ -2369,7 +2370,7 @@ object SessionController {
         shellReady: Boolean,
         isCancelled: () -> Boolean = { connectCancelled },
     ) {
-        if (connectCancelled) return
+        if (isCancelled()) return
         val choice =
             askWifiJoinChoice(
                 DialogSpec(
@@ -2381,7 +2382,7 @@ object SessionController {
                 ),
                 isCancelled = isCancelled,
             )
-        if (connectCancelled) return
+        if (isCancelled()) return
         when (choice) {
             true -> {
                 when (val retry = joinCarWifi(wifi, shellReady)) {
@@ -2423,7 +2424,7 @@ object SessionController {
                     shownNetwork = shown,
                     isCancelled = isCancelled,
                 )
-            if (connectCancelled || useCurrent == null) return
+            if (isCancelled() || useCurrent == null) return
             if (useCurrent) {
                 // 用户确认的是弹窗里那张网络：期间换网则不能把确认套到新网络上。
                 if (shown == null || !shown.matches(connector.currentWifiNetwork(), liveWifiSsid())) {
@@ -2453,10 +2454,14 @@ object SessionController {
         )
         val manualDeadline = android.os.SystemClock.uptimeMillis() + WLAN_WAIT_TIMEOUT_MS
         while (android.os.SystemClock.uptimeMillis() < manualDeadline) {
-            if (connectCancelled) return
+            // 用调用方的判据（含交接所有权），而不是全局 connectCancelled：交接被
+            // 别的链路接手后全局标志可能仍为 false，旧任务继续跑会在一轮新交接里
+            // 绑定旧端点的热点并重注册 ctrl 广播。
+            if (isCancelled()) return
             Thread.sleep(5_000)
+            if (isCancelled()) return
             if (liveWifiSsid() == wifi.ssid) {
-                bindVerifiedCarWifi(wifi.ssid, "手动入网") { }
+                bindVerifiedCarWifi(wifi.ssid, "手动入网", isCancelled) { }
                 return
             }
         }
@@ -2485,10 +2490,10 @@ object SessionController {
         val current = liveWifiSsid()
         if (current == wifi.ssid) {
             appendLog("WIFI: 手机已在车机热点 \"$current\"——直接绑定")
-            bindVerifiedCarWifi(wifi.ssid, "旧安全类型入网") { }
+            bindVerifiedCarWifi(wifi.ssid, "旧安全类型入网", isCancelled) { }
             return
         }
-        if (connectCancelled) return
+        if (isCancelled()) return
         val choice =
             askWifiJoinChoice(
                 DialogSpec(
@@ -2498,10 +2503,11 @@ object SessionController {
                     positive = t(R.string.sc_join_continue),
                     negative = t(R.string.sc_open_wifi_settings),
                 ),
+                isCancelled = isCancelled,
             )
-        if (connectCancelled) return
+        if (isCancelled()) return
         if (choice == false) {
-            manualJoinCarWifi(wifi)
+            manualJoinCarWifi(wifi, isCancelled)
             return
         }
         if (choice == null) {
@@ -2514,7 +2520,7 @@ object SessionController {
             ">>> 手机当前 ${wifiForLog(current, "未连接")}（非车机热点）——" +
                 "经 Shizuku 自动切换到 \"${wifi.ssid}\"",
         )
-        if (connectCancelled) return
+        if (isCancelled()) return
         val result =
             Shell.exec(
                 WifiConnectCommand.build(wifi.ssid, wifi.passphrase, wifi.securityType),
@@ -2532,7 +2538,7 @@ object SessionController {
         appendLog("WIFI: connect-network 已发起（自动保存网络，等待切换…）")
         // 系统切换是异步的（断开当前网/扫描/关联/DHCP，2-10 秒）：轮询 SSID 确认。
         repeat(20) {
-            if (connectCancelled) {
+            if (isCancelled()) {
                 appendLog("WIFI: 自动加入已取消（用户断开）")
                 return
             }
@@ -2540,12 +2546,12 @@ object SessionController {
             if (ssid == null) {
                 // status 命令不可用（非 AOSP 系统）：不做无 SSID 校验的通配绑定，
                 // 只接受核验句柄或用户确认的当前网络。
-                bindVerifiedCarWifi(wifi.ssid, "旧安全类型入网") { }
+                bindVerifiedCarWifi(wifi.ssid, "旧安全类型入网", isCancelled) { }
                 return
             }
             if (ssid == wifi.ssid) {
                 appendLog("WIFI: 已切到车机热点 ${wifi.ssid}")
-                bindVerifiedCarWifi(wifi.ssid, "旧安全类型入网") { }
+                bindVerifiedCarWifi(wifi.ssid, "旧安全类型入网", isCancelled) { }
                 return
             }
             Thread.sleep(800)
