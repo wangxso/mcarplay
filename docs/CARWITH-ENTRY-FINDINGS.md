@@ -2391,14 +2391,14 @@ standard/release，签名摘要 `ea628c8b`。接收端 iAP2 `0x1D01` 自报 `AH4
   `dataPort=6030`；timing 首包 32B 有应答。`RECORD` 后车机经 `/command` 的 `iAPSendMessage` 开虚拟 iAP2 链路
   （与 mcarplay `VirtualIap2Link` 同一形态），全程 `parse-rejected=0`、`retries=0`。
 - **视频链路与 mcarplay 根本不同（最重要的边界）：** 该 app 绑 `com.miui.carlink/com.xiaomi.ucar.carlife.
-  CarlifeConnService`（`com.baidu.carlife.mixing.aidl.ICarLifeCastManager`）调 `prepareCast` 直接拿 CarWith
-  的宿主 Surface 自己编码（`input=CarWith-Surface`、`generator=cached-YUV`，日志同时记
+  CarlifeConnService`（`com.baidu.carlife.mixing.aidl.ICarLifeCastManager`）调 `prepareCast` 把自己编码器的
+  input Surface 交给 CarWith 渲染（`input=CarWith-Surface`，日志同时记
   `CarLife Binder is a separate entry; no network/USB CarLife startup`），触摸/音频另走 CarLife Binder 监听。
   mcarplay 走的是七路 CarLife 协议 + 透传/转码码流，**全仓没有 `prepareCast` 调用**。因此「这台车机上它出图」
   只能说明车机 AirPlay 侧接受本机推流，**不能推出 mcarplay 的七路路径在同一车机上会成功**。
-  另有一处待核对的矛盾：仓库既有结论是 `CarlifeConnService.i()` 校验调用方 UID 包名，第三方 APK 不能调用
-  `prepareCast`；本日志却在 CarWith `4.0.20-20260923` 上记 `prepareCast accepted`。两者只有其一成立，
-  需在同一 CarWith 版本上用一次受控调用确认（可能是构建差异、调用点不同，或 `accepted` 仅是该 app 的本地判断）。
+  早先记为「待核对的矛盾」（`CarlifeConnService.i()` 校验调用方 UID 包名 vs 日志里 `prepareCast accepted`）已由下节
+  APK 静态分析解释：该 APK 的 manifest 包名就是 `com.baidu.carlife.xiaomi`，按包名查 UID 的校验自然通过；
+  它替换的正是百度 CarLife 这个用户应用（见下节）。
 - **视频：** `prepareCast(size=1624x1278, dpi=160, encoderFPS=30)` 被 CarWith 采纳，编码器
   `c2.qti.avc.encoder` 1624×1278@30、7,783,020 bps、`input=CarWith-Surface`，首帧 IDR 即 1624×1278；
   帧率由 CarWith 的 `carlife_dynamic_params` 驱动（`carlife_frame=30` → 20），实发稳定 20–21 fps，
@@ -2412,8 +2412,8 @@ standard/release，签名摘要 `ea628c8b`。接收端 iAP2 `0x1D01` 自报 `AH4
   `modesChanged`。**同一台车机先后使用借用式与接管式两种参数**，对前者的 501 没有导致拆链。
 - **触控：** 车机侧主动发 `hidSendReport{uuid:"2", 5 字节}`，坐标直接按 1624×1278 转发给 CarWith
   （`source == target`，无缩放），`target=CarWith dispatched=true`。第 1 轮 +32.6 s 一次滑动（down/move/move/up）；
-  第 2 轮 +12.4 s 起三次点按。车机只有在渲染出画面后才会去点，这是「车机确实出了图」的强旁证——但**出的是
-  哪一帧无法判定**（见下条 `generator=cached-YUV`），日志本身也仍标 `receiver-rendering=unmeasured`、
+  第 2 轮 +12.4 s 起三次点按。车机只有在渲染出画面后才会去点，这是「车机确实出了图」的强旁证——但**画面内容
+  仍无法判定**（APK 里没有任何回读车机屏的路径），日志本身也仍标 `receiver-rendering=unmeasured`、
   `receiver-display-fps=unknown`。
 - **未应答的 iAP2 订阅：** 车机重复下发 `0xAE00`(power)、`0x4157`(communications)、`0x4170`(list)、
   `0x5200`(route guidance)、`0x4154`(call state) 五条 CSM，该 app 一律记 `unhandled` 不回包；对照之下它**回了**
@@ -2426,14 +2426,75 @@ standard/release，签名摘要 `ea628c8b`。接收端 iAP2 `0x1D01` 自报 `AH4
 - **音频：** **零音频证据。** 全程没有音频 `SETUP`、没有 type 100/102、没有 PCM/RTP 计数，只有
   `awaiting valid PCM before live-audio activation` 与 `microphone route selection=vehicle capability-only`。
   车主口述的「视频连接成功」严格讲只覆盖视频链路，声音完全未被验证。
-- **不能从本日志推出的结论：** ① 画面内容未确认——app 状态行自述「正在发送测试画面（请确认车机显示）」，
-  且**全部 195 条成本行（去重后）都是 `generator=cached-YUV`、`render-ms=0.0`、`copy-ms=0.0`**（跨两轮 12 分钟无变化），
-  加上每轮的 `receiver rendering still needs confirmation`：无法判断车机收到的是实时 CarWith 画面、缓存的
-  测试图，还是两者先后出现过。若 12 分钟里一直是缓存帧，「车机能点屏」也不能证明点到了 CarWith 界面。
-  ② 发送成功不等于车机解码，11-12 那份 mcarplay 报告同一教训。③ 两轮的 fps 窗口、分辨率一致，但
-  **未记录 CarWith 实际编码尺寸**，无法据此判断「CarWith 返回 1280×720」是否为 MBUX 无画面的原因。
-  ④ 单车主、单次导出，不代表该车型稳定。
+- **不能从本日志推出的结论：** ① 画面内容仍未确认——app 自述 `receiver rendering still needs confirmation`，
+  且**全部成本行都带 `generator=cached-YUV`、`render-ms=0.0`、`copy-ms=0.0`**（跨两轮 12 分钟无变化）。
+  经下节 APK 静态分析，这三点**不能**当作「可能在重发缓存帧」的证据：`generator=cached-YUV` 是该 app 日志里的
+  硬编码常量，`render-ms/copy-ms` 的计数器只包住 CPU 测试图案与 YUV 平面拷贝，Surface 输入路径本就不走它们，
+  所以 Surface 模式下恒为 0.0 是预期结果；该模式下也不存在周期性的测试图案渲染。也就是说，这两项既不能证明
+  也不是反证「车机看到的是实时 CarWith 画面」。② 发送成功不等于车机解码，11-12 那份 mcarplay 报告同一教训。
+  ③ 两轮的 fps 窗口、分辨率一致，但 **未记录 CarWith 实际编码尺寸**，无法据此判断「CarWith 返回 1280×720」是否为
+  MBUX 无画面的原因。④ 单车主、单次导出，不代表该车型稳定。
 - **待办（问车主即可推进）：** ① 车机屏上实际看到的内容（CarWith 界面 / 测试图案 / 黑屏）与点击反馈；
-  ② 打开声音后重连再导出一份，覆盖音频路径；③ 该 app 名称、版本与「原始流 / 手机端重编码」类开关取值；
+  ② 打开声音后重连再导出一份，覆盖音频路径；③ 该 app 的名称与版本已由 APK 确认为「BOX OFF」
+  `8.1.1-carplay.C`（见下节）：它的界面只有启用开关、选择目标车机（或手填地址）、导出/复制日志、打开 CarWith
+  这几项，**没有**「原始流 / 手机端重编码」开关，也没有分辨率或帧率选项——视频恒为手机端再编码、几何取自车机
+  `/info`，因此不必再向车主索取这些取值；
   ④ 若要判断 mcarplay 在这台车机上的差距，需要同一台车机、同一手机上的 mcarplay 脱敏报告做**成对**比较。
   转发与归档时注意：原始文件含车机热点明文口令与接收端 MAC，已按仓库规则排除在本文之外。
+
+## 上述第三方发送端的 APK 静态分析：BOX OFF 8.1.1-carplay.C（2026-11-15，车主提供的闭源 APK，非本仓库代码）
+
+- **样本与归属：** 车主提供的 `BOX-OFF-8.1.1-carplay.C-100022-debugfalse-r8.apk`，10,941,416 B，SHA-256
+  `e9c03b4de4ddde00b6a7ce4602a6212e9b28af4f41635866bf581703644ef462`；证书 CN「CarWith CT5 Research」、
+  O「Jianfeng Zou」、自签 3072-bit RSA（SHA-256 `39:EA:8A:…:1E:E1`）。`BuildConfig` 为
+  `APPLICATION_ID=com.baidu.carlife.xiaomi`、`VERSION_NAME=8.1.1-carplay.C`、`VERSION_CODE=100022`、
+  `GIT_SHA=carplayB`、`NATIVE_HOOK_ID=provider-no-hook`，与上一节日志头的 `8.1.1-carplay.C (carplayB)` 一致，
+  可确认是同一款软件。APK 本身不入库，本节只记录静态事实。
+- **身份伪装是整个方案的地基：** manifest 包名直接取 `com.baidu.carlife.xiaomi`，并保留百度侧类名
+  （`com.baidu.carlife.CarlifeActivity` 别名、`com.baidu.carlife.service.CarlifeConnectService` 导出服务、
+  `com.baidu.carlife.mix.xiaomi.XiaomiPermissionActivity`）。它替换的是**百度 CarLife 这个用户应用**，不是 CarWith；
+  由此 `CarlifeConnService.i()` 按包名查调用方 UID 的校验天然通过，「第三方 APK 不能调 `prepareCast`」的限制在这条
+  路上不成立——这正是上节那个「矛盾」的解释。代价是与原厂 CarLife `8.8.4` 不能共存（同包名）。
+- **三条接入路径，日志证明跑的是最弱的一条：** `CarWithBridge.Transport` 有 `HOOK` / `DIRECT` /
+  `CARLIFE_SESSION` 三种。`HOOK` 与 `CARLIFE_SESSION` 需要 LSPosed 注入 CarWith 进程，且都硬性要求 CarWith
+  `4.0.14-20260801`（`SUPPORTED`/`expected inspected` 常量，版本不等即抛异常）；本次车机手机上是 `4.0.20-20260923`，
+  日志也记 `transport selected=DIRECT`、`formalSession=false requires-LSPosed=false`，因此**无 Xposed、无 root**
+  的 `DIRECT` 路径即已完成出图。`DIRECT` 的握手全部是手写 Parcel：tx 3 注册 `ISystemAudioCallback`、tx 4 注册
+  `ICarLifeCastCallback`、tx 5 发 `Intent("carlife_connect_audio_type")`、tx 1 依次写
+  `int 1 / width / height / dpi 160 / Parcelable Surface`（首个 int 恒为 1，具体语义未从 CarWith 侧确认）；
+  会话结束时用 tx 2 释放。触控/按键/音频三个监听器由 CarWith 反过来在 cast 回调上以
+  `IRemoteTouchListener`/3、`IRemoteKeyListener`/5、`IRemoteAudioListener`/12 交付 binder，之后该 app 在每个
+  监听器上调 tx 1 发送事件（这几个号属于回调与监听器接口，与 manager 的 1–5 各自独立）。
+  日志里的 `prepareCast accepted` 是该客户端 `transact()` 返回后的**本地**日志行，不是 CarWith 的回执——
+  CarWith 真正的回执是随后的
+  `onCastPrepared displayId=5/7`（回调事务 2），上一节记的「本地判断」猜测在此得到证实。
+- **视频方向与 mcarplay 相反：** 它把**自己**的 `MediaCodec` 输入 Surface 交给 CarWith，由 CarWith 把 CarLife 界面
+  渲染到这个 Surface（`TestVideo` 中 `carWith=true` ⇒ `surfaceInput=true` ⇒ 日志标 `input=CarWith-Surface`），
+  再从同一个编码器取 H.264 送 AirPlay。`BRAND_SURFACE startup frame submitted` 是启动时向该 Surface 画一次
+  `boxoff-test.webp` 品牌图（`Ct5BrandSurface.draw` → EGL 上传），随后 `CarWithBridge.begin(surface,w,h,fps)` 发布
+  会话。`render-ms=0.0 / copy-ms=0.0` 之所以恒为 0 也在这里：`TestPattern.render()` 与 YUV 平面拷贝只在
+  `carWith=false` 的 CPU 路径上执行并计数；Surface 路径不经过它们。`generator=cached-YUV` 更是
+  `TestVideo.smali` 里一条 `const-string` 常量（全 APK 仅此一处），与运行时实际取帧方式无关。
+  结论：上一节据此推断「车机可能在看缓存帧」不成立；该常量与 0.0 成本行**既不能证明也不能否证**车机看到的是实时画面。
+- **音频与触控同样是 Binder 旁路：** 音频不是自己抓取，而是由 CarWith 通过 `ISystemAudioCallback` 推 PCM
+  （`Ct5AudioIngressBinder` 校验 8–48 kHz、1–2 声道、encoding=2、分块整除，再走 24 深度队列；日志中的
+  `pcm handler completed`、`pcm rejected category=` 即此处）；触控由车机 `hidSendReport` 直接转发给 CarWith
+  （`CarWithDirectContract.coordinate()` 做缩放，本次 source==target 故无缩放）。**它全程不建立任何 CarLife 七路
+  TCP 连接**：全 APK 搜不到 7240/8240/9240/9241/9242/9340/9440 的常量用法（命中的都是 BouncyCastle 常量），
+  socket 只出现在 AirPlay 与接收端发现代码里。所以它与 mcarplay 的能力不重叠，「它能出图」对七路路径没有证据价值。
+- **权限面与 mcarplay 的分界：** 除正常蓝牙/定位/网络/前台服务权限外只有 `moe.shizuku.manager.permission.API_V23`；
+  Shizuku 只用于 `desktop/` 那套「车机桌面镜像」（`DesktopProjection` 创建 VirtualDisplay，`ShizukuDisplaySession`
+  注入输入），本次日志未走该分支。APK 内含 Xposed 实现（`hook/BluetoothHook` 注入 `com.android.bluetooth`、
+  `CarWithHook`/`CarWithSessionHook` 注入 `com.miui.carlink`、`res/values/arrays.xml` 的 `xposed_scope`），但
+  **没有 `xposed_init` 资产或模块元数据**，即当前不是可安装的 Xposed 模块；且 `BluetoothHook` 额外用
+  SDK==37 + 整机 fingerprint `Xiaomi/pudding/pudding:…OS4.0.0.32.XPCCNXM` + `/apex/com.android.bt/lib64/
+  libbluetooth_jni.so` 的 SHA-256 三重门禁，native 库 `libcarplay_eir_hook.so` 才 patch `SDP_AddSequence`
+  (rva 0x8ceaa8) 与 `WriteEIR` (rva 0xb02c80)，把 SPP 服务描述改成 `…cafe`、并伪造 HFP 的
+  CGMI/CGMM/CGMR 为 Apple/iPhone/iOS 26.0。这些是它能在部分机型上表现得像 iPhone 的原因，也是 mcarplay
+  明确不做的事（本仓库不 patch 系统蓝牙、不伪造 UID、不冒充百度包名）。
+- **对本仓库的可用结论：** ① 在 CarWith 4.0.20 + MBUX 上，**仅凭一个同包名应用 + 公开 Binder 事务**就能让
+  CarWith 把界面渲染给第三方 Surface 并由第三方编码送出，无需 root/Xposed——这条路 mcarplay 未采用，也不建议采用；
+  ② 它证明 MBUX 接受手机端 H.264 + `viewAreas` 的推流形态，与 mcarplay 的七路 + 转码路径是两条独立路线，不能互相
+  背书；③ 它的日志自述多处 `unverified`（`receiver rendering still needs confirmation`、
+  `receiver-display-fps=unknown`、`audibleOutputProven=false`、`foreground=unverified`），车主口述的「视频成功」
+  仍只能算**车机侧出现了画面**，画面内容与声音依旧未证实。
