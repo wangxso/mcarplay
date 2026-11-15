@@ -206,6 +206,9 @@ class MainActivity : AppCompatActivity() {
 
     /** 当前打开的「加入热点」确认弹窗：取消连接时联动关闭（触发流程中止）。 */
     private var wifiJoinDialog: androidx.appcompat.app.AlertDialog? = null
+
+    /** 仍未关闭的确认弹窗，按 [SessionController.DialogSpec.requestId] 索引（流程侧提前撤框用）。 */
+    private val dialogRequestIds = java.util.concurrent.ConcurrentHashMap<Long, androidx.appcompat.app.AlertDialog>()
     private var receiverDetectionDialog: androidx.appcompat.app.AlertDialog? = null
     private var pendingDetectionTarget: TargetDevicePrefs.Target? = null
 
@@ -962,7 +965,8 @@ class MainActivity : AppCompatActivity() {
         // 连接流程的重要提示（WiFi 未开启/热点加入限制等）以 Snackbar 长显
         SessionController.uiHintSink = uiHintSinkRef
         // 加入热点确认弹窗：继续自动加入 / 打开 WLAN 设置手动连。
-        // 取消连接时 cancel() 联动关闭（触发 onChoice(null) → 流程检查取消标志中止）
+        // 取消连接时 cancel() 联动关闭（触发 onChoice(null) → 流程检查取消标志中止）。
+        // 流程侧提前退出（蓝牙链路断开等）也会按 requestId 关闭它，免得留下无人消费的确认框。
         SessionController.dialogSink = { spec, onChoice ->
             runOnUiThread {
                 if (isFinishing || isDestroyed) {
@@ -994,7 +998,15 @@ class MainActivity : AppCompatActivity() {
                         onCancel = { if (!answered) onChoice(null) },
                     )
                 wifiJoinDialog = dialog
+                dialogRequestIds[spec.requestId] = dialog
+                dialog.setOnDismissListener {
+                    dialogRequestIds.remove(spec.requestId)
+                    if (wifiJoinDialog === dialog) wifiJoinDialog = null
+                }
             }
+        }
+        SessionController.dialogDismissSink = { requestId ->
+            runOnUiThread { dialogRequestIds.remove(requestId)?.cancel() }
         }
         SessionController.ssidSink = ssidSink
         console.render(SessionController.logText())
@@ -2363,6 +2375,8 @@ class MainActivity : AppCompatActivity() {
         if (SessionController.logListener === logListener) SessionController.logListener = null
         if (SessionController.uiHintSink === uiHintSinkRef) SessionController.uiHintSink = null
         SessionController.dialogSink = null
+        SessionController.dialogDismissSink = null
+        dialogRequestIds.clear()
         if (SessionController.ssidSink === ssidSink) SessionController.ssidSink = null
     }
 }
