@@ -958,8 +958,6 @@ object SessionController {
         val message: String,
         val positive: String,
         val negative: String,
-        /** 本次询问的标识：取消等待时只关这一次的弹窗，不误关后续轮次的提问。 */
-        val requestId: Long = 0L,
     )
 
     /**
@@ -977,20 +975,6 @@ object SessionController {
         WifiPromptBroker<DialogSpec, WifiNetworkToken<Network>>(
             tokensMatch = { shown, current -> shown.matches(current.network, current.ssid) },
         )
-
-    /**
-     * 关闭仍在等待的某一次询问（参数与 [DialogSpec.requestId] 相同）。
-     *
-     * [WifiPromptBroker] 只负责「停止等待」，不会关掉已经显示的 AlertDialog：取消连接或
-     * 蓝牙拆链让等待提前返回后，弹窗仍留在屏上无人消费（用户会看到一个点了也没用的框）。
-     * 等待方退出时必须同时撤框，因此按 requestId 单独登记。
-     */
-    @Volatile
-    var dialogDismissSink: ((Long) -> Unit)? = null
-
-    private val dialogRequestIds =
-        java.util.concurrent.atomic
-            .AtomicLong()
 
     private fun ensureSessionObjects(context: Context) {
         if (bluetoothServer != null) return
@@ -2211,7 +2195,7 @@ object SessionController {
     }
 
     /** WiFi 未开启时的引导与等待；true = 已开启可继续。 */
-    private fun waitForWifiEnabled(isCancelled: () -> Boolean = { connectCancelled }): Boolean {
+    private fun waitForWifiEnabled(): Boolean {
         val open =
             askWifiJoinChoice(
                 DialogSpec(
@@ -2220,7 +2204,6 @@ object SessionController {
                     positive = t(R.string.sc_open_wifi_settings),
                     negative = t(R.string.sc_cancel),
                 ),
-                isCancelled = isCancelled,
             )
         if (connectCancelled) return false
         when (open) {
@@ -2266,7 +2249,6 @@ object SessionController {
     private fun promptSpecifierFailed(
         wifi: Iap2SenderSession.WifiConfiguration,
         shellReady: Boolean,
-        isCancelled: () -> Boolean = { connectCancelled },
     ) {
         if (connectCancelled) return
         val choice =
@@ -2278,14 +2260,13 @@ object SessionController {
                     positive = t(R.string.sc_retry),
                     negative = t(R.string.sc_open_wifi_settings),
                 ),
-                isCancelled = isCancelled,
             )
         if (connectCancelled) return
         when (choice) {
             true -> {
                 when (val retry = joinCarWifi(wifi, shellReady)) {
                     is WifiCarPlayConnector.JoinResult.Joined -> Unit
-                    WifiCarPlayConnector.JoinResult.Unsupported -> legacyJoinCarWifi(wifi, shellReady, isCancelled)
+                    WifiCarPlayConnector.JoinResult.Unsupported -> legacyJoinCarWifi(wifi, shellReady)
                     WifiCarPlayConnector.JoinResult.Unavailable -> {
                         phaseHint = t(R.string.sc_join_failed_manual)
                         appendLog("WIFI: 重试仍未加入 \"${wifi.ssid}\"——请到系统 WLAN 手动连接")
@@ -2293,7 +2274,7 @@ object SessionController {
                 }
             }
 
-            false -> manualJoinCarWifi(wifi, isCancelled)
+            false -> manualJoinCarWifi(wifi)
 
             null -> {
                 phaseHint = t(R.string.sc_join_failed_retry)
@@ -2303,10 +2284,7 @@ object SessionController {
     }
 
     /** 手动兜底：密码进剪贴板 + 跳 WLAN 设置，轮询用户是否连上。 */
-    private fun manualJoinCarWifi(
-        wifi: Iap2SenderSession.WifiConfiguration,
-        isCancelled: () -> Boolean = { connectCancelled },
-    ) {
+    private fun manualJoinCarWifi(wifi: Iap2SenderSession.WifiConfiguration) {
         val connector = wifiConnector
         if (connector != null && connector.hasExistingWifi() && connector.currentWifiSsid() == null) {
             val shown = currentNetworkToken()
@@ -2320,7 +2298,6 @@ object SessionController {
                         negative = t(R.string.sc_open_wifi_settings),
                     ),
                     shownNetwork = shown,
-                    isCancelled = isCancelled,
                 )
             if (connectCancelled || useCurrent == null) return
             if (useCurrent) {
@@ -2371,7 +2348,6 @@ object SessionController {
     private fun legacyJoinCarWifi(
         wifi: Iap2SenderSession.WifiConfiguration,
         shellReady: Boolean,
-        isCancelled: () -> Boolean = { connectCancelled },
     ) {
         if (!shellReady) {
             phaseHint = t(R.string.sc_not_on_hotspot, wifi.ssid)
@@ -2538,11 +2514,6 @@ object SessionController {
      * （见 [WifiPromptBroker]）。`null` = 调用方没有网络快照，此问题不合并。
      *
      * 取消或轮次变化时立即返回 null，并且不再为新网络补弹旧轮次的框。
-     *
-     * [isCancelled] 必须是本轮的有效性判定（通常含 [connectCancelled] 与交接所有权）：
-     * 车机拆链后等待要立刻退出。broker 只负责停止等待，**不会**关掉已显示的
-     * AlertDialog，因此提前退出时还要按 requestId 撤框，否则用户会看到一个点了也
-     * 没用的框（见 [dialogDismissSink]）。
      */
     private fun askWifiJoinChoice(
         spec: DialogSpec,
@@ -2569,12 +2540,6 @@ object SessionController {
                 }
 
                 is WifiPromptBroker.Claim.Owner -> {
-                    // 本次询问的标识：提前退出时按它撤掉对应的那个弹窗。
-                    val requestId = dialogRequestIds.incrementAndGet()
-                    val request = spec.copy(requestId = requestId)
-                    val answered =
-                        java.util.concurrent.atomic
-                            .AtomicBoolean(false)
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         val sink = dialogSink
                         if (sink == null) {
@@ -2582,20 +2547,13 @@ object SessionController {
                             wifiPromptBroker.finish(claim, null, cache = false)
                             return@post
                         }
-                        sink(request) { result ->
-                            answered.set(true)
+                        sink(spec) { result ->
                             wifiPromptBroker.finish(claim, result, cache = true)
                         }
                     }
-                    try {
-                        val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000, ::expired)
-                        if (!claim.future.isDone) wifiPromptBroker.timeout(claim)
-                        return answer
-                    } finally {
-                        // 提前退出（取消/跨轮/超时）时撤掉仍显示的弹窗；已应答时是无害 no-op
-                        // （UI 侧按 requestId 只关对应那一个）。
-                        if (!answered.get()) runCatching { dialogDismissSink?.invoke(requestId) }
-                    }
+                    val answer = wifiPromptBroker.await(claim.future, JOIN_DIALOG_TIMEOUT_S * 1_000, ::expired)
+                    if (!claim.future.isDone) wifiPromptBroker.timeout(claim)
+                    return answer
                 }
             }
         }
@@ -5253,7 +5211,7 @@ object SessionController {
                         }
 
                         WifiCarPlayConnector.JoinResult.Unavailable -> {
-                            promptSpecifierFailed(wifi, shellReady, isCancelled)
+                            promptSpecifierFailed(wifi, shellReady)
                             settled = true
                             val bound = boundCarSsid == wifi.ssid && wifiConnector?.currentNetwork != null
                             onResult(bound)
@@ -5430,7 +5388,6 @@ object SessionController {
                     positive = t(R.string.sc_open_wifi_settings),
                     negative = t(R.string.sc_keep_waiting),
                 ),
-                isCancelled = isCancelled,
             )
         if (isCancelled()) {
             onResult(false)
