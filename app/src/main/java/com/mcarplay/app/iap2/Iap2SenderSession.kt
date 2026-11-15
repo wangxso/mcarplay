@@ -184,6 +184,9 @@ class Iap2SenderSession(
     /** 0x4301 原始体是否已记录（每轮会话一次，避免周期补发刷屏）。 */
     private var startSessionRawLogged = false
 
+    /** 0x4300 本轮是否已发（车机可收时会在凭据窗口内提前发，Phase 1 末尾幂等）。 */
+    private var carPlayAvailabilitySent = false
+
     /** 最近一次晚到 0x4301 的端点指纹（车机周期重发相同内容时不重复打详情）。 */
     private var lastLateStartSessionSignature: Int? = null
 
@@ -247,6 +250,16 @@ class Iap2SenderSession(
 
         /** 等 0x5703 期间检查车机 ctrl 邀请的间隔。 */
         const val INVITE_POLL_MILLIS = 500L
+
+        /**
+         * 车机「可收 0x4300 且会发 0x4301」时等 0x5703 的上限（issue #69）。
+         *
+         * 这类车机（上汽 AH4EM 实测）根本不参与 0x57xx，继续等旧协议只会拖到车机
+         * 拆链。值取 6 秒：0x4300 已在窗口内发出，给 0x4301 足够往返时间；
+         * 同时显著短于整轮预算，保证后续还能在活链路上处理 0x4301。
+         * 不是协议常量，是现场观察得出的兼容阈值。
+         */
+        const val WIFI_CREDENTIAL_WAIT_WITH_START_SESSION_MILLIS = 6_000L
 
         /**
          * 等 0x4301 的短窗口（声明会发的测试台毫秒级应答；没声明的车机直接跳过）。
@@ -414,6 +427,38 @@ class Iap2SenderSession(
         val declaresReceiveWifi =
             accessoryDeclaresReceive(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
         val declaresSendWifi = accessoryDeclaresSend(Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION)
+        // 正向能力：车机可收 0x4300 就在 0x5702 之后立刻发，不等旧协议救援循环结束。
+        // 依据是上汽 AH4EM（issue #69，0.1.7，2026-11-15 报告）：它的清单只声明
+        // 收 0x4300、发 0x4301，完全不参与 0x57xx；旧实现等到整轮 deadline（车机
+        // 约 60 秒后主动拆链）才去发 0x4300，通道已死，0x4300 一次都没真正发出。
+        // 两条请求互不冲突：0x4300 本来就每轮无条件发送，这里只是提前到凭据窗口内。
+        // 只按「是否声明可收」分派，不看品牌；未声明（null）时保持原时序。
+        val declaresReceiveCarPlayAvailability = accessoryDeclaresReceive(Iap2MessageIds.CARPLAY_AVAILABILITY)
+        val declaresSendStartSession = accessoryDeclaresSend(Iap2MessageIds.CARPLAY_START_SESSION)
+        // 正向能力判据（只决定 **时序**，不改变画像分派）：车机声明可收 0x4300、会发
+        // 0x4301，且完全不参与旧协议、也不开 EA 会话时，0x4300 在 0x5702 之后立刻发。
+        //
+        // 为什么不能像 issue #69 建议的那样改 ReceiverProfile.classify()：
+        // 本仓库自己记录的「奥迪 MMI 3315」识别帧（ReceiverProfileTest）就是
+        // 收 {0x4e0c,0x4e09,0x4300,0xea00}、发 {0x4301,0xea03}——与上汽 AH4EM 的
+        // 「收 0x4300、发 0x4301、无 0x57xx」在 0x430x 能力上**完全同形**。若按
+        // 「0x4300+0x4301 即 NEW」分派，那台奥迪会从「必须发 0x5702」翻成「跳过」，
+        // 而 2026-10-22 真车日志定谳：跳过 0x5702 它就不启动 AirPlay 服务（45 次
+        // ECONNREFUSED）。奥迪与上汽的清单在这条判据上不可区分，因此不改 classify()。
+        //
+        // 这里用 EA 声明的缺席把两者分开：奥迪 3315 在 0x1D01 里声明 0xea00/0xea03
+        // 并走 EA 会话；上汽 AH4EM 的清单只有 2+2 项，没有任何 EA 消息。这是能力事实，
+        // 不是品牌判断；任何同样形态的车机都走同一条路。旧协议声明在场时保持原时序。
+        //
+        // EA 判据同时看两条：0x1D01 的 EA 协议组件（eaProtocols）与两份消息清单里
+        // 是否出现任一 0xEA 消息。只看前者会被「有清单、没组件」的车机漏判。
+        val earlyCarPlayAvailability =
+            declaresReceiveCarPlayAvailability == true &&
+                declaresSendStartSession == true &&
+                declaresReceiveWifi != true &&
+                declaresSendWifi != true &&
+                eaProtocols.isEmpty() &&
+                !declaresAnyEaMessage()
         val legacyWifiExchange = wifiGen != ReceiverProfile.WifiGen.NEW
         if (!legacyWifiExchange) {
             log(
@@ -433,33 +478,62 @@ class Iap2SenderSession(
                 null
             } else {
                 send(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
+                // 车机声明可收 0x4300：**立刻**发，与 0x5702 并行。两条请求互不冲突，
+                // 且 0x4300 本来每轮都会发；提前只影响时序。上汽 AH4EM（issue #69）
+                // 只认这条路，若等到救援循环结束（整轮预算，车机约 60 秒后拆链）才发，
+                // 通道已死、0x4300 一次都没真正发出。
+                if (earlyCarPlayAvailability) {
+                    sendCarPlayAvailability()
+                    log("iap2 车机可收 0x4300 且会发 0x4301（无 0x57xx、无 EA）——已在 0x5702 之后立即发出")
+                }
                 // 0x5703 分段等待：先重发问候、再重发 0x5702，最后才放弃走 0x4300/0x4301。
+                // earlyCarPlayAvailability 时 0x4301 已在并行路径上，迟到即放弃等旧协议。
                 var wifiConfiguration =
-                    expectOrNull(
-                        Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
+                    awaitWifiConfiguration(
                         wifiRescueDeadline(deadline, 1_500L),
+                        stopOnStartSession = earlyCarPlayAvailability,
                     )
-                if (wifiConfiguration == null) {
+                if (wifiConfiguration == null && channel.isAlive && !startSessionPending()) {
                     sendDeviceStateGreetings(force = true)
                     log("iap2 0x5703 1.5s 未到——重发设备状态问候，继续等待")
                     wifiConfiguration =
-                        expectOrNull(
-                            Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
+                        awaitWifiConfiguration(
                             wifiRescueDeadline(deadline, 1_300L),
+                            stopOnStartSession = earlyCarPlayAvailability,
                         )
                 }
-                if (wifiConfiguration == null) {
+                var startSessionWhileWaiting = startSessionPending()
+                if (wifiConfiguration == null && channel.isAlive && !startSessionWhileWaiting) {
                     send(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
                     log("iap2 0x5702 重发一次（首次仅链路 ACK）")
                     // 分片等待并检查 ctrl 邀请：帕萨特 2025（2026-10-31 23:50）入网后 26 秒即发邀请，
                     // 却迟迟不回 0x5703（首次配对前）；整窗干等到会话期限（约 90 秒）才进兜底，用户早已放弃。
                     // 邀请已到 = 手机已在车机网络上，不必再等凭据。
-                    while (wifiConfiguration == null && System.nanoTime() < deadline) {
+                    //
+                    // 退出上限：
+                    //  - 缺省仍是整轮 deadline（邀请可能迟到几十秒，不能提前拆链）；
+                    //  - 车机同时声明「可收 0x4300」且「会发 0x4301」时改用凭据等待额度。
+                    //    这类车机（#69 上汽 AH4EM）根本不参与 0x57xx，旧实现会一直等到
+                    //    车机自己拆链（报告里约识别后 60 秒），之后才去发 0x4300，
+                    //    通道已死，0x4300 一次都没真正发出。
+                    val credentialDeadline =
+                        if (earlyCarPlayAvailability) {
+                            wifiRescueDeadline(deadline, WIFI_CREDENTIAL_WAIT_WITH_START_SESSION_MILLIS)
+                        } else {
+                            deadline
+                        }
+                    while (wifiConfiguration == null && System.nanoTime() < credentialDeadline) {
                         wifiConfiguration =
                             expectOrNull(
                                 Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
-                                wifiRescueDeadline(deadline, INVITE_POLL_MILLIS),
+                                wifiRescueDeadline(credentialDeadline, INVITE_POLL_MILLIS),
                             )
+                        if (wifiConfiguration == null && startSessionPending()) {
+                            // 新协议先行送达：0x4301 自带 AP 信息，不必再等 0x5703。
+                            startSessionWhileWaiting = true
+                            log("iap2 0x4301 已到（早于 0x5703）——停止等待旧协议凭据，改用 0x4301 自带 AP 信息")
+                            break
+                        }
                         if (wifiConfiguration == null &&
                             (receiverInvited?.invoke() == true || unverifiedInvitePending())
                         ) {
@@ -469,8 +543,10 @@ class Iap2SenderSession(
                         if (!channel.isAlive) break
                     }
                 }
-                if (wifiConfiguration == null) {
+                if (wifiConfiguration == null && (channel.isAlive || startSessionWhileWaiting)) {
                     log("iap2 0x5703 三段救援（问候/0x5702 重发）后仍未到达——改走 0x4300/0x4301（新版协议自带 AP 信息）")
+                }
+                if (wifiConfiguration == null) {
                     null
                 } else {
                     // 显式断言：上面按分段等待赋值过 3 次，避免依赖 var 的智能转换
@@ -515,13 +591,11 @@ class Iap2SenderSession(
         //    超时返回无端点的 CarPlayEndpoint，由主控 mDNS 合成。
         // 0x4300 同样发后不管：2026-10-11 12:52 轮实测车机曾对它停止 ACK
         // （事件通道 SYN 洪水把它打懵的时段），链路看门狗险些再次自杀。
-        sendFireAndForget(
-            Iap2MessageIds.CARPLAY_AVAILABILITY,
-            Iap2Csm.group(1, Iap2Csm.u8(0, 1), Iap2Csm.string(1, bluetoothMac)),
-        )
+        // 幂等：车机声明可收 0x4300 时，凭据窗口内已提前发过（见 #69 分支）。
+        sendCarPlayAvailability()
         // 车机声明里没有 0x4301 就直接跳过等待（Audi 实测每轮白等 10s）：
         // 真 iPhone 对这类车机也不等——AirPlay 端点经 mDNS/网关合成。
-        val declaresStartSession = accessoryDeclaresSend(Iap2MessageIds.CARPLAY_START_SESSION)
+        val declaresStartSession = declaresSendStartSession
         // 没拿到 0x5703（新协议车机）时，0x4301 是**唯一**的 AP 信息来源——窗口给足；
         // 真有 0x5703 的旧协议车机保持 3 秒短窗口（应答都在毫秒级）。
         val startSessionWindow =
@@ -912,6 +986,79 @@ class Iap2SenderSession(
         )
     }
 
+    /**
+     * 0x4300（CarPlayAvailability）每轮会话**至多一次**，发后不管。
+     *
+     * 理由：它是「询问车机能否开始 CarPlay」的全局请求，不是可重放的订阅。
+     * 车机可收 0x4300 时在凭据窗口内提前发（#69），Phase 1 末尾再调用时落到
+     * 幂等分支——否则同一轮会向对端发两条语义相同的请求，属于未经证实的
+     * 协议行为（issue #69 明确要求不要并发发送可能冲突的协议消息）。
+     *
+     * 发后不管：2026-10-11 12:52 实测车机曾对 0x4300 停止 ACK，重传看门狗
+     * 会把整条链路杀掉（事件通道 SYN 洪水时段）。
+     */
+    private fun sendCarPlayAvailability() {
+        if (carPlayAvailabilitySent) return
+        carPlayAvailabilitySent = true
+        sendFireAndForget(
+            Iap2MessageIds.CARPLAY_AVAILABILITY,
+            Iap2Csm.group(1, Iap2Csm.u8(0, 1), Iap2Csm.string(1, bluetoothMac)),
+        )
+    }
+
+    /** 两份清单里是否声明了任一 EA 消息（0xEA00/0xEA01/0xEA03）——用于区分是否走 EA 通道。 */
+    private fun declaresAnyEaMessage(): Boolean {
+        val eaIds = intArrayOf(Iap2MessageIds.EA_OPEN_SESSION, Iap2MessageIds.EA_CLOSE_SESSION, Iap2MessageIds.EA_SESSION_STATUS)
+        return eaIds.any { it in accessorySendIds || it in accessoryReceiveIds }
+    }
+
+    /** 0x4301 是否已在等待旧协议凭据期间先行到达（暂存区里等后续消费）。 */
+    private fun startSessionPending(): Boolean = pendingFrames.any { it.messageId == Iap2MessageIds.CARPLAY_START_SESSION }
+
+    /**
+     * 等 0x5703，但可被先行到达的 0x4301 提前结束（[stopOnStartSession]）。
+     *
+     * 新协议车机（AP 信息自带于 0x4301）没必要耗完旧协议窗口；旧协议车机保持
+     * 原来的整段等待，行为不变。
+     */
+    private fun awaitWifiConfiguration(
+        deadlineNanos: Long,
+        stopOnStartSession: Boolean,
+    ): Iap2Csm.Frame? {
+        if (!stopOnStartSession) return expectOrNull(Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION, deadlineNanos)
+        while (true) {
+            val frame =
+                expectOrNull(
+                    Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
+                    wifiRescueDeadline(deadlineNanos, INVITE_POLL_MILLIS),
+                )
+            if (frame != null) return frame
+            if (startSessionPending()) {
+                log("iap2 0x4301 已到（早于 0x5703）——停止等待旧协议凭据，改用 0x4301 自带 AP 信息")
+                return null
+            }
+            if (!channel.isAlive || System.nanoTime() >= deadlineNanos) return null
+        }
+    }
+
+    /**
+     * 发送被链路拒绝时的错误文本，必须区分两种完全不同的原因（issue #69）：
+     *  - 对端/链路**先**关闭，我们随后往死通道写：报告里会写成「发送 0x4300 时关闭」，
+     *    读日志的人会误以为 0x4300 导致拆链；
+     *  - 链路仍在但本次写入失败。
+     * 两者都附上链路自身的终止原因（有则给出），避免再靠猜。
+     */
+    private fun sendFailureText(messageId: Int): String {
+        val id = "0x${messageId.toString(16)}"
+        if (channel.isAlive) return "iAP2 发送 $id 失败：链路仍在线，写入被拒"
+        val reason = channel.terminationReason?.takeIf { it.isNotBlank() }
+        return if (reason == null) {
+            "iAP2 发送 $id 失败：链路已被对端关闭（不是 $id 导致拆链）"
+        } else {
+            "iAP2 发送 $id 失败：链路已被对端关闭（$reason；不是 $id 导致拆链）"
+        }
+    }
+
     /** 分段等待用的截止时刻：取「整体 deadline」与「再等 millis 毫秒」的较小值。 */
     private fun wifiRescueDeadline(
         deadlineNanos: Long,
@@ -934,7 +1081,7 @@ class Iap2SenderSession(
         while (offset < frame.size) {
             val end = minOf(offset + limit, frame.size)
             if (!channel.sendControl(frame.copyOfRange(offset, end))) {
-                throw IOException("iAP2 链路在发送 0x${messageId.toString(16)} 时关闭")
+                throw IOException(sendFailureText(messageId))
             }
             offset = end
         }
@@ -1019,7 +1166,7 @@ class Iap2SenderSession(
         while (offset < frame.size) {
             val end = minOf(offset + limit, frame.size)
             if (!channel.sendControl(frame.copyOfRange(offset, end), awaitAck = false)) {
-                throw IOException("iAP2 链路在发送 0x${messageId.toString(16)} 时关闭")
+                throw IOException(sendFailureText(messageId))
             }
             offset = end
         }

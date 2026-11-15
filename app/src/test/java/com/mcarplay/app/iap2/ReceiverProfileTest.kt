@@ -85,6 +85,93 @@ class ReceiverProfileTest {
         assertEquals(ReceiverProfile.WifiGen.UNKNOWN, p.wifiGen)
     }
 
+    /**
+     * issue #69 提议的判据（收 0x4300 + 发 0x4301 + 无 0x57xx → NEW）**不采纳**：
+     * 本仓库记录的奥迪 3315 与上汽 AH4EM 在这条判据上同形，而奥迪必须继续判
+     * UNKNOWN（跳过 0x5702 会让它不启动 AirPlay 服务，2026-10-22 真车定谳）。
+     * 这条用例把「建议规则没有落地」固定下来；若将来要改，必须先解决两者的区分。
+     */
+    @Test
+    fun availabilityOnlySparseListsStayUnknownForBothAudiAndSaicShapes() {
+        // 上汽 AH4EM（issue #69 车主报告）：收 {0x4e09,0x4300}、发 {0xaa06,0x4301}
+        val saic =
+            ReceiverProfile.classify(
+                ReceiverProfile.Signals(
+                    name = "AH4EM-ZXD END 01",
+                    model = "AH4EM",
+                    manufacturer = "SAIC MOTOR Overseas Intelligent Mobility Technology Co., Ltd.",
+                    sendIds = setOf(0xaa06, 0x4301),
+                    receiveIds = setOf(0x4e09, 0x4300),
+                ),
+            )
+        // 本仓库记录的奥迪 3315 识别帧：可收清单含 0x4300，发送清单含 0x4301
+        val audi =
+            ReceiverProfile.classify(
+                ReceiverProfile.Signals(
+                    name = "Audi_MMI_3315",
+                    model = "AUDI 5163",
+                    manufacturer = "DELPHI",
+                    sendIds = setOf(0x4301, 0xea03),
+                    receiveIds = setOf(0x4e0c, 0x4e09, 0x4300, 0xea00, 0xea01),
+                ),
+            )
+        assertEquals("0x430x 能力不足以区分奥迪与上汽", audi.wifiGen, saic.wifiGen)
+        assertEquals(ReceiverProfile.WifiGen.UNKNOWN, saic.wifiGen)
+        assertEquals(ReceiverProfile.WifiGen.UNKNOWN, audi.wifiGen)
+    }
+
+    /** 宝马 iD9 完整清单仍是 NEW 的正例：两清单合计 ≥10 项且无 0x57xx。 */
+    @Test
+    fun bmwFullListsStayNew() {
+        val p =
+            ReceiverProfile.classify(
+                ReceiverProfile.Signals(
+                    sendIds = setOf(0xaa01, 0xaa03, 0x5000, 0x5002, 0x5200, 0x5203, 0xae00, 0xae02, 0x4157, 0x4301),
+                    receiveIds = setOf(0xaa00, 0xaa02, 0xaa04, 0xaa05, 0xea00, 0xea01, 0x5001, 0x5201, 0x4300, 0x4e0d),
+                ),
+            )
+        assertEquals(ReceiverProfile.WifiGen.NEW, p.wifiGen)
+    }
+
+    /** 保时捷 MIB2+/ALPINE（issue #64/#66）：退化清单声明 0x5703 → LEGACY，走旧协议。 */
+    @Test
+    fun porscheDegradedListDeclaringWifiStaysLegacy() {
+        val p =
+            ReceiverProfile.classify(
+                ReceiverProfile.Signals(
+                    name = "Porsche",
+                    model = "MIB2+",
+                    manufacturer = "ALPINE",
+                    sendIds = setOf(0x5703, 0xea03),
+                    receiveIds = setOf(0x5702, 0x4e09, 0x4e0b, 0x4e0d, 0x4e0e, 0x4300, 0xea00),
+                ),
+            )
+        assertEquals(ReceiverProfile.WifiGen.LEGACY, p.wifiGen)
+        assertTrue(p.reasons.any { it.contains("0x5703/0x5702") })
+    }
+
+    /** 混合清单：只要任一清单声明 0x57xx 就判 LEGACY，不看另一份是否稀疏。 */
+    @Test
+    fun mixedListsDeclaringOldProtocolOnOneSideStayLegacy() {
+        val onlySend =
+            ReceiverProfile.classify(ReceiverProfile.Signals(sendIds = setOf(0x5703), receiveIds = setOf(0x4300)))
+        val onlyReceive =
+            ReceiverProfile.classify(ReceiverProfile.Signals(sendIds = setOf(0x4301), receiveIds = setOf(0x5702)))
+        assertEquals(ReceiverProfile.WifiGen.LEGACY, onlySend.wifiGen)
+        assertEquals(ReceiverProfile.WifiGen.LEGACY, onlyReceive.wifiGen)
+    }
+
+    /** 空清单与「未提供」都不构成新协议证据：口径保持保守，仍判 UNKNOWN。 */
+    @Test
+    fun emptyOrMissingListsStayUnknown() {
+        val empty =
+            ReceiverProfile.classify(ReceiverProfile.Signals(sendIds = emptySet(), receiveIds = emptySet()))
+        val missing =
+            ReceiverProfile.classify(ReceiverProfile.Signals(sendIds = null, receiveIds = setOf(0x4300)))
+        assertEquals(ReceiverProfile.WifiGen.UNKNOWN, empty.wifiGen)
+        assertEquals(ReceiverProfile.WifiGen.UNKNOWN, missing.wifiGen)
+    }
+
     @Test
     fun describeCarriesReasons() {
         val p =

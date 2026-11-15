@@ -390,6 +390,146 @@ class Iap2SenderSessionTest {
     }
 
     /**
+     * **上汽 AH4EM（issue #69）**：清单只声明收 `0x4300`、发 `0x4301`，完全不参与
+     * `0x57xx`、也没有任何 EA 消息。旧实现要等旧协议救援循环耗尽整轮预算
+     * （真实车机约在识别后 60 秒拆链）才去发 `0x4300`，通道已死，`0x4300` 一次都
+     * 没真正发出，日志却写成「链路在发送 0x4300 时关闭」。
+     *
+     * 断言三件事：
+     *  1. `0x5702` 照发（清单不完整不能反证「不支持」，奥迪 3315 的教训）；
+     *  2. `0x4300` 在 `0x5702` **之后**、且在远小于会话预算的时间内到达（时序）；
+     *  3. 整轮只发一次 `0x4300`（幂等，避免未经证实的重复请求）。
+     */
+    @Test
+    fun saicAvailabilityIsSentInsideTheCredentialWindowExactlyOnce() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-saic")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-saic")
+        val accessory = MockAccessory(accessoryChannel, shape = MockAccessory.Shape.SAIC_AH4EM)
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory-saic")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+        try {
+            val endpoint =
+                Iap2SenderSession(
+                    phoneChannel,
+                    log = { line -> println("PHONE $line") },
+                    bluetoothMac = "34:86:DA:86:BB:96",
+                    deviceName = "test-device",
+                ).run(timeoutMillis = 30_000L)
+
+            assertTrue("无论如何都要先发 0x5702（漏发 0x5702 的代价见奥迪 3315）", accessory.sawWifiRequest)
+            assertEquals("整轮只发一次 0x4300", 1, accessory.carPlayAvailabilityCount)
+            assertTrue(
+                "0x4300 必须晚于 0x5702，实际顺序=${accessory.receivedOrder}",
+                accessory.receivedOrder.indexOf(Iap2MessageIds.CARPLAY_AVAILABILITY) >
+                    accessory.receivedOrder.indexOf(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION),
+            )
+            assertTrue(
+                "0x4300 必须在凭据窗口内发出（实际 ${accessory.carPlayAvailabilityAfterMs}ms）",
+                accessory.carPlayAvailabilityAfterMs in 0..5_000L,
+            )
+            // 0x4301 自带的 AP 信息必须被采用
+            assertEquals("MockAP", endpoint.ssid)
+            assertEquals("secret-passphrase", endpoint.passphrase)
+            assertEquals(49152, endpoint.airPlayPort)
+        } finally {
+            phoneChannel.close()
+            accessoryChannel.close()
+            accessoryThread.join(2_000)
+        }
+    }
+
+    /**
+     * **奥迪 MMI 3315 不得获得提前发送的 0x4300，且必须继续等 0x5703**
+     * （issue #69 的同一处改动，反向钉子）。
+     *
+     * 奥迪 3315 的识别清单是收 `{0x4e0c,0x4e09,0x4300,0xea00,0xea01}`、发
+     * `{0x4301,0xea03}`——在「0x4300/0x4301」这一维度上与上汽 AH4EM 同形。
+     * issue #69 建议的 `classify()` 规则会把两者都判成 NEW，从而跳过 0x5702；
+     * 2026-10-22 真车日志已定谳这样做会让该车不启动 AirPlay 服务（45 次
+     * ECONNREFUSED）。区分它们的是 EA 声明与旧协议声明，所以这里锁住：
+     * 有 EA/有 0x57xx 声明时，0x4300 保持原来的末尾时序，0x5703 照常采用。
+     */
+    @Test
+    fun audiSparseEaDeclarationKeepsLegacyTimingAndUsesWifiCredentials() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-audi")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-audi")
+        val accessory = MockAccessory(accessoryChannel, shape = MockAccessory.Shape.AUDI_3315)
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory-audi")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+        try {
+            val endpoint =
+                Iap2SenderSession(
+                    phoneChannel,
+                    log = { line -> println("PHONE $line") },
+                    bluetoothMac = "34:86:DA:86:BB:96",
+                    deviceName = "test-device",
+                ).run(timeoutMillis = 10_000L)
+
+            assertTrue("奥迪 3315 必须发 0x5702", accessory.sawWifiRequest)
+            assertEquals("奥迪 3315 必须采用 0x5703 的凭据", "MockAP", endpoint.ssid)
+            assertEquals("secret-passphrase", endpoint.passphrase)
+            assertEquals(36, endpoint.channel)
+        } finally {
+            phoneChannel.close()
+            accessoryChannel.close()
+            accessoryThread.join(2_000)
+        }
+    }
+
+    /**
+     * 链路在等待 0x5703 期间被对端关闭：不得再往死通道写 0x4300，也不得把
+     * 失败归因成「发送 0x4300 时关闭」（issue #69 第 3 条）。
+     */
+    @Test
+    fun linkClosedWhileWaitingForCredentialsDoesNotBlameAvailability() {
+        val pair = InMemoryStreamPair()
+        val phone = Iap2LinkChannel(pair.sideA, name = "phone-link-closed")
+        val peer = Iap2LinkChannel(pair.sideB, name = "accessory-link-closed")
+        val accessory = MockAccessory(peer, shape = MockAccessory.Shape.VW_PASSAT, closeAfterWifiRequest = true)
+        val logs = java.util.Collections.synchronizedList(ArrayList<String>())
+        val failure = AtomicReference<Throwable?>()
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory-link-closed")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+        val session =
+            Iap2SenderSession(
+                phone,
+                log = { line -> logs += line },
+                bluetoothMac = "02:00:00:00:00:01",
+            )
+        val worker =
+            Thread(
+                { failure.set(runCatching { session.run(timeoutMillis = 20_000L) }.exceptionOrNull()) },
+                "session-link-closed",
+            ).apply {
+                isDaemon = true
+                start()
+            }
+        try {
+            worker.join(15_000)
+            assertFalse("会话应在链路关闭后结束", worker.isAlive)
+            assertTrue("必须真的走过发 0x5702 的路径", accessory.sawWifiRequest)
+            val message = failure.get()?.message
+            if (message != null) {
+                assertFalse(
+                    "不得把对端拆链写成 0x4300 导致：$message",
+                    message.contains("在发送 0x4300 时关闭"),
+                )
+            }
+            assertTrue("链路关闭后不得再发 0x4300", logs.none { it.contains("tx=0x4300") })
+        } finally {
+            phone.close()
+            peer.close()
+            worker.join(2_000)
+            accessoryThread.join(2_000)
+        }
+    }
+
+    /**
      * **无新凭据但知道热点 SSID 时不得拆链**（2026-10-22 奥迪回归的第二根钉子）。
      *
      * 关键时序证据：真 iPhone 14:23:02 入网、14:23:23 才收到车机 ctrl 邀请
@@ -951,6 +1091,8 @@ class Iap2SenderSessionTest {
         private val completeWifiConfiguration: Boolean = true,
         private val provideWifiSsid: Boolean = true,
         private val includeWirelessSsid: Boolean = true,
+        /** 收到 0x5702 后立即关闭链路（模拟对端主动拆链，issue #69）。 */
+        private val closeAfterWifiRequest: Boolean = false,
     ) {
         private val parser = Iap2Csm.Parser()
         private val pending = ArrayDeque<Iap2Csm.Frame>()
@@ -959,6 +1101,21 @@ class Iap2SenderSessionTest {
         @Volatile
         var sawWifiRequest: Boolean = false
             private set
+
+        /** 收到的消息 ID 顺序（时序断言用；仅 SAIC 形态记录）。 */
+        val receivedOrder = java.util.Collections.synchronizedList(ArrayList<Int>())
+
+        /** SAIC 形态下收到 0x4300 的次数（幂等断言：必须恰好 1 次）。 */
+        @Volatile
+        var carPlayAvailabilityCount: Int = 0
+            private set
+
+        /** SAIC 形态下从会话开始到收到 0x4300 的毫秒数（时序断言用）。 */
+        @Volatile
+        var carPlayAvailabilityAfterMs: Long = -1L
+            private set
+
+        private val startedAtNanos = System.nanoTime()
 
         /** 实际从发送端收到的挑战长度，不能只测试策略常量。 */
         val mfiChallengeSizes = java.util.Collections.synchronizedList(ArrayList<Int>())
@@ -986,13 +1143,19 @@ class Iap2SenderSessionTest {
             // 大众帕萨特 2025（2026-10-31 诊断报告）：声明发 0x5703、收 0x5702，
             // 但首次 AirPlay 配对前不回 0x5703，也不发 0x4301——只在 WiFi 上发 ctrl 邀请
             VW_PASSAT,
+
+            // 上汽 AH4EM（issue #69，0.1.7，2026-11-15 车主报告）：清单只声明
+            // 收 {0x4e09, 0x4300}、发 {0xaa06, 0x4301}，完全不参与 0x57xx、也不开 EA。
+            // 车机约在识别后 60 秒拆链；0x4300 必须在凭据窗口内发出才有意义。
+            SAIC_AH4EM,
         }
 
         /** 老式奥迪/测试台：不声明接收清单，也不发 StartHID。 */
         private val legacyHid: Boolean get() = shape != Shape.TEST_BENCH
 
         /** 是否应答 0x5702（旧协议在网络侧有凭据交换）。CT5 与 BMW 同为纯新协议。 */
-        private val answersWifiRequest: Boolean get() = shape != Shape.BMW_ID9 && shape != Shape.CT5_NEW_PROTOCOL
+        private val answersWifiRequest: Boolean
+            get() = shape != Shape.BMW_ID9 && shape != Shape.CT5_NEW_PROTOCOL && shape != Shape.SAIC_AH4EM
 
         fun run() {
             check(channel.awaitReady(10_000)) { "mock link not ready" }
@@ -1047,6 +1210,31 @@ class Iap2SenderSessionTest {
                 expect(Iap2MessageIds.DEVICE_HID_REPORT)
             }
 
+            // 上汽 AH4EM（issue #69）：收 0x5702 但从不回 0x5703；一旦收到 0x4300
+            // 立即回 0x4301（自带 AP 信息）。真实车机约在识别后 60 秒拆链，所以
+            // 「0x4300 是否在凭据窗口内发出」是这条路径的关键断言。
+            if (shape == Shape.SAIC_AH4EM) {
+                expect(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
+                sawWifiRequest = true
+                receivedOrder += Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION
+                val availability = expectFrame(Iap2MessageIds.CARPLAY_AVAILABILITY)
+                receivedOrder += Iap2MessageIds.CARPLAY_AVAILABILITY
+                carPlayAvailabilityCount++
+                carPlayAvailabilityAfterMs = (System.nanoTime() - startedAtNanos) / 1_000_000L
+                if (providesStartSession) {
+                    sendStartSession()
+                }
+                // 车机继续响应后续帧（0x4e0e）；若发送端打破幂等再发 0x4300，
+                // awaitFrame 会在测试末尾把它算进计数，断言即可发现。
+                while (true) {
+                    val frame = awaitFrame(2_000) ?: break
+                    receivedOrder += frame.messageId
+                    if (frame.messageId == Iap2MessageIds.CARPLAY_AVAILABILITY) carPlayAvailabilityCount++
+                    if (frame.messageId == Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER) break
+                }
+                return
+            }
+
             // WiFi 配置：BMW/CT5 形态不发 0x5702（AP 信息由 0x4301 自带）。
             // 若发送端在 BMW 形态下仍发 0x5702，下面第一个 expect(0x4e0d) 会立刻
             // 报「expected 0x4e0d got 0x5702」——分派错误无处可藏。
@@ -1054,6 +1242,10 @@ class Iap2SenderSessionTest {
                 // 只收 0x5702、永不应答（链路层 ACK 由通道自动完成）
                 expect(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
                 sawWifiRequest = true
+                if (closeAfterWifiRequest) {
+                    // 车机收到凭据请求后直接拆链（#69 报告形态的压缩版）
+                    channel.close()
+                }
                 return
             }
             if (answersWifiRequest) {
@@ -1111,6 +1303,7 @@ class Iap2SenderSessionTest {
                 Shape.BMW_ID9 -> "BMW 87866"
                 Shape.CT5_NEW_PROTOCOL -> "CADILLAC_2179"
                 Shape.VW_PASSAT -> "Volkswagen"
+                Shape.SAIC_AH4EM -> "AH4EM-ZXD END 01"
                 Shape.TEST_BENCH -> "MockCarPlay"
                 Shape.CHERY -> "Cloudrive"
             }
@@ -1168,6 +1361,14 @@ class Iap2SenderSessionTest {
                             7,
                             intArrayOf(0x6801, 0x4c01, 0x4c04, 0x5001, 0x4e09, 0x4e0a, 0x4e0b, 0x4e0c, 0x4300),
                         ),
+                    )
+                // 上汽 AH4EM（issue #69）：发 {0xaa06,0x4301}、收 {0x4e09,0x4300}，
+                // 没有任何 0x57xx、也没有任何 EA 消息——与奥迪 3315 在 0x430x 上同形，
+                // 只能靠「缺 EA/缺旧协议声明」区分。清单数字来自车主报告，未增删。
+                Shape.SAIC_AH4EM ->
+                    arrayOf(
+                        Iap2Csm.u16List(6, intArrayOf(0xaa06, 0x4301)),
+                        Iap2Csm.u16List(7, intArrayOf(0x4e09, 0x4300)),
                     )
             }
 
