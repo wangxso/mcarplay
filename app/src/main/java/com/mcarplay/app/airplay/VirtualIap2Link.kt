@@ -91,6 +91,16 @@ class VirtualIap2Link(
     private var mib3ControlSessionNotified = false
 
     /**
+     * MIB3 突发发出后车机订阅/后续消息的到达情况（issue #62 观测点）。
+     *
+     * 奔驰 MB_E-P-4（AirPlay 480.7.4）报告里 MFi 认证「自报成功」、突发也已投递，但 109 s 内
+     * 车机**一条订阅都没有**（0x4157/0x4154/0x4170/0x5000/0x6800 都没往返），同期车机不显示
+     * 画面、点 CarPlay 图标无反应。真机（奥迪 MIB3）在突发后立即回这批订阅；缺失说明车机
+     * 可能不认为这是有效 CarPlay 会话。这里只记录「突发后多久、收到哪些订阅」，不改变时序。
+     */
+    private val mib3Subscriptions = Mib3SubscriptionWatchdog(Mib3SubscriptionWatchdog.WINDOW_MILLIS)
+
+    /**
      * 事件通道链路模式（2026-10-20 Honda HFT 实测新增）。
      *
      * 车机在**事件通道**上以发起方姿态反复发 SYN marker（`FF 55 02 00 EE 10`，
@@ -170,6 +180,9 @@ class VirtualIap2Link(
                     synchronized(lock) {
                         engine.advanceTime(System.nanoTime() / 1_000_000L)
                         drainLocked()
+                        // 未布防时 watchdog 自身返回 null；不在这里按 mib3Armed 过滤，
+                        // 因为 Honda 事件链路形态也可能走到突发（见 sendMib3BurstLocked）。
+                        mib3Subscriptions.poll(nowMillis())?.let { log("IAPLINK: $it") }
                     }
                 }
             },
@@ -220,6 +233,12 @@ class VirtualIap2Link(
             log("IAPLINK: 链路代际 → $generation")
         }
     }
+
+    /** 会话结束时报告 MIB3 订阅情况（issue #62：突发后一条订阅都没有是关键证据）。 */
+    fun mib3SubscriptionSummary(): String = mib3Subscriptions.summary(nowMillis())
+
+    /** 本轮是否真的发出过 MIB3 突发（决定会话结束时是否值得记订阅汇总）。 */
+    val mib3BurstSent: Boolean get() = mib3Subscriptions.armed
 
     /**
      * 调试/特殊形态用：强制开启一轮控制通道协商（正常路径由车机 marker 触发）。
@@ -564,6 +583,10 @@ class VirtualIap2Link(
         val mib3 = (mib3Armed || eventLinkArmed) && !onTunnel
         if (!onTunnel && !mib3) return
         val ids = Iap2MessageIds
+        // 订阅类消息（0x4157/0x4154/0x4170/0x5000/0x6800）到达即记：突发后一条都收不到是
+        // 「车机不认这个 CarPlay 会话」的强证据（issue #62），见 [Mib3SubscriptionWatchdog]。
+        // 只记突发布防之后的：布防前到达的订阅早于本次突发，不能用来证明车机收到了突发。
+        if (frame.messageId in SUBSCRIPTION_MESSAGE_IDS) mib3Subscriptions.observe(frame.messageId)
         when (frame.messageId) {
             ids.IDENTIFICATION_INFORMATION -> {
                 val identified = if (onTunnel) tunnelIdentified else mib3Identified
@@ -804,6 +827,7 @@ class VirtualIap2Link(
         )
         sendRawCsmLocked(MIB3_START_LOCATION_INFORMATION)
         sendRawCsmLocked(MIB3_GPRMC_DATA_STATUS)
+        mib3Subscriptions.arm(nowMillis())
         log("IAPLINK: MIB3 突发已发（会话标识 $sessionId）——等待车机订阅")
         if (!mib3ControlSessionNotified) {
             mib3ControlSessionNotified = true
@@ -927,6 +951,19 @@ class VirtualIap2Link(
 
         /** 同一按键持续按住多久才允许再次触发（模拟长按连发，短按绝不重复）。 */
         const val HID_HOLD_REPEAT_MILLIS = MediaKeyEdge.HOLD_REPEAT_MILLIS
+
+        /**
+         * MIB3 突发后车机应回的订阅类消息：通信/通话/列表/NowPlaying/StartHID。
+         * 这些在真机（奥迪 MIB3）上紧跟突发到达；奔驰 MB_E-P-4（issue #62）一条都没有。
+         */
+        val SUBSCRIPTION_MESSAGE_IDS =
+            setOf(
+                START_COMMUNICATIONS_UPDATES,
+                START_CALL_STATE_UPDATES,
+                START_LIST_UPDATES,
+                Iap2MessageIds.START_NOW_PLAYING_UPDATES,
+                Iap2MessageIds.START_HID,
+            )
 
         /**
          * 0x6802 的参数表 → HID 报文。
