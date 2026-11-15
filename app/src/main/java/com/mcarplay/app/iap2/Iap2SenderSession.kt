@@ -782,6 +782,13 @@ class Iap2SenderSession(
             if (frame.messageId == Iap2MessageIds.CARPLAY_START_SESSION) {
                 handleLateStartSession(frame)
             }
+            // 同理：0x5703 不能在保活期只记长度就丢。凭据等待窗口有界（见 #69 的
+            // earlyCarPlayAvailability 分支），慢一点的车机可能在窗口之后才回
+            // 0x5703；旧实现会在这里丢掉唯一的热点凭据，让「清单稀疏但实际支持
+            // 旧协议」的接收端从能入网退化成永不入网（PR #71 审查 P2）。
+            if (frame.messageId == Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION) {
+                handleLateWifiConfiguration(frame)
+            }
             if (frame.messageId == lastLoggedId) {
                 repeatCount++
                 if (repeatCount % 100 != 0) continue
@@ -798,6 +805,46 @@ class Iap2SenderSession(
             )
         }
         log("SESSION 保活结束（链路断开）")
+    }
+
+    /**
+     * 保活期间收到 0x5703（旧协议凭据晚到）：解析并沿用，**不能只记长度丢掉**。
+     *
+     * 触发场景：车机在 0x1D01 里只声明收 0x4300/发 0x4301（清单稀疏），但实际
+     * 也可能回 0x5703，只是比凭据等待窗口慢。窗口结束后端点已按 0x4301 交出，
+     * 此时到达的 0x5703 仍是有效的 AP 凭据——旧实现在这里只打 keep-alive 日志，
+     * 让能入网的接收端退化成永不入网（PR #71 审查 P2）。
+     *
+     * 幂等：除非凭据变化（SSID/口令/信道/安全类型）或本轮从未拿到完整配置，
+     * 否则不重复回调，避免车机周期重发把主控的网络绑定反复推翻。
+     */
+    private fun handleLateWifiConfiguration(frame: Iap2Csm.Frame) {
+        val parsed =
+            parseWifiConfiguration(frame) ?: run {
+                log("iap2 rx=0x5703（晚到）缺少 SSID——忽略")
+                return
+            }
+        val complete = parsed.configuration
+        if (complete == null) {
+            if (knownSessionSsid == null && parsed.ssid.isNotBlank()) {
+                knownSessionSsid = parsed.ssid
+            }
+            log("iap2 rx=0x5703（晚到）只有 SSID，缺少安全类型/密码——仅记为已知热点")
+            return
+        }
+        if (complete == wifi) {
+            log("iap2 rx=0x5703（晚到）与已缓存凭据一致——忽略")
+            return
+        }
+        val firstComplete = wifi == null
+        wifi = complete
+        if (knownSessionSsid.isNullOrBlank()) knownSessionSsid = complete.ssid
+        log(
+            "iap2 rx=0x5703（晚到，Phase 1 之后）SSID 已读取 channel=${complete.channel} " +
+                "security=${complete.securityType} psk=${if (complete.passphrase.isEmpty()) "(空)" else "***"}" +
+                if (firstComplete) "——本轮首个完整凭据，交给主控绑 WiFi/接邀请" else "——凭据已更新",
+        )
+        onWifiCredentials?.invoke(complete)
     }
 
     /**

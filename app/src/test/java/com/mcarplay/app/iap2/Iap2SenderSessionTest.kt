@@ -441,6 +441,71 @@ class Iap2SenderSessionTest {
     }
 
     /**
+     * PR #71 审查 P2：凭据等待窗口缩短后，**晚到的 0x5703 不得被丢弃**。
+     *
+     * 场景：接收端清单与上汽 AH4EM 同形（稀疏、只声明 0x4300/0x4301），但实际也支持
+     * 旧协议，只是 0x5703 比窗口慢。窗口结束后端点按 0x4301 交出；若保活期把
+     * 0x5703 当普通 keep-alive 只记长度，唯一的热点凭据就丢了，这类接收端会从
+     * 「能入网」退化成「永不入网」。
+     */
+    @Test
+    fun lateWifiConfigurationAfterPhaseOneIsStillDelivered() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-late-5703")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-late-5703")
+        val accessory =
+            MockAccessory(
+                accessoryChannel,
+                shape = MockAccessory.Shape.SAIC_AH4EM,
+                lateWifiConfigurationAfterMs = 300L,
+                // 0x4301 的无线组只给 SSID、不给完整 AP 配置：本轮唯一的完整凭据只能
+                // 来自晚到的 0x5703。旧实现在保活期把它丢掉 → 该接收端永不入网。
+                completeWirelessAp = false,
+            )
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory-late-5703")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+
+        val delivered = java.util.Collections.synchronizedList(ArrayList<Iap2SenderSession.WifiConfiguration>())
+        val latch = CountDownLatch(1)
+        val session =
+            Iap2SenderSession(
+                phoneChannel,
+                log = { line -> println("PHONE $line") },
+                bluetoothMac = "34:86:DA:86:BB:96",
+                deviceName = "test-device",
+                onWifiCredentials = {
+                    delivered += it
+                    latch.countDown()
+                },
+            )
+        var pump: Thread? = null
+        try {
+            // 首轮按新协议交出端点（0x5703 尚未到达）；保活泵必须在 run() 之后启动，
+            // 否则它会抢走 Phase 1 的帧（同一通道只能有一个消费者）。
+            val phaseOne = session.run(timeoutMillis = 20_000L)
+            assertEquals("MockAP", phaseOne.ssid)
+            assertNull("0x4301 未给完整 AP 配置时不得凭空生成凭据", phaseOne.accessoryWifiOrNull())
+            pump =
+                Thread({ session.pumpIncomingForever() }, "phone-pump-late-5703").apply {
+                    isDaemon = true
+                    start()
+                }
+            assertTrue("晚到 0x5703 必须在保活期交付", latch.await(5, TimeUnit.SECONDS))
+            val wifi = delivered.first()
+            assertEquals("MockAP", wifi.ssid)
+            assertEquals("secret-passphrase", wifi.passphrase)
+            assertEquals(36, wifi.channel)
+            assertEquals(2, wifi.securityType)
+        } finally {
+            phoneChannel.close()
+            accessoryChannel.close()
+            pump?.join(2_000)
+            accessoryThread.join(2_000)
+        }
+    }
+
+    /**
      * **奥迪 MMI 3315 不得获得提前发送的 0x4300，且必须继续等 0x5703**
      * （issue #69 的同一处改动，反向钉子）。
      *
@@ -1093,6 +1158,8 @@ class Iap2SenderSessionTest {
         private val includeWirelessSsid: Boolean = true,
         /** 收到 0x5702 后立即关闭链路（模拟对端主动拆链，issue #69）。 */
         private val closeAfterWifiRequest: Boolean = false,
+        /** ≥0 = 发出 0x4301 后延迟这么久再补发 0x5703（旧协议凭据晚到，PR #71 审查 P2）。 */
+        private val lateWifiConfigurationAfterMs: Long = -1L,
     ) {
         private val parser = Iap2Csm.Parser()
         private val pending = ArrayDeque<Iap2Csm.Frame>()
@@ -1231,6 +1298,18 @@ class Iap2SenderSessionTest {
                     receivedOrder += frame.messageId
                     if (frame.messageId == Iap2MessageIds.CARPLAY_AVAILABILITY) carPlayAvailabilityCount++
                     if (frame.messageId == Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER) break
+                }
+                if (lateWifiConfigurationAfterMs >= 0) {
+                    // 车机在凭据窗口之后才回 0x5703（旧协议慢响应）。
+                    // 发送端必须解析并交付，不能只当 keep-alive 记长度丢掉。
+                    Thread.sleep(lateWifiConfigurationAfterMs)
+                    send(
+                        Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
+                        Iap2Csm.string(1, wifiConfiguration.ssid),
+                        Iap2Csm.string(2, wifiConfiguration.passphrase),
+                        Iap2Csm.u8(3, wifiConfiguration.securityType),
+                        Iap2Csm.u8(4, wifiConfiguration.channel),
+                    )
                 }
                 return
             }
