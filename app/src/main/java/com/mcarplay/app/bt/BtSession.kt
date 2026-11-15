@@ -9,6 +9,7 @@ import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DeviceIdentity
+import java.io.IOException
 
 /**
  * BT 控制会话核心流程（Server/Client 共用，此前两份近乎复制）：
@@ -24,6 +25,12 @@ internal fun Iap2LinkChannel.runSenderSession(
     onEndpointUpdate: (Iap2SenderSession.CarPlayEndpoint) -> Unit,
     /** 链路断开：同时携带 RFCOMM 观察归属（交接所有权）与对端地址（熔断隔离）。 */
     onLinkClosed: (ReceiverObservation?, String?) -> Unit = { _, _ -> },
+    /**
+     * Phase 1（拿到端点）之前就失败的轮次：端点没交付，[onLinkClosed] 不会被调用
+     * （它的语义是「已交付会话的链路断了」），失败只在这里上报，供主控结束时间线并记账。
+     * 参数为失败原因（异常文本，仅写日志，不进对外报告）与对端地址。
+     */
+    onPreEndpointFailure: (String, String?) -> Unit = { _, _ -> },
     /** 本进程已知的车机热点 SSID（无新凭据时沿用，避免每轮拆链）。 */
     knownCarSsid: () -> String? = { null },
     /** 车机是否已在 WiFi 上发过 ctrl 邀请（无凭据时据此不拆链）。 */
@@ -63,6 +70,7 @@ internal fun Iap2LinkChannel.runSenderSession(
     onSession(session)
     onObservation(observation, true)
     var endpointDelivered = false
+    var failureReason: String? = null
     try {
         val endpoint = session.run(timeoutMillis)
         onGeneration(session.linkGeneration)
@@ -71,6 +79,10 @@ internal fun Iap2LinkChannel.runSenderSession(
         onEndpoint(endpoint.copy(observation = observation, peerAddress = peerAddress))
         // Phase 2 过渡：保持控制通道存活记录配件消息；AirPlay 配对由 onEndpoint 回调发起
         session.pumpIncomingForever()
+    } catch (error: IOException) {
+        // 交给调用方的 try 继续打日志/收尾，但先记下原因：下面的 finally 要据此上报。
+        failureReason = error.message ?: error.javaClass.simpleName
+        throw error
     } finally {
         onObservation(observation, false)
         if (endpointDelivered && ReceiverDetectionRuntime.isCurrent(observation)) {
@@ -78,6 +90,15 @@ internal fun Iap2LinkChannel.runSenderSession(
             // 不得取消另一条已经进入入网/配对的健康链路。
             session.linkTerminationReason?.let { log("SESSION 链路终止原因: $it") }
             onLinkClosed(observation, peerAddress)
+        } else {
+            // Phase 1 之前就结束（协商超时/车机拆链/识别失败）：onLinkClosed 不会触发，
+            // 这里补一次上报，否则主控既不会结束本轮时间线，也不会把连续失败计入熔断
+            // （bug #66：退化 0x1d01 + 协商重启的保时捷形态）。
+            // 与 onLinkClosed 一样要求本链路仍是当前轮次，避免旧链路收尾误伤新一轮。
+            val reason = failureReason ?: session.linkTerminationReason ?: "ended before endpoint"
+            if (ReceiverDetectionRuntime.isCurrent(observation)) {
+                onPreEndpointFailure(reason, peerAddress)
+            }
         }
     }
 }

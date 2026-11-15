@@ -46,6 +46,7 @@ import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.diagnostics.ConnectionStage
 import com.mcarplay.app.diagnostics.ConnectionStagePolicy
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.diagnostics.DiagnosticRedactor
 import com.mcarplay.app.diagnostics.StreamEnvironment
 import com.mcarplay.app.i18n.AppLanguage
 import com.mcarplay.app.iap2.Iap2MessageIds
@@ -1030,6 +1031,7 @@ object SessionController {
                     onWifiCredentials = wifiCredentialHook,
                     onEndpointUpdate = { endpoint -> onLateEndpoint(endpoint, "车机回连") },
                     onLinkClosed = ::onSenderLinkClosed,
+                    onPreEndpointFailure = ::onPreEndpointRoundFailed,
                     knownCarSsid = ::knownCarHotspotSsid,
                     receiverInvited = ::receiverHasInvited,
                     onObservation = ::onReceiverObservation,
@@ -1048,6 +1050,7 @@ object SessionController {
                     onWifiCredentials = wifiCredentialHook,
                     onEndpointUpdate = { endpoint -> onLateEndpoint(endpoint, "主动连车机") },
                     onLinkClosed = ::onSenderLinkClosed,
+                    onPreEndpointFailure = ::onPreEndpointRoundFailed,
                     knownCarSsid = ::knownCarHotspotSsid,
                     receiverInvited = ::receiverHasInvited,
                     onObservation = ::onReceiverObservation,
@@ -1446,6 +1449,104 @@ object SessionController {
         } else {
             appendLog("已${endAction}并停止保活服务（常亮已恢复）")
         }
+    }
+
+    /**
+     * Phase 1（拿到端点）之前就失败的 BT 轮次。
+     *
+     * [Iap2BluetoothServer]/[Iap2BluetoothClient] 的 `onLinkClosed` 只在已交付端点后触发
+     * （语义是「已交付会话的链路断了」），因此协商超时/识别失败/车机在 Phase 1 拆链这类
+     * 轮次此前只写一行 `SESSION 失败`：时间线不会结束，`elapsedMs` 一直累加到诊断报告里，
+     * 熔断也完全看不到这些失败（bug #66：保时捷退化 0x1d01 反复协商重启，卡在
+     * BLUETOOTH:WIFI_INFO 224s+，自动重连无限重试）。
+     *
+     * 只结束仍处于建立阶段的当前时间线，并在本轮仍是当前轮次、当前对端时记账；
+     * 用户断开/正在收尾、以及已被新一轮取代的轮次一律不动。
+     *
+     * 两个出口都必须处理，否则熔断在 #66 的形态下永远到不了阈值：
+     * - **未触发熔断时**立刻开一条新的 BLUETOOTH 时间线。客户端/服务端在线路断开后会在
+     *   自己的循环里再起一轮 `runSession`，但那不会调用 [startConnection]；若沿用刚结束的
+     *   attempt，之后每轮都因 status=failed 被 [settlesOnPreEndpointFailure] 拒绝，而
+     *   `recordFastFailure` 又按 attempt 去重，于是连续失败永远只记 1 次。
+     * - **触发熔断后**必须真正停掉 BT 客户端/服务端（与 [disconnect] 同路），否则只写一行
+     *   日志、它们的循环仍在重启会话，冷却期形同虚设。此时**不得**再开新 attempt：
+     *   [disconnect] 会取当前时间线 id 再记一次失败，把第 3 次改写成第 4 次。
+     */
+    private fun onPreEndpointRoundFailed(
+        reason: String,
+        peerAddress: String?,
+    ) {
+        if (isDisconnecting() || connectCancelled) return
+        if (!peerUnknownOrMatches(peerAddress, activePeerAddress)) {
+            appendLog(">>> 非本轮蓝牙链路（$peerAddress）在端点前结束——忽略（本轮 ${activePeerAddress ?: "未知"}）")
+            return
+        }
+        val app = appContext ?: return
+        val snapshot = ConnectionDiagnostics.timeline.snapshot() ?: return
+        // 空端点（等晚到 0x4301）也停在 waiting+BLUETOOTH，但那是**有意**的等待，
+        // 由 watchForPendingStartSession 自己收尾，不能被别的链路在这里结束。
+        // 还有别的链路活着时同样不判定：无法证明这条失败属于正在等待的那一轮，
+        // 宁可少收尾一次，也不能把别家的失败记到当前轮次头上（会误触发熔断）。
+        // 必须用 hasAny() 而不是 single()!=null：只要有未知身份的链路、或剩下两条以上
+        // 已知链路，single() 就返回 null，那正是「还有链路在协商/即将交付端点」的情形。
+        // 目标形态（协商超时后车机才重连）里失败链路已从集合移除，hasAny() 为 false。
+        if (!settlesOnPreEndpointFailure(
+                status = snapshot.status,
+                stage = snapshot.stage,
+                waitingForLateEndpoint = pendingStartSessionEndpoint.get() != null,
+                anotherLinkLive = activeReceiverObservations.hasAny(),
+            )
+        ) {
+            return
+        }
+        ConnectionDiagnostics.timeline.finish(
+            snapshot.id,
+            DiagnosticCode.BT_LINK_CLOSED,
+            true,
+            "endpoint not delivered: ${DiagnosticRedactor.scrubAtSource(reason).take(120)}",
+        )
+        // 与其它失败出口共用同一套判据，只额外说明这是「端点交付前」的轮次：
+        // 这类轮次从未进入界面交接，不受 60s 快速失败门限约束（见
+        // [countsAsAutoReconnectFailure] 的 beforeEndpoint）。
+        val ended = ConnectionDiagnostics.timeline.snapshot() ?: return
+        if (!countsAsAutoReconnectFailure(DiagnosticCode.BT_LINK_CLOSED, ended.videoFrames, ended.elapsedMs, beforeEndpoint = true)) {
+            return
+        }
+        val blocked = AutoReconnectGuard.recordFastFailure(app, peerAddress, snapshot.id)
+        if (blocked == null) {
+            // 未触发熔断：本轮时间线已结束，仍在运行的 BT 循环需要自己的 attempt（见上方 KDoc）。
+            beginPreEndpointRetryAttempt()
+            return
+        }
+        appendLog(
+            "AUTO: 连续 ${blocked.failures} 轮在端点交付前失败——暂停自动重连 ${blocked.remainingSeconds} 秒" +
+                "（可在 App 内手动连接）",
+        )
+        // 熔断必须真正生效：只写日志的话，仍在运行的 BT 循环会马上再拉一轮。
+        // 与 onSenderLinkClosed 触发熔断时同样走 disconnect（BT_LINK_CLOSED 不是用户停止，
+        // 不会清空熔断状态）。
+        //
+        // 这里**不能**先开新 attempt：disconnect 会取当前时间线的 id 再记一次失败
+        // （disconnect → finishCurrent/recordAutoReconnectOutcome）。那样会把
+        // failures 从 3 改成 4、再延长一次冷却期，并把 recordedAttempt 改写成一条
+        // 几乎零时长的合成轮次，支撑报告也就看不到真正触发熔断的那一轮。
+        appContext?.let { disconnect(it, DiagnosticCode.BT_LINK_CLOSED) }
+    }
+
+    /**
+     * 未触发熔断、端点前失败的轮次结束后，为仍在运行的 BT 循环准备一条新的 BLUETOOTH 时间线。
+     *
+     * 只在「本轮尚未触发熔断」且确实还有 BT 组件在跑时调用：触发熔断后调用方会走
+     * [disconnect]，它会按当前时间线 id 再记一次失败；此时若先造一条空 attempt，
+     * 会把熔断次数与冷却期改写。真正收尾（用户断开/熔断）之后也不得凭空造出一条
+     * 会一直累加 `elapsedMs` 的 waiting 记录。
+     */
+    private fun beginPreEndpointRetryAttempt() {
+        if (isDisconnecting() || connectCancelled) return
+        if (bluetoothClient?.isRunning != true && bluetoothServer?.isRunning != true) return
+        val attempt = ConnectionDiagnostics.begin("bt_retry")
+        bluetoothDiagnostics.begin(attempt)
+        ConnectionDiagnostics.timeline.stage(attempt, ConnectionStage.BLUETOOTH)
     }
 
     /**
@@ -5727,6 +5828,26 @@ internal fun usableKnownCarSsid(
 ): String? =
     listOf(bound, last)
         .firstOrNull { !it.isNullOrBlank() && it != SessionController.INVITED_WIFI_LABEL }
+
+/**
+ * 端点交付前失败时，是否应结束当前时间线并计入自动重连熔断。
+ *
+ * 只收尾仍能继续的轮次：已失败/已结束的轮次不再覆盖记录；已经推进到 DISCOVERY
+ * 及以后的轮次说明端点早已交付（那属于 `onLinkClosed` 的语义），这里不重复处理。
+ * [waitingForLateEndpoint] 为 true 表示本轮已收到**空端点**、正在有意等待晚到的
+ * 0x4301——它同样停在 waiting+BLUETOOTH，但必须由 `watchForPendingStartSession`
+ * 自己收尾，不能当成失败。抽成纯函数是为了单测覆盖（bug #66）。
+ */
+internal fun settlesOnPreEndpointFailure(
+    status: String,
+    stage: ConnectionStage,
+    waitingForLateEndpoint: Boolean = false,
+    anotherLinkLive: Boolean = false,
+): Boolean =
+    status == "waiting" &&
+        stage == ConnectionStage.BLUETOOTH &&
+        !waitingForLateEndpoint &&
+        !anotherLinkLive
 
 /**
  * 链路关闭是否应进入自动重连熔断记账。
