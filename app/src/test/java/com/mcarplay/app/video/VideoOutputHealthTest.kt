@@ -208,6 +208,47 @@ class VideoOutputHealthTest {
     }
 
     @Test
+    fun onlyAnInProgressEncoderStallKeepsAPendingRequest() {
+        val health = health()
+        // 编码器无输出：5s 请求（发布），随后未到重试间隔的 WARN 必须保留这条待处理请求
+        val request = health.encoderSilent(VideoOutputHealth.WARN_MILLIS)
+        assertEquals(Action.REQUEST_KEY_FRAME, request.action)
+        assertFalse(request.keepsPendingKeyFrameRequest)
+        val waiting =
+            health.encoderSilent(VideoOutputHealth.WARN_MILLIS + VideoOutputHealth.KEY_FRAME_RETRY_MILLIS - 1)
+        assertEquals(Action.WARN, waiting.action)
+        assertTrue("An unconsumed request of the same stall must survive", waiting.keepsPendingKeyFrameRequest)
+
+        // 恢复、写阻塞、无输入、用尽都必须让待处理请求失效
+        assertFalse(health.normal(16).keepsPendingKeyFrameRequest)
+        assertFalse(health.passthroughStalled(VideoOutputHealth.WARN_MILLIS).keepsPendingKeyFrameRequest)
+
+        val blocked = health()
+        assertFalse(
+            blocked
+                .sample(
+                    VideoOutputHealth.WARN_MILLIS,
+                    0,
+                    sourceInputSinceLastWrite = false,
+                    encoderOutputSinceLastWrite = false,
+                    paused = false,
+                    stopped = false,
+                ).keepsPendingKeyFrameRequest,
+        )
+
+        val exhausted = health()
+        exhausted.encoderSilent(VideoOutputHealth.WARN_MILLIS)
+        exhausted.encoderSilent(VideoOutputHealth.WARN_MILLIS + VideoOutputHealth.KEY_FRAME_RETRY_MILLIS)
+        exhausted.encoderSilent(VideoOutputHealth.WARN_MILLIS + 2 * VideoOutputHealth.KEY_FRAME_RETRY_MILLIS)
+        val afterCap = exhausted.encoderSilent(VideoOutputHealth.GIVE_UP_MILLIS - 1)
+        assertEquals(Action.WARN, afterCap.action)
+        // 仍处同一轮「编码器无输出」停滞、只是不再发新请求：已发出的请求可以继续被消费
+        assertTrue(afterCap.keepsPendingKeyFrameRequest)
+        // 判定用尽后必须让任何未消费的请求失效
+        assertFalse(exhausted.encoderSilent(VideoOutputHealth.GIVE_UP_MILLIS).keepsPendingKeyFrameRequest)
+    }
+
+    @Test
     fun pauseAndStopResetWithoutWarningOrRequests() {
         val health = health()
         val paused =

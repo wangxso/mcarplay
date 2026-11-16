@@ -72,7 +72,17 @@ internal class VideoOutputHealth(
         val giveUp: Boolean = false,
         /** 本次采样发现输出刚刚恢复（只应记一次日志）。 */
         val recovered: Boolean = false,
-    )
+    ) {
+        /**
+         * 调用方应保留尚未消费的补帧请求，而不是把它清掉。
+         *
+         * 只有「同一类别（编码器无输出）的停滞、只是还没到下一次重试间隔」才属于这种情况——
+         * 此时上一次请求可能仍排在 drain 线程的队列里，清掉会让有界补救失效。其余任何动作
+         * （写阻塞、用尽、恢复、暂停、关闭）都必须让待处理请求失效。
+         */
+        val keepsPendingKeyFrameRequest: Boolean
+            get() = action == Action.WARN && kind == Kind.NO_ENCODER_OUTPUT
+    }
 
     init {
         require(warnMillis > 0) { "warnMillis must be positive" }

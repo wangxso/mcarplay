@@ -315,37 +315,55 @@ class VideoSender(
     private fun sampleOutputHealth() {
         if (!videoWriteSeen) {
             // 还没出过帧：没有证据区分「编码器故障」与「启动/首帧建立慢」，不判定
-            healthKeyFramePending.set(false)
-            synchronized(outputHealth) { outputHealth.reset() }
+            invalidateHealthRequest()
             return
         }
-        val now = healthClockMs()
         val paused = screenOutputHeld()
         val halted = paused || stopped.get() || quiescing.get()
-        if (halted) {
-            // 主屏暂停/关闭期间的「没有写」是预期行为：把基线推进到当前时刻，
-            // 否则恢复后第一次采样就会把暂停时长当成停滞（可能直接 GIVE_UP）
-            lastVideoWriteAtMs = now
-            sourceInputSinceLastWrite = false
-            encoderOutputSinceLastWrite = false
-        }
-        val lastWrite = lastVideoWriteAtMs
-        // 还没有成功写过（理论上 start 已设基线）：按 0 处理，不误报
-        val sinceLastWrite = if (lastWrite == 0L) 0L else now - lastWrite
-        val inFlightStart = writeStartedAtMs
-        val inFlight = if (inFlightStart == 0L) 0L else (now - inFlightStart).coerceAtLeast(0L)
         val decision =
+            // 采样、时间戳读取与请求标志的发布/失效必须在同一把锁内完成：
+            // 否则写成功的 markVideoWriteSucceeded() 可能在采样与置位之间插入，
+            // 让一个已经过期的决策把补帧请求重新置上（或让已恢复/已阻塞的请求继续存活）。
             synchronized(outputHealth) {
-                outputHealth.sample(
-                    sinceLastWriteMs = sinceLastWrite,
-                    writeInFlightMillis = inFlight,
-                    sourceInputSinceLastWrite = sourceInputSinceLastWrite,
-                    encoderOutputSinceLastWrite = if (transcoder != null) encoderOutputSinceLastWrite else null,
-                    paused = paused,
-                    stopped = stopped.get() || quiescing.get(),
-                )
+                val now = healthClockMs()
+                if (halted) {
+                    // 主屏暂停/关闭期间的「没有写」是预期行为：把基线推进到当前时刻，
+                    // 否则恢复后第一次采样就会把暂停时长当成停滞（可能直接 GIVE_UP）
+                    lastVideoWriteAtMs = now
+                    sourceInputSinceLastWrite = false
+                    encoderOutputSinceLastWrite = false
+                }
+                val lastWrite = lastVideoWriteAtMs
+                // 还没有成功写过（理论上 start 已设基线）：按 0 处理，不误报
+                val sinceLastWrite = if (lastWrite == 0L) 0L else now - lastWrite
+                val inFlightStart = writeStartedAtMs
+                val inFlight = if (inFlightStart == 0L) 0L else (now - inFlightStart).coerceAtLeast(0L)
+                val sampled =
+                    outputHealth.sample(
+                        sinceLastWriteMs = sinceLastWrite,
+                        writeInFlightMillis = inFlight,
+                        sourceInputSinceLastWrite = sourceInputSinceLastWrite,
+                        encoderOutputSinceLastWrite = if (transcoder != null) encoderOutputSinceLastWrite else null,
+                        paused = paused,
+                        stopped = stopped.get() || quiescing.get(),
+                    )
+                if (sampled.action == VideoOutputHealth.Action.REQUEST_KEY_FRAME) {
+                    healthKeyFramePending.set(true)
+                } else if (!sampled.keepsPendingKeyFrameRequest) {
+                    // 写阻塞/用尽/恢复/无输入/暂停：任何未消费的补帧请求都必须作废
+                    healthKeyFramePending.set(false)
+                }
+                sampled
             }
         reportHealth(decision)
+    }
+
+    /** 让尚未被 drain 消费的补帧请求失效（暂停、启动早期等不判定的窗口）。 */
+    private fun invalidateHealthRequest() {
+        synchronized(outputHealth) {
+            healthKeyFramePending.set(false)
+            outputHealth.reset()
+        }
     }
 
     private fun reportHealth(decision: VideoOutputHealth.Decision) {
@@ -366,7 +384,6 @@ class VideoSender(
                 )
             }
             VideoOutputHealth.Action.REQUEST_KEY_FRAME -> {
-                healthKeyFramePending.set(true)
                 log(
                     "VIDEO: 视频输出停滞 ${decision.stalledMillis}ms（${decision.kind.label}）——" +
                         "补关键帧第 ${decision.keyFrameRequests}/${VideoOutputHealth.MAX_KEY_FRAME_REQUESTS} 轮",
@@ -415,12 +432,14 @@ class VideoSender(
      * 若在这里提前 reset，恢复事件永远无法被观察到，最长停滞时长也随之丢失。
      */
     private fun markVideoWriteSucceeded() {
-        lastVideoWriteAtMs = healthClockMs()
-        videoWriteSeen = true
-        sourceInputSinceLastWrite = false
-        encoderOutputSinceLastWrite = false
-        // 输出已经恢复：尚未被 drain 消费的补帧请求随之作废
-        healthKeyFramePending.set(false)
+        synchronized(outputHealth) {
+            lastVideoWriteAtMs = healthClockMs()
+            videoWriteSeen = true
+            sourceInputSinceLastWrite = false
+            encoderOutputSinceLastWrite = false
+            // 输出已经恢复：尚未被 drain 消费的补帧请求随之作废
+            healthKeyFramePending.set(false)
+        }
     }
 
     private fun markSourceInput() {
@@ -647,11 +666,15 @@ class VideoSender(
         stopped.set(true)
         running.set(false)
         externalQueue.clear()
-        healthKeyFramePending.set(false)
         val monitor = healthThread
         healthThread = null
         monitor?.interrupt()
-        synchronized(outputHealth) { outputHealth.reset() }
+        // 先取摘要再 reset：会话结束时的「输出健康看门狗」统计必须反映本次会话的真实记录
+        val healthSummary =
+            synchronized(outputHealth) {
+                healthKeyFramePending.set(false)
+                outputHealth.summary().also { outputHealth.reset() }
+            }
         // 先关 socket：解开阻塞在写入上的线程（它持有 writeLock，转码发布方持有 lifecycleLock 等它）
         val closing = socket
         socket = null
@@ -671,8 +694,7 @@ class VideoSender(
         releaseVideoResources(active, codec, surface)
         if (externalVideoSource != null && streamStatsLogged.compareAndSet(false, true)) {
             val gate = synchronized(screenOutputGate) { screenOutputGate.summary() }
-            val health = synchronized(outputHealth) { outputHealth.summary() }
-            log("VIDEO: 透传码流统计（会话结束）${streamStats.summary()}\n  ↳ 屏幕输出门控：$gate\n  ↳ 输出健康看门狗：$health")
+            log("VIDEO: 透传码流统计（会话结束）${streamStats.summary()}\n  ↳ 屏幕输出门控：$gate\n  ↳ 输出健康看门狗：$healthSummary")
         }
     }
 
@@ -786,9 +808,8 @@ class VideoSender(
             }
         when (decision.transition) {
             ScreenOutputGate.Transition.PAUSED -> {
-                // 主动暂停不是传输停滞：立刻清空看门狗基线，并丢弃还没消费的补帧请求
-                healthKeyFramePending.set(false)
-                synchronized(outputHealth) { outputHealth.reset() }
+                // 主动暂停不是传输停滞：在同一把锁内清空看门狗基线并作废未消费的补帧请求
+                invalidateHealthRequest()
                 reportScreenSuspended(true)
                 log("VIDEO: 主屏归车机——暂停发送全部视频帧（keepAlive 继续；归还后从新的 IDR 恢复）")
             }

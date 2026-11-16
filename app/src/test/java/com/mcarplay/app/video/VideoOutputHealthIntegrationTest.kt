@@ -21,6 +21,32 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class VideoOutputHealthIntegrationTest {
     @Test
+    fun sessionEndSummaryKeepsTheWarningsRecordedDuringTheSession() {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
+            val clock = AtomicLong(1_000)
+            val keyFrameRequests = AtomicInteger()
+            val logs = CopyOnWriteArrayList<String>()
+            val sender = passthroughSender(receiver, clock, keyFrameRequests, logs)
+            assertTrue(sender.start {})
+            receiver.accept().use {
+                assertTrue(sender.submitExternalFrame(keyFrame(1)))
+                assertTrue("the first frame must be written", awaitCondition { sender.framesSentTotal >= 1 })
+                // 进入一次已报警的停滞，让本轮确有记录
+                clock.addAndGet(6_000)
+                assertTrue(awaitLog(logs, "视频输出停滞") { it.contains("无输入") })
+            }
+            sender.stop()
+            val summaryLine = logs.firstOrNull { it.contains("输出健康看门狗") }
+            assertTrue("stop() must log the session-end summary", summaryLine != null)
+            assertTrue(
+                "The session-end summary must not say 无停滞 after a recorded stall: $summaryLine",
+                summaryLine!!.contains("无输入"),
+            )
+            assertEquals("Stopping must still clear the in-memory state", "无停滞", sender.outputHealthSummary())
+        }
+    }
+
+    @Test
     fun recoveryAfterAWarnedStallIsReportedWithItsMaximumDuration() {
         ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
             val clock = AtomicLong(1_000)
