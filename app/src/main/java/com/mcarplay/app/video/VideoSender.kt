@@ -228,11 +228,12 @@ class VideoSender(
     /**
      * 透传队列（容量 8，见 [PassthroughFrameQueue]）。入队方是 CarLife 读线程，出队方是推流线程；
      * 本字段只做内存排队，不做任何阻塞式网络调用。
+     *
+     * 丢帧后的「解码链已断」标记随帧入队（[PassthroughFrameQueue.Entry.discontinuityBefore]），
+     * 不单独保存：否则入队唤醒推流线程与打标记之间存在窗口，新 IDR 可能先被消费、
+     * 再被迟到的标记多等一个 IDR（2026-11-16 审查）。
      */
     private val externalQueue = PassthroughFrameQueue()
-
-    /** 转码路径丢过帧：推流线程在下一次喂帧前标记解码断流（等 IDR），不占用 CarLife 读线程。 */
-    private val passthroughDiscontinuity = AtomicBoolean(false)
 
     /** 队满换入新 IDR 的累计次数（日志限流用，避免每秒刷屏）。 */
     private val queueReplacements =
@@ -293,9 +294,13 @@ class VideoSender(
     /** 健康线程是否仍在运行（会话停止后必须结束）；测试用。 */
     internal fun isHealthMonitorAlive(): Boolean = healthMonitorRunning.get()
 
-    /** 透传队列丢过帧、转码解码链需要重新等 IDR；测试用。 */
+    /**
+     * 队列里是否还有带断流标记的帧（测试与诊断用）。
+     *
+     * 标记与帧一起入队、随帧一起取出，所以这里读到 true 就表示「消费方还没拿到那个恢复点」。
+     */
     internal val isPassthroughResyncPending: Boolean
-        get() = passthroughDiscontinuity.get()
+        get() = externalQueue.hasPendingDiscontinuity()
 
     /** 转码路径：门控已确认暂停时不再解码/编码；读取失败按暂停处理，与 [admitScreenFrame] 一致。 */
     private fun screenFeedPaused(): Boolean {
@@ -770,11 +775,11 @@ class VideoSender(
         // 先停补要线程：否则它可能在会话结束后仍向 CarWith 发命令。
         // 不 join（守护线程、请求本身可能阻塞在命令通道），断开按钮不被它拖住。
         overflowKeyFrameRecovery.stop()
+        // clear() 同时清掉队列里带断流标记的帧与尚未附着的标记。
         externalQueue.clear()
         val monitor = healthThread
         healthThread = null
         monitor?.interrupt()
-        passthroughDiscontinuity.set(false)
         // 先关 socket：解开阻塞在写入上的线程（它持有 writeLock，转码发布方持有 lifecycleLock 等它）
         val closing = socket
         socket = null
@@ -803,7 +808,6 @@ class VideoSender(
         quiescing.set(true)
         overflowKeyFrameRecovery.stop()
         externalQueue.clear()
-        passthroughDiscontinuity.set(false)
     }
 
     /** 先停转码（停止往编码器 Surface 渲染），再释放编码器与其输入 Surface。 */
@@ -987,6 +991,7 @@ class VideoSender(
      *  - 普通帧丢弃并返回 false（调用方重置入流门控等下一个 IDR），并额外派发一次补要关键帧；
      *  - 关键帧替换已排队的旧帧后仍然入队（返回 true），因为它是唯一可用的恢复边界——
      *    不能让它被丢弃，也不能把更早的旧关键帧当成恢复点；此时恢复点已到，不再补要。
+     * 丢帧后的断流标记随入队的帧一起交给推流线程，不在这里单独置位（见 [externalQueue]）。
      * 两条路径都只做内存操作，本线程（CarLife 读线程）不做任何网络调用。
      */
     fun submitExternalFrame(frame: ExternalVideoFrame): Boolean =
@@ -998,7 +1003,6 @@ class VideoSender(
                 PassthroughFrameQueue.Outcome.ACCEPTED -> true
 
                 PassthroughFrameQueue.Outcome.REPLACED_STALE -> {
-                    passthroughDiscontinuity.set(true)
                     val replacements = queueReplacements.incrementAndGet()
                     if (replacements <= 3 || replacements % 50 == 0L) {
                         log(
@@ -1013,9 +1017,8 @@ class VideoSender(
                 }
 
                 PassthroughFrameQueue.Outcome.DROPPED_FULL -> {
-                    // 由推流线程消费：转码路径据此让解码器等 IDR；透传路径由调用方 reset
-                    // 门控重新等 IDR，推流线程只负责把标记清掉，不让它残留到之后的转码切换。
-                    passthroughDiscontinuity.set(true)
+                    // 转码路径由推流线程在下一次投喂前看到随帧携带的断流标记；透传路径的恢复
+                    // 由调用方 reset 入流门控完成，标记只是随下一帧一起被丢弃。
                     val drops = streamStats.onQueueDrop()
                     if (drops <= 3 || drops % 50 == 0L) {
                         // 最近一次写入耗时用于区分「车机/链路慢」与「本机解码/编码慢」：
@@ -1119,32 +1122,33 @@ class VideoSender(
         val output = socket?.getOutputStream() ?: return
         try {
             while (running.get()) {
-                val frame = externalQueue.poll(250)
+                val entry = externalQueue.poll(250)
                 // 转码中：帧改喂解码器，数据口（含 keepAlive）由编码线程独占
                 val pipeline = transcoder
                 if (quiescing.get()) continue
                 if (pipeline != null) {
-                    if (frame != null) markSourceInput()
-                    // 队列丢过帧：解码链已断，下一次投喂前先标记等 IDR（在推流线程上做，
-                    // 不占用 CarLife 读线程；IdrResync 自己限流补要关键帧）。
-                    if (passthroughDiscontinuity.getAndSet(false)) pipeline.notifyDiscontinuity()
+                    if (entry != null) markSourceInput()
+                    // 断流标记随帧到达（入队时原子写入）：先标记，再喂这一帧。新 IDR 因此
+                    // 一定会经过「等 IDR」逻辑，而不会先被当成正常帧喂进去再被迟到的标记
+                    // 逼着多等一个 IDR（2026-11-16 审查）。
+                    if (entry != null && entry.discontinuityBefore) pipeline.notifyDiscontinuity()
                     // 门控已确认暂停后停止喂帧：解码/编码一场倒车影像的输入是纯功耗；
                     // 恢复时继续喂帧，由编码线程等新的 IDR 再放行输出。
-                    if (frame != null && !screenFeedPaused()) pipeline.submit(frame)
+                    if (entry != null && !screenFeedPaused()) pipeline.submit(entry.frame)
                     continue
                 }
-                if (frame == null) {
+                if (entry == null) {
                     // 透传线程是本路径唯一的 drain：在这里消费看门狗的补帧请求
                     consumeHealthKeyFrameRequest()
                     maybeSendKeepAlive(output)
                     continue
                 }
-                // 透传路径不消费断流标记；这里清掉，避免它残留到之后的转码切换
-                // （透传丢帧的恢复由调用方 reset 入流门控完成）。
-                passthroughDiscontinuity.set(false)
+                val frame = entry.frame
                 var nalUnits = splitAnnexB(frame.data)
                 if (nalUnits.isEmpty()) continue
                 markSourceInput()
+                // 透传路径不消费断流标记：它已经随这一帧取出并就此消失，不会残留到
+                // 之后的转码切换（透传丢帧的恢复由调用方 reset 入流门控完成）。
                 if (!admitScreenFrame(frame.keyFrame, passthrough = true)) {
                     maybeSendKeepAlive(output)
                     continue
@@ -1513,11 +1517,15 @@ class VideoSender(
             // 写入开始前取快照：写入期间或之后到达的源输入/编码器输出都会大于它
             val sourceSeqBeforeWrite = sourceInputSeq.get()
             val encoderSeqBeforeWrite = encoderOutputSeq.get()
+            val writeStart = android.os.SystemClock.uptimeMillis()
+            // trackedWrite 让健康线程知道「有写在途」，据此把停滞判成写阻塞而不是编码器故障；
+            // 写耗时同时喂给队满诊断（#76），两条路径共用这一个测量点。
             trackedWrite {
                 output.write(header)
                 output.write(sealed)
                 output.flush()
             }
+            streamStats.onFrameWrite(android.os.SystemClock.uptimeMillis() - writeStart)
             markVideoWriteSucceeded(sourceSeqBeforeWrite, encoderSeqBeforeWrite)
             framesSent++
             framesSinceKeepAlive++

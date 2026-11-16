@@ -160,6 +160,20 @@ internal class PassthroughStreamStats {
         }
     }
 
+    /**
+     * 记一次视频帧写入数据口（含 flush）的耗时。
+     *
+     * 本地编码与转码路径都经 `sendVideoFrame` 写出，由它统一上报；透传路径在 [onFrameSent]
+     * 里上报同一组字段。队满时用最近一次写入区分「车机/链路慢」与「本机解码/编码慢」，
+     * 两条路径都必须更新，否则转码期间的队满诊断会读到 0 或过期的透传写入（2026-11-16 审查）。
+     */
+    @Synchronized
+    fun onFrameWrite(writeMillis: Long) {
+        lastWriteMs = writeMillis
+        if (writeMillis > maxWriteMs) maxWriteMs = writeMillis
+        if (writeMillis >= SLOW_WRITE_MILLIS) slowWrites++
+    }
+
     /** 透传队列已满、CarWith 帧被丢弃（随后入流门控等下一个 IDR）。返回累计丢弃数。 */
     @Synchronized
     fun onQueueDrop(): Long = ++queueDrops

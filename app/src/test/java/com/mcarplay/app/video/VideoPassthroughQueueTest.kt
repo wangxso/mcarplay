@@ -195,7 +195,7 @@ class VideoPassthroughQueueTest {
     }
 
     @Test
-    fun aDroppedFrameMarksTheDecoderChainBrokenAndPassthroughSendingClearsIt() {
+    fun aDroppedFrameCarriesItsDiscontinuityToTheNextFrameAndConsumesIt() {
         ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
             val gateEntered = CountDownLatch(1)
             val releaseGate = CountDownLatch(1)
@@ -218,13 +218,15 @@ class VideoPassthroughQueueTest {
                     assertFalse(sender.submitExternalFrame(pFrame(77)))
                     assertTrue("a dropped access unit must break the decoder chain", sender.isPassthroughResyncPending)
 
-                    // 放行后透传继续发送；透传路径不消费该标记，必须在发送时清掉，
-                    // 否则它会残留到之后的转码切换，让解码器白等一次 IDR。
+                    // 标记随下一个入队的帧一起走：队列排空后标记仍在等下一个帧（这是正确语义，
+                    // 丢帧之后到达的第一帧就是新的解码边界），推流线程取走它才消失。
                     releaseGate.countDown()
                     awaitCondition { sender.framesSentTotal >= 9L }
-                    awaitCondition { !sender.isPassthroughResyncPending }
-                    // 队列已排空，后续帧应重新被接收（而不是继续报队满）。
+                    assertTrue("the discontinuity stays armed until a frame carries it", sender.isPassthroughResyncPending)
+                    // 下一帧入队时带上标记，被推流线程取走后标记消失，不会残留到之后的转码切换。
                     assertTrue(sender.submitExternalFrame(pFrame(78)))
+                    awaitCondition { sender.framesSentTotal >= 10L }
+                    awaitCondition { !sender.isPassthroughResyncPending }
                     readVideoFrames(car, expected = 10)
                 }
             } finally {

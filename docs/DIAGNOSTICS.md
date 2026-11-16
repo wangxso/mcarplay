@@ -157,8 +157,10 @@ still-redacted recent runtime history.
     warning. These lines contain counts and classifications only.
   - `VIDEO: 透传队列已满` when the 8-frame passthrough backlog overflows: current depth, whether the dropped frame was
     a key frame, whether the path was passthrough or transcoding and the last socket write duration (to tell a slow
-    receiver/link from a slow local pipeline). A newer IDR replaces the queued stale frames so it becomes the only
-    recovery point. Overflow also asks CarWith for a key frame, at most once per second, off the CarLife reader thread;
+    receiver/link from a slow local pipeline; both the passthrough and the encoded/transcoded write paths update it).
+    A newer IDR replaces the queued stale frames so it becomes the only recovery point, and the decoder-discontinuity
+    flag travels atomically with the first frame queued after a drop. Overflow also asks CarWith for a key frame, at
+    most once per second, off the CarLife reader thread;
   - `VIDEO: 车机经屏幕数据口回传` / `车机关闭了屏幕数据口` when the receiver writes to or closes the video data port;
   - `TIMING:` drift of the receiver's clock against the phone's monotonic clock, and the timesync request interval;
   - `EVENT: 首次收到车机命令` (the structure of each new command type, never its values), `EVENT: 本轮车机命令统计`,
