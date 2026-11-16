@@ -48,6 +48,93 @@ class VideoOutputHealthIntegrationTest {
     }
 
     @Test
+    fun lateSampleAfterFinalizationCanNeitherLogNorRepopulateState() {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
+            val clock = AtomicLong(1_000)
+            val keyFrameRequests = AtomicInteger()
+            val logs = CopyOnWriteArrayList<String>()
+            val sender = passthroughSender(receiver, clock, keyFrameRequests, logs)
+            assertTrue(sender.start {})
+            receiver.accept().use {
+                assertTrue(sender.submitExternalFrame(keyFrame(1)))
+                assertTrue("the first frame must be written", awaitCondition { sender.framesSentTotal >= 1 })
+                clock.addAndGet(6_000)
+                assertTrue(awaitLog(logs, "视频输出停滞") { it.contains("无输入") })
+            }
+            sender.stop()
+            val summaryLine = logs.filter { it.contains("输出健康看门狗") }
+            assertEquals("stop() must log exactly one session-end summary", 1, summaryLine.size)
+            val stallLinesAfterStop = logs.count { it.contains("视频输出停滞") }
+            val requestAfterStop = sender.outputHealthKeyFrameRequests()
+
+            // 模拟已经越过循环条件、在 stop() 之后才拿到锁的监测轮次：不得改状态、不得打日志
+            clock.addAndGet(60_000)
+            sender.sampleOutputHealthForTest()
+
+            assertEquals(
+                "A late monitor iteration must not log after finalization",
+                stallLinesAfterStop,
+                logs.count { it.contains("视频输出停滞") },
+            )
+            assertEquals("A late monitor iteration must not re-arm a request", requestAfterStop, sender.outputHealthKeyFrameRequests())
+            assertEquals("A late monitor iteration must not repopulate state", "无停滞", sender.outputHealthSummary())
+        }
+    }
+
+    @Test
+    fun finalizationWinsOverConcurrentSamplingWithoutLateLogs() {
+        repeat(30) { attempt ->
+            ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
+                val clock = AtomicLong(1_000)
+                val keyFrameRequests = AtomicInteger()
+                val logs = CopyOnWriteArrayList<String>()
+                val sender = passthroughSender(receiver, clock, keyFrameRequests, logs)
+                assertTrue(sender.start {})
+                receiver.accept().use {
+                    assertTrue(sender.submitExternalFrame(keyFrame(1)))
+                    assertTrue("the first frame must be written", awaitCondition { sender.framesSentTotal >= 1 })
+                    clock.addAndGet(6_000)
+                    assertTrue(awaitLog(logs, "视频输出停滞") { it.contains("无输入") })
+                }
+
+                // 采样线程与 stop() 竞争：无论谁先拿到 outputHealth 锁，
+                // 定稿之后都不得再出现停滞日志、不得重新置位请求、状态必须为空
+                val start = CountDownLatch(1)
+                val contenders =
+                    List(4) { index ->
+                        Thread {
+                            start.await()
+                            if (index == 0) {
+                                sender.stop()
+                            } else {
+                                sender.sampleOutputHealthForTest()
+                            }
+                        }.apply {
+                            isDaemon = true
+                            start()
+                        }
+                    }
+                start.countDown()
+                contenders.forEach { it.join(TimeUnit.SECONDS.toMillis(10)) }
+                sender.stop()
+
+                val summaryLines = logs.filter { it.contains("输出健康看门狗") }
+                assertEquals(
+                    "attempt $attempt: the session-end summary must be logged exactly once",
+                    1,
+                    summaryLines.size,
+                )
+                assertTrue(
+                    "attempt $attempt: concurrent stop() lost the recorded stall: ${summaryLines.first()}",
+                    summaryLines.first().contains("无输入"),
+                )
+                assertEquals("attempt $attempt: state must stay cleared", "无停滞", sender.outputHealthSummary())
+                assertEquals("attempt $attempt: no request may survive finalization", 0, sender.outputHealthKeyFrameRequests())
+            }
+        }
+    }
+
+    @Test
     fun concurrentStopsShareOneFinalSummaryThatKeepsTheRecordedStall() {
         repeat(20) { attempt ->
             ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->

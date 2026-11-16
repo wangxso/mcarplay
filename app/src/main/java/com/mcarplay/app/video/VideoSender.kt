@@ -241,6 +241,9 @@ class VideoSender(
     /** 本轮停滞累计补关键帧次数；测试用。 */
     internal fun outputHealthKeyFrameRequests(): Int = synchronized(outputHealth) { outputHealth.requestedKeyFrames }
 
+    /** 显式驱动一次健康采样；测试用（模拟迟到的监测轮次）。 */
+    internal fun sampleOutputHealthForTest() = sampleOutputHealth()
+
     /** 健康线程是否仍在运行（会话停止后必须结束）；测试用。 */
     internal fun isHealthMonitorAlive(): Boolean = healthMonitorRunning.get()
 
@@ -313,51 +316,49 @@ class VideoSender(
     }
 
     private fun sampleOutputHealth() {
-        // 摘要已定稿（stop() 已捕获最终结果）：迟到的采样不得再改状态或打日志
-        if (healthFinalized.get()) return
-        if (!videoWriteSeen) {
-            // 还没出过帧：没有证据区分「编码器故障」与「启动/首帧建立慢」，不判定
-            invalidateHealthRequest()
-            return
-        }
         val paused = screenOutputHeld()
         val halted = paused || stopped.get() || quiescing.get()
-        val decision =
-            // 采样、时间戳读取与请求标志的发布/失效必须在同一把锁内完成：
-            // 否则写成功的 markVideoWriteSucceeded() 可能在采样与置位之间插入，
-            // 让一个已经过期的决策把补帧请求重新置上（或让已恢复/已阻塞的请求继续存活）。
-            synchronized(outputHealth) {
-                val now = healthClockMs()
-                if (halted) {
-                    // 主屏暂停/关闭期间的「没有写」是预期行为：把基线推进到当前时刻，
-                    // 否则恢复后第一次采样就会把暂停时长当成停滞（可能直接 GIVE_UP）
-                    lastVideoWriteAtMs = now
-                    sourceInputSinceLastWrite = false
-                    encoderOutputSinceLastWrite = false
-                }
-                val lastWrite = lastVideoWriteAtMs
-                // 还没有成功写过（理论上 start 已设基线）：按 0 处理，不误报
-                val sinceLastWrite = if (lastWrite == 0L) 0L else now - lastWrite
-                val inFlightStart = writeStartedAtMs
-                val inFlight = if (inFlightStart == 0L) 0L else (now - inFlightStart).coerceAtLeast(0L)
-                val sampled =
-                    outputHealth.sample(
-                        sinceLastWriteMs = sinceLastWrite,
-                        writeInFlightMillis = inFlight,
-                        sourceInputSinceLastWrite = sourceInputSinceLastWrite,
-                        encoderOutputSinceLastWrite = if (transcoder != null) encoderOutputSinceLastWrite else null,
-                        paused = paused,
-                        stopped = stopped.get() || quiescing.get(),
-                    )
-                if (sampled.action == VideoOutputHealth.Action.REQUEST_KEY_FRAME) {
-                    healthKeyFramePending.set(true)
-                } else if (!sampled.keepsPendingKeyFrameRequest) {
-                    // 写阻塞/用尽/恢复/无输入/暂停：任何未消费的补帧请求都必须作废
-                    healthKeyFramePending.set(false)
-                }
-                sampled
+        // 定稿判定、采样、时间戳读取、请求标志发布/失效、以及日志报告全部在同一把锁内完成：
+        //  - stop() 若先定稿并 reset，旧采样不得再把状态填回去或重新置位补帧请求；
+        //  - 采样若先完成、stop() 随后定稿，日志也不得打在会话结束之后（no-late-log）。
+        synchronized(outputHealth) {
+            if (healthFinalized.get()) return
+            if (!videoWriteSeen) {
+                // 还没出过帧：没有证据区分「编码器故障」与「启动/首帧建立慢」，不判定
+                healthKeyFramePending.set(false)
+                outputHealth.reset()
+                return
             }
-        reportHealth(decision)
+            val now = healthClockMs()
+            if (halted) {
+                // 主屏暂停/关闭期间的「没有写」是预期行为：把基线推进到当前时刻，
+                // 否则恢复后第一次采样就会把暂停时长当成停滞（可能直接 GIVE_UP）
+                lastVideoWriteAtMs = now
+                sourceInputSinceLastWrite = false
+                encoderOutputSinceLastWrite = false
+            }
+            val lastWrite = lastVideoWriteAtMs
+            // 还没有成功写过（理论上 start 已设基线）：按 0 处理，不误报
+            val sinceLastWrite = if (lastWrite == 0L) 0L else now - lastWrite
+            val inFlightStart = writeStartedAtMs
+            val inFlight = if (inFlightStart == 0L) 0L else (now - inFlightStart).coerceAtLeast(0L)
+            val sampled =
+                outputHealth.sample(
+                    sinceLastWriteMs = sinceLastWrite,
+                    writeInFlightMillis = inFlight,
+                    sourceInputSinceLastWrite = sourceInputSinceLastWrite,
+                    encoderOutputSinceLastWrite = if (transcoder != null) encoderOutputSinceLastWrite else null,
+                    paused = paused,
+                    stopped = stopped.get() || quiescing.get(),
+                )
+            if (sampled.action == VideoOutputHealth.Action.REQUEST_KEY_FRAME) {
+                healthKeyFramePending.set(true)
+            } else if (!sampled.keepsPendingKeyFrameRequest) {
+                // 写阻塞/用尽/恢复/无输入/暂停：任何未消费的补帧请求都必须作废
+                healthKeyFramePending.set(false)
+            }
+            reportHealth(sampled)
+        }
     }
 
     /** 让尚未被 drain 消费的补帧请求失效（暂停、启动早期等不判定的窗口）。 */
