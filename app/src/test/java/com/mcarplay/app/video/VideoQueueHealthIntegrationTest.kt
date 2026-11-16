@@ -89,10 +89,12 @@ class VideoQueueHealthIntegrationTest {
                     assertEquals("a stalled watchdog must never add a key-frame request", 1, requests.size)
                     assertEquals(0, sender.outputHealthKeyFrameRequests())
 
-                    // 队列仍可正常工作：放行门控后，排队的帧与新关键帧都能继续写出；
-                    // 队满替换过旧帧，所以写出序列里最后出现的是新 IDR。
-                    releaseDrain.countDown()
+                    // 队列仍可正常工作：必须在放行门控**之前**先提交新 IDR，否则 countDown()
+                    // 会立刻唤醒 drain，让它先取走一个排队中的旧 P 帧再轮到替换 IDR，
+                    // 断言序列就随调度变化（2026-11-16 审查）。先提交 → 队列内容被替换为
+                    // 唯一的新 IDR，再放行，写出序列才是确定的。
                     assertTrue(sender.submitExternalFrame(keyFrame(99)))
+                    releaseDrain.countDown()
                     val frames = readVideoFrames(car, expected = 3)
                     assertEquals("the newest IDR must be the last one written", 99, frames.last())
                 }
