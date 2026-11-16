@@ -171,10 +171,32 @@ class DisplaySurfaceReportTest {
         // Long.MAX_VALUE.toInt() == -1：不校验就会被当成负数画布。
         assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to Long.MAX_VALUE))))
         assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("heightPixels" to Long.MAX_VALUE))))
-        // 超出明确上限（16384）也拒绝。
+        // 超出单边上限（4096）也拒绝。
         assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to 100_000L))))
-        // 刚好在上限内的合法尺寸仍接受。
-        assertEquals("16384x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to 16_384L)))?.text)
+        // 刚好在上限内、且总量在预算内的尺寸仍接受。
+        assertEquals("4096x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to 4_096L)))?.text)
+    }
+
+    /**
+     * PR #78 Codex 复审 P2：双维各自「合法」不代表组合可用。
+     *
+     * 这些值来自车机自报，畸形报告不应让本机替一个 16K 画布分配编码器；「显示」缩放最高
+     * 160%，16384 会进一步放大到 26214。上限按实际资源收紧，超限一律回退 displays[0]。
+     */
+    @Test
+    fun panelGeometryRejectsGeometriesBeyondResourceLimits() {
+        // 旧上限 16384 现在必须拒绝（单边超 4096）。
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to 16_384L))))
+        // 单边都合法、总量超预算（4096×4096 = 1677 万像素）也必须拒绝。
+        val square =
+            panel + ("widthPixels" to 4_096L) + ("heightPixels" to 4_096L)
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(square)))
+        // 总量刚好在预算内（4096×2024 < 8294400）仍接受。
+        val budget =
+            panel + ("widthPixels" to 4_096L) + ("heightPixels" to 2_024L)
+        assertEquals("4096x2024", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(budget))?.text)
+        // 实验目标 2288×1728 不受任何影响。
+        assertEquals("2288x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel))?.text)
     }
 
     @Test

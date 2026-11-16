@@ -131,6 +131,11 @@ internal object DisplaySurfaceReport {
      * 越界、小于 2 一律返回 null，调用方保持 `displays[0]` 原值。
      *
      * 下限取 2：H.264 画布按 2 对齐，`1` 对齐后仍不足一个宏块，无法表示有效画布。
+     *
+     * 上限必须按**实际资源**定，不能随手给一个大数（PR #78 Codex 复审 P2）：这些尺寸来自
+     * 车机自报，畸形/故意报告会让本机替一个 16K 画布分配编码器；而「显示」缩放最高 160%，
+     * 会把请求放大到 26214×26214。上限取 [MAX_DIMENSION]（4K 级别），并另按像素总量
+     * [MAX_PIXELS] 约束，两者都拒绝时回退 `displays[0]`（已知的 2288×1728 实验远低于此）。
      */
     private fun validDimension(raw: Any?): Int? {
         val value =
@@ -153,6 +158,20 @@ internal object DisplaySurfaceReport {
             }
         if (value !in MIN_DIMENSION..MAX_DIMENSION) return null
         return value.toInt()
+    }
+
+    /**
+     * 面板几何的整体可用性：两维各自在范围内，且**像素总量**不超过 [MAX_PIXELS]。
+     *
+     * 双维边界各自合法不代表组合安全：16384×16384 每维都「合法」但总量不可实现。
+     */
+    private fun validGeometry(
+        width: Int?,
+        height: Int?,
+    ): Boolean {
+        if (width == null || height == null) return false
+        if (width !in MIN_DIMENSION..MAX_DIMENSION || height !in MIN_DIMENSION..MAX_DIMENSION) return false
+        return width.toLong() * height.toLong() <= MAX_PIXELS
     }
 
     private fun uuidOf(map: Map<*, *>?): String? =
@@ -203,6 +222,7 @@ internal object DisplaySurfaceReport {
             if (!sameSurface) return@forEachIndexed
             val width = validDimension(panel["widthPixels"]) ?: return@forEachIndexed
             val height = validDimension(panel["heightPixels"]) ?: return@forEachIndexed
+            if (!validGeometry(width, height)) return@forEachIndexed
             return Geometry(width, height, "displayPanels[$index]")
         }
         return null
@@ -246,6 +266,12 @@ internal object DisplaySurfaceReport {
     /** 单边像素下限 2：H.264 画布按 2 对齐，1 对齐后仍不足一个宏块。 */
     private const val MIN_DIMENSION = 2
 
-    /** 单边像素上限：远高于任何车机面板，仅用于挡住溢出/哨兵值（如 Long.MAX_VALUE 截断）。 */
-    private const val MAX_DIMENSION = 16_384
+    /** 单边像素上限：4K 级别，远高于任何车机面板；挡住溢出/哨兵值与畸形 16K 报告。 */
+    private const val MAX_DIMENSION = 4_096
+
+    /**
+     * 面板像素总量上限（约 3840×2160）。双维各自合法不代表组合可用：
+     * 4096×4096 = 1677 万像素，远超任何车机视频表面，也会让编码器分配失败。
+     */
+    private const val MAX_PIXELS = 8_294_400L
 }
