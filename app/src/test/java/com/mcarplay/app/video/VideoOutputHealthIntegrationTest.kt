@@ -8,6 +8,7 @@ import org.junit.Test
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -43,6 +44,48 @@ class VideoOutputHealthIntegrationTest {
                 summaryLine!!.contains("无输入"),
             )
             assertEquals("Stopping must still clear the in-memory state", "无停滞", sender.outputHealthSummary())
+        }
+    }
+
+    @Test
+    fun concurrentStopsShareOneFinalSummaryThatKeepsTheRecordedStall() {
+        repeat(20) { attempt ->
+            ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
+                val clock = AtomicLong(1_000)
+                val keyFrameRequests = AtomicInteger()
+                val logs = CopyOnWriteArrayList<String>()
+                val sender = passthroughSender(receiver, clock, keyFrameRequests, logs)
+                assertTrue(sender.start {})
+                receiver.accept().use {
+                    assertTrue(sender.submitExternalFrame(keyFrame(1)))
+                    assertTrue("the first frame must be written", awaitCondition { sender.framesSentTotal >= 1 })
+                    // 让本轮确有记录，且监测线程此刻可能正卡在采样锁上
+                    clock.addAndGet(6_000)
+                    assertTrue(awaitLog(logs, "视频输出停滞") { it.contains("无输入") })
+                }
+
+                // 透传与转码 drain 线程会并发 stop()：两者必须拿到同一份真实摘要
+                val start = CountDownLatch(1)
+                val stoppers =
+                    List(2) {
+                        Thread {
+                            start.await()
+                            sender.stop()
+                        }.apply {
+                            isDaemon = true
+                            start()
+                        }
+                    }
+                start.countDown()
+                stoppers.forEach { it.join(TimeUnit.SECONDS.toMillis(10)) }
+
+                val summaryLines = logs.filter { it.contains("输出健康看门狗") }
+                assertEquals("attempt $attempt: the session-end summary must be logged exactly once", 1, summaryLines.size)
+                assertTrue(
+                    "attempt $attempt: concurrent stop() lost the recorded stall: ${summaryLines.first()}",
+                    summaryLines.first().contains("无输入"),
+                )
+            }
         }
     }
 

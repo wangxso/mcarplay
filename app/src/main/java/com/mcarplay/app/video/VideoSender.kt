@@ -313,6 +313,8 @@ class VideoSender(
     }
 
     private fun sampleOutputHealth() {
+        // 摘要已定稿（stop() 已捕获最终结果）：迟到的采样不得再改状态或打日志
+        if (healthFinalized.get()) return
         if (!videoWriteSeen) {
             // 还没出过帧：没有证据区分「编码器故障」与「启动/首帧建立慢」，不判定
             invalidateHealthRequest()
@@ -662,19 +664,42 @@ class VideoSender(
         return codec to surface
     }
 
+    /**
+     * 会话结束时的最终摘要：一次性捕获后缓存，供并发的第二次 [stop] 与迟到的监测采样复用。
+     *
+     * 两个竞态都必须挡在这里：① 健康线程可能已经通过循环条件、正卡在 `sampleOutputHealth()`
+     * 的锁上，若不先捕获就发布 `stopped`，它会用 `stopped = true` 采样并 reset，摘要永远为空；
+     * ② 透传与转码 drain 线程可能并发调用 [stop]，两个调用者各自快照时，后到的一个会读到
+     * 已被 reset 的 `无停滞` 且赢下 `streamStatsLogged`。
+     */
+    private val healthFinalized = AtomicBoolean(false)
+
+    @Volatile
+    private var healthFinalSummary: String? = null
+
+    /** 一次性：捕获本轮真实摘要并 reset。并发/迟到调用直接拿到同一份缓存结果。 */
+    private fun finalizeOutputHealth(): String =
+        synchronized(outputHealth) {
+            if (healthFinalized.compareAndSet(false, true)) {
+                healthKeyFramePending.set(false)
+                outputHealth.summary().also {
+                    healthFinalSummary = it
+                    outputHealth.reset()
+                }
+            } else {
+                healthFinalSummary ?: "无停滞"
+            }
+        }
+
     fun stop() {
+        // 先捕获最终摘要，再发布 stopped：顺序反了，健康线程的迟到采样会把它 reset 掉
+        val healthSummary = finalizeOutputHealth()
         stopped.set(true)
         running.set(false)
         externalQueue.clear()
         val monitor = healthThread
         healthThread = null
         monitor?.interrupt()
-        // 先取摘要再 reset：会话结束时的「输出健康看门狗」统计必须反映本次会话的真实记录
-        val healthSummary =
-            synchronized(outputHealth) {
-                healthKeyFramePending.set(false)
-                outputHealth.summary().also { outputHealth.reset() }
-            }
         // 先关 socket：解开阻塞在写入上的线程（它持有 writeLock，转码发布方持有 lifecycleLock 等它）
         val closing = socket
         socket = null
