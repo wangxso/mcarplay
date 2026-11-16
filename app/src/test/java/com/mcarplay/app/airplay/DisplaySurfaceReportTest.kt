@@ -191,12 +191,42 @@ class DisplaySurfaceReportTest {
         val square =
             panel + ("widthPixels" to 4_096L) + ("heightPixels" to 4_096L)
         assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(square)))
-        // 总量刚好在预算内（4096×2024 < 8294400）仍接受。
+        // 总量刚好在预算内（4096×2024 < 8847360）仍接受。
         val budget =
             panel + ("widthPixels" to 4_096L) + ("heightPixels" to 2_024L)
         assertEquals("4096x2024", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(budget))?.text)
         // 实验目标 2288×1728 不受任何影响。
         assertEquals("2288x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel))?.text)
+    }
+
+    /**
+     * PR #78 Codex 复审第二轮 P2：预算必须落在**应用「显示」缩放后**的画布上。
+     *
+     * `SessionController` 用 `setup.displayWidth * scalePct/100`（最高 160%）生成编码画布，
+     * 面板本身合法不代表缩放后合法。`fitWithinCanvasLimits` 在知道缩放值的那一层收敛。
+     */
+    @Test
+    fun scaledCanvasIsFittedIntoResourceLimits() {
+        // 已在预算内：原样返回（含实验预期尺寸按 100% 使用时）。
+        assertEquals(2288 to 1728, DisplaySurfaceReport.fitWithinCanvasLimits(2288, 1728))
+        assertEquals(1920 to 1080, DisplaySurfaceReport.fitWithinCanvasLimits(1920, 1080))
+        // 实验 2288×1728 @160% = 3661×2765 ≈ 10.1MP：收敛到预算内且仍为偶数。
+        val fitted = DisplaySurfaceReport.fitWithinCanvasLimits(3661, 2765)
+        assertTrue(
+            "收敛后 ${fitted.first}x${fitted.second} 应回到预算内",
+            fitted.first.toLong() * fitted.second.toLong() <= 8_294_400L,
+        )
+        assertEquals("宽必须偶数", 0, fitted.first % 2)
+        assertEquals("高必须偶数", 0, fitted.second % 2)
+        // 远大于预算：3840×2160 @160% = 6144×3456 ≈ 21.2MP。
+        val big = DisplaySurfaceReport.fitWithinCanvasLimits(6144, 3456)
+        assertTrue(big.first.toLong() * big.second.toLong() <= 8_294_400L)
+        assertTrue("不得超出缩放后单边上限", maxOf(big.first, big.second) <= 6_144)
+        // 单边超上限但总量不大：同样收敛。
+        val tall = DisplaySurfaceReport.fitWithinCanvasLimits(8_000, 100)
+        assertTrue("单边必须收敛", maxOf(tall.first, tall.second) <= 6_144)
+        // 退化输入不受影响（不产生 0 或负数）。
+        assertEquals(0 to 0, DisplaySurfaceReport.fitWithinCanvasLimits(0, 0))
     }
 
     @Test

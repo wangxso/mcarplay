@@ -161,9 +161,13 @@ internal object DisplaySurfaceReport {
     }
 
     /**
-     * 面板几何的整体可用性：两维各自在范围内，且**像素总量**不超过 [MAX_PIXELS]。
+     * 面板几何的整体可用性（**原始尺寸**，不含「显示」缩放）。
      *
-     * 双维边界各自合法不代表组合安全：16384×16384 每维都「合法」但总量不可实现。
+     * 这里只挡自报值本身的荒谬与溢出：两维在范围内，总量不超过 [MAX_PIXELS]。
+     * 缩放后的画布由 [fitWithinCanvasLimits] 在下游按**实际**缩放值收敛
+     * （PR #78 Codex 复审第二轮 P2：`DisplayPrefs` 允许 160%，`SessionController`
+     * 用 `setup.displayWidth * scalePct/100` 生成编码画布，因此最终尺寸必须在知道
+     * 缩放值的地方再校验一次；这里拒绝 3840×2160@160%=6144×3456 这类组合）。
      */
     private fun validGeometry(
         width: Int?,
@@ -172,6 +176,37 @@ internal object DisplaySurfaceReport {
         if (width == null || height == null) return false
         if (width !in MIN_DIMENSION..MAX_DIMENSION || height !in MIN_DIMENSION..MAX_DIMENSION) return false
         return width.toLong() * height.toLong() <= MAX_PIXELS
+    }
+
+    /**
+     * 把**已应用缩放的**画布收敛到资源上限内：超限时按比例缩小（宽高都对齐到偶数）。
+     *
+     * 为什么在这里而不是在面板校验里：缩放值（30%–160%）只有主控知道，`airplay/` 层不能
+     * 读 `DisplayPrefs`。`SessionController` 算出 `streamW/streamH` 后调用本函数，实验路径
+     * 因此不会请求一个编码器无法承受的画布；被缩小时如实返回较小尺寸，让「实际发送尺寸」
+     * 判定说明实验未生效，而不是分配失败。
+     *
+     * @return 收敛后的 (width, height)；已在上限内时原样返回。
+     */
+    fun fitWithinCanvasLimits(
+        width: Int,
+        height: Int,
+    ): Pair<Int, Int> {
+        if (width <= 0 || height <= 0) return width to height
+        var scale = 1.0
+        if (width > MAX_SCALED_DIMENSION || height > MAX_SCALED_DIMENSION) {
+            scale = minOf(scale, MAX_SCALED_DIMENSION / maxOf(width, height))
+        }
+        val pixels = width.toDouble() * height
+        if (pixels > MAX_SCALED_PIXELS) {
+            scale = minOf(scale, kotlin.math.sqrt(MAX_SCALED_PIXELS / pixels))
+        }
+        if (scale >= 1.0) return width to height
+
+        fun even(value: Double) = ((value * scale).toInt() / 2) * 2
+        val fittedWidth = even(width.toDouble()).coerceAtLeast(MIN_DIMENSION)
+        val fittedHeight = even(height.toDouble()).coerceAtLeast(MIN_DIMENSION)
+        return fittedWidth to fittedHeight
     }
 
     private fun uuidOf(map: Map<*, *>?): String? =
@@ -269,9 +304,20 @@ internal object DisplaySurfaceReport {
     /** 单边像素上限：4K 级别，远高于任何车机面板；挡住溢出/哨兵值与畸形 16K 报告。 */
     private const val MAX_DIMENSION = 4_096
 
+    /** 原始面板像素总量上限（约 4K，4096×2160 以内）。 */
+    private const val MAX_PIXELS = 8_847_360L
+
     /**
-     * 面板像素总量上限（约 3840×2160）。双维各自合法不代表组合可用：
-     * 4096×4096 = 1677 万像素，远超任何车机视频表面，也会让编码器分配失败。
+     * 缩放后单边上限。`SessionController` 的画布是 `setup.displayWidth * scalePct/100`，
+     * 缩放最高 160%，因此 3840 面板可达 6144。
      */
-    private const val MAX_PIXELS = 8_294_400L
+    private const val MAX_SCALED_DIMENSION = 6_144.0
+
+    /**
+     * 缩放后像素总量上限（约 3840×2160 = 8.29 MP，4K 编码画布的常见上限）。
+     *
+     * 实验本身 2288×1728@160% = 3661×2765 ≈ 10.1 MP，超过本预算，因此会被
+     * [fitWithinCanvasLimits] 按比例收敛（≈ 0.9×），并让「实际发送尺寸」判定如实说明实验未生效。
+     */
+    private const val MAX_SCALED_PIXELS = 8_294_400.0
 }

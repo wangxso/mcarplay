@@ -4874,11 +4874,28 @@ object SessionController {
                                                 DisplayPrefs
                                                     .fps(it)
                                             } ?: 30
+                                    // 缩放后的画布才是交给编码器的最终尺寸。实验面板可能把它推到编码器
+                                    // 无法承受的规模（2288×1728@160% ≈ 10.1MP），这里按资源上限收敛；
+                                    // 被缩小时「实际发送尺寸」判定会如实报告实验未生效（PR #78 P2）。
+                                    val (fittedW, fittedH) =
+                                        if (setup.experimentalPanelGeometry != null) {
+                                            DisplaySurfaceReport.fitWithinCanvasLimits(streamW, streamH)
+                                        } else {
+                                            streamW to streamH
+                                        }
+                                    if (fittedW != streamW || fittedH != streamH) {
+                                        appendLog(
+                                            "DISPLAY: 实验画布 ${streamW}x$streamH 超出资源上限 → 收敛为 " +
+                                                "${fittedW}x$fittedH（不会再请求 ${streamW}x$streamH）",
+                                        )
+                                    }
+                                    val effectiveW = fittedW
+                                    val effectiveH = fittedH
                                     activeScalePercent = scalePct
                                     activeTargetFps = fps
                                     appendLog(
                                         "DISPLAY: 流 ${setup.displayWidth}x${setup.displayHeight} → " +
-                                            "${streamW}x$streamH（$scalePct%）@${fps}fps",
+                                            "${effectiveW}x$effectiveH（$scalePct%）@${fps}fps",
                                     )
                                     // 实验（issue #62）：面板几何同时成为触摸映射的源尺寸。目前没有证据
                                     // 证明车机 HID 坐标范围也随之变化；若它仍按 displays[0] 上报，触摸会偏移。
@@ -4890,8 +4907,8 @@ object SessionController {
                                                 "（车机 HID 是否同范围未经台架/实车验证，偏移即为此因）",
                                         )
                                     }
-                                    pendingVideoW = streamW
-                                    pendingVideoH = streamH
+                                    pendingVideoW = effectiveW
+                                    pendingVideoH = effectiveH
                                     val carLifeSource =
                                         object : ExternalVideoSource {
                                             override fun requestKeyFrame(): Boolean = currentCarLifeSession?.requestKeyFrame() == true
@@ -4905,8 +4922,9 @@ object SessionController {
                                                 host = host,
                                                 dataPort = screenInfo.dataPort,
                                                 frameCipher = screenInfo.cipher,
-                                                width = streamW,
-                                                height = streamH,
+                                                // 用收敛后的尺寸：实验面板不得把编码器画布推出资源上限。
+                                                width = effectiveW,
+                                                height = effectiveH,
                                                 targetFps = fps,
                                                 log = { line -> appendLog(line) },
                                                 keepAliveWithStats = setup.keepAliveSendStatsAsBody,
