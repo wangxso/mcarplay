@@ -125,6 +125,15 @@ object ReceiverProfile {
                     // 不能仅凭「未声明」判新：奥迪清单只列 CarPlay 生命周期消息（实测
                     // 发送清单 2 项/可收 5 项，均无 0x57xx），但旧协议工作正常——
                     // 稀疏清单不算数，保守 UNKNOWN 走旧协议（0x5703 有超时兜底）
+                    //
+                    // 反例（issue #69，2026-11-15）：曾建议在稀疏分支之前加一条
+                    // 「收 0x4300 + 发 0x4301 + 无 0x57xx → NEW」，依据是上汽 AH4EM
+                    // 的 2+2 清单。**未采纳**：本仓库记录的奥迪 MMI 3315 识别帧是
+                    // 收 {0x4e0c,0x4e09,0x4300,0xea00,0xea01}、发 {0x4301,0xea03}，
+                    // 在 0x430x 维度上与之同形，而跳过 0x5702 会让奥迪不启动 AirPlay
+                    // 服务（2026-10-22 真车：45 次 ECONNREFUSED）。两者只能靠 EA 与
+                    // 旧协议声明区分，因此该时序差异改在 [Iap2SenderSession] 里按
+                    // 能力门控处理，画像判定保持不变。
                     reasons += "清单完整（${(signals.sendIds?.size ?: 0) + (signals.receiveIds?.size ?: 0)} 项）仍无 0x5703/0x5702——AP 信息由 0x4301 提供"
                     WifiGen.NEW
                 }
@@ -133,7 +142,6 @@ object ReceiverProfile {
                     reasons += "清单稀疏且未声明 0x5703/0x5702——不构成「新协议」证据，保守按旧协议（超时兜底）"
                     WifiGen.UNKNOWN
                 }
-
                 else -> WifiGen.UNKNOWN
             }
         return Profile(era, wifiGen, identityKeyOf(signals), reasons)
