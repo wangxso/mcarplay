@@ -1242,6 +1242,7 @@ class AirPlayClient(
                 hidDescriptors = parsedHidDescriptors,
                 // 奥迪 MMI 3315 声明 true：屏幕流 keepAlive 用 opcode=5 带 bplist 统计体
                 keepAliveSendStatsAsBody = (infoRoot?.get("keepAliveSendStatsAsBody") as? Boolean) == true,
+                experimentalPanelGeometry = panelGeometry?.let { it.width!! to it.height!! },
             )
         log(
             "AIRPLAY: ✓ SETUP 完成 eventPort=${info.eventPort} timingPort=${info.timingPort} " +
@@ -1447,6 +1448,13 @@ class AirPlayClient(
          * （true → opcode=5 + bplist；false → opcode=2 空帧）。奥迪 3315 为 true。
          */
         val keepAliveSendStatsAsBody: Boolean = false,
+        /**
+         * 实验（issue #62，手动选「奔驰 MB_E-P / GLC（实验）」且命中面板时）：目标面板几何。
+         *
+         * 非 null 只表示「请求的是这个尺寸」，**不代表实际输出已是它**——CarWith 可能不采纳，
+         * 透传路径还会用实际 SPS 尺寸覆盖画布。调用方必须在拿到实际尺寸后比较并报告。
+         */
+        val experimentalPanelGeometry: Pair<Int, Int>? = null,
     )
 
     /** 屏幕流协商结果。 */

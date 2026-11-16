@@ -120,6 +120,127 @@ class DisplaySurfaceReportTest {
         assertEquals("2288x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(audioOnly, panel))?.text)
     }
 
+    // ---- PR #78 评审 P2：面板尺寸必须先校验再转换 ----
+
+    @Test
+    fun panelGeometryRejectsNonPositiveDimensions() {
+        listOf(0L, -1L, -2288L).forEach { bad ->
+            assertEquals(
+                "widthPixels=$bad 必须拒绝",
+                null,
+                DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to bad))),
+            )
+            assertEquals(
+                "heightPixels=$bad 必须拒绝",
+                null,
+                DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("heightPixels" to bad))),
+            )
+        }
+    }
+
+    /** PR #78 复审 P2：下限 2，且必须整数值——`1.9.toLong()` 不能悄悄变成 1。 */
+    @Test
+    fun panelGeometryRejectsTooSmallAndFractionalDimensions() {
+        // 1 对齐后仍不足一个宏块。
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to 1))))
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("heightPixels" to 1L))))
+        // 2 是可表示的最小偶数画布。
+        assertEquals("2x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to 2)))?.text)
+        // 非整数值不能被截断成整数后接受。
+        listOf(1.9, 2288.5, 3.01, 0.9).forEach { bad ->
+            assertEquals(
+                "Double $bad 必须拒绝（不能截断）",
+                null,
+                DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to bad))),
+            )
+        }
+        listOf(1.9f, 2288.5f).forEach { bad ->
+            assertEquals(
+                "Float $bad 必须拒绝（不能截断）",
+                null,
+                DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("heightPixels" to bad))),
+            )
+        }
+        // 整数值的浮点仍接受（bplist 可能把整数给成 Double）。
+        assertEquals("2288x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to 2288.0)))?.text)
+        assertEquals("2288x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("heightPixels" to 1728f)))?.text)
+    }
+
+    @Test
+    fun panelGeometryRejectsOverflowingDimensionsInsteadOfTruncating() {
+        // Long.MAX_VALUE.toInt() == -1：不校验就会被当成负数画布。
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to Long.MAX_VALUE))))
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("heightPixels" to Long.MAX_VALUE))))
+        // 超出明确上限（16384）也拒绝。
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to 100_000L))))
+        // 刚好在上限内的合法尺寸仍接受。
+        assertEquals("16384x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to 16_384L)))?.text)
+    }
+
+    @Test
+    fun panelGeometryRejectsNonFiniteAndNonNumericDimensions() {
+        listOf(Double.NaN, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY).forEach { bad ->
+            assertEquals(
+                "非有限值 $bad 必须拒绝",
+                null,
+                DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to bad))),
+            )
+        }
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel + ("widthPixels" to "2288"))))
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel - "widthPixels")))
+    }
+
+    @Test
+    fun panelGeometryAcceptsIntBackedValues() {
+        // 个别接收端把像素给成 Int 而非 bplist 的 Long。
+        val intPanel = panel + ("widthPixels" to 2288) + ("heightPixels" to 1728)
+        assertEquals("2288x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(intPanel))?.text)
+    }
+
+    // ---- PR #78 评审 P2：实验是否真的对实际输出尺寸生效 ----
+
+    @Test
+    fun experimentIsEffectiveOnlyWhenActualOutputMatchesThePanel() {
+        assertEquals(
+            DisplaySurfaceReport.PanelExperimentOutcome.EFFECTIVE,
+            DisplaySurfaceReport.panelExperimentOutcome(2288, 1728, 2288, 1728),
+        )
+        // 偶数对齐后仍算一致（VideoSender/编码器都按 2 对齐）。
+        assertEquals(
+            DisplaySurfaceReport.PanelExperimentOutcome.EFFECTIVE,
+            DisplaySurfaceReport.panelExperimentOutcome(2289, 1729, 2288, 1728),
+        )
+    }
+
+    @Test
+    fun experimentWithoutATargetIsNotRequested() {
+        assertEquals(
+            DisplaySurfaceReport.PanelExperimentOutcome.NOT_REQUESTED,
+            DisplaySurfaceReport.panelExperimentOutcome(null, null, 2288, 1728),
+        )
+        assertEquals(
+            DisplaySurfaceReport.PanelExperimentOutcome.NOT_REQUESTED,
+            DisplaySurfaceReport.panelExperimentOutcome(2288, null, 2288, 1728),
+        )
+    }
+
+    @Test
+    fun experimentReportsCarWithIgnoringTheRequestedSize() {
+        // CarWith 返回了别的尺寸（含默认 1920 长边上限的结果）→ 实验未生效。
+        listOf(1920 to 1450, 1920 to 1140, 1280 to 720).forEach { (w, h) ->
+            assertEquals(
+                "CarWith ${w}x$h 与面板不符时必须报告未生效",
+                DisplaySurfaceReport.PanelExperimentOutcome.CARWITH_DIFFERENT,
+                DisplaySurfaceReport.panelExperimentOutcome(2288, 1728, w, h),
+            )
+        }
+        // 非法实际尺寸也不能被当成生效。
+        assertEquals(
+            DisplaySurfaceReport.PanelExperimentOutcome.CARWITH_DIFFERENT,
+            DisplaySurfaceReport.panelExperimentOutcome(2288, 1728, 0, 0),
+        )
+    }
+
     @Test
     fun repeatedSurfaceUuidKeepsOneAlias() {
         // 同一别名必须复用，否则「两个表面是否相同」在报告里看不出来。

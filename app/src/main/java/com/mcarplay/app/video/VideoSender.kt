@@ -71,14 +71,28 @@ class VideoSender(
     private val onScreenOutputSuspended: (Boolean) -> Unit = {},
     private val uptimeMs: () -> Long = { android.os.SystemClock.uptimeMillis() },
 ) {
-    @Volatile
-    private var width: Int = (width / 2) * 2
+    /**
+     * 画布尺寸 + 是否转码：两者必须原子地一起读写（评审 P2）。
+     * 见 [VideoCanvasState]：源尺寸更新与转码发布经同一把锁，避免「源线程判断未转码 → 转码线程
+     * 发布固定画布 → 源线程再覆盖」的交错。
+     */
+    private val canvas = VideoCanvasState((width / 2) * 2, (height / 2) * 2)
 
-    @Volatile
-    private var height: Int = (height / 2) * 2
+    /** 读取画布的一次性快照（两者来自同一版本）。 */
+    private fun canvasSize(): VideoCanvasState.Size = canvas.read()
 
-    val videoWidth: Int get() = width
-    val videoHeight: Int get() = height
+    val videoWidth: Int get() = canvasSize().width
+    val videoHeight: Int get() = canvasSize().height
+
+    /**
+     * 诊断/实验：VideoConfig 成功写出后回调**实际发送的**画布尺寸。
+     *
+     * 透传路径 = CarWith SPS 尺寸；转码/本地编码 = 编码器画布。只在写成功之后回调，
+     * 因此可以用它判断「实验是否真的改变了发给车机的尺寸」——不能拿请求值或首个源帧
+     * 到达时的画布代替（PR #78 评审 P2：源帧可能未发送，之后尺寸还可能变）。
+     */
+    @Volatile
+    var onVideoConfigSent: ((width: Int, height: Int) -> Unit)? = null
 
     /**
      * CarWith 源尺寸是否与上次 [setVideoDimensions] 记录的不同。转码后 [videoWidth]/[videoHeight]
@@ -638,10 +652,10 @@ class VideoSender(
                     start()
                 }
                 reportScreenSuspended(false, force = true)
-                log("VIDEO: 外部 CarWith H.264 输入已启动 ${width}x$height@$targetFps")
+                log("VIDEO: 外部 CarWith H.264 输入已启动 ${canvasSize().width}x${canvasSize().height}@$targetFps")
                 return true
             }
-            val (codec, surface) = createEncoder(width, height, targetFps)
+            val (codec, surface) = canvasSize().let { createEncoder(it.width, it.height, targetFps) }
             val published =
                 synchronized(lifecycleLock) {
                     if (stopped.get() || quiescing.get()) {
@@ -1047,12 +1061,15 @@ class VideoSender(
         val output = socket?.getOutputStream() ?: return
         synchronized(writeLock) {
             if (quiescing.get()) return
+            // 快照：header、日志与「实际发送尺寸」回调必须用同一份尺寸（评审 P2）。
+            val sent = canvasSize()
             trackedWrite {
-                output.write(buildVideoConfigHeader(avcC.size, width, height))
+                output.write(buildVideoConfigHeader(avcC.size, sent.width, sent.height))
                 output.write(avcC)
                 output.flush()
             }
-            log("VIDEO: 主屏输出恢复——重发 VideoConfig avcC=${avcC.size}B ${width}x$height")
+            log("VIDEO: 主屏输出恢复——重发 VideoConfig avcC=${avcC.size}B ${sent.width}x${sent.height}")
+            onVideoConfigSent?.invoke(sent.width, sent.height)
         }
     }
 
@@ -1117,19 +1134,27 @@ class VideoSender(
         overflowKeyFrameRecovery.signal()
     }
 
-    /** Align the CarPlay canvas to the SPS dimensions from CarWith. */
+    /**
+     * Align the CarPlay canvas to the SPS dimensions from CarWith.
+     *
+     * **只取画布短锁，绝不取 [lifecycleLock]**（PR #78 复审 P1）：转码发布在持有 lifecycleLock
+     * 的情况下等 [writeLock]，而 writeLock 可能正被阻塞的车机 socket 写占用；本方法由 CarWith
+     * 视频读取线程调用，若在此等 lifecycleLock，整个视频读取会被网络写入拖住。
+     *
+     * 「是否已转码」的判断与画布写入由 [VideoCanvasState] 在同一把短锁内完成，因此不需要
+     * lifecycleLock 也能保证原子；[VideoCanvasState] 的锁从不持有其它锁、也不会阻塞在 I/O 上。
+     */
     fun setVideoDimensions(
         newWidth: Int,
         newHeight: Int,
     ) {
         if (newWidth <= 0 || newHeight <= 0) return
-        sourceWidth = (newWidth / 2) * 2
-        sourceHeight = (newHeight / 2) * 2
+        val alignedWidth = (newWidth / 2) * 2
+        val alignedHeight = (newHeight / 2) * 2
+        sourceWidth = alignedWidth
+        sourceHeight = alignedHeight
         // 转码中画布固定为车机流尺寸；CarWith 尺寸变化交给解码器自适应
-        if (transcoder != null) return
-        width = sourceWidth
-        height = sourceHeight
-        cachedVideoConfig = null
+        if (canvas.applySourceSize(alignedWidth, alignedHeight)) cachedVideoConfig = null
     }
 
     /**
@@ -1170,8 +1195,8 @@ class VideoSender(
                 synchronized(lifecycleLock) {
                     if (!running.get() || quiescing.get()) return@synchronized false
                     synchronized(writeLock) {
-                        width = streamWidth
-                        height = streamHeight
+                        // 画布与「已转码」标记一起发布：与 setVideoDimensions() 同一把锁。
+                        canvas.publishEncodedCanvas(streamWidth, streamHeight)
                         configSent = false
                         cachedVideoConfig = null
                         encoder = codec
@@ -1318,7 +1343,9 @@ class VideoSender(
         synchronized(writeLock) {
             // 已切换转码：透传线程在切换前取到的旧配置不得混进新流
             if (transcoder != null || quiescing.get()) return@synchronized false
-            val header = buildVideoConfigHeader(avcC.size, width, height)
+            // 快照：header、日志与「实际发送尺寸」回调必须用同一份尺寸（评审 P2）。
+            val sent = canvasSize()
+            val header = buildVideoConfigHeader(avcC.size, sent.width, sent.height)
             trackedWrite {
                 output.write(header)
                 output.write(avcC)
@@ -1327,10 +1354,11 @@ class VideoSender(
             cachedVideoConfig = avcC
             configSent = true
             log(
-                "VIDEO: ✓ CarWith VideoConfig 已发送 avcC=${avcC.size}B ${width}x$height" +
+                "VIDEO: ✓ CarWith VideoConfig 已发送 avcC=${avcC.size}B ${sent.width}x${sent.height}" +
                     "\n  ↳ 头部前 24 字节=" + header.take(24).joinToString(" ") { "%02x".format(it) } +
                     "\n  ↳ avcC=" + avcC.joinToString(" ") { "%02x".format(it) },
             )
+            onVideoConfigSent?.invoke(sent.width, sent.height)
             true
         }
 
@@ -1521,7 +1549,9 @@ class VideoSender(
             //  - params[0] 归零（catplay 的 config 不带 PTS；只有 VideoFrame 才写 params[0]）
             // 旧实现三项都没写——DiPlay/WinPlay 只读 body、不校验头，所以测试台一直正常，
             // 真车（Audi 4851）却黑屏（2026-10-19 用户日志）。
-            val header = buildVideoConfigHeader(body.size, width, height)
+            // 快照：header、日志与「实际发送尺寸」回调必须用同一份尺寸（评审 P2）。
+            val sent = canvasSize()
+            val header = buildVideoConfigHeader(body.size, sent.width, sent.height)
             trackedWrite {
                 output.write(header)
                 output.write(body)
@@ -1531,11 +1561,12 @@ class VideoSender(
             log(
                 "VIDEO: ✓ VideoConfig 已发送 avcC=${body.size}B（SPS ${rawSps.size}B/PPS ${pps.size}B，" +
                     "profile=${rawSps[1].toInt() and 0xFF} level=${rawSps[3].toInt() and 0xFF} " +
-                    "flags=0x%02x ${width}x$height）".format(header[6].toInt() and 0xFF) +
+                    "flags=0x%02x ${sent.width}x${sent.height}）".format(header[6].toInt() and 0xFF) +
                     "\n  ↳ 头部前 24 字节=" + header.take(24).joinToString(" ") { "%02x".format(it) } +
                     "\n  ↳ 参数集 ${PassthroughStreamStats.describeParameterSets(rawSps, pps)}",
             )
             cachedVideoConfig = body
+            onVideoConfigSent?.invoke(sent.width, sent.height)
         }
 
     /** 返回已发出的明文字节数（0 = 丢弃）。 */

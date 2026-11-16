@@ -110,7 +110,7 @@ internal object DisplaySurfaceReport {
         val text: String get() = geometry.text
     }
 
-    /** 取整数像素字段：bplist 解析成 Long，个别接收端给 Int。 */
+    /** 取整数像素字段：bplist 解析成 Long，个别接收端给 Int。仅用于日志描述，不做有效性约束。 */
     private fun geometryOf(
         map: Map<*, *>?,
         source: String,
@@ -120,6 +120,39 @@ internal object DisplaySurfaceReport {
         val height = (map["heightPixels"] as? Number)?.toInt()
         if (width == null && height == null) return null
         return Geometry(width, height, source)
+    }
+
+    /**
+     * 取一个**可用**的像素尺寸：它会被写进 SETUP 并成为编码画布，因此必须先校验再转换。
+     *
+     * `Number.toInt()` 会静默截断超出 `Int` 范围的值（`Long.MAX_VALUE.toInt() == -1`），
+     * 也会放行 0/负数；下游 `mapCarLifeTouch` 在源尺寸非正时会返回 null（触摸全部失效），
+     * 编码器也可能拿到非法宽高。这里统一拒绝：非有限值、**非整数值**（如 `1.9` 不能被截成 `1`）、
+     * 越界、小于 2 一律返回 null，调用方保持 `displays[0]` 原值。
+     *
+     * 下限取 2：H.264 画布按 2 对齐，`1` 对齐后仍不足一个宏块，无法表示有效画布。
+     */
+    private fun validDimension(raw: Any?): Int? {
+        val value =
+            when (raw) {
+                is Int -> raw.toLong()
+                is Long -> raw
+                is Short -> raw.toLong()
+                is Byte -> raw.toLong()
+                is Double -> {
+                    if (!raw.isFinite() || raw % 1.0 != 0.0) return null
+                    raw.toLong()
+                }
+
+                is Float -> {
+                    if (!raw.isFinite() || raw % 1.0f != 0.0f) return null
+                    raw.toLong()
+                }
+
+                else -> return null
+            }
+        if (value !in MIN_DIMENSION..MAX_DIMENSION) return null
+        return value.toInt()
     }
 
     private fun uuidOf(map: Map<*, *>?): String? =
@@ -168,9 +201,51 @@ internal object DisplaySurfaceReport {
                     else -> false
                 }
             if (!sameSurface) return@forEachIndexed
-            val geometry = geometryOf(panel, "displayPanels[$index]")
-            if (geometry?.width != null && geometry.height != null) return geometry
+            val width = validDimension(panel["widthPixels"]) ?: return@forEachIndexed
+            val height = validDimension(panel["heightPixels"]) ?: return@forEachIndexed
+            return Geometry(width, height, "displayPanels[$index]")
         }
         return null
     }
+
+    /** 实验是否真的改变了实际输出尺寸（而非只改了请求）。 */
+    enum class PanelExperimentOutcome {
+        /** 没有面板目标（实验未启用或没有可用面板几何）——无从谈起。 */
+        NOT_REQUESTED,
+
+        /** 实际输出与目标面板几何一致（按 H.264 偶数对齐后比较）。 */
+        EFFECTIVE,
+
+        /** 实际输出被 CarWith 的返回尺寸覆盖，与目标不同——实验未生效。 */
+        CARWITH_DIFFERENT,
+    }
+
+    /**
+     * 判定实验是否真的对**实际发出的视频尺寸**生效。
+     *
+     * 背景（PR #78 评审 P2）：把面板几何写进 `SetupInfo` 只是改了「请求」，CarWith 可能不采纳
+     * （`CarLifeProtocol.videoRequestFor` 自己也会把长边压到上限），透传路径还会用 CarWith 实际
+     * SPS 尺寸覆盖画布。因此不能用「日志说按面板协商」当作实验生效的证据，必须在拿到实际尺寸后比较。
+     *
+     * 比较前按 2 对齐，与 `VideoSender`/`videoRequestFor` 的偶数处理一致。
+     */
+    fun panelExperimentOutcome(
+        targetWidth: Int?,
+        targetHeight: Int?,
+        actualWidth: Int,
+        actualHeight: Int,
+    ): PanelExperimentOutcome {
+        if (targetWidth == null || targetHeight == null) return PanelExperimentOutcome.NOT_REQUESTED
+        if (actualWidth <= 0 || actualHeight <= 0) return PanelExperimentOutcome.CARWITH_DIFFERENT
+        val matched = even(targetWidth) == even(actualWidth) && even(targetHeight) == even(actualHeight)
+        return if (matched) PanelExperimentOutcome.EFFECTIVE else PanelExperimentOutcome.CARWITH_DIFFERENT
+    }
+
+    private fun even(value: Int): Int = (value / 2) * 2
+
+    /** 单边像素下限 2：H.264 画布按 2 对齐，1 对齐后仍不足一个宏块。 */
+    private const val MIN_DIMENSION = 2
+
+    /** 单边像素上限：远高于任何车机面板，仅用于挡住溢出/哨兵值（如 Long.MAX_VALUE 截断）。 */
+    private const val MAX_DIMENSION = 16_384
 }

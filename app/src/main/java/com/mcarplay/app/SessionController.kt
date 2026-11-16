@@ -6,6 +6,7 @@ import android.os.SystemClock
 import android.view.KeyEvent
 import androidx.annotation.StringRes
 import com.mcarplay.app.airplay.AirPlayClient
+import com.mcarplay.app.airplay.DisplaySurfaceReport
 import com.mcarplay.app.airplay.PairVerifyClient
 import com.mcarplay.app.audio.AudioDuckingPrefs
 import com.mcarplay.app.audio.AudioProfile
@@ -1148,6 +1149,37 @@ object SessionController {
     }
 
     /** 正式会话的 CarLife 源：输出按 [carLifeOutput] 路由，旧轮迟到回调被隔离。 */
+
+    /**
+     * 实验（issue #62，PR #78 评审 P2）：在 **VideoConfig 实际写出之后**判定面板几何是否生效。
+     *
+     * 只在发送成功的尺寸上判定，不能用「请求值」或「首个源帧到达时的画布」代替；同一尺寸只报一次，
+     * 尺寸变化（源尺寸变化、切换转码、主屏恢复重发）时重新判定，避免一次过早结论覆盖后续事实。
+     */
+    private fun reportPanelExperiment(
+        target: Pair<Int, Int>,
+        actualWidth: Int,
+        actualHeight: Int,
+        lastReported: AtomicReference<Pair<Int, Int>?>,
+    ) {
+        val aligned = ((actualWidth / 2) * 2) to ((actualHeight / 2) * 2)
+        if (lastReported.getAndSet(aligned) == aligned) return
+        when (DisplaySurfaceReport.panelExperimentOutcome(target.first, target.second, actualWidth, actualHeight)) {
+            DisplaySurfaceReport.PanelExperimentOutcome.EFFECTIVE ->
+                appendLog(
+                    "VIDEO: 实验面板几何已生效——实际发送 ${actualWidth}x$actualHeight" +
+                        " = 目标 ${target.first}x${target.second}",
+                )
+            DisplaySurfaceReport.PanelExperimentOutcome.CARWITH_DIFFERENT ->
+                appendLog(
+                    "VIDEO: 实验面板几何未生效——目标 ${target.first}x${target.second}，" +
+                        "实际发送 ${actualWidth}x$actualHeight" +
+                        "（CarWith 未采纳请求或本机「显示」缩放非 100%）",
+                )
+            DisplaySurfaceReport.PanelExperimentOutcome.NOT_REQUESTED -> Unit
+        }
+    }
+
     private fun newFormalCarLifeSession(
         context: Context,
         requestedVideoSize: Pair<Int, Int>? = null,
@@ -4848,6 +4880,16 @@ object SessionController {
                                         "DISPLAY: 流 ${setup.displayWidth}x${setup.displayHeight} → " +
                                             "${streamW}x$streamH（$scalePct%）@${fps}fps",
                                     )
+                                    // 实验（issue #62）：面板几何同时成为触摸映射的源尺寸。目前没有证据
+                                    // 证明车机 HID 坐标范围也随之变化；若它仍按 displays[0] 上报，触摸会偏移。
+                                    // 这里明确写出待验证点，避免把「实验已开启」误读成「触摸已适配」。
+                                    if (setup.experimentalPanelGeometry != null) {
+                                        appendLog(
+                                            "EVENT: 触摸源尺寸按实验面板 " +
+                                                "${setup.displayWidth}x${setup.displayHeight} 映射" +
+                                                "（车机 HID 是否同范围未经台架/实车验证，偏移即为此因）",
+                                        )
+                                    }
                                     pendingVideoW = streamW
                                     pendingVideoH = streamH
                                     val carLifeSource =
@@ -4900,7 +4942,11 @@ object SessionController {
                                                     }
                                                 },
                                                 onEnded = onVideoEnded@{
-                                                    if (videoSender !== sender) return@onVideoEnded
+                                                    if (videoSender !==
+                                                        sender
+                                                    ) {
+                                                        return@onVideoEnded
+                                                    }
                                                     appendLog(
                                                         "SESSION: 本轮车机交互统计 forceKeyFrame=$forceKeyFrameCount requestUI=$requestUiCount " +
                                                             "触摸报文=$touchLogCount 媒体键释放=$consumerReleaseCount",
@@ -4951,6 +4997,14 @@ object SessionController {
                                                     }
                                                 },
                                             )
+                                        // 实验（issue #62，PR #78 评审 P2）：只在 VideoConfig 真正写出后判定，
+                                        // 且尺寸变化时重新判定——首个源帧可能未发送，之后还可能切转码/主屏恢复。
+                                        setup.experimentalPanelGeometry?.let { target ->
+                                            val lastReported = AtomicReference<Pair<Int, Int>?>(null)
+                                            sender.onVideoConfigSent = { actualWidth, actualHeight ->
+                                                reportPanelExperiment(target, actualWidth, actualHeight, lastReported)
+                                            }
+                                        }
                                         return sender
                                     }
                                     sessionVideoSender = newScreenSender(screen)
@@ -5058,11 +5112,39 @@ object SessionController {
                                     val videoW = pendingVideoW
                                     val videoH = pendingVideoH
                                     val output = CarLifeOutput(diagnosticAttempt, sessionVideoSender)
-                                    // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准
+                                    // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准。
+                                    // 实验（issue #62）：默认 1920 长边上限会把面板尺寸先压小（2288×1728 →
+                                    // 1920×1448），使实验连「请求正确尺寸」都做不到；命中面板时放开到面板长边，
+                                    // 但是否真的生效仍以实际返回尺寸为准（见 newFormalCarLifeSession）。
+                                    val experimentalPanelWidth = setup.experimentalPanelGeometry?.first
+                                    val experimentalPanelHeight = setup.experimentalPanelGeometry?.second
+                                    val requestMaxLongSide =
+                                        if (experimentalPanelWidth != null && experimentalPanelHeight != null) {
+                                            maxOf(
+                                                CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE,
+                                                experimentalPanelWidth,
+                                                experimentalPanelHeight,
+                                            )
+                                        } else {
+                                            CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE
+                                        }
+                                    val requestedVideo =
+                                        CarLifeProtocol.videoRequestFor(
+                                            setup.displayWidth,
+                                            setup.displayHeight,
+                                            requestMaxLongSide,
+                                        )
+                                    if (setup.experimentalPanelGeometry != null) {
+                                        appendLog(
+                                            "DISPLAY: 实验面板几何 ${experimentalPanelWidth}x$experimentalPanelHeight" +
+                                                " → 请求 CarWith ${requestedVideo.first}x${requestedVideo.second}" +
+                                                "（长边上限 $requestMaxLongSide）",
+                                        )
+                                    }
                                     val createdCarLife =
                                         newFormalCarLifeSession(
                                             context,
-                                            CarLifeProtocol.videoRequestFor(setup.displayWidth, setup.displayHeight),
+                                            requestedVideo,
                                         )
                                     carLife = createdCarLife
                                     val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)
