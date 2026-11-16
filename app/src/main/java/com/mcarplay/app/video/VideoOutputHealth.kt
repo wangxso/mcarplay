@@ -165,14 +165,6 @@ internal class VideoOutputHealth(
         lastKind = Kind.NORMAL
     }
 
-    /**
-     * 记录一次视频帧成功写出：清掉本轮停滞的计数，下一次采样会自然看到
-     * `sinceLastWriteMs < warnMillis`。
-     */
-    fun onWriteSucceeded() {
-        reset()
-    }
-
     fun summary(): String =
         when {
             keyFrameRequests > 0 ->

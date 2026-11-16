@@ -21,6 +21,39 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class VideoOutputHealthIntegrationTest {
     @Test
+    fun recoveryAfterAWarnedStallIsReportedWithItsMaximumDuration() {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
+            val clock = AtomicLong(1_000)
+            val keyFrameRequests = AtomicInteger()
+            val logs = CopyOnWriteArrayList<String>()
+            val sender = passthroughSender(receiver, clock, keyFrameRequests, logs)
+            try {
+                assertTrue(sender.start {})
+                receiver.accept().use {
+                    assertTrue(sender.submitExternalFrame(keyFrame(1)))
+                    assertTrue("the first frame must be written", awaitCondition { sender.framesSentTotal >= 1 })
+
+                    // 进入一次已报警的停滞
+                    clock.addAndGet(6_000)
+                    assertTrue(awaitLog(logs, "视频输出停滞") { it.contains("无输入") })
+
+                    // 再写一帧：恢复必须由下一次采样报告，而不是被写路径静默重置
+                    assertTrue(sender.submitExternalFrame(keyFrame(2)))
+                    assertTrue("the second frame must be written", awaitCondition { sender.framesSentTotal >= 2 })
+                    assertTrue(
+                        "A stall that recovers must emit 视频输出恢复 with its maximum duration",
+                        awaitLog(logs, "视频输出恢复") { it.contains("最长") },
+                    )
+                    assertEquals("无停滞", sender.outputHealthSummary())
+                    assertEquals(0, sender.outputHealthKeyFrameRequests())
+                }
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
+    @Test
     fun startupWithoutAnyVideoFrameIsNotDiagnosed() {
         ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
             val clock = AtomicLong(1_000)

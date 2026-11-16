@@ -407,7 +407,13 @@ class VideoSender(
         }
     }
 
-    /** 视频帧成功写出：清空自上次写出以来的输入/编码器标记，并让健康状态机重新计时。 */
+    /**
+     * 视频帧成功写出：清空自上次写出以来的输入/编码器标记，并刷新「上次成功写」时间。
+     *
+     * **不在这里重置健康状态机**：`warned`/`gaveUp`/`maxStalled` 必须保留到下一次采样，由
+     * [VideoOutputHealth.sample] 的恢复分支统一收尾并报告 `视频输出恢复`（附带最长停滞时长）。
+     * 若在这里提前 reset，恢复事件永远无法被观察到，最长停滞时长也随之丢失。
+     */
     private fun markVideoWriteSucceeded() {
         lastVideoWriteAtMs = healthClockMs()
         videoWriteSeen = true
@@ -415,7 +421,6 @@ class VideoSender(
         encoderOutputSinceLastWrite = false
         // 输出已经恢复：尚未被 drain 消费的补帧请求随之作废
         healthKeyFramePending.set(false)
-        synchronized(outputHealth) { outputHealth.onWriteSucceeded() }
     }
 
     private fun markSourceInput() {
