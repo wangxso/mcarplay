@@ -262,35 +262,51 @@ class VideoQueueHealthIntegrationTest {
             val clock = AtomicLong(1_000)
             val requests = AtomicInteger()
             val logs = CopyOnWriteArrayList<String>()
+            val drainCalls = AtomicInteger()
+            val drainEntered = CountDownLatch(1)
+            val releaseDrain = CountDownLatch(1)
             val sender =
                 sender(
                     receiver = receiver,
                     clock = clock,
                     logs = logs,
                     onKeyFrame = { requests.incrementAndGet() },
+                    // 必须真的卡住 drain：默认 phoneOwnsScreen = { true } 时帧会被正常写出，
+                    // 队满变成与写出竞速，无法保证填满队列（2026-11-16 审查）。
+                    phoneOwnsScreen = {
+                        if (Thread.currentThread().name == DRAIN_THREAD && drainCalls.incrementAndGet() == 2) {
+                            drainEntered.countDown()
+                            releaseDrain.await(30, TimeUnit.SECONDS)
+                        }
+                        true
+                    },
                 )
             try {
                 assertTrue(sender.start {})
                 receiver.accept().use { car ->
                     car.soTimeout = 2_000
                     assertTrue(sender.submitExternalFrame(keyFrame(1)))
-                    awaitCondition { sender.framesSentTotal >= 1 }
+                    assertTrue("the first frame must be written", awaitCondition { sender.framesSentTotal >= 1 })
 
-                    // 把推流线程卡住后反复制造队满：1 s 限流必须让请求保持在 1 次
+                    // 确认 drain 已被卡住（第 2 次门控调用），再制造队满：否则这轮突发
+                    // 只是和自由排空的写线程竞速，不保证填满队列。
                     assertTrue(sender.submitExternalFrame(pFrame(2)))
-                    awaitCondition { sender.screenFramesSkippedTotal >= 1 }
+                    assertTrue("the drain must be blocked before overflowing", drainEntered.await(2, TimeUnit.SECONDS))
+
+                    // 推流线程卡住后反复制造队满：1 s 限流必须让请求保持在 1 次
                     repeat(3) {
                         fillToOverflow(sender)
                         repeat(10) { sender.submitExternalFrame(pFrame(100 + it)) }
                         Thread.sleep(50)
                     }
-                    awaitCondition { requests.get() >= 1 }
+                    assertTrue("overflow must produce a request", awaitCondition { requests.get() >= 1 })
                     assertEquals("queue overflow must be throttled to one request per second", 1, requests.get())
 
                     Thread.sleep(300)
                     assertEquals("no burst of requests while still inside the window", 1, requests.get())
                 }
             } finally {
+                releaseDrain.countDown()
                 sender.stop()
             }
         }
