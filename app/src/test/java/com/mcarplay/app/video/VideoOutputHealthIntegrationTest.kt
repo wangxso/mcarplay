@@ -82,6 +82,64 @@ class VideoOutputHealthIntegrationTest {
     }
 
     @Test
+    fun sourceInputArrivingDuringABlockedWriteSurvivesTheSuccessfulWrite() {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
+            val clock = AtomicLong(1_000)
+            val keyFrameRequests = AtomicInteger()
+            val logs = CopyOnWriteArrayList<String>()
+            val sender = passthroughSender(receiver, clock, keyFrameRequests, logs)
+            try {
+                assertTrue(sender.start {})
+                val accepted = receiver.accept()
+                try {
+                    // 大帧让 drain 卡在 write 里
+                    assertTrue(sender.submitExternalFrame(hugeFrame(4 * 1024 * 1024)))
+                    assertTrue(
+                        "the drain must be blocked in write",
+                        awaitCondition { sender.isHealthWriteInFlightForTest() },
+                    )
+
+                    // 写还被卡着时，源线程又送入一帧：这一事件发生在写入开始之后，
+                    // 写成功时绝不能把它当成「写入前」而抹掉
+                    sender.markSourceInputForTest()
+
+                    // 放行写，让这次写成功完成
+                    val reader =
+                        Thread {
+                            runCatching {
+                                val input = accepted.getInputStream()
+                                val buffer = ByteArray(64 * 1024)
+                                while (input.read(buffer) >= 0) Unit
+                            }
+                        }.apply {
+                            isDaemon = true
+                            start()
+                        }
+                    assertTrue("the blocked write must complete", awaitCondition { sender.framesSentTotal >= 1 })
+                    reader.interrupt()
+
+                    // 写成功后无新帧 6 s：必须看到「写阻塞」（有输入但没写出），
+                    // 而不是误判成「无输入」
+                    clock.addAndGet(6_000)
+                    sender.sampleOutputHealthForTest()
+                    assertTrue(
+                        "input that arrived during the write must not be erased: ${logs.filter { it.contains("视频输出停滞") }}",
+                        logs.any { it.contains("视频输出停滞") && it.contains("写阻塞") },
+                    )
+                    assertFalse(
+                        "the watchdog must not classify it as NO_SOURCE_INPUT",
+                        logs.any { it.contains("视频输出停滞") && it.contains("无输入") },
+                    )
+                } finally {
+                    runCatching { accepted.close() }
+                }
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
+    @Test
     fun finalizationWinsOverConcurrentSamplingWithoutLateLogs() {
         repeat(30) { attempt ->
             ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->

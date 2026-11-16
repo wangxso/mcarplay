@@ -13,6 +13,7 @@ import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * CarPlay 主屏视频发送端（Phase 2-C2）。
@@ -184,13 +185,23 @@ class VideoSender(
     @Volatile
     private var writeStartedAtMs = 0L
 
-    /** 自上次成功写视频帧以来源是否有新帧（CarWith 透传或转码解码输入）。 */
-    @Volatile
-    private var sourceInputSinceLastWrite = false
+    /**
+     * 源输入与编码器输出的单调序号。
+     *
+     * 不能用「可清布尔」表达「自上次成功写以来是否有新输入」：写线程在 `flush` 返回后还要等
+     * `outputHealth` 锁（健康线程可能正在锁内记日志），这段时间里另一条线程完全可能送入新帧；
+     * 布尔值随后被写线程清掉，新输入就永久丢失，编码器卡在这帧上时会被误判成「无输入」。
+     * 序号只增不减，配合「写入开始前的快照」，写入期间/之后到达的事件不可能被抹掉。
+     */
+    private val sourceInputSeq = AtomicLong(0)
+    private val encoderOutputSeq = AtomicLong(0)
 
-    /** 自上次成功写视频帧以来编码器是否产出过新帧（透传路径恒为 false）。 */
+    /** 最近一次成功写视频帧**开始前**的序号快照；序号更大即表示写完之后确实有新事件。 */
     @Volatile
-    private var encoderOutputSinceLastWrite = false
+    private var sourceInputSeqAtLastWrite = 0L
+
+    @Volatile
+    private var encoderOutputSeqAtLastWrite = 0L
 
     /** 健康判定要求补一次关键帧；由 drain 线程消费。 */
     private val healthKeyFramePending = AtomicBoolean(false)
@@ -243,6 +254,12 @@ class VideoSender(
 
     /** 显式驱动一次健康采样；测试用（模拟迟到的监测轮次）。 */
     internal fun sampleOutputHealthForTest() = sampleOutputHealth()
+
+    /** 模拟源线程在写进行期间送入新帧；测试用。 */
+    internal fun markSourceInputForTest() = markSourceInput()
+
+    /** 当前是否有 socket 写卡在 `write`/`flush` 里；测试用。 */
+    internal fun isHealthWriteInFlightForTest(): Boolean = writeStartedAtMs != 0L
 
     /** 健康线程是否仍在运行（会话停止后必须结束）；测试用。 */
     internal fun isHealthMonitorAlive(): Boolean = healthMonitorRunning.get()
@@ -332,22 +349,26 @@ class VideoSender(
             val now = healthClockMs()
             if (halted) {
                 // 主屏暂停/关闭期间的「没有写」是预期行为：把基线推进到当前时刻，
-                // 否则恢复后第一次采样就会把暂停时长当成停滞（可能直接 GIVE_UP）
+                // 否则恢复后第一次采样就会把暂停时长当成停滞（可能直接 GIVE_UP）。
+                // 同时提交序号快照：暂停期间到达的输入不属于「恢复后的新事件」
                 lastVideoWriteAtMs = now
-                sourceInputSinceLastWrite = false
-                encoderOutputSinceLastWrite = false
+                sourceInputSeqAtLastWrite = sourceInputSeq.get()
+                encoderOutputSeqAtLastWrite = encoderOutputSeq.get()
             }
             val lastWrite = lastVideoWriteAtMs
             // 还没有成功写过（理论上 start 已设基线）：按 0 处理，不误报
             val sinceLastWrite = if (lastWrite == 0L) 0L else now - lastWrite
             val inFlightStart = writeStartedAtMs
             val inFlight = if (inFlightStart == 0L) 0L else (now - inFlightStart).coerceAtLeast(0L)
+            val sourceInputSinceLastWrite = sourceInputSeq.get() > sourceInputSeqAtLastWrite
+            val encoderOutputSinceLastWrite =
+                if (transcoder != null) encoderOutputSeq.get() > encoderOutputSeqAtLastWrite else null
             val sampled =
                 outputHealth.sample(
                     sinceLastWriteMs = sinceLastWrite,
                     writeInFlightMillis = inFlight,
                     sourceInputSinceLastWrite = sourceInputSinceLastWrite,
-                    encoderOutputSinceLastWrite = if (transcoder != null) encoderOutputSinceLastWrite else null,
+                    encoderOutputSinceLastWrite = encoderOutputSinceLastWrite,
                     paused = paused,
                     stopped = stopped.get() || quiescing.get(),
                 )
@@ -434,23 +455,37 @@ class VideoSender(
      * [VideoOutputHealth.sample] 的恢复分支统一收尾并报告 `视频输出恢复`（附带最长停滞时长）。
      * 若在这里提前 reset，恢复事件永远无法被观察到，最长停滞时长也随之丢失。
      */
-    private fun markVideoWriteSucceeded() {
+
+    /**
+     * 视频帧成功写出：把「写入开始前」的输入/输出序号快照提交为基线，并刷新写出时间。
+     *
+     * **不在这里重置健康状态机**：`warned`/`gaveUp`/`maxStalled` 必须保留到下一次采样，由
+     * [VideoOutputHealth.sample] 的恢复分支统一收尾并报告 `视频输出恢复`（附带最长停滞时长）。
+     * 若在这里提前 reset，恢复事件永远无法被观察到，最长停滞时长也随之丢失。
+     *
+     * 用提交快照而不是「清布尔」：`flush` 返回后到本方法拿到锁之间，源线程/编码线程可能又推进了
+     * 序号；只要它们的序号大于快照，就会被算作「写完之后的新事件」，不会被这里抹掉。
+     */
+    private fun markVideoWriteSucceeded(
+        sourceSeqBeforeWrite: Long,
+        encoderSeqBeforeWrite: Long,
+    ) {
         synchronized(outputHealth) {
             lastVideoWriteAtMs = healthClockMs()
             videoWriteSeen = true
-            sourceInputSinceLastWrite = false
-            encoderOutputSinceLastWrite = false
+            sourceInputSeqAtLastWrite = sourceSeqBeforeWrite
+            encoderOutputSeqAtLastWrite = encoderSeqBeforeWrite
             // 输出已经恢复：尚未被 drain 消费的补帧请求随之作废
             healthKeyFramePending.set(false)
         }
     }
 
     private fun markSourceInput() {
-        sourceInputSinceLastWrite = true
+        sourceInputSeq.incrementAndGet()
     }
 
     private fun markEncoderOutput() {
-        encoderOutputSinceLastWrite = true
+        encoderOutputSeq.incrementAndGet()
     }
 
     /**
@@ -1157,12 +1192,15 @@ class VideoSender(
                     }
                 }
             frameCounter++
+            // 写入开始前取快照：写入期间或之后到达的源输入/编码器输出都会大于它
+            val sourceSeqBeforeWrite = sourceInputSeq.get()
+            val encoderSeqBeforeWrite = encoderOutputSeq.get()
             trackedWrite {
                 output.write(header)
                 output.write(sealed)
                 output.flush()
             }
-            markVideoWriteSucceeded()
+            markVideoWriteSucceeded(sourceSeqBeforeWrite, encoderSeqBeforeWrite)
             framesSent++
             framesSinceKeepAlive++
             bytesSinceKeepAlive += plain.size.toLong()
@@ -1385,12 +1423,15 @@ class VideoSender(
                     }
                 }
             frameCounter++
+            // 写入开始前取快照：写入期间或之后到达的源输入/编码器输出都会大于它
+            val sourceSeqBeforeWrite = sourceInputSeq.get()
+            val encoderSeqBeforeWrite = encoderOutputSeq.get()
             trackedWrite {
                 output.write(header)
                 output.write(sealed)
                 output.flush()
             }
-            markVideoWriteSucceeded()
+            markVideoWriteSucceeded(sourceSeqBeforeWrite, encoderSeqBeforeWrite)
             framesSent++
             framesSinceKeepAlive++
             bytesSinceKeepAlive += plain.size.toLong()
