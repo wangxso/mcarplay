@@ -97,6 +97,32 @@ class PassthroughFrameQueueTest {
     }
 
     @Test
+    fun anArmedKeyFrameIsFlagsDirectlyWhenTheConsumerFreedTheSlot() {
+        // 并发交错的另一种合法结果（2026-11-16 审查）：消费方在 armed 之后先取走队列内容，
+        // 此时关键帧不是替换旧帧，而是直接入队；它仍然必须带标记，否则恢复点会丢。
+        val queue = PassthroughFrameQueue(capacity = 1)
+        queue.offer(pFrame(1))
+        assertEquals(PassthroughFrameQueue.Outcome.DROPPED_FULL, queue.offer(pFrame(2)).outcome)
+        assertTrue(queue.hasPendingDiscontinuity())
+
+        // 消费方腾空单槽队列（armed 状态不受影响）。
+        assertEquals(
+            1,
+            queue
+                .poll(0)
+                ?.frame
+                ?.timestampUs
+                ?.toInt(),
+        )
+
+        val offered = queue.offer(keyFrame(3))
+        assertEquals("an empty slot admits the key frame directly", PassthroughFrameQueue.Outcome.ACCEPTED, offered.outcome)
+        assertTrue("the armed flag must attach even without replacement", offered.discontinuityBefore)
+        assertTrue(queue.poll(0)!!.discontinuityBefore)
+        assertFalse("the flag must travel with exactly one frame", queue.hasPendingDiscontinuity())
+    }
+
+    @Test
     fun aDroppedFrameArmsTheDiscontinuityForTheNextQueuedFrame() {
         val queue = PassthroughFrameQueue(capacity = 2)
         queue.offer(keyFrame(1))
@@ -162,12 +188,21 @@ class PassthroughFrameQueueTest {
                     }
                 }
             consumer.start()
-            assertEquals(PassthroughFrameQueue.Outcome.REPLACED_STALE, queue.offer(keyFrame(3)).outcome)
+            // 入队结果取决于消费者是否已先取走 pFrame(1)：队列仍满时是 REPLACED_STALE，
+            // 已被取空时是 ACCEPTED。两种都是合法交错，且关键帧都会继承 armNextFrame。
+            // 真正的性质（关键帧必须带标记、且绝不会以未标记状态可见）由下面的断言钉住，
+            // 不能在这里要求某一种入队结果（2026-11-16 审查）。
+            assertTrue(
+                "the recovery IDR must be admitted either by replacement or directly",
+                queue.offer(keyFrame(3)).outcome in
+                    setOf(PassthroughFrameQueue.Outcome.REPLACED_STALE, PassthroughFrameQueue.Outcome.ACCEPTED),
+            )
             producerDone.countDown()
             consumer.join(2_000)
             assertFalse("consumer must terminate", consumer.isAlive)
             assertTrue("the recovery IDR must be flagged when it becomes visible", sawFlagged.get())
             assertFalse("a key frame must never be visible without its discontinuity", sawUnflaggedKeyFrame.get())
+            assertFalse("the discontinuity must be consumed with that frame", queue.hasPendingDiscontinuity())
         }
     }
 
