@@ -85,4 +85,25 @@ class PassthroughStreamStatsTest {
         assertTrue(text, text.startsWith("profile=66 constraint=0x80 level=31"))
         assertTrue(text, text.contains("| cabac=0"))
     }
+
+    @Test
+    fun transcodedWritesUpdateTheLatestWriteMetric() {
+        // 2026-11-16 审查：转码路径此前只调 onTranscodedFrameSent，lastWriteMs 会停在 0
+        // 或上一次透传的值，队满日志就无法区分「车机/链路慢」与「本机管线慢」。
+        val stats = PassthroughStreamStats()
+        assertEquals(0L, stats.lastWriteMillis())
+
+        stats.onFrameWrite(120L)
+        assertEquals("a transcoded frame write must become the latest write", 120L, stats.lastWriteMillis())
+
+        stats.onTranscodedFrameSent(keyFrame = false, nowMillis = 1_000)
+        assertEquals("recording the encoded frame must not reset the write metric", 120L, stats.lastWriteMillis())
+
+        // 慢写计数与最大值同样由转码写入更新。
+        stats.onFrameWrite(2L)
+        assertEquals(2L, stats.lastWriteMillis())
+        val summary = stats.summary()
+        assertTrue(summary, summary.contains("最慢写入 120ms"))
+        assertTrue(summary, summary.contains("≥${PassthroughStreamStats.SLOW_WRITE_MILLIS}ms 1 次"))
+    }
 }
