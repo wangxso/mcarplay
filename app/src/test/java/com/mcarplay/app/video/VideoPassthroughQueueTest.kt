@@ -27,6 +27,11 @@ import java.util.concurrent.atomic.AtomicLong
  * 去解码一串缺参考的帧——本测试用真实 socket 上的解密结果钉住这一点。
  */
 class VideoPassthroughQueueTest {
+    /** VideoSender 里推流线程的名字：只有它能被测试夹具阻塞。 */
+    private companion object {
+        const val DRAIN_THREAD = "video-external-drain"
+    }
+
     private val key = ByteArray(32) { (it * 13 + 7).toByte() }
 
     @Test
@@ -44,7 +49,7 @@ class VideoPassthroughQueueTest {
                         requestThreads.add(Thread.currentThread().name)
                         true
                     },
-                    phoneOwnsScreen = { blockOnce(gateEntered, releaseGate) },
+                    phoneOwnsScreen = { blockDrainOnce(gateEntered, releaseGate) },
                 )
             try {
                 assertTrue(sender.start {})
@@ -96,7 +101,7 @@ class VideoPassthroughQueueTest {
                         keyFrameRequests.incrementAndGet()
                         true
                     },
-                    phoneOwnsScreen = { blockOnce(gateEntered, releaseGate) },
+                    phoneOwnsScreen = { blockDrainOnce(gateEntered, releaseGate) },
                     uptimeMillis = { clock.get() },
                 )
             try {
@@ -142,7 +147,7 @@ class VideoPassthroughQueueTest {
                         requestThreads.add(Thread.currentThread().name)
                         true
                     },
-                    phoneOwnsScreen = { blockOnce(gateEntered, releaseGate) },
+                    phoneOwnsScreen = { blockDrainOnce(gateEntered, releaseGate) },
                 )
             try {
                 assertTrue(sender.start {})
@@ -203,7 +208,7 @@ class VideoPassthroughQueueTest {
                 sender(
                     receiver = receiver,
                     externalSource = { true },
-                    phoneOwnsScreen = { blockOnce(gateEntered, releaseGate) },
+                    phoneOwnsScreen = { blockDrainOnce(gateEntered, releaseGate) },
                 )
             try {
                 assertTrue(sender.start {})
@@ -236,14 +241,22 @@ class VideoPassthroughQueueTest {
         }
     }
 
-    /** 第一次调用阻塞在门控上（模拟推流线程写不出去），之后立即放行。 */
-    private fun blockOnce(
+    /**
+     * 第一次在**推流线程**上调用时阻塞在门控上（模拟写不出去），之后立即放行。
+     *
+     * `phoneOwnsScreen` 同时被推流线程（入流门控）和 #75 的健康采样线程调用。若只按调用
+     * 次数阻塞，健康线程会抢走这次阻塞，推流线程照样往下跑，队列根本堆不满
+     * （2026-11-16 合并 #75 后实测）。因此只阻塞 drain 线程，健康线程永远立即返回。
+     */
+    private fun blockDrainOnce(
         entered: CountDownLatch,
         release: CountDownLatch,
     ): Boolean {
-        if (entered.count == 1L) {
-            entered.countDown()
-            release.await(5, TimeUnit.SECONDS)
+        if (Thread.currentThread().name == DRAIN_THREAD) {
+            if (entered.count == 1L) {
+                entered.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            }
         }
         return true
     }

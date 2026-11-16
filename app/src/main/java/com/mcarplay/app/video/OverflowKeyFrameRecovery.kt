@@ -40,6 +40,9 @@ internal class OverflowKeyFrameRecovery(
         require(intervalMillis > 0) { "intervalMillis must be positive" }
     }
 
+    /** 派发线程是否仍在运行；测试用（与 #75 的 isHealthMonitorAlive 同义）。 */
+    internal val isWorkerAlive: Boolean get() = running.get()
+
     fun start() {
         synchronized(lock) {
             if (running.getAndSet(true)) return

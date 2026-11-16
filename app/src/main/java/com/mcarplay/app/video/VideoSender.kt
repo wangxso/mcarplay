@@ -294,6 +294,9 @@ class VideoSender(
     /** 健康线程是否仍在运行（会话停止后必须结束）；测试用。 */
     internal fun isHealthMonitorAlive(): Boolean = healthMonitorRunning.get()
 
+    /** 队满补要关键帧的派发线程是否仍在运行；测试用。 */
+    internal fun isOverflowRecoveryAlive(): Boolean = overflowKeyFrameRecovery.isWorkerAlive
+
     /**
      * 队列里是否还有带断流标记的帧（测试与诊断用）。
      *
