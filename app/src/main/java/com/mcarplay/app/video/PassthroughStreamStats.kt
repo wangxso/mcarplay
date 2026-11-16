@@ -42,6 +42,7 @@ internal class PassthroughStreamStats {
     private var maxSendGapMs = 0L
     private var sendStalls = 0L
     private var maxWriteMs = 0L
+    private var lastWriteMs = 0L
     private var slowWrites = 0L
     private var maxQueueDepth = 0
     private var queueDrops = 0L
@@ -72,6 +73,7 @@ internal class PassthroughStreamStats {
         }
         lastFrameAt = nowMillis
         if (writeMillis > maxWriteMs) maxWriteMs = writeMillis
+        lastWriteMs = writeMillis
         if (writeMillis >= SLOW_WRITE_MILLIS) slowWrites++
         if (queueDepth > maxQueueDepth) maxQueueDepth = queueDepth
         if (keyFrame) {
@@ -161,6 +163,13 @@ internal class PassthroughStreamStats {
     /** 透传队列已满、CarWith 帧被丢弃（随后入流门控等下一个 IDR）。返回累计丢弃数。 */
     @Synchronized
     fun onQueueDrop(): Long = ++queueDrops
+
+    /**
+     * 最近一次发送写入耗时。队满时用它区分「车机/链路慢」（写耗时长）与「本机解码/编码慢」
+     * （写很快但仍排不上），两类问题的处理方向相反。
+     */
+    @Synchronized
+    fun lastWriteMillis(): Long = lastWriteMs
 
     @Synchronized
     fun summary(): String {

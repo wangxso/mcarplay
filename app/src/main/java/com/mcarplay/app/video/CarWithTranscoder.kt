@@ -157,6 +157,17 @@ internal class CarWithTranscoder(
         requestSourceKeyFrameIfDue()
     }
 
+    /**
+     * 上游队列丢了帧（[VideoSender] 的透传队列满）：之后的 P 帧参考已缺，等 IDR。
+     *
+     * 由投喂线程（[submit] 的调用线程）在执行下一次投喂前调用，与内部丢帧同一条路径，
+     * 因此不需要额外同步。空实现时行为不变。
+     */
+    internal fun notifyDiscontinuity() {
+        if (!running.get()) return
+        dropped()
+    }
+
     private fun requestSourceKeyFrameIfDue() {
         if (!resync.requestDue(android.os.SystemClock.uptimeMillis())) return
         runCatching { requestSourceKeyFrame() }

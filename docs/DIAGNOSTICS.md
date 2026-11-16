@@ -155,6 +155,10 @@ still-redacted recent runtime history.
     At ~20 s the watchdog stops auto-remediation, logs `自动补救已用尽`, keeps the transport open and leaves the peer
     death decision to `TcpLiveness`. Main-screen pauses, orderly shutdown and session stop reset the watchdog without
     warning. These lines contain counts and classifications only.
+  - `VIDEO: 透传队列已满` when the 8-frame passthrough backlog overflows: current depth, whether the dropped frame was
+    a key frame, whether the path was passthrough or transcoding and the last socket write duration (to tell a slow
+    receiver/link from a slow local pipeline). A newer IDR replaces the queued stale frames so it becomes the only
+    recovery point. Overflow also asks CarWith for a key frame, at most once per second, off the CarLife reader thread;
   - `VIDEO: 车机经屏幕数据口回传` / `车机关闭了屏幕数据口` when the receiver writes to or closes the video data port;
   - `TIMING:` drift of the receiver's clock against the phone's monotonic clock, and the timesync request interval;
   - `EVENT: 首次收到车机命令` (the structure of each new command type, never its values), `EVENT: 本轮车机命令统计`,
