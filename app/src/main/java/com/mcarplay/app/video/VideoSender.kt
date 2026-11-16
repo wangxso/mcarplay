@@ -658,14 +658,76 @@ class VideoSender(
             ).toInt().coerceAtMost(15_000_000)
         log("VIDEO: 启动编码器 ${encodeWidth}x$encodeHeight@$fps ${bitrate / 1_000_000}Mbps（端口已连通）")
 
-        val format =
-            MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encodeWidth, encodeHeight).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-                setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-                if (capEncoderFps) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
-                if (baselineProfile) setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+        if (baselineProfile) {
+            log("VIDEO: 转码编码器键 ${EncoderFormatPolicy.describe(fps)}")
+        }
+        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        // 逐级回退：每一级只在上一级被编码器拒绝时才尝试，且必须先 reset() 才能重新 configure。
+        // 级数与「这一级撤销了什么」由 EncoderFormatPolicy.attempts 决定并有单测；
+        // 转码专用键不随 level/Profile 撤销。
+        val attempts =
+            EncoderFormatPolicy.attempts(baselineProfile).map { attempt ->
+                format(encodeWidth, encodeHeight, fps, bitrate, capEncoderFps, baselineProfile, attempt) to attempt.dropped
+            }
+        var lastRejection: Exception? = null
+        for ((index, attempt) in attempts.withIndex()) {
+            if (index > 0) runCatching { codec.reset() }
+            try {
+                codec.configure(attempt.first, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                attempt.second?.let { dropped ->
+                    if (dropped.startsWith("priority")) {
+                        log("VIDEO: 编码器拒绝 $dropped（${lastRejection?.message}）——去掉后重试，其余参数不变")
+                    } else {
+                        log("VIDEO: 指定 $dropped 被编码器拒绝（${lastRejection?.message}）——回退自动选择（部分车机可能黑屏）")
+                    }
+                }
+                lastRejection = null
+                break
+            } catch (rejected: Exception) {
+                lastRejection = rejected
+            }
+        }
+        if (lastRejection != null) {
+            // 全部候选都被拒绝：释放后再抛，避免调用方 stop() 拿不到这个尚未发布的编码器
+            runCatching { codec.release() }
+            throw lastRejection
+        }
+        val surface = codec.createInputSurface()
+        codec.start()
+        return codec to surface
+    }
+
+    /**
+     * 构造编码器 MediaFormat。
+     *
+     * [attempt] 决定这一级写哪些键：转码专用键（max-bframes / repeat-previous-frame-after）只看
+     * [baselineProfile]，**不随 level/Profile 一起撤销**——编码器可能只拒绝 level 4.0。
+     * 固定 level 4.0 的理由见下方注释（奥迪 DELPHI 对 3.2 静默不渲染）。
+     */
+    private fun format(
+        encodeWidth: Int,
+        encodeHeight: Int,
+        fps: Int,
+        bitrate: Int,
+        capEncoderFps: Boolean,
+        baselineProfile: Boolean,
+        attempt: EncoderFormatPolicy.Attempt,
+    ): MediaFormat =
+        MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encodeWidth, encodeHeight).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            if (capEncoderFps) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
+            if (baselineProfile) {
+                // 转码路径：禁 B 帧 + 无新帧时按帧间隔重复上一帧（单位微秒，见 EncoderFormatPolicy）。
+                // 即使下面这一级撤销了 level/Profile，这两个键也必须保留。
+                EncoderFormatPolicy.transcodeKeys(fps).applyTo(this)
+            }
+            if (attempt.withLevelAndProfile) {
+                if (baselineProfile) {
+                    setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                }
                 // 固定 H.264 level 4.0（SPS level_idc=40，真 iPhone 同款流形态）。
                 // 不固定时编码器按「分辨率+帧率」自动选：默认 30fps 下 1412x654
                 // 合法落入 level 3.2——奥迪 DELPHI 解码器对该 level 静默不渲染
@@ -679,26 +741,8 @@ class VideoSender(
                     )
                 }
             }
-        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        // 个别编码器不接受 level 指定（configure 抛异常=视频全灭），降级为不指定重试
-        try {
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        } catch (levelRejected: Exception) {
-            log("VIDEO: 指定 level 4.0${if (baselineProfile) " / Baseline" else ""} 被编码器拒绝（${levelRejected.message}）——回退自动选择（部分车机可能黑屏）")
-            val fallback =
-                MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encodeWidth, encodeHeight).apply {
-                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                    setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-                    setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-                    if (capEncoderFps) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
-                }
-            codec.configure(fallback, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            if (attempt.withOptionalRealtime) EncoderFormatPolicy.applyOptionalRealtime(this)
         }
-        val surface = codec.createInputSurface()
-        codec.start()
-        return codec to surface
-    }
 
     /**
      * 会话结束时的最终摘要：一次性捕获后缓存，供并发的第二次 [stop] 与迟到的监测采样复用。
