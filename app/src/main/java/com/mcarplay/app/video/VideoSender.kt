@@ -661,9 +661,16 @@ class VideoSender(
         // 只记录、不阻断——厂商能力表常低估，据此提前失败会让原本能 configure 成功的设备黑屏；
         // 也不能按对齐取整或换 codec，那会改动已协商、并写进 VideoConfig 头部让车机建画布的尺寸。
         logEncoderCapability(codec, encodeWidth, encodeHeight, fps, baselineProfile)
-        // configure / createInputSurface / start 任一失败都要释放 codec：原实现只在 start 之后
-        // 由调用方收尾，此处提前失败会泄漏一个编码器实例（转码路径重试时尤为明显）。
-        return releaseOnFailure({ codec.release() }) {
+        // configure / createInputSurface / start 任一失败都要释放全部已创建资源：原实现只在 start 之后
+        // 由调用方收尾，此处提前失败会泄漏一个编码器实例（转码路径重试时尤为明显）；
+        // Surface 同理——start 抛异常时它尚未返回给调用方，只能在这里释放。
+        var surface: Surface? = null
+        return releaseOnFailure(
+            {
+                surface?.let { runCatching { it.release() } }
+                runCatching { codec.release() }
+            },
+        ) {
             // 逐级回退：每一级只在上一级被编码器拒绝时才尝试，且必须先 reset() 才能重新 configure。
             // 级数与「这一级撤销了什么」由 EncoderFormatPolicy.attempts 决定并有单测；
             // 转码专用键不随 level/Profile 撤销。
@@ -692,9 +699,10 @@ class VideoSender(
             }
             // 全部候选都被拒绝：清理后原样抛出（清理已由 releaseOnFailure 统一负责）
             lastRejection?.let { throw it }
-            val surface = codec.createInputSurface()
+            val created = codec.createInputSurface()
+            surface = created
             codec.start()
-            codec to surface
+            codec to created
         }
     }
 
@@ -753,7 +761,7 @@ class VideoSender(
     ) {
         val check =
             EncoderCapabilityRules.assess(
-                capability = readEncoderCapability(codec),
+                capability = readEncoderCapability(codec, encodeWidth, encodeHeight, fps),
                 width = encodeWidth,
                 height = encodeHeight,
                 fps = fps,

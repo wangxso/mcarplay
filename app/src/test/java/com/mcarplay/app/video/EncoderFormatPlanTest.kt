@@ -56,6 +56,45 @@ class EncoderFormatPlanTest {
     }
 
     @Test
+    fun failureCleanupReleasesSurfaceBeforeCodec() {
+        // createInputSurface() 成功后 start() 抛异常：Surface 还没交给调用方，必须在这里释放。
+        val released = mutableListOf<String>()
+        var surface: String? = null
+        try {
+            releaseOnFailure(
+                {
+                    surface?.let { released += "surface:$it" }
+                    released += "codec"
+                },
+            ) {
+                surface = "surface-1"
+                throw IllegalStateException("start failed")
+            }
+            fail("start 失败必须抛出")
+        } catch (expected: IllegalStateException) {
+            assertEquals("start failed", expected.message)
+        }
+        assertEquals("Surface 必须先于 codec 释放", listOf("surface:surface-1", "codec"), released)
+    }
+
+    @Test
+    fun failureCleanupSkipsSurfaceWhenItWasNeverCreated() {
+        val released = mutableListOf<String>()
+        var surface: String? = null
+        try {
+            releaseOnFailure(
+                {
+                    surface?.let { released += "surface:$it" }
+                    released += "codec"
+                },
+            ) { throw IllegalStateException("configure failed") }
+        } catch (_: IllegalStateException) {
+            Unit
+        }
+        assertEquals("configure 失败时没有 Surface 可释放", listOf("codec"), released)
+    }
+
+    @Test
     fun avcMimeTypeAndEncodeFlagAreUnchanged() {
         assertEquals("video/avc", android.media.MediaFormat.MIMETYPE_VIDEO_AVC)
         assertEquals(1, android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)

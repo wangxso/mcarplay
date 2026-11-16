@@ -28,6 +28,19 @@ internal data class EncoderCapability(
      * 只声明 High@4.2 的编码器不能算支持我们请求的 Baseline。
      */
     val profileLevels: List<Pair<Int, Int>>? = null,
+    /**
+     * `VideoCapabilities.areSizeSupported(width, height)` 的原样结果（null = 未查询或查询失败）。
+     *
+     * 尺寸/帧率的**组合**是否可用不能由 `supportedWidths` × `supportedHeights` ×
+     * `supportedFrameRates` 这些独立上限推出：能出 1080p60 与 4K30 的编码器会暴露帧率上限 60，
+     * 单看上限会把 4K60 记成支持。组合判断必须来自这一对（尺寸）与 [sizeAndRateSupported]（尺寸+帧率）。
+     */
+    val sizeSupported: Boolean? = null,
+    /**
+     * `VideoCapabilities.areSizeAndRateSupported(width, height, fps)` 的原样结果
+     * （null = 未查询或查询失败）。这是「请求的尺寸@帧率」是否可用的直接依据。
+     */
+    val sizeAndRateSupported: Boolean? = null,
 )
 
 /** 单个维度的结论。[UNSUPPORTED] 只是「编码器声明不支持」，不是失败依据。 */
@@ -144,8 +157,18 @@ internal object EncoderCapabilityRules {
             problems += "高度 $height 不是编码器声明对齐 $alignHeight 的倍数（不自动取整：会把协商尺寸改成车机未声明的大小）"
         }
         if (odd || declaredMismatch) return CapabilityState.UNSUPPORTED
-        val complete = minWidth != null && maxWidth != null && minHeight != null && maxHeight != null
-        return if (complete) CapabilityState.SUPPORTED else CapabilityState.UNKNOWN
+        // 组合级结论优先：独立上限齐全也不代表这一组尺寸可用（见 [sizeSupported] 的说明）。
+        when (capability.sizeSupported) {
+            false -> {
+                problems += "编码器声明不支持尺寸 $width×$height（areSizeSupported=false）"
+                return CapabilityState.UNSUPPORTED
+            }
+
+            true -> return CapabilityState.SUPPORTED
+            null -> Unit
+        }
+        // 独立范围/对齐都通过也不足以断言「支持」：组合结论缺失时只能是未知。
+        return CapabilityState.UNKNOWN
     }
 
     private fun assessFrameRate(
@@ -153,11 +176,24 @@ internal object EncoderCapabilityRules {
         fps: Int,
         problems: MutableList<String>,
     ): CapabilityState {
-        val maxFps = capability?.maxFrameRate ?: return CapabilityState.UNKNOWN
-        if (!maxFps.isFinite() || maxFps <= 0.0) return CapabilityState.UNKNOWN
-        if (fps <= maxFps) return CapabilityState.SUPPORTED
-        problems += "帧率 $fps 超过编码器声明上限 ${rateText(maxFps)}"
-        return CapabilityState.UNSUPPORTED
+        if (capability == null) return CapabilityState.UNKNOWN
+        val maxFps = capability.maxFrameRate
+        val overGlobalMax = maxFps != null && maxFps.isFinite() && maxFps > 0.0 && fps > maxFps
+        if (maxFps != null && maxFps.isFinite() && maxFps > 0.0 && overGlobalMax) {
+            problems += "帧率 $fps 超过编码器声明上限 ${rateText(maxFps)}"
+        }
+        // 组合级结论优先：「尺寸@帧率」是否可用只能由 areSizeAndRateSupported 直接回答。
+        when (capability.sizeAndRateSupported) {
+            false -> {
+                problems += "编码器声明不支持该尺寸@${fps}fps（areSizeAndRateSupported=false）"
+                return CapabilityState.UNSUPPORTED
+            }
+
+            true -> return if (overGlobalMax) CapabilityState.UNSUPPORTED else CapabilityState.SUPPORTED
+            null -> Unit
+        }
+        // 没有组合结论时，不拿独立上限冒充「支持」。
+        return CapabilityState.UNKNOWN
     }
 
     private fun assessSurface(
@@ -256,12 +292,21 @@ internal object EncoderCapabilityRules {
  * 那个编码器无关。这里读 `codec.codecInfo`，保证「核对对象 == 使用对象」。
  *
  * 任何读取失败都返回 `null`（= 未知），绝不抛异常——调用方在建立编码器的关键路径上。
+ *
+ * [width]/[height]/[fps] 是要 configure 的那组参数：尺寸与尺寸@帧率的**组合**是否可用
+ * 只能由 `areSizeSupported` / `areSizeAndRateSupported` 对具体取值回答，不能由独立上限推出。
  */
-internal fun readEncoderCapability(codec: android.media.MediaCodec): EncoderCapability? =
+internal fun readEncoderCapability(
+    codec: android.media.MediaCodec,
+    width: Int,
+    height: Int,
+    fps: Int,
+): EncoderCapability? =
     runCatching {
         val info = codec.codecInfo ?: return@runCatching null
         val caps = info.getCapabilitiesForType(android.media.MediaFormat.MIMETYPE_VIDEO_AVC)
         val video = caps.videoCapabilities
+        // 组合查询单独兜底：个别厂商实现在这些调用上抛异常，失败只记未知，不影响其余字段。
         EncoderCapability(
             name = info.name ?: codec.name ?: "?",
             surfaceInput = caps.colorFormats?.contains(android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface),
@@ -273,5 +318,9 @@ internal fun readEncoderCapability(codec: android.media.MediaCodec): EncoderCapa
             maxHeight = video.supportedHeights?.upper,
             maxFrameRate = video.supportedFrameRates?.upper?.toDouble(),
             profileLevels = caps.profileLevels?.map { it.profile to it.level },
+            sizeSupported =
+                runCatching { video.isSizeSupported(width, height) }.getOrNull(),
+            sizeAndRateSupported =
+                runCatching { video.areSizeAndRateSupported(width, height, fps.toDouble()) }.getOrNull(),
         )
     }.getOrNull()

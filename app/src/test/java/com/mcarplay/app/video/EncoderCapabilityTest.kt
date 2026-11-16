@@ -24,6 +24,8 @@ class EncoderCapabilityTest {
         maxHeight: Int? = 4096,
         maxFrameRate: Double? = 60.0,
         profileLevels: List<Pair<Int, Int>>? = listOf(1 to 2048, 2 to 4096, 8 to 8192),
+        sizeSupported: Boolean? = true,
+        sizeAndRateSupported: Boolean? = true,
     ) = EncoderCapability(
         name = name,
         surfaceInput = surfaceInput,
@@ -35,6 +37,8 @@ class EncoderCapabilityTest {
         maxHeight = maxHeight,
         maxFrameRate = maxFrameRate,
         profileLevels = profileLevels,
+        sizeSupported = sizeSupported,
+        sizeAndRateSupported = sizeAndRateSupported,
     )
 
     private fun assess(
@@ -102,18 +106,49 @@ class EncoderCapabilityTest {
 
     @Test
     fun partiallyDeclaredCapabilityStaysUnknownForTheMissingDimensions() {
-        val check = assess(capability(minWidth = null, maxWidth = null, widthAlignment = null))
-        // 高度有声明但宽度未知：不能因为一半信息就断言「支持」。
-        assertEquals(CapabilityState.UNKNOWN, check.size)
-        assertEquals(CapabilityState.SUPPORTED, check.frameRate)
+        // 独立范围缺失、又没有组合结论：只能是未知。
+        val unknown =
+            assess(
+                capability(minWidth = null, maxWidth = null, widthAlignment = null, sizeSupported = null, sizeAndRateSupported = null),
+            )
+        assertEquals(CapabilityState.UNKNOWN, unknown.size)
+        assertEquals(CapabilityState.UNKNOWN, unknown.frameRate)
+
+        // 组合结论在，独立范围缺失也能回答：这正是 areSize* 存在的意义。
+        val answered = assess(capability(minWidth = null, maxWidth = null, widthAlignment = null))
+        assertEquals(CapabilityState.SUPPORTED, answered.size)
+        assertEquals(CapabilityState.SUPPORTED, answered.frameRate)
+    }
+
+    @Test
+    fun globalUpperBoundsDoNotProveTheRequestedCombination() {
+        // 能出 1080p60 与 4K30 的编码器会同时暴露帧率上限 60：单看上限会把 4K60 记成支持。
+        // 组合级查询说不支持时，必须以它为准。
+        val notThisTuple = assess(capability(sizeAndRateSupported = false), width = 3840, height = 2160, fps = 60)
+        assertEquals(CapabilityState.UNSUPPORTED, notThisTuple.frameRate)
+        assertTrue(notThisTuple.problems.any { it.contains("areSizeAndRateSupported=false") })
+
+        val sizeOnly = assess(capability(sizeSupported = false), width = 3840, height = 2160, fps = 30)
+        assertEquals(CapabilityState.UNSUPPORTED, sizeOnly.size)
+        assertTrue(sizeOnly.problems.any { it.contains("areSizeSupported=false") })
+
+        // 组合不支持也只记录，不构成提前失败依据。
+        assertTrue(notThisTuple.hardProblems.isEmpty())
+        assertTrue(sizeOnly.hardProblems.isEmpty())
     }
 
     @Test
     fun anomalousDeclaredFrameRateIsUnknownRatherThanZeroSupport() {
-        assertEquals(CapabilityState.UNKNOWN, assess(capability(maxFrameRate = 0.0)).frameRate)
-        assertEquals(CapabilityState.UNKNOWN, assess(capability(maxFrameRate = -1.0)).frameRate)
-        assertEquals(CapabilityState.UNKNOWN, assess(capability(maxFrameRate = Double.NaN)).frameRate)
-        assertEquals(CapabilityState.UNKNOWN, assess(capability(maxFrameRate = Double.POSITIVE_INFINITY)).frameRate)
+        // 上限异常时不能把它当成「0 上限」，也不能据此判支持：没有组合结论就是未知。
+        assertEquals(CapabilityState.UNKNOWN, assess(capability(maxFrameRate = 0.0, sizeAndRateSupported = null)).frameRate)
+        assertEquals(CapabilityState.UNKNOWN, assess(capability(maxFrameRate = -1.0, sizeAndRateSupported = null)).frameRate)
+        assertEquals(CapabilityState.UNKNOWN, assess(capability(maxFrameRate = Double.NaN, sizeAndRateSupported = null)).frameRate)
+        assertEquals(
+            CapabilityState.UNKNOWN,
+            assess(capability(maxFrameRate = Double.POSITIVE_INFINITY, sizeAndRateSupported = null)).frameRate,
+        )
+        // 组合结论可用时，异常上限既不否定也不确认。
+        assertEquals(CapabilityState.SUPPORTED, assess(capability(maxFrameRate = Double.NaN)).frameRate)
     }
 
     @Test
@@ -124,6 +159,11 @@ class EncoderCapabilityTest {
         assertTrue(check.hardProblems.isEmpty())
         // 小数上限按一位小数记录，固定 Locale.ROOT，避免区域设置把小数点写成逗号。
         assertTrue(assess(capability(maxFrameRate = 59.94), fps = 60).problems.any { it.contains("59.9") })
+        // 组合结论缺失时，超出上限也不能单方面断言支持：结果为未知。
+        assertEquals(
+            CapabilityState.UNKNOWN,
+            assess(capability(maxFrameRate = 30.0, sizeAndRateSupported = null), fps = 60).frameRate,
+        )
         assertTrue(assess(capability(maxFrameRate = 60.0), fps = 30).summary.contains("声明上限 60"))
     }
 
