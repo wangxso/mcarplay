@@ -59,6 +59,18 @@ class ScreenOutputGateTest {
     }
 
     @Test
+    fun holdingOutputCoversPauseAndAwaitingKeyFrame() {
+        val gate = ScreenOutputGate()
+        assertFalse("An active gate is not holding output", gate.isHoldingOutput)
+        gate.admit(phoneOwnsScreen = false, keyFrame = true, nowMs = 0)
+        assertTrue("A full pause holds output", gate.isHoldingOutput)
+        gate.admit(phoneOwnsScreen = true, keyFrame = false, nowMs = 100)
+        assertTrue("Waiting for the fresh IDR also holds output", gate.isHoldingOutput)
+        gate.admit(phoneOwnsScreen = true, keyFrame = true, nowMs = 200)
+        assertFalse("Output resumes once the IDR is admitted", gate.isHoldingOutput)
+    }
+
+    @Test
     fun firstFrameAfterReturnCanResumeWhenItIsAnIdr() {
         val gate = ScreenOutputGate()
         gate.admit(phoneOwnsScreen = false, keyFrame = false, nowMs = 0)

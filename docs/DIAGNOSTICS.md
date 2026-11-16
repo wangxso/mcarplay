@@ -147,6 +147,14 @@ still-redacted recent runtime history.
   - `VIDEO: 透传码流统计` and `VIDEO: 转码统计`, written after 300 frames, then every 30 s, on a switch to transcoding
     and at stream end: slice/NAL composition, frame sizes, IDR intervals, send gaps, slow socket writes, queue drops,
     the time from the last sent IDR to each receiver `forceKeyFrame`, and how fast CarWith answers a key-frame request;
+  - `VIDEO: 视频输出停滞` / `视频输出恢复` / `自动补救已用尽` from the output-health watchdog (issue #72 task C). The
+    one-line diagnosis names the class it can prove: `写阻塞` (a `write`/`flush` has not returned, or the source already
+    produced another frame), `编码器无输出` (input is flowing but the encoder produced no new frame), or `无输入`
+    (CarWith itself has no new frame; **not** an encoder fault). Only `编码器无输出` triggers bounded key-frame
+    requests (at most 3 rounds, ~5 s apart). A blocked write never does: a new IDR would queue behind the stuck write.
+    At ~20 s the watchdog stops auto-remediation, logs `自动补救已用尽`, keeps the transport open and leaves the peer
+    death decision to `TcpLiveness`. Main-screen pauses, orderly shutdown and session stop reset the watchdog without
+    warning. These lines contain counts and classifications only.
   - `VIDEO: 车机经屏幕数据口回传` / `车机关闭了屏幕数据口` when the receiver writes to or closes the video data port;
   - `TIMING:` drift of the receiver's clock against the phone's monotonic clock, and the timesync request interval;
   - `EVENT: 首次收到车机命令` (the structure of each new command type, never its values), `EVENT: 本轮车机命令统计`,
