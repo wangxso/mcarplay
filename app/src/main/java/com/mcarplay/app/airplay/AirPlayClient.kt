@@ -1124,13 +1124,40 @@ class AirPlayClient(
         // `hidDevices uuids=[]` / `displayUuid=null` 两个结果，看不到原因。
         var infoRoot: Map<*, *>? = null
         val infoMap = loadInfoWithDiagnostics()
-        log(ReceiverCompatibility.describe(receiverCompatibility()))
+        val compat = receiverCompatibility()
+        log(ReceiverCompatibility.describe(compat))
         infoRoot = infoMap
         val display = (infoMap?.get("displays") as? List<*>)?.firstOrNull() as? Map<*, *>
         if (display == null) {
             log(
                 "AIRPLAY: 未取得 /info displays → 显示屏参数退回手机分辨率兜底" +
                     "（车机侧可能是小画面/黑边）；HID 设备为空 → 车机不会发 hidSendReport（触摸不可用）",
+            )
+        }
+        // 实验（issue #62，仅手动选「奔驰 MB_E-P / GLC（实验）」）：按 displayPanels 的视频表面协商。
+        // 根因未定谳，默认关闭；取不到匹配的表面时保持 displays[0] 原值，绝不退化成兜底分辨率。
+        val displayUuidRaw =
+            uuidText(
+                display?.get("uuid")
+                    ?: display?.get("UUID")
+                    ?: display?.get("displayUUID"),
+            )
+        val panelGeometry =
+            if (compat.usePanelVideoGeometry) {
+                DisplaySurfaceReport.panelVideoGeometry(displayUuidRaw, infoMap?.get("displayPanels") as? List<*>)
+            } else {
+                null
+            }
+        if (compat.usePanelVideoGeometry) {
+            log(
+                if (panelGeometry != null) {
+                    "AIRPLAY: 实验开关按 displayPanels 协商显示几何 ${panelGeometry.text}" +
+                        "（displays[0] 原值 " +
+                        "${(display?.get("widthPixels") as? Long)}x${(display?.get("heightPixels") as? Long)}）"
+                } else {
+                    "AIRPLAY: 实验开关已开，但 displayPanels 没有同 UUID 的视频表面——保持 displays[0]" +
+                        "（未退回兜底分辨率）"
+                },
             )
         }
         // /info 全量转储：找奥迪私有的数据流 UUID（type-130 的 clientTypeUUID 候选）、
@@ -1205,16 +1232,11 @@ class AirPlayClient(
                 timingPort = portOf(root["timingPort"]),
                 keepAlivePort = root["keepAlivePort"]?.let(::portOf)?.takeIf { it != 0 },
                 enabledFeatures = (root["enabledFeatures"] as? List<*>)?.map { it.toString() }.orEmpty(),
-                displayWidth = ((display?.get("widthPixels") as? Long) ?: 1080L).toInt(),
-                displayHeight = ((display?.get("heightPixels") as? Long) ?: 2320L).toInt(),
+                displayWidth = (panelGeometry?.width ?: (display?.get("widthPixels") as? Long)?.toInt()) ?: 1080,
+                displayHeight = (panelGeometry?.height ?: (display?.get("heightPixels") as? Long)?.toInt()) ?: 2320,
                 // /info displays[0] 的显示屏 UUID（真实 iPhone 会把它回填进屏幕流 SETUP；
                 // 键名以小写 "uuid" 为准，大写 "UUID" 兜底）
-                displayUuid =
-                    uuidText(
-                        display?.get("uuid")
-                            ?: display?.get("UUID")
-                            ?: display?.get("displayUUID"),
-                    ),
+                displayUuid = displayUuidRaw,
                 maxFps = ((display?.get("maxFPS") as? Long) ?: 30L).toInt(),
                 hidDeviceUuids = parsedHidUuids,
                 hidDescriptors = parsedHidDescriptors,

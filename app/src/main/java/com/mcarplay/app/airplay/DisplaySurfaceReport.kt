@@ -137,4 +137,40 @@ internal object DisplaySurfaceReport {
             is Number -> raw.toString()
             else -> raw.toString().takeIf { it.isNotBlank() }
         }
+
+    /**
+     * 实验（issue #62，仅手动选「奔驰 MB_E-P / GLC（实验）」时启用）：从 `displayPanels` 里挑出
+     * 真正承载视频的表面几何，作为 SETUP 的显示屏参数。
+     *
+     * 规则（无假设之外的自由度）：
+     *  1. 只取 `initialVideoStreams` **非空**的面板——没有声明视频表面的面板不是它要画布的对象；
+     *  2. 该面板若含 `uuid`，必须与 `displays[0]` 的 uuid 相同：不同表面不能拿来当同一块屏编码
+     *     （包括面板条目自身没有 uuid、只有 `initialVideoStreams` 带 uuid 的两种写法）；
+     *  3. 取第一个命中的面板；几何缺宽/高则返回 null，由调用方保持 `displays[0]` 原值。
+     *
+     * 返回 null = 不能按面板协商，调用方必须保持原行为（不回退到兜底分辨率）。
+     */
+    fun panelVideoGeometry(
+        displayUuid: String?,
+        panels: List<*>?,
+    ): Geometry? {
+        if (displayUuid == null || panels == null) return null
+        panels.forEachIndexed { index, entry ->
+            val panel = entry as? Map<*, *> ?: return@forEachIndexed
+            val streams = (panel["initialVideoStreams"] as? List<*>).orEmpty()
+            if (streams.isEmpty()) return@forEachIndexed
+            val streamUuids = streams.map { uuidOf(it as? Map<*, *>) }.filterNotNull()
+            val panelUuid = uuidOf(panel)
+            val sameSurface =
+                when {
+                    streamUuids.isNotEmpty() -> streamUuids.all { it == displayUuid }
+                    panelUuid != null -> panelUuid == displayUuid
+                    else -> false
+                }
+            if (!sameSurface) return@forEachIndexed
+            val geometry = geometryOf(panel, "displayPanels[$index]")
+            if (geometry?.width != null && geometry.height != null) return geometry
+        }
+        return null
+    }
 }

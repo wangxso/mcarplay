@@ -73,6 +73,53 @@ class DisplaySurfaceReportTest {
         assertTrue(DisplaySurfaceReport.describe(display, null).startsWith("displays[0]=2288x1278"))
     }
 
+    // ---- issue #62 实验开关：按 displayPanels 的视频表面取几何（纯函数，不涉及开关本身）----
+
+    @Test
+    fun panelGeometryTakesTheMatchingVideoSurface() {
+        val geometry = DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel))
+        assertEquals("2288x1728", geometry?.text)
+    }
+
+    @Test
+    fun panelGeometryRefusesAnotherDisplaySurface() {
+        // initialVideoStreams 指向别的屏幕：不能拿它的几何当本屏协商。
+        val other = panel + ("initialVideoStreams" to listOf(mapOf("uuid" to "11111111-2222-3333-4444-555555555555")))
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(other)))
+    }
+
+    @Test
+    fun panelGeometryIgnoresPanelsWithoutVideoStreams() {
+        // 没声明 initialVideoStreams 的面板不是车机要画布的对象，即便高度不同也不能用。
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(panel - "initialVideoStreams")))
+    }
+
+    @Test
+    fun panelGeometryFallsBackToPanelUuidWhenStreamsCarryNone() {
+        // 流里没有 uuid 时，用面板自身的 uuid 判同一表面。
+        val streamWithoutUuid = panel + ("initialVideoStreams" to listOf(mapOf("zIndex" to 1L)))
+        assertEquals(
+            "2288x1728",
+            DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(streamWithoutUuid + ("uuid" to displayUuid)))?.text,
+        )
+        // 面板自身也没有 uuid → 无法证明是同一表面，必须放弃。
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(streamWithoutUuid)))
+    }
+
+    @Test
+    fun panelGeometryNeedsBothWidthAndHeight() {
+        val half = panel + ("heightPixels" to null)
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(half)))
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(null, listOf(panel)))
+        assertEquals(null, DisplaySurfaceReport.panelVideoGeometry(displayUuid, null))
+    }
+
+    @Test
+    fun panelGeometrySkipsNonVideoPanelsBeforeTheMatchingOne() {
+        val audioOnly = mapOf<String, Any?>("widthPixels" to 400L, "heightPixels" to 400L)
+        assertEquals("2288x1728", DisplaySurfaceReport.panelVideoGeometry(displayUuid, listOf(audioOnly, panel))?.text)
+    }
+
     @Test
     fun repeatedSurfaceUuidKeepsOneAlias() {
         // 同一别名必须复用，否则「两个表面是否相同」在报告里看不出来。
