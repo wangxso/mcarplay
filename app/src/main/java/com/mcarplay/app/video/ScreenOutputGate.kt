@@ -58,6 +58,13 @@ internal class ScreenOutputGate(
      */
     val isSuspended: Boolean get() = state == State.SUSPENDED
 
+    /**
+     * 输出被门控主动扣住：完全暂停，或已归还主屏但还在等新的 IDR。
+     *
+     * 这两段本来就不写视频帧，健康监测不得把它们算成传输停滞；恢复本身由门控每秒重试关键帧。
+     */
+    val isHoldingOutput: Boolean get() = state != State.ACTIVE
+
     fun admit(
         phoneOwnsScreen: Boolean,
         keyFrame: Boolean,

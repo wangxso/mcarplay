@@ -161,6 +161,46 @@ class VideoSender(
     private val aesStream: AirPlayCrypto.Aes128CtrStream? =
         (frameCipher as? StreamFrameCipher.AesCtr)?.let { AirPlayCrypto.Aes128CtrStream(it.key, it.iv) }
 
+    // ---- 视频输出停滞看门狗（issue #72 任务 C）----
+    // 观测值全部是 volatile：由写线程/编码线程更新，健康线程只读。健康线程自己**不写 socket**，
+    // 它只判定并置位 [healthKeyFramePending]，由仍活着的 drain 线程消费后补关键帧——
+    // 写阻塞时 drain 线程正卡在 write 里，天然不会把新 IDR 塞到积压之后。
+    private val healthClockMs: () -> Long = uptimeMs
+
+    /** 最近一次「视频帧成功写出」的时刻；0 = 本次会话尚未写过。 */
+    @Volatile
+    private var lastVideoWriteAtMs = 0L
+
+    /**
+     * 本次会话是否已经成功写出过视频帧。
+     *
+     * 看门狗只在「已经出过帧」之后才判定停滞：启动/首帧建立慢由连接 timeline 负责，
+     * 这里没有足够证据区分「编码器故障」与「还没开始出帧」，所以不报警、更不补帧。
+     */
+    @Volatile
+    private var videoWriteSeen = false
+
+    /** 当前这次 socket 写进入 `write`/`flush` 的时刻；0 = 没有写在途（含还没开始写）。 */
+    @Volatile
+    private var writeStartedAtMs = 0L
+
+    /** 自上次成功写视频帧以来源是否有新帧（CarWith 透传或转码解码输入）。 */
+    @Volatile
+    private var sourceInputSinceLastWrite = false
+
+    /** 自上次成功写视频帧以来编码器是否产出过新帧（透传路径恒为 false）。 */
+    @Volatile
+    private var encoderOutputSinceLastWrite = false
+
+    /** 健康判定要求补一次关键帧；由 drain 线程消费。 */
+    private val healthKeyFramePending = AtomicBoolean(false)
+
+    private val outputHealth = VideoOutputHealth()
+
+    @Volatile
+    private var healthThread: Thread? = null
+    private val healthMonitorRunning = AtomicBoolean(false)
+
     /** 上一次屏幕流 keepAlive 的时刻（uptimeMillis；0 = 尚未发过）。 */
     private var lastKeepAliveAt = 0L
 
@@ -195,6 +235,15 @@ class VideoSender(
     internal val isPassthroughReprimePending: Boolean
         get() = reprimePending.get()
 
+    /** 视频输出停滞看门狗摘要；测试用。 */
+    internal fun outputHealthSummary(): String = synchronized(outputHealth) { outputHealth.summary() }
+
+    /** 本轮停滞累计补关键帧次数；测试用。 */
+    internal fun outputHealthKeyFrameRequests(): Int = synchronized(outputHealth) { outputHealth.requestedKeyFrames }
+
+    /** 健康线程是否仍在运行（会话停止后必须结束）；测试用。 */
+    internal fun isHealthMonitorAlive(): Boolean = healthMonitorRunning.get()
+
     /** 转码路径：门控已确认暂停时不再解码/编码；读取失败按暂停处理，与 [admitScreenFrame] 一致。 */
     private fun screenFeedPaused(): Boolean {
         val owns =
@@ -205,6 +254,176 @@ class VideoSender(
             }
         if (owns) return false
         return synchronized(screenOutputGate) { screenOutputGate.isSuspended }
+    }
+
+    /**
+     * 视频输出停滞看门狗（issue #72 任务 C）。
+     *
+     * 独立于阻塞的 socket 写：写阻塞时写线程卡在 `write` 里，只有另一条线程还能观察到
+     * 「已经 5 s 没有成功写出」。本线程**只采样 + 记日志**，从不写 socket、从不直接向 CarLife
+     * 要帧——补帧通过 [healthKeyFramePending] 交给 drain 线程，写阻塞时 drain 也被卡住，
+     * 于是不会把新 IDR 排到积压之后。主屏暂停、有序关闭、会话停止时整体短路。
+     *
+     * 用 [uptimeMs]（可注入）而非壁钟：设备改时间不影响停滞判定。
+     */
+    private fun startHealthMonitor() {
+        if (externalVideoSource == null) return
+        healthMonitorRunning.set(true)
+        val thread =
+            Thread({
+                try {
+                    while (running.get() && !quiescing.get() && !stopped.get()) {
+                        runCatching { sampleOutputHealth() }
+                        try {
+                            Thread.sleep(HEALTH_SAMPLE_INTERVAL_MS)
+                        } catch (_: InterruptedException) {
+                            return@Thread
+                        }
+                    }
+                } finally {
+                    // 只在线程真正退出时清标志：测试据此确认 stop() 没有留下线程
+                    healthMonitorRunning.set(false)
+                }
+            }, "video-health").apply {
+                isDaemon = true
+                start()
+            }
+        synchronized(lifecycleLock) {
+            if (stopped.get() || quiescing.get()) {
+                thread.interrupt()
+            } else {
+                healthThread = thread
+            }
+        }
+    }
+
+    /**
+     * 主屏输出是否被扣住：手机不再持有主屏，或门控正在等新 IDR。
+     * 这两段本来就不写视频帧，健康监测必须短路，否则会把主动暂停误报成传输停滞。
+     */
+    private fun screenOutputHeld(): Boolean {
+        val owns =
+            try {
+                phoneOwnsScreen()
+            } catch (_: Exception) {
+                false
+            }
+        if (!owns) return true
+        return synchronized(screenOutputGate) { screenOutputGate.isHoldingOutput }
+    }
+
+    private fun sampleOutputHealth() {
+        if (!videoWriteSeen) {
+            // 还没出过帧：没有证据区分「编码器故障」与「启动/首帧建立慢」，不判定
+            healthKeyFramePending.set(false)
+            synchronized(outputHealth) { outputHealth.reset() }
+            return
+        }
+        val now = healthClockMs()
+        val paused = screenOutputHeld()
+        val halted = paused || stopped.get() || quiescing.get()
+        if (halted) {
+            // 主屏暂停/关闭期间的「没有写」是预期行为：把基线推进到当前时刻，
+            // 否则恢复后第一次采样就会把暂停时长当成停滞（可能直接 GIVE_UP）
+            lastVideoWriteAtMs = now
+            sourceInputSinceLastWrite = false
+            encoderOutputSinceLastWrite = false
+        }
+        val lastWrite = lastVideoWriteAtMs
+        // 还没有成功写过（理论上 start 已设基线）：按 0 处理，不误报
+        val sinceLastWrite = if (lastWrite == 0L) 0L else now - lastWrite
+        val inFlightStart = writeStartedAtMs
+        val inFlight = if (inFlightStart == 0L) 0L else (now - inFlightStart).coerceAtLeast(0L)
+        val decision =
+            synchronized(outputHealth) {
+                outputHealth.sample(
+                    sinceLastWriteMs = sinceLastWrite,
+                    writeInFlightMillis = inFlight,
+                    sourceInputSinceLastWrite = sourceInputSinceLastWrite,
+                    encoderOutputSinceLastWrite = if (transcoder != null) encoderOutputSinceLastWrite else null,
+                    paused = paused,
+                    stopped = stopped.get() || quiescing.get(),
+                )
+            }
+        reportHealth(decision)
+    }
+
+    private fun reportHealth(decision: VideoOutputHealth.Decision) {
+        when (decision.action) {
+            VideoOutputHealth.Action.NONE ->
+                if (decision.recovered) {
+                    log("VIDEO: 视频输出恢复（停滞最长 ${decision.maxStalledMillis}ms）")
+                }
+            VideoOutputHealth.Action.WARN -> {
+                if (!decision.warning) return
+                log(
+                    "VIDEO: 视频输出停滞 ${decision.stalledMillis}ms（${decision.kind.label}）——" +
+                        when (decision.kind) {
+                            VideoOutputHealth.Kind.WRITE_BLOCKED -> "写路径阻塞，补关键帧只会加剧积压，只记诊断"
+                            VideoOutputHealth.Kind.NO_SOURCE_INPUT -> "CarWith 暂无新帧，不是编码器故障"
+                            else -> "等待编码器输出"
+                        },
+                )
+            }
+            VideoOutputHealth.Action.REQUEST_KEY_FRAME -> {
+                healthKeyFramePending.set(true)
+                log(
+                    "VIDEO: 视频输出停滞 ${decision.stalledMillis}ms（${decision.kind.label}）——" +
+                        "补关键帧第 ${decision.keyFrameRequests}/${VideoOutputHealth.MAX_KEY_FRAME_REQUESTS} 轮",
+                )
+            }
+            VideoOutputHealth.Action.GIVE_UP -> {
+                if (decision.giveUp) {
+                    val remedy =
+                        if (decision.keyFrameRequests > 0) {
+                            "自动补救已用尽（已补 ${decision.keyFrameRequests} 轮）"
+                        } else {
+                            "未补关键帧（${decision.kind.label}）"
+                        }
+                    log(
+                        "VIDEO: 视频输出停滞 ${decision.stalledMillis}ms（${decision.kind.label}）——" +
+                            "$remedy，保留传输，交给 TCP keepalive 判死",
+                    )
+                }
+            }
+        }
+    }
+
+    /** 供 drain 线程调用：消费健康线程置位的补帧请求。在 drain 线程内执行，避免额外线程直接要帧。 */
+    private fun consumeHealthKeyFrameRequest() {
+        if (!healthKeyFramePending.getAndSet(false)) return
+        if (!running.get() || quiescing.get() || stopped.get()) return
+        val requested = requestKeyFrame(fromReceiver = false)
+        log("VIDEO: 停滞自动补救——补关键帧${if (requested) "已提交" else "未提交"}")
+    }
+
+    /** 包住一次 socket 写：记录「有写在途」，健康线程据此把停滞判成写阻塞而非编码器故障。 */
+    private inline fun <T> trackedWrite(block: () -> T): T {
+        writeStartedAtMs = healthClockMs()
+        try {
+            return block()
+        } finally {
+            writeStartedAtMs = 0L
+        }
+    }
+
+    /** 视频帧成功写出：清空自上次写出以来的输入/编码器标记，并让健康状态机重新计时。 */
+    private fun markVideoWriteSucceeded() {
+        lastVideoWriteAtMs = healthClockMs()
+        videoWriteSeen = true
+        sourceInputSinceLastWrite = false
+        encoderOutputSinceLastWrite = false
+        // 输出已经恢复：尚未被 drain 消费的补帧请求随之作废
+        healthKeyFramePending.set(false)
+        synchronized(outputHealth) { outputHealth.onWriteSucceeded() }
+    }
+
+    private fun markSourceInput() {
+        sourceInputSinceLastWrite = true
+    }
+
+    private fun markEncoderOutput() {
+        encoderOutputSinceLastWrite = true
     }
 
     /**
@@ -306,7 +525,9 @@ class VideoSender(
                     if (stopped.get() || quiescing.get()) return false
                     running.set(true)
                     lastKeepAliveAt = android.os.SystemClock.uptimeMillis()
+                    lastVideoWriteAtMs = healthClockMs()
                 }
+                startHealthMonitor()
                 Thread({ drainExternalVideo() }, "video-external-drain").apply {
                     isDaemon = true
                     start()
@@ -325,6 +546,7 @@ class VideoSender(
                         inputSurface = surface
                         running.set(true)
                         lastKeepAliveAt = android.os.SystemClock.uptimeMillis()
+                        lastVideoWriteAtMs = healthClockMs()
                         true
                     }
                 }
@@ -332,6 +554,7 @@ class VideoSender(
                 releaseVideoResources(null, codec, surface)
                 return false
             }
+            startHealthMonitor()
 
             onSurfaceReady(surface)
 
@@ -419,6 +642,11 @@ class VideoSender(
         stopped.set(true)
         running.set(false)
         externalQueue.clear()
+        healthKeyFramePending.set(false)
+        val monitor = healthThread
+        healthThread = null
+        monitor?.interrupt()
+        synchronized(outputHealth) { outputHealth.reset() }
         // 先关 socket：解开阻塞在写入上的线程（它持有 writeLock，转码发布方持有 lifecycleLock 等它）
         val closing = socket
         socket = null
@@ -438,7 +666,8 @@ class VideoSender(
         releaseVideoResources(active, codec, surface)
         if (externalVideoSource != null && streamStatsLogged.compareAndSet(false, true)) {
             val gate = synchronized(screenOutputGate) { screenOutputGate.summary() }
-            log("VIDEO: 透传码流统计（会话结束）${streamStats.summary()}\n  ↳ 屏幕输出门控：$gate")
+            val health = synchronized(outputHealth) { outputHealth.summary() }
+            log("VIDEO: 透传码流统计（会话结束）${streamStats.summary()}\n  ↳ 屏幕输出门控：$gate\n  ↳ 输出健康看门狗：$health")
         }
     }
 
@@ -552,6 +781,9 @@ class VideoSender(
             }
         when (decision.transition) {
             ScreenOutputGate.Transition.PAUSED -> {
+                // 主动暂停不是传输停滞：立刻清空看门狗基线，并丢弃还没消费的补帧请求
+                healthKeyFramePending.set(false)
+                synchronized(outputHealth) { outputHealth.reset() }
                 reportScreenSuspended(true)
                 log("VIDEO: 主屏归车机——暂停发送全部视频帧（keepAlive 继续；归还后从新的 IDR 恢复）")
             }
@@ -606,9 +838,11 @@ class VideoSender(
         val output = socket?.getOutputStream() ?: return
         synchronized(writeLock) {
             if (quiescing.get()) return
-            output.write(buildVideoConfigHeader(avcC.size, width, height))
-            output.write(avcC)
-            output.flush()
+            trackedWrite {
+                output.write(buildVideoConfigHeader(avcC.size, width, height))
+                output.write(avcC)
+                output.flush()
+            }
             log("VIDEO: 主屏输出恢复——重发 VideoConfig avcC=${avcC.size}B ${width}x$height")
         }
     }
@@ -722,17 +956,21 @@ class VideoSender(
                 val pipeline = transcoder
                 if (quiescing.get()) continue
                 if (pipeline != null) {
+                    if (frame != null) markSourceInput()
                     // 门控已确认暂停后停止喂帧：解码/编码一场倒车影像的输入是纯功耗；
                     // 恢复时继续喂帧，由编码线程等新的 IDR 再放行输出。
                     if (frame != null && !screenFeedPaused()) pipeline.submit(frame)
                     continue
                 }
                 if (frame == null) {
+                    // 透传线程是本路径唯一的 drain：在这里消费看门狗的补帧请求
+                    consumeHealthKeyFrameRequest()
                     maybeSendKeepAlive(output)
                     continue
                 }
                 var nalUnits = splitAnnexB(frame.data)
                 if (nalUnits.isEmpty()) continue
+                markSourceInput()
                 if (!admitScreenFrame(frame.keyFrame, passthrough = true)) {
                     maybeSendKeepAlive(output)
                     continue
@@ -826,9 +1064,11 @@ class VideoSender(
             // 已切换转码：透传线程在切换前取到的旧配置不得混进新流
             if (transcoder != null || quiescing.get()) return@synchronized false
             val header = buildVideoConfigHeader(avcC.size, width, height)
-            output.write(header)
-            output.write(avcC)
-            output.flush()
+            trackedWrite {
+                output.write(header)
+                output.write(avcC)
+                output.flush()
+            }
             cachedVideoConfig = avcC
             configSent = true
             log(
@@ -865,9 +1105,12 @@ class VideoSender(
                     }
                 }
             frameCounter++
-            output.write(header)
-            output.write(sealed)
-            output.flush()
+            trackedWrite {
+                output.write(header)
+                output.write(sealed)
+                output.flush()
+            }
+            markVideoWriteSucceeded()
             framesSent++
             framesSinceKeepAlive++
             bytesSinceKeepAlive += plain.size.toLong()
@@ -894,6 +1137,8 @@ class VideoSender(
                     }
                 when {
                     index == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        // 编码器这轮没有产出：让看门狗知道「有输入、无输出」可能成立
+                        consumeHealthKeyFrameRequest()
                         maybeSendKeepAlive(output)
                         continue
                     }
@@ -910,6 +1155,8 @@ class VideoSender(
                             sendVideoConfig(buffer, bufferInfo.size, output)
                         } else if (bufferInfo.size > 0) {
                             val keyFrame = flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+                            // 编码器确实有产出：即使随后被主屏门控丢弃，也不是「编码器无输出」
+                            markEncoderOutput()
                             val sent =
                                 if (admitScreenFrame(keyFrame, passthrough = false)) {
                                     if (keyFrame && encoderReprimePending.compareAndSet(true, false)) {
@@ -977,8 +1224,12 @@ class VideoSender(
         lastKeepAliveAt = now
         keepAliveCount++
         val frame = buildKeepAliveFrame(keepAliveWithStats, frames, bytesPerSecond, framesPerSecond)
-        output.write(frame)
-        output.flush()
+        // 只登记在途写，不更新「上次成功写视频帧」：写阻塞时 keepAlive 也会卡住，
+        // 若把它当成视频进度，看门狗永远判不出写阻塞
+        trackedWrite {
+            output.write(frame)
+            output.flush()
+        }
         if (keepAliveCount <= 3 || keepAliveCount % 30 == 0L) {
             log(
                 "VIDEO: keepAlive #$keepAliveCount " +
@@ -1013,9 +1264,11 @@ class VideoSender(
             // 旧实现三项都没写——DiPlay/WinPlay 只读 body、不校验头，所以测试台一直正常，
             // 真车（Audi 4851）却黑屏（2026-10-19 用户日志）。
             val header = buildVideoConfigHeader(body.size, width, height)
-            output.write(header)
-            output.write(body)
-            output.flush()
+            trackedWrite {
+                output.write(header)
+                output.write(body)
+                output.flush()
+            }
             configSent = true
             log(
                 "VIDEO: ✓ VideoConfig 已发送 avcC=${body.size}B（SPS ${rawSps.size}B/PPS ${pps.size}B，" +
@@ -1080,9 +1333,12 @@ class VideoSender(
                     }
                 }
             frameCounter++
-            output.write(header)
-            output.write(sealed)
-            output.flush()
+            trackedWrite {
+                output.write(header)
+                output.write(sealed)
+                output.flush()
+            }
+            markVideoWriteSucceeded()
             framesSent++
             framesSinceKeepAlive++
             bytesSinceKeepAlive += plain.size.toLong()
@@ -1162,6 +1418,9 @@ class VideoSender(
 
         /** 屏幕流 keepAlive 间隔（catplay `DEFAULT_KEEP_ALIVE` = 1s）。 */
         private const val KEEPALIVE_INTERVAL_MS = 1_000L
+
+        /** 健康监测采样间隔：够密以在 5 s 阈值附近判定，又足够便宜（只读几个 volatile）。 */
+        private const val HEALTH_SAMPLE_INTERVAL_MS = 100L
 
         /**
          * 帧头偏移 8..16 写入 NTP 32.32 LE 时间戳。
