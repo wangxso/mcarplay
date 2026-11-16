@@ -4,6 +4,7 @@ import android.media.MediaFormat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -63,5 +64,35 @@ class EncoderFormatPolicyTest {
         assertTrue(text, text.contains("max-bframes=0"))
         assertTrue(text, text.contains("repeat-previous-frame-after=33333us"))
         assertTrue(text, text.contains("微秒"))
+    }
+
+    @Test
+    fun transcodeFallbackKeepsTranscodeKeysWhenOnlyLevelIsRejected() {
+        // 审查 P2：level/Profile 被拒时的最后一级不得连带丢掉 max-bframes /
+        // repeat-previous-frame-after。这里钉住级数、撤销顺序，以及「只撤 level」的那一级。
+        val attempts = EncoderFormatPolicy.attempts(baselineProfile = true)
+        assertEquals(
+            listOf(
+                EncoderFormatPolicy.Attempt.FULL,
+                EncoderFormatPolicy.Attempt.WITHOUT_OPTIONAL_HINTS,
+                EncoderFormatPolicy.Attempt.WITHOUT_LEVEL_AND_PROFILE,
+            ),
+            attempts,
+        )
+        val last = attempts.last()
+        assertFalse("最后一级必须已经撤掉 level/Profile", last.withLevelAndProfile)
+        assertFalse("可选提示在任何回退级都不需要", last.withOptionalRealtime)
+        assertEquals("level 4.0 / Baseline", last.dropped)
+    }
+
+    @Test
+    fun localScreenPathKeepsItsTwoStepFallback() {
+        // 本地屏幕路径不开 Baseline：两级，且从不写 priority/latency（与旧行为一致）。
+        val attempts = EncoderFormatPolicy.attempts(baselineProfile = false)
+        assertEquals(2, attempts.size)
+        assertFalse(attempts.any { it.withOptionalRealtime })
+        assertTrue(attempts[0].withLevelAndProfile)
+        assertFalse(attempts[1].withLevelAndProfile)
+        assertNull(attempts[0].dropped)
     }
 }

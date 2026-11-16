@@ -378,53 +378,18 @@ class VideoSender(
         }
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         // 逐级回退：每一级只在上一级被编码器拒绝时才尝试，且必须先 reset() 才能重新 configure。
-        //  - 转码路径：完整（level+Baseline+可选实时提示）→ 去掉可选提示 → 去掉 level/Profile
-        //  - 本地屏幕路径：level → 去掉 level（与旧行为一致）
-        // 每一级带上「这一级去掉了什么」，成功时只记真正被撤掉的那一层
-        val attempts = ArrayList<Pair<MediaFormat, String?>>()
-        attempts +=
-            format(
-                encodeWidth,
-                encodeHeight,
-                fps,
-                bitrate,
-                capEncoderFps,
-                baselineProfile,
-                withLevelAndProfile = true,
-                withOptionalRealtime = baselineProfile,
-            ) to null
-        // 可选提示键被拒不代表码流有问题，去掉后重试一次即可
-        if (baselineProfile) {
-            attempts +=
-                format(
-                    encodeWidth,
-                    encodeHeight,
-                    fps,
-                    bitrate,
-                    capEncoderFps,
-                    baselineProfile,
-                    withLevelAndProfile = true,
-                    withOptionalRealtime = false,
-                ) to "priority/latency 提示"
-        }
-        attempts +=
-            format(
-                encodeWidth,
-                encodeHeight,
-                fps,
-                bitrate,
-                capEncoderFps,
-                baselineProfile,
-                withLevelAndProfile = false,
-                withOptionalRealtime = false,
-            ) to "level 4.0${if (baselineProfile) " / Baseline" else ""}"
+        // 级数与「这一级撤销了什么」由 EncoderFormatPolicy.attempts 决定并有单测；
+        // 转码专用键不随 level/Profile 撤销。
+        val attempts =
+            EncoderFormatPolicy.attempts(baselineProfile).map { attempt ->
+                format(encodeWidth, encodeHeight, fps, bitrate, capEncoderFps, baselineProfile, attempt) to attempt.dropped
+            }
         var lastRejection: Exception? = null
         for ((index, attempt) in attempts.withIndex()) {
             if (index > 0) runCatching { codec.reset() }
             try {
                 codec.configure(attempt.first, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                if (attempt.second != null) {
-                    val dropped = attempt.second!!
+                attempt.second?.let { dropped ->
                     if (dropped.startsWith("priority")) {
                         log("VIDEO: 编码器拒绝 $dropped（${lastRejection?.message}）——去掉后重试，其余参数不变")
                     } else {
@@ -450,8 +415,8 @@ class VideoSender(
     /**
      * 构造编码器 MediaFormat。
      *
-     * [withLevelAndProfile] = false 时退回到「不指定 level / Profile、也不写转码专用键」的旧行为；
-     * [withOptionalRealtime] 只控制 priority/latency 两个提示键（转码路径才加）。
+     * [attempt] 决定这一级写哪些键：转码专用键（max-bframes / repeat-previous-frame-after）只看
+     * [baselineProfile]，**不随 level/Profile 一起撤销**——编码器可能只拒绝 level 4.0。
      * 固定 level 4.0 的理由见下方注释（奥迪 DELPHI 对 3.2 静默不渲染）。
      */
     private fun format(
@@ -461,8 +426,7 @@ class VideoSender(
         bitrate: Int,
         capEncoderFps: Boolean,
         baselineProfile: Boolean,
-        withLevelAndProfile: Boolean,
-        withOptionalRealtime: Boolean,
+        attempt: EncoderFormatPolicy.Attempt,
     ): MediaFormat =
         MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encodeWidth, encodeHeight).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -470,11 +434,14 @@ class VideoSender(
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             if (capEncoderFps) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
-            if (withLevelAndProfile) {
+            if (baselineProfile) {
+                // 转码路径：禁 B 帧 + 无新帧时按帧间隔重复上一帧（单位微秒，见 EncoderFormatPolicy）。
+                // 即使下面这一级撤销了 level/Profile，这两个键也必须保留。
+                EncoderFormatPolicy.transcodeKeys(fps).applyTo(this)
+            }
+            if (attempt.withLevelAndProfile) {
                 if (baselineProfile) {
                     setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-                    // 转码路径：禁 B 帧 + 无新帧时按帧间隔重复上一帧（单位微秒，见 EncoderFormatPolicy）
-                    EncoderFormatPolicy.transcodeKeys(fps).applyTo(this)
                 }
                 // 固定 H.264 level 4.0（SPS level_idc=40，真 iPhone 同款流形态）。
                 // 不固定时编码器按「分辨率+帧率」自动选：默认 30fps 下 1412x654
@@ -489,7 +456,7 @@ class VideoSender(
                     )
                 }
             }
-            if (withOptionalRealtime) EncoderFormatPolicy.applyOptionalRealtime(this)
+            if (attempt.withOptionalRealtime) EncoderFormatPolicy.applyOptionalRealtime(this)
         }
 
     fun stop() {

@@ -78,6 +78,43 @@ internal object EncoderFormatPolicy {
         for ((key, value) in optionalRealtimeKeys()) format.setInteger(key, value)
     }
 
+    /**
+     * `configure` 的一级尝试：哪一层参数可以撤销。
+     *
+     * 转码路径的两个关键键（max-bframes / repeat-previous-frame-after）与 level/Profile 是**独立**的：
+     * 编码器拒绝 level 4.0 不代表它拒绝这两个键，因此 [LEVEL_AND_PROFILE] 这一级也必须保留它们
+     * （2026-11 审查：把三者绑在同一层会让「只拒 level」的编码器静默丢掉任务 A 的两个键）。
+     */
+    enum class Attempt(
+        /** 是否写 level 4.0 / Baseline profile。 */
+        val withLevelAndProfile: Boolean,
+        /** 是否写 priority/latency 提示键。 */
+        val withOptionalRealtime: Boolean,
+        /** 这一级相对上一级撤销了什么（null = 第一级）；成功时据此记日志。 */
+        val dropped: String?,
+    ) {
+        FULL(withLevelAndProfile = true, withOptionalRealtime = true, dropped = null),
+        WITHOUT_OPTIONAL_HINTS(withLevelAndProfile = true, withOptionalRealtime = false, dropped = "priority/latency 提示"),
+
+        /** 只撤销 level/Profile；转码专用键仍然写入。 */
+        WITHOUT_LEVEL_AND_PROFILE(
+            withLevelAndProfile = false,
+            withOptionalRealtime = false,
+            dropped = "level 4.0 / Baseline",
+        ),
+
+        /** 本地屏幕路径的第一级（非转码：从不写 priority/latency）。 */
+        LOCAL_FULL(withLevelAndProfile = true, withOptionalRealtime = false, dropped = null),
+    }
+
+    /** 某条路径要尝试的级数：转码三级，本地屏幕路径两级（与旧行为一致）。 */
+    fun attempts(baselineProfile: Boolean): List<Attempt> =
+        if (baselineProfile) {
+            listOf(Attempt.FULL, Attempt.WITHOUT_OPTIONAL_HINTS, Attempt.WITHOUT_LEVEL_AND_PROFILE)
+        } else {
+            listOf(Attempt.LOCAL_FULL, Attempt.WITHOUT_LEVEL_AND_PROFILE)
+        }
+
     /** 日志用：把实际写入编码器的取值列出来，便于从报告里判断键是否生效。 */
     fun describe(fps: Int): String =
         "max-bframes=$MAX_B_FRAMES repeat-previous-frame-after=${microsPerFrame(fps)}us（重复周期，" +
