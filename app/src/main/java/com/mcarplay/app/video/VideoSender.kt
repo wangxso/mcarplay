@@ -694,59 +694,61 @@ class VideoSender(
          */
         baselineProfile: Boolean = false,
     ): Pair<MediaCodec, Surface> {
-        val bitrate =
-            (
-                ((encodeWidth * encodeHeight * 6L).toInt()).coerceIn(2_000_000, 10_000_000) *
-                    if (fps >= 60) 1.5f else 1f
-            ).toInt().coerceAtMost(15_000_000)
+        val bitrate = EncoderFormatRules.bitrateFor(encodeWidth, encodeHeight, fps)
         log("VIDEO: 启动编码器 ${encodeWidth}x$encodeHeight@$fps ${bitrate / 1_000_000}Mbps（端口已连通）")
-
         if (baselineProfile) {
             log("VIDEO: 转码编码器键 ${EncoderFormatPolicy.describe(fps)}")
         }
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        // 逐级回退：每一级只在上一级被编码器拒绝时才尝试，且必须先 reset() 才能重新 configure。
-        // 级数与「这一级撤销了什么」由 EncoderFormatPolicy.attempts 决定并有单测；
-        // 转码专用键不随 level/Profile 撤销。
-        val attempts =
-            EncoderFormatPolicy.attempts(baselineProfile).map { attempt ->
-                format(encodeWidth, encodeHeight, fps, bitrate, capEncoderFps, baselineProfile, attempt) to attempt.dropped
-            }
-        var lastRejection: Exception? = null
-        for ((index, attempt) in attempts.withIndex()) {
-            if (index > 0) runCatching { codec.reset() }
-            try {
-                codec.configure(attempt.first, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                attempt.second?.let { dropped ->
-                    if (dropped.startsWith("priority")) {
-                        log("VIDEO: 编码器拒绝 $dropped（${lastRejection?.message}）——去掉后重试，其余参数不变")
-                    } else {
-                        log("VIDEO: 指定 $dropped 被编码器拒绝（${lastRejection?.message}）——回退自动选择（部分车机可能黑屏）")
-                    }
+        // 只读核对「实际创建的这个编码器」声明了什么：候选尺寸/帧率/profile/level 是否在能力表内。
+        // 只记录、不阻断——厂商能力表常低估，据此提前失败会让原本能 configure 成功的设备黑屏；
+        // 也不能按对齐取整或换 codec，那会改动已协商、并写进 VideoConfig 头部让车机建画布的尺寸。
+        logEncoderCapability(codec, encodeWidth, encodeHeight, fps, baselineProfile)
+        // configure / createInputSurface / start 任一失败都要释放全部已创建资源：原实现只在 start 之后
+        // 由调用方收尾，此处提前失败会泄漏一个编码器实例（转码路径重试时尤为明显）；
+        // Surface 同理——start 抛异常时它尚未返回给调用方，只能在这里释放。
+        var surface: Surface? = null
+        return releaseOnFailure(
+            {
+                surface?.let { runCatching { it.release() } }
+                runCatching { codec.release() }
+            },
+        ) {
+            // 逐级回退：每一级只在上一级被编码器拒绝时才尝试，且必须先 reset() 才能重新 configure。
+            // 级数与「这一级撤销了什么」由 EncoderFormatPolicy.attempts 决定并有单测；
+            // 转码专用键不随 level/Profile 撤销。
+            val attempts =
+                EncoderFormatPolicy.attempts(baselineProfile).map { attempt ->
+                    format(encodeWidth, encodeHeight, fps, bitrate, capEncoderFps, baselineProfile, attempt) to
+                        attempt.dropped
                 }
-                lastRejection = null
-                break
-            } catch (rejected: Exception) {
-                lastRejection = rejected
+            var lastRejection: Exception? = null
+            for ((index, attempt) in attempts.withIndex()) {
+                if (index > 0) runCatching { codec.reset() }
+                try {
+                    codec.configure(attempt.first, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    attempt.second?.let { dropped ->
+                        if (dropped.startsWith("priority")) {
+                            log("VIDEO: 编码器拒绝 $dropped（${lastRejection?.message}）——去掉后重试，其余参数不变")
+                        } else {
+                            log("VIDEO: 指定 $dropped 被编码器拒绝（${lastRejection?.message}）——回退自动选择（部分车机可能黑屏）")
+                        }
+                    }
+                    lastRejection = null
+                    break
+                } catch (rejected: Exception) {
+                    lastRejection = rejected
+                }
             }
+            // 全部候选都被拒绝：清理后原样抛出（清理已由 releaseOnFailure 统一负责）
+            lastRejection?.let { throw it }
+            val created = codec.createInputSurface()
+            surface = created
+            codec.start()
+            codec to created
         }
-        if (lastRejection != null) {
-            // 全部候选都被拒绝：释放后再抛，避免调用方 stop() 拿不到这个尚未发布的编码器
-            runCatching { codec.release() }
-            throw lastRejection
-        }
-        val surface = codec.createInputSurface()
-        codec.start()
-        return codec to surface
     }
 
-    /**
-     * 构造编码器 MediaFormat。
-     *
-     * [attempt] 决定这一级写哪些键：转码专用键（max-bframes / repeat-previous-frame-after）只看
-     * [baselineProfile]，**不随 level/Profile 一起撤销**——编码器可能只拒绝 level 4.0。
-     * 固定 level 4.0 的理由见下方注释（奥迪 DELPHI 对 3.2 静默不渲染）。
-     */
     private fun format(
         encodeWidth: Int,
         encodeHeight: Int,
@@ -786,6 +788,34 @@ class VideoSender(
             }
             if (attempt.withOptionalRealtime) EncoderFormatPolicy.applyOptionalRealtime(this)
         }
+
+    /**
+     * 「候选 → 选中 → 依据」一行日志。能力读取失败时如实记未知，不当作不支持。
+     *
+     * 新增短语不匹配 `tools/logbot/rules.py` 的任何 `LogPattern`，无需三处同改；
+     * 也刻意不复用 `VIDEO: 启动编码器` 等既有行，避免改变既有日志的解析口径。
+     */
+    private fun logEncoderCapability(
+        codec: MediaCodec,
+        encodeWidth: Int,
+        encodeHeight: Int,
+        fps: Int,
+        baselineProfile: Boolean,
+    ) {
+        val check =
+            EncoderCapabilityRules.assess(
+                capability = readEncoderCapability(codec, encodeWidth, encodeHeight, fps),
+                width = encodeWidth,
+                height = encodeHeight,
+                fps = fps,
+                baselineProfile = baselineProfile,
+                level4 = true,
+            )
+        log("VIDEO: 编码能力核对 ${check.summary}")
+        if (check.problems.isNotEmpty()) {
+            log("VIDEO: 编码能力核对差异 - ${check.problems.joinToString("；")}（仍按原参数 configure）")
+        }
+    }
 
     /**
      * 会话结束时的最终摘要：一次性捕获后缓存，供并发的第二次 [stop] 与迟到的监测采样复用。
