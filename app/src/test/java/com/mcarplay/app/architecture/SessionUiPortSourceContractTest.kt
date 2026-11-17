@@ -153,7 +153,8 @@ class SessionUiPortSourceContractTest {
     @Test
     fun specifierResultWritesTheJoinedHintOnBothRoutes() {
         val code = KotlinSource.scan(producerBody("joinCarWifiSpecifier")).code
-        requireContains(code, "phaseHint = t(R.string.sc_joined)", "specifier 成功与系统已连近路都要写 sc_joined")
+        val joinedCount = Regex("""phaseHint = t\(R\.string\.sc_joined\)""").findAll(code).count()
+        assertTrue("specifier 成功与系统已连近路必须各写一次 sc_joined（当前共两处）", joinedCount == 2)
         requireContains(code, "if (bindExistingCarWifi(connector, wifi.ssid) != null)", "specifier 失败近路必须走统一绑定")
     }
 
@@ -298,7 +299,10 @@ class SessionUiPortSourceContractTest {
     @Test
     fun phaseHintIsDeclaredOnTheControllerOnly() {
         assertTrue("phaseHint 声明必须在 SessionController.kt", controller.contains("@Volatile\n    var phaseHint: String? = null"))
-        assertFalse("本契约只钉 SessionController 写入点", false)
+        val otherMainKotlinFiles = SourceTree.mainKotlinFiles.entries.filter { it.key != "SessionController.kt" }
+        assertTrue("契约必须扫描到其它主源码文件", otherMainKotlinFiles.isNotEmpty())
+        val duplicatedDeclarations = otherMainKotlinFiles.filter { it.value.readText().contains("var phaseHint") }
+        assertTrue("phaseHint 声明只能出现在 SessionController.kt", duplicatedDeclarations.isEmpty())
     }
 
     @Test

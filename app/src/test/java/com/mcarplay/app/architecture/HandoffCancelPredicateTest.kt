@@ -184,9 +184,9 @@ class HandoffCancelPredicateTest {
     /** 现状快照：handoffCancelled 必须同时看全局取消与交接归属。 */
     @Test
     fun handoffCancelledPredicateCoversOwnershipAndCancellation() {
-        val owner = controller.substringAfter("fun handoffCancelled(): Boolean")
-        val code = KotlinSource.scan(owner.substringBefore("private fun")).code
-        assertTrue("handoffCancelled 必须包含 wasCancelled()", code.contains("wasCancelled()"))
-        assertTrue("handoffCancelled 必须包含 handoffOwnership.owns", code.contains("handoffOwnership.owns"))
+        val predicateLine = controller.lineSequence().first { "fun handoffCancelled(): Boolean" in it }
+        assertTrue("handoffCancelled 必须包含 wasCancelled()", predicateLine.contains("wasCancelled()"))
+        assertTrue("handoffCancelled 必须包含 handoffOwnership.owns", predicateLine.contains("handoffOwnership.owns"))
+        assertTrue("handoffCancelled 必须保留两条件的短路或组合", predicateLine.contains("||"))
     }
 }
