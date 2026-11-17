@@ -3,10 +3,228 @@ package com.mcarplay.app.diagnostics
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SupportReportTest {
+    @Test
+    fun summaryTextKeepsSectionOrderPrefixesSeparatorsAndExactValues() {
+        val observedCalls = mutableListOf<String>()
+        val connectionSummary = {
+            observedCalls += "connection"
+            "CarPlay 连接：\nEXPORT_SNAPSHOT\n多行 value 保留"
+        }
+        val selfTestSummary = {
+            observedCalls += "self-test"
+            "CarWith 自检：line1\nline2"
+        }
+        val receiverDetectionSummary = {
+            observedCalls += "receiver"
+            "receiver value"
+        }
+        val bluetoothSummary = {
+            observedCalls += "bluetooth"
+            "bluetooth value"
+        }
+        val notificationProbeSummary = {
+            observedCalls += "notification"
+            "notification value"
+        }
+        val carLifeSelfTestSummary = {
+            observedCalls += "carlife"
+            "carlife value"
+        }
+
+        val summary =
+            SupportReport.summaryText(
+                connectionSummary = connectionSummary,
+                selfTestSummary = selfTestSummary,
+                receiverDetectionSummary = receiverDetectionSummary,
+                bluetoothSummary = bluetoothSummary,
+                notificationProbeSummary = notificationProbeSummary,
+                carLifeSelfTestSummary = carLifeSelfTestSummary,
+            )
+
+        assertEquals(
+            listOf(
+                "CarPlay 连接：\nEXPORT_SNAPSHOT\n多行 value 保留",
+                "CarWith 自检：line1\nline2",
+                "RECEIVER_DETECTION receiver value",
+                "BLUETOOTH_DIAGNOSTICS bluetooth value",
+                "CARWITH_NOTIFICATION_PROBE notification value",
+                "CARLIFE_SELF_TEST_DIAGNOSTICS carlife value",
+            ).joinToString("\n\n"),
+            summary,
+        )
+        assertEquals(
+            listOf("connection", "self-test", "receiver", "bluetooth", "notification", "carlife"),
+            observedCalls,
+        )
+    }
+
+    @Test
+    fun summaryTextSkipsNullSnapshotsAndKeepsBluetoothBetweenReceiverAndNotification() {
+        val observedCalls = mutableListOf<String>()
+        val bluetoothSummary = {
+            observedCalls += "bluetooth"
+            "after null snapshots"
+        }
+
+        val summary =
+            SupportReport.summaryText(
+                connectionSummary = { null },
+                selfTestSummary = { null },
+                receiverDetectionSummary = {
+                    observedCalls += "receiver"
+                    "receiver value"
+                },
+                bluetoothSummary = bluetoothSummary,
+                notificationProbeSummary = {
+                    observedCalls += "notification"
+                    "notification value"
+                },
+                carLifeSelfTestSummary = {
+                    observedCalls += "carlife"
+                    "carlife value"
+                },
+            )
+
+        assertEquals(
+            listOf(
+                "RECEIVER_DETECTION receiver value",
+                "BLUETOOTH_DIAGNOSTICS after null snapshots",
+                "CARWITH_NOTIFICATION_PROBE notification value",
+                "CARLIFE_SELF_TEST_DIAGNOSTICS carlife value",
+            ).joinToString("\n\n"),
+            summary,
+        )
+        assertEquals(listOf("receiver", "bluetooth", "notification", "carlife"), observedCalls)
+    }
+
+    @Test
+    fun summaryTextKeepsEmptyStringAndMultilineSectionValues() {
+        val summary =
+            SupportReport.summaryText(
+                connectionSummary = { null },
+                selfTestSummary = { "CarWith 自检：" },
+                receiverDetectionSummary = { "" },
+                bluetoothSummary = { "line1\nline2" },
+                notificationProbeSummary = { "notification value" },
+                carLifeSelfTestSummary = { "" },
+            )
+
+        assertEquals(
+            listOf(
+                "CarWith 自检：",
+                "RECEIVER_DETECTION ",
+                "BLUETOOTH_DIAGNOSTICS line1\nline2",
+                "CARWITH_NOTIFICATION_PROBE notification value",
+                "CARLIFE_SELF_TEST_DIAGNOSTICS ",
+            ).joinToString("\n\n"),
+            summary,
+        )
+    }
+
+    @Test
+    fun summaryTextDoesNotInvokeBluetoothProviderAtConstructionAndInvokesItOnceOnSameThread() {
+        val executionThreadNames = mutableListOf<String>()
+        var invocationCount = 0
+        val bluetoothSummary: () -> String = {
+            invocationCount += 1
+            executionThreadNames += Thread.currentThread().name
+            "bluetooth value"
+        }
+
+        assertEquals(0, invocationCount)
+
+        val summary =
+            SupportReport.summaryText(
+                connectionSummary = { null },
+                selfTestSummary = { null },
+                receiverDetectionSummary = { "receiver value" },
+                bluetoothSummary = bluetoothSummary,
+                notificationProbeSummary = { "notification value" },
+                carLifeSelfTestSummary = { "carlife value" },
+            )
+
+        assertEquals(1, invocationCount)
+        assertEquals(listOf(Thread.currentThread().name), executionThreadNames)
+        assertEquals(
+            listOf(
+                "RECEIVER_DETECTION receiver value",
+                "BLUETOOTH_DIAGNOSTICS bluetooth value",
+                "CARWITH_NOTIFICATION_PROBE notification value",
+                "CARLIFE_SELF_TEST_DIAGNOSTICS carlife value",
+            ).joinToString("\n\n"),
+            summary,
+        )
+    }
+
+    @Test
+    fun summaryTextPropagatesBluetoothExceptionAndSkipsLaterSections() {
+        val failure = IllegalStateException("bluetooth summary failed")
+        val observedCalls = mutableListOf<String>()
+
+        val thrown =
+            runCatching {
+                SupportReport.summaryText(
+                    connectionSummary = { null },
+                    selfTestSummary = { null },
+                    receiverDetectionSummary = {
+                        observedCalls += "receiver"
+                        "receiver value"
+                    },
+                    bluetoothSummary = {
+                        observedCalls += "bluetooth"
+                        throw failure
+                    },
+                    notificationProbeSummary = {
+                        observedCalls += "notification"
+                        "notification value"
+                    },
+                    carLifeSelfTestSummary = {
+                        observedCalls += "carlife"
+                        "carlife value"
+                    },
+                )
+            }
+
+        assertEquals(
+            listOf("receiver", "bluetooth"),
+            observedCalls,
+        )
+        assertSame(failure, thrown.exceptionOrNull())
+    }
+
+    @Test
+    fun summaryTextUsesEmptyFallbackWhenAllSectionsAreNull() {
+        var invocationCount = 0
+        val summary =
+            SupportReport.summaryText(
+                connectionSummary = { null },
+                selfTestSummary = { null },
+                receiverDetectionSummary = { "" },
+                bluetoothSummary = {
+                    invocationCount += 1
+                    ""
+                },
+                notificationProbeSummary = { "" },
+                carLifeSelfTestSummary = { "" },
+            )
+
+        assertEquals(
+            listOf(
+                "RECEIVER_DETECTION ",
+                "BLUETOOTH_DIAGNOSTICS ",
+                "CARWITH_NOTIFICATION_PROBE ",
+                "CARLIFE_SELF_TEST_DIAGNOSTICS ",
+            ).joinToString("\n\n"),
+            summary,
+        )
+        assertEquals(1, invocationCount)
+    }
+
     @Test
     fun rawReportRetainsNamesAddressesCredentialsPayloadsAndExitDetails() {
         val detail = "name=FamilyCar address=10.2.3.4 psk=SecretValue"
