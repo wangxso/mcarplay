@@ -25,6 +25,10 @@ class HandoffCancelPredicateTest {
         SourceTree.mainKotlinFiles.getValue("SessionController.kt").readText()
     }
 
+    private val scopeSource: String by lazy {
+        SourceTree.mainKotlinFiles.getValue("session/AttemptScope.kt").readText()
+    }
+
     /** 取 [name] 的函数体：先配平参数表的圆括号，再配平函数体的花括号。 */
     private fun body(name: String): String {
         val start = controller.indexOf("private fun $name(")
@@ -185,8 +189,15 @@ class HandoffCancelPredicateTest {
     @Test
     fun handoffCancelledPredicateCoversOwnershipAndCancellation() {
         val predicateLine = controller.lineSequence().first { "fun handoffCancelled(): Boolean" in it }
-        assertTrue("handoffCancelled 必须包含 wasCancelled()", predicateLine.contains("wasCancelled()"))
-        assertTrue("handoffCancelled 必须包含 handoffOwnership.owns", predicateLine.contains("handoffOwnership.owns"))
-        assertTrue("handoffCancelled 必须保留两条件的短路或组合", predicateLine.contains("||"))
+        assertTrue("handoffCancelled 必须委托真实 helper", predicateLine.contains("attemptHandoffCancelled(scope)"))
+        assertTrue(
+            "交接归属必须由调用点独立提供，不能折进 scope",
+            predicateLine.contains("handoffOwnership.owns(endpoint.observation)"),
+        )
+        val helperLine = scopeSource.lineSequence().first { "): Boolean = !scope.isActive || !ownsHandoff()" in it }
+        assertTrue(
+            "helper 必须保留取消/失主两层短路或组合",
+            helperLine.contains("!scope.isActive || !ownsHandoff()"),
+        )
     }
 }

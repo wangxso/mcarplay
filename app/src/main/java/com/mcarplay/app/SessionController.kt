@@ -77,6 +77,8 @@ import com.mcarplay.app.net.WifiSavedNetworks
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
+import com.mcarplay.app.session.LegacyAttemptScope
+import com.mcarplay.app.session.attemptHandoffCancelled
 import com.mcarplay.app.settings.DisplayPrefs
 import com.mcarplay.app.settings.MediaPrefs
 import com.mcarplay.app.shizuku.CarInputClient
@@ -4144,14 +4146,11 @@ object SessionController {
             return
         }
 
-        fun ownsConnection(): Boolean = ReceiverDetectionRuntime.isCurrent(endpoint.observation)
-
-        fun wasCancelled(): Boolean = connectCancelled || !ownsConnection()
         // 熔断按实际发起本轮的控制链路对端隔离；未选定目标车机时也不会误拦其它车机。
         val peerAddress = endpoint.peerAddress ?: TargetDevicePrefs.get(context)?.address
 
-        fun handoffCancelled(): Boolean = wasCancelled() || !handoffOwnership.owns(endpoint.observation)
-        if (!ownsConnection()) {
+        // 入口在构造 attempt scope 之前直查检测归属：过期端点不得触碰交接互斥。
+        if (!ReceiverDetectionRuntime.isCurrent(endpoint.observation)) {
             rejectPreAcquired()
             return
         }
@@ -4186,6 +4185,17 @@ object SessionController {
         // 本轮失败/成功的熔断记账都以这条控制链路的对端地址为键。
         activePeerAddress = peerAddress
         ReceiverDetectionRuntime.attach(endpoint.observation, diagnosticAttempt)
+        // scope 只读现状：id/observation 固定为本轮，两个 Boolean 每次访问都重新问运行时。
+        val scope =
+            LegacyAttemptScope(
+                id = diagnosticAttempt,
+                observation = endpoint.observation,
+                cancelled = { connectCancelled },
+                owns = { ReceiverDetectionRuntime.isCurrent(it) },
+            )
+
+        // 交接归属是独立于 isCurrent/isActive 的第二层判据，不能折进 scope。
+        fun handoffCancelled(): Boolean = attemptHandoffCancelled(scope) { handoffOwnership.owns(endpoint.observation) }
         ConnectionDiagnostics.timeline.note(
             diagnosticAttempt,
             "RECEIVER srcvers=${endpoint.sourceVersion} features=${endpoint.advertisedFeatures}",
@@ -4291,9 +4301,9 @@ object SessionController {
         // 等车机 ctrl 邀请（车机已发现我们的权威信号）。
         val continueWithNetwork: (Boolean) -> Unit = proceed@{ bound ->
             if (!bound || handoffCancelled()) {
-                ConnectionDiagnostics.timeline.abandon(diagnosticAttempt, wasCancelled(), DiagnosticCode.WIFI_JOIN_FAILED)
+                ConnectionDiagnostics.timeline.abandon(diagnosticAttempt, !scope.isActive, DiagnosticCode.WIFI_JOIN_FAILED)
                 val joinCode = ConnectionDiagnostics.timeline.snapshot()?.code
-                if (!wasCancelled()) {
+                if (scope.isActive) {
                     phaseHint = t(R.string.sc_not_on_hotspot_endpoint, endpoint.ssid)
                     appendLog(">>> [$source] 手机当前不在该热点——请到 设置>WLAN 加入 \"${endpoint.ssid}\" 后断开重连")
                 } else {
@@ -4333,7 +4343,7 @@ object SessionController {
             val airPlayConnected = AtomicBoolean(false)
             Bg.run("airplay-pairing") {
                 try {
-                    if (wasCancelled()) {
+                    if (!scope.isActive) {
                         appendLog("AIRPLAY: 用户已取消——中止配对")
                         releaseHandoff()
                         return@run
@@ -4364,7 +4374,7 @@ object SessionController {
                             if (effectiveEndpoint.portIsFallback) "port=fallback" else "port=advertised",
                         )
                     }
-                    if (wasCancelled()) {
+                    if (!scope.isActive) {
                         appendLog("AIRPLAY: 用户已取消——中止配对")
                         releaseHandoff()
                         return@run
@@ -4422,14 +4432,14 @@ object SessionController {
                                 scheduleModesReclaim(created)
                             }
                         }
-                    if (ownsConnection()) retireSession()
+                    if (scope.isCurrent) retireSession()
                     // 会话静默降噪（2026-10-10）：从交接点起暂停其它接收端的出站连接探测
                     // （典型：连着 DiPlay 测试台时不再噪音式探测 Audi）。会话结束/断开时解除。
                     BtSessionGate.sessionActive = true
                     // 第一阶段：保持 BT 在位直接配对 + SETUP（协议上正确的形态）
                     phaseHint = t(R.string.sc_pairing)
                     var client = newClient()
-                    if (wasCancelled()) {
+                    if (!scope.isActive) {
                         client.close()
                         return@run
                     }
@@ -4452,8 +4462,8 @@ object SessionController {
                         } else {
                             client.runPairing()
                         }
-                    if (wasCancelled()) {
-                        if (ownsConnection()) retireSession()
+                    if (!scope.isActive) {
+                        if (scope.isCurrent) retireSession()
                         appendLog("AIRPLAY: 用户已取消——中止配对")
                         releaseHandoff()
                         return@run
@@ -4483,15 +4493,15 @@ object SessionController {
                         // 这里只模拟交接后的退役状态，不结束 EA 会话。
                         detachActiveBtSessions(eaStopReason = null)
                         client = newClient()
-                        if (wasCancelled()) {
+                        if (!scope.isActive) {
                             client.close()
                             return@run
                         }
                         currentClient = client
                         drainPendingEndpoint(client)
                         keys = client.runPairing()
-                        if (wasCancelled()) {
-                            if (ownsConnection()) retireSession()
+                        if (!scope.isActive) {
+                            if (scope.isCurrent) retireSession()
                             appendLog("AIRPLAY: 用户已取消——中止配对")
                             releaseHandoff()
                             return@run
@@ -4558,7 +4568,7 @@ object SessionController {
                                 setup = client.runSetup()
                             }
                         }
-                        if (wasCancelled()) {
+                        if (!scope.isActive) {
                             client.close()
                             return@run
                         }
@@ -4585,7 +4595,7 @@ object SessionController {
                             // 每台媒体键 HID 设备一个边沿判定器；随本条 event 通道重建，旧轮按住状态不残留
                             val mediaKeyEdges = HashMap<String, MediaKeyEdge>()
                             client.connectEventChannel(sessionKey, setup) onEvent@{ command ->
-                                if (currentClient !== client || wasCancelled()) return@onEvent
+                                if (currentClient !== client || !scope.isActive) return@onEvent
                                 when (command["type"]) {
                                     "hidSendReport" -> {
                                         val uuid = command["uuid"]?.toString()
@@ -5031,7 +5041,7 @@ object SessionController {
                                     videoSender?.openDataPort()
                                     screenStreamRecovery = recover@{
                                         fun failure(): ScreenRecoveryResult =
-                                            if (wasCancelled() || client.cancelled || currentClient !== client) {
+                                            if (!scope.isActive || client.cancelled || currentClient !== client) {
                                                 ScreenRecoveryResult.ABORTED
                                             } else {
                                                 ScreenRecoveryResult.FAILED
@@ -5040,7 +5050,7 @@ object SessionController {
                                             synchronized(this) {
                                                 val previousOutput = carLifeOutput ?: return@recover ScreenRecoveryResult.ABORTED
                                                 val previous = videoSender ?: return@recover ScreenRecoveryResult.ABORTED
-                                                if (wasCancelled() ||
+                                                if (!scope.isActive ||
                                                     currentClient !== client ||
                                                     previousOutput.sender !== previous ||
                                                     currentCarLifeSession !== carLife ||
@@ -5054,30 +5064,30 @@ object SessionController {
                                             }
                                         appendLog("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频")
                                         previousSender.stop()
-                                        if (wasCancelled() || !client.teardownScreenStream()) return@recover failure()
-                                        if (wasCancelled()) return@recover ScreenRecoveryResult.ABORTED
+                                        if (!scope.isActive || !client.teardownScreenStream()) return@recover failure()
+                                        if (!scope.isActive) return@recover ScreenRecoveryResult.ABORTED
                                         val resumed = client.runScreenStream(sessionKey, setup.displayUuid) ?: return@recover failure()
-                                        if (wasCancelled()) return@recover ScreenRecoveryResult.ABORTED
+                                        if (!scope.isActive) return@recover ScreenRecoveryResult.ABORTED
                                         val replacement = newScreenSender(resumed)
                                         var restored = false
                                         try {
                                             synchronized(this) {
-                                                if (wasCancelled() || currentClient !== client) return@recover ScreenRecoveryResult.ABORTED
+                                                if (!scope.isActive || currentClient !== client) return@recover ScreenRecoveryResult.ABORTED
                                                 videoSender = replacement
                                             }
                                             if (!replacement.openDataPort() ||
-                                                wasCancelled() ||
+                                                !scope.isActive ||
                                                 // 屏幕流已 TEARDOWN/SETUP：单次 RECORD 车机也必须重发一次，
                                                 // 否则新流没有激活（艾瑞泽 8 重进后触控/按键失效）。
                                                 !client.record(force = true) ||
-                                                wasCancelled() ||
+                                                !scope.isActive ||
                                                 !replacement.start {} ||
-                                                wasCancelled()
+                                                !scope.isActive
                                             ) {
                                                 return@recover failure()
                                             }
                                             synchronized(this) {
-                                                if (wasCancelled() || currentClient !== client || videoSender !== replacement) {
+                                                if (!scope.isActive || currentClient !== client || videoSender !== replacement) {
                                                     return@recover ScreenRecoveryResult.ABORTED
                                                 }
                                                 carLifeOutput = CarLifeOutput(diagnosticAttempt, replacement)
@@ -5111,7 +5121,7 @@ object SessionController {
                                     // 该出口只关客户端、不走 disconnect：必须在这里记账。
                                     val tripped =
                                         recordAutoReconnectOutcome(diagnosticAttempt, DiagnosticCode.SETUP_FAILED, peerAddress)
-                                    if (ownsConnection() && currentClient === client) {
+                                    if (scope.isCurrent && currentClient === client) {
                                         phaseHint = t(R.string.sc_record_unconfirmed)
                                         uiHintSink?.invoke(t(R.string.sc_record_unconfirmed))
                                         retireSession()
@@ -5251,11 +5261,11 @@ object SessionController {
                     // 配对未成功建立推流（fail/异常/start 失败提前退出）时解除静默降噪，
                     // 否则 BT-C 会永久停在门闸外、连真车路径失效。
                     // 推流活跃时保持关闭，由 VideoSender.onEnded（推流终止）负责解除。
-                    if (ownsConnection() && videoSender?.isRunning != true) {
+                    if (scope.isCurrent && videoSender?.isRunning != true) {
                         ConnectionDiagnostics.timeline.abandon(
                             diagnosticAttempt,
-                            wasCancelled(),
-                            if (!airPlayConnected.get() && !wasCancelled()) DiagnosticCode.AIRPLAY_CONNECT_FAILED else null,
+                            !scope.isActive,
+                            if (!airPlayConnected.get() && scope.isActive) DiagnosticCode.AIRPLAY_CONNECT_FAILED else null,
                         )
                         // 配对/加入/异常等失败都从这里收尾，且不经过 disconnect：按实际结束码记账。
                         val abandonCode = ConnectionDiagnostics.timeline.snapshot()?.code
@@ -5271,12 +5281,12 @@ object SessionController {
                         // 窗口内到达，会被暂存但没人消费。此处补投一次——车机等 15s
                         // 无人连入就拆链，错过这一投就是整轮失败（2026-10-18 分析）。
                         val pending =
-                            if (!wasCancelled()) {
+                            if (scope.isActive) {
                                 pendingEndpointUpdate.takeIf { it.observation === endpoint.observation }
                             } else {
                                 null
                             }
-                        if (pending != null && !wasCancelled()) {
+                        if (pending != null && scope.isActive) {
                             appendLog(">>> 收尾时发现暂存的晚到 0x4301——立即按新端点重走一轮")
                             Bg.run("late-endpoint-retry") {
                                 onCarPlayEndpoint(pending, "0x4301 晚到（本轮收尾补投）")
@@ -5313,7 +5323,7 @@ object SessionController {
         ): WifiHandoffAction =
             WifiHandoffPolicy.decide(
                 source = source,
-                targetCurrent = ownsConnection(),
+                targetCurrent = scope.isCurrent,
                 liveSsidMatches = liveSsidMatches,
                 liveWifiPresent = wifiConnector?.hasExistingWifi() == true,
                 freshInvite = receiverHasInvited(endpoint.observation),
@@ -5338,7 +5348,7 @@ object SessionController {
             when (nextAction) {
                 WifiHandoffAction.JOIN_ACCESSORY ->
                     joinAccessoryWifi(endpoint.accessoryWifiOrNull()!!, { handoffCancelled() }) { success ->
-                        if (!success && !wasCancelled()) {
+                        if (!success && scope.isActive) {
                             wifiCredentialCache.clear()
                             appendLog("WIFI: 完整车机凭据入网失败——已清除凭据缓存")
                         }
@@ -5352,7 +5362,7 @@ object SessionController {
                             continueWithNetwork(true)
                             return@joinAccessoryWifi
                         }
-                        if (wasCancelled()) {
+                        if (!scope.isActive) {
                             continueWithNetwork(false)
                             return@joinAccessoryWifi
                         }
