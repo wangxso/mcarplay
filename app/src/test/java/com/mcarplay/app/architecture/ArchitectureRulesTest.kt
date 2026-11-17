@@ -51,8 +51,6 @@ class ArchitectureRulesTest {
             "carlife/CarLifeDiagnostics.kt -> com.mcarplay.app.SessionController",
             "carlife/CarLifeDiagnostics.kt -> com.mcarplay.app.service",
             "carlife/ExternalHuController.kt -> com.mcarplay.app.SessionController",
-            // 支持报告读取蓝牙诊断摘要
-            "diagnostics/SupportReport.kt -> com.mcarplay.app.SessionController",
             // btsnoop 查看页本身是 Activity，复用界面组件
             "diagnostics/btsnoop/BtSnoopActivity.kt -> com.mcarplay.app.ui",
             // 系统蓝牙广播入口负责拉起前台服务
