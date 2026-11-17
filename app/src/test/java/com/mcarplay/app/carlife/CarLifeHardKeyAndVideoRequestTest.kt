@@ -31,4 +31,26 @@ class CarLifeHardKeyAndVideoRequestTest {
     fun unknownDisplayFallsBackToProtocolDefault() {
         assertEquals(1280 to 720, CarLifeProtocol.videoRequestFor(0, 0))
     }
+
+    /**
+     * 实验（issue #62，PR #78 评审 P2）：默认长边上限会把面板尺寸先压小，
+     * 使实验连「请求正确尺寸」都做不到。放开上限后才应得到面板原尺寸。
+     */
+    @Test
+    fun videoRequestCanAskForThePanelSizeWhenTheCapIsRaised() {
+        // 2288×1728 面板：默认请求被压到长边 1920。
+        val capped = CarLifeProtocol.videoRequestFor(2288, 1728)
+        assertEquals(CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE, capped.first)
+        // 实验放开到面板长边后，请求就是面板尺寸本身（2288/1728 均为偶数）。
+        assertEquals(
+            2288 to 1728,
+            CarLifeProtocol.videoRequestFor(
+                2288,
+                1728,
+                maxOf(CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE, 2288, 1728),
+            ),
+        )
+        // 小于上限的面板不受影响。
+        assertEquals(1280 to 720, CarLifeProtocol.videoRequestFor(1280, 720, 1920))
+    }
 }

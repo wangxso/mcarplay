@@ -110,7 +110,7 @@ internal object DisplaySurfaceReport {
         val text: String get() = geometry.text
     }
 
-    /** 取整数像素字段：bplist 解析成 Long，个别接收端给 Int。 */
+    /** 取整数像素字段：bplist 解析成 Long，个别接收端给 Int。仅用于日志描述，不做有效性约束。 */
     private fun geometryOf(
         map: Map<*, *>?,
         source: String,
@@ -120,6 +120,93 @@ internal object DisplaySurfaceReport {
         val height = (map["heightPixels"] as? Number)?.toInt()
         if (width == null && height == null) return null
         return Geometry(width, height, source)
+    }
+
+    /**
+     * 取一个**可用**的像素尺寸：它会被写进 SETUP 并成为编码画布，因此必须先校验再转换。
+     *
+     * `Number.toInt()` 会静默截断超出 `Int` 范围的值（`Long.MAX_VALUE.toInt() == -1`），
+     * 也会放行 0/负数；下游 `mapCarLifeTouch` 在源尺寸非正时会返回 null（触摸全部失效），
+     * 编码器也可能拿到非法宽高。这里统一拒绝：非有限值、**非整数值**（如 `1.9` 不能被截成 `1`）、
+     * 越界、小于 2 一律返回 null，调用方保持 `displays[0]` 原值。
+     *
+     * 下限取 2：H.264 画布按 2 对齐，`1` 对齐后仍不足一个宏块，无法表示有效画布。
+     *
+     * 上限必须按**实际资源**定，不能随手给一个大数（PR #78 Codex 复审 P2）：这些尺寸来自
+     * 车机自报，畸形/故意报告会让本机替一个 16K 画布分配编码器；而「显示」缩放最高 160%，
+     * 会把请求放大到 26214×26214。上限取 [MAX_DIMENSION]（4K 级别），并另按像素总量
+     * [MAX_PIXELS] 约束，两者都拒绝时回退 `displays[0]`（已知的 2288×1728 实验远低于此）。
+     */
+    private fun validDimension(raw: Any?): Int? {
+        val value =
+            when (raw) {
+                is Int -> raw.toLong()
+                is Long -> raw
+                is Short -> raw.toLong()
+                is Byte -> raw.toLong()
+                is Double -> {
+                    if (!raw.isFinite() || raw % 1.0 != 0.0) return null
+                    raw.toLong()
+                }
+
+                is Float -> {
+                    if (!raw.isFinite() || raw % 1.0f != 0.0f) return null
+                    raw.toLong()
+                }
+
+                else -> return null
+            }
+        if (value !in MIN_DIMENSION..MAX_DIMENSION) return null
+        return value.toInt()
+    }
+
+    /**
+     * 面板几何的整体可用性（**原始尺寸**，不含「显示」缩放）。
+     *
+     * 这里只挡自报值本身的荒谬与溢出：两维在范围内，总量不超过 [MAX_PIXELS]。
+     * 缩放后的画布由 [fitWithinCanvasLimits] 在下游按**实际**缩放值收敛
+     * （PR #78 Codex 复审第二轮 P2：`DisplayPrefs` 允许 160%，`SessionController`
+     * 用 `setup.displayWidth * scalePct/100` 生成编码画布，因此最终尺寸必须在知道
+     * 缩放值的地方再校验一次；这里拒绝 3840×2160@160%=6144×3456 这类组合）。
+     */
+    private fun validGeometry(
+        width: Int?,
+        height: Int?,
+    ): Boolean {
+        if (width == null || height == null) return false
+        if (width !in MIN_DIMENSION..MAX_DIMENSION || height !in MIN_DIMENSION..MAX_DIMENSION) return false
+        return width.toLong() * height.toLong() <= MAX_PIXELS
+    }
+
+    /**
+     * 把**已应用缩放的**画布收敛到资源上限内：超限时按比例缩小（宽高都对齐到偶数）。
+     *
+     * 为什么在这里而不是在面板校验里：缩放值（30%–160%）只有主控知道，`airplay/` 层不能
+     * 读 `DisplayPrefs`。`SessionController` 算出 `streamW/streamH` 后调用本函数，实验路径
+     * 因此不会请求一个编码器无法承受的画布；被缩小时如实返回较小尺寸，让「实际发送尺寸」
+     * 判定说明实验未生效，而不是分配失败。
+     *
+     * @return 收敛后的 (width, height)；已在上限内时原样返回。
+     */
+    fun fitWithinCanvasLimits(
+        width: Int,
+        height: Int,
+    ): Pair<Int, Int> {
+        if (width <= 0 || height <= 0) return width to height
+        var scale = 1.0
+        if (width > MAX_SCALED_DIMENSION || height > MAX_SCALED_DIMENSION) {
+            scale = minOf(scale, MAX_SCALED_DIMENSION / maxOf(width, height))
+        }
+        val pixels = width.toDouble() * height
+        if (pixels > MAX_SCALED_PIXELS) {
+            scale = minOf(scale, kotlin.math.sqrt(MAX_SCALED_PIXELS / pixels))
+        }
+        if (scale >= 1.0) return width to height
+
+        fun even(value: Double) = ((value * scale).toInt() / 2) * 2
+        val fittedWidth = even(width.toDouble()).coerceAtLeast(MIN_DIMENSION)
+        val fittedHeight = even(height.toDouble()).coerceAtLeast(MIN_DIMENSION)
+        return fittedWidth to fittedHeight
     }
 
     private fun uuidOf(map: Map<*, *>?): String? =
@@ -137,4 +224,100 @@ internal object DisplaySurfaceReport {
             is Number -> raw.toString()
             else -> raw.toString().takeIf { it.isNotBlank() }
         }
+
+    /**
+     * 实验（issue #62，仅手动选「奔驰 MB_E-P / GLC（实验）」时启用）：从 `displayPanels` 里挑出
+     * 真正承载视频的表面几何，作为 SETUP 的显示屏参数。
+     *
+     * 规则（无假设之外的自由度）：
+     *  1. 只取 `initialVideoStreams` **非空**的面板——没有声明视频表面的面板不是它要画布的对象；
+     *  2. 该面板若含 `uuid`，必须与 `displays[0]` 的 uuid 相同：不同表面不能拿来当同一块屏编码
+     *     （包括面板条目自身没有 uuid、只有 `initialVideoStreams` 带 uuid 的两种写法）；
+     *  3. 取第一个命中的面板；几何缺宽/高则返回 null，由调用方保持 `displays[0]` 原值。
+     *
+     * 返回 null = 不能按面板协商，调用方必须保持原行为（不回退到兜底分辨率）。
+     */
+    fun panelVideoGeometry(
+        displayUuid: String?,
+        panels: List<*>?,
+    ): Geometry? {
+        if (displayUuid == null || panels == null) return null
+        panels.forEachIndexed { index, entry ->
+            val panel = entry as? Map<*, *> ?: return@forEachIndexed
+            val streams = (panel["initialVideoStreams"] as? List<*>).orEmpty()
+            if (streams.isEmpty()) return@forEachIndexed
+            val streamUuids = streams.map { uuidOf(it as? Map<*, *>) }.filterNotNull()
+            val panelUuid = uuidOf(panel)
+            val sameSurface =
+                when {
+                    streamUuids.isNotEmpty() -> streamUuids.all { it == displayUuid }
+                    panelUuid != null -> panelUuid == displayUuid
+                    else -> false
+                }
+            if (!sameSurface) return@forEachIndexed
+            val width = validDimension(panel["widthPixels"]) ?: return@forEachIndexed
+            val height = validDimension(panel["heightPixels"]) ?: return@forEachIndexed
+            if (!validGeometry(width, height)) return@forEachIndexed
+            return Geometry(width, height, "displayPanels[$index]")
+        }
+        return null
+    }
+
+    /** 实验是否真的改变了实际输出尺寸（而非只改了请求）。 */
+    enum class PanelExperimentOutcome {
+        /** 没有面板目标（实验未启用或没有可用面板几何）——无从谈起。 */
+        NOT_REQUESTED,
+
+        /** 实际输出与目标面板几何一致（按 H.264 偶数对齐后比较）。 */
+        EFFECTIVE,
+
+        /** 实际输出被 CarWith 的返回尺寸覆盖，与目标不同——实验未生效。 */
+        CARWITH_DIFFERENT,
+    }
+
+    /**
+     * 判定实验是否真的对**实际发出的视频尺寸**生效。
+     *
+     * 背景（PR #78 评审 P2）：把面板几何写进 `SetupInfo` 只是改了「请求」，CarWith 可能不采纳
+     * （`CarLifeProtocol.videoRequestFor` 自己也会把长边压到上限），透传路径还会用 CarWith 实际
+     * SPS 尺寸覆盖画布。因此不能用「日志说按面板协商」当作实验生效的证据，必须在拿到实际尺寸后比较。
+     *
+     * 比较前按 2 对齐，与 `VideoSender`/`videoRequestFor` 的偶数处理一致。
+     */
+    fun panelExperimentOutcome(
+        targetWidth: Int?,
+        targetHeight: Int?,
+        actualWidth: Int,
+        actualHeight: Int,
+    ): PanelExperimentOutcome {
+        if (targetWidth == null || targetHeight == null) return PanelExperimentOutcome.NOT_REQUESTED
+        if (actualWidth <= 0 || actualHeight <= 0) return PanelExperimentOutcome.CARWITH_DIFFERENT
+        val matched = even(targetWidth) == even(actualWidth) && even(targetHeight) == even(actualHeight)
+        return if (matched) PanelExperimentOutcome.EFFECTIVE else PanelExperimentOutcome.CARWITH_DIFFERENT
+    }
+
+    private fun even(value: Int): Int = (value / 2) * 2
+
+    /** 单边像素下限 2：H.264 画布按 2 对齐，1 对齐后仍不足一个宏块。 */
+    private const val MIN_DIMENSION = 2
+
+    /** 单边像素上限：4K 级别，远高于任何车机面板；挡住溢出/哨兵值与畸形 16K 报告。 */
+    private const val MAX_DIMENSION = 4_096
+
+    /** 原始面板像素总量上限（约 4K，4096×2160 以内）。 */
+    private const val MAX_PIXELS = 8_847_360L
+
+    /**
+     * 缩放后单边上限。`SessionController` 的画布是 `setup.displayWidth * scalePct/100`，
+     * 缩放最高 160%，因此 3840 面板可达 6144。
+     */
+    private const val MAX_SCALED_DIMENSION = 6_144.0
+
+    /**
+     * 缩放后像素总量上限（约 3840×2160 = 8.29 MP，4K 编码画布的常见上限）。
+     *
+     * 实验本身 2288×1728@160% = 3661×2765 ≈ 10.1 MP，超过本预算，因此会被
+     * [fitWithinCanvasLimits] 按比例收敛（≈ 0.9×），并让「实际发送尺寸」判定如实说明实验未生效。
+     */
+    private const val MAX_SCALED_PIXELS = 8_294_400.0
 }

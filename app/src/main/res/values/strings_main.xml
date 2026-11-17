@@ -88,4 +88,5 @@
     <string name="vehicle_preset_diplay">DiPlay 接收端（比亚迪等）</string>
     <string name="vehicle_preset_classic_mib3">奥迪经典 MIB3</string>
     <string name="vehicle_preset_mercedes_mb_dpp">奔驰 MB_D-PP（AirPlay 320.17.7）</string>
+    <string name="vehicle_preset_mercedes_mb_e">奔驰 MB_E-P / GLC（实验：按面板几何，未验证）</string>
 </resources>

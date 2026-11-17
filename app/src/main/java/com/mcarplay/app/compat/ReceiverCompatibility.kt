@@ -72,6 +72,18 @@ object ReceiverCompatibility {
          * 用户看到黑屏（ID7 黑屏诊断：15 次断流前各有一次邀请）。其余车机推流中的邀请只记日志。
          */
         val reconnectOnStreamingInvite: Boolean = false,
+        /**
+         * 实验：显示屏几何改取 `/info displayPanels[].initialVideoStreams` 指向的表面，而不是 `displays[0]`。
+         *
+         * issue #62（车主称 2025 款奔驰 GLC，iAP2 `/info` 自报 `Mercedes-Benz / MB_E-P-4`、AirPlay 480.7.4）
+         * 链路全通、推流 109 s，但车机不显示画面：`/info` 里 `displays[0]` 为 1278 高、`displayPanels[0]`
+         * 为 1728 高且其 `initialVideoStreams` 指向同一 UUID。**该根因未定谳**，文档明确要求先有实车对照
+         * 才能改协商（docs/CARWITH-ENTRY-FINDINGS.md「issue #62」一节）。因此本开关：
+         *  - 默认关，**只在手动选车型时**打开，不从车机自报身份自动启用；
+         *  - 只影响 SETUP 的显示几何（编码尺寸与触摸映射随之变化），不改 `modesChanged` / MIB3 订阅；
+         *  - 无面板几何时保持 `displays[0]` 原值，不会退化成兜底分辨率。
+         */
+        val usePanelVideoGeometry: Boolean = false,
     )
 
     data class PairingFallback(
@@ -114,6 +126,7 @@ object ReceiverCompatibility {
                     pinnedMfiChallengeLength = null,
                     singleRecordPerSession = false,
                     reconnectOnStreamingInvite = false,
+                    usePanelVideoGeometry = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -153,6 +166,19 @@ object ReceiverCompatibility {
                     )
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-dpp-blocked")
+                }
+            // 奔驰 MB_E-P / 2025 GLC（issue #62）：**实验选项，根因未定谳**。
+            // 只打开「按 displayPanels 的视频表面协商」这一条假设；其余行为与自动判定完全一致，
+            // 不附带 MB_D-PP 的单次 RECORD（那是另一代际、另一份报告的证据）。
+            // 已知是别家车机时拒绝套用，避免把实验开关带到其它接收端上。
+            VehiclePreset.MERCEDES_MB_E ->
+                if (manualMercedesAllowed(signals)) {
+                    policy.copy(
+                        usePanelVideoGeometry = true,
+                        rules = policy.rules + "manual.mercedes-mb-e.panel-geometry-experiment",
+                    )
+                } else {
+                    policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")
                 }
         }
 

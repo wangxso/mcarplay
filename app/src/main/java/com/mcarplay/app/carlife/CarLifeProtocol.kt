@@ -86,6 +86,9 @@ object CarLifeProtocol {
     const val DEFAULT_HEIGHT = 720
     const val DEFAULT_FPS = 30
 
+    /** `videoRequestFor` 默认的长边上限（请求尺寸，不是实际输出尺寸）。 */
+    const val VIDEO_REQUEST_MAX_LONG_SIDE = 1920
+
     private const val COMMAND_HEADER_SIZE = 8
     private const val VIDEO_HEADER_SIZE = 12
     private const val MAX_COMMAND_BODY = 65_535
@@ -270,7 +273,7 @@ object CarLifeProtocol {
     fun videoRequestFor(
         displayWidth: Int,
         displayHeight: Int,
-        maxLongSide: Int = 1920,
+        maxLongSide: Int = VIDEO_REQUEST_MAX_LONG_SIDE,
     ): Pair<Int, Int> {
         if (displayWidth <= 0 || displayHeight <= 0) return DEFAULT_WIDTH to DEFAULT_HEIGHT
         val scale = minOf(1.0, maxLongSide.toDouble() / maxOf(displayWidth, displayHeight))

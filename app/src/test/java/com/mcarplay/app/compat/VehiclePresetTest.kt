@@ -90,6 +90,41 @@ class VehiclePresetTest {
         assertFalse(resolve(mercedes, VehiclePreset.GENERIC).singleRecordPerSession)
     }
 
+    /**
+     * issue #62（`MB_E-P-4 / 480.7.4`，车主称 2025 GLC）实验选项：只打开「按 displayPanels
+     * 协商显示几何」这一条未定谳假设，且**只在手动选择时**生效。
+     */
+    @Test
+    fun mercedesMbEPresetOnlyTogglesPanelGeometryExperiment() {
+        val unknownPolicy = resolve(unknown, VehiclePreset.MERCEDES_MB_E)
+        assertTrue(unknownPolicy.usePanelVideoGeometry)
+        assertTrue("manual.mercedes-mb-e.panel-geometry-experiment" in unknownPolicy.rules)
+        // 不得顺手带上 MB_D-PP 的单次 RECORD：那是另一代际、另一份报告的证据。
+        assertFalse(unknownPolicy.singleRecordPerSession)
+        assertFalse(unknownPolicy.releaseBluetoothAfterSetup)
+        assertFalse(unknownPolicy.skipIapTunnel)
+        assertNull(unknownPolicy.pinnedMfiChallengeLength)
+        // 已知是奔驰（型号/固件不同）也放行——手动预设正是给自动判定认不出的车机用的。
+        val mbep = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4", srcvers = "480.7.4")
+        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).usePanelVideoGeometry)
+    }
+
+    @Test
+    fun mercedesMbEPresetRefusesOtherManufacturersAndNeverAutoEnables() {
+        // 自动判定永远不开实验开关：没有可靠的正向证据能触发它。
+        val mbep = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4", srcvers = "480.7.4")
+        assertFalse(resolve(mbep, VehiclePreset.AUTO).usePanelVideoGeometry)
+        assertFalse(resolve(unknown, VehiclePreset.AUTO).usePanelVideoGeometry)
+        // 已知是别家车机：守卫拒绝，只记录 blocked。
+        listOf(chery, ReceiverProfile.Signals(manufacturer = "Volkswagen", model = "VW4131")).forEach { other ->
+            val policy = resolve(other, VehiclePreset.MERCEDES_MB_E)
+            assertFalse("${other.manufacturer} 不应套用奔驰实验开关", policy.usePanelVideoGeometry)
+            assertTrue("manual.mercedes-mb-e-blocked" in policy.rules)
+        }
+        // 通用预设关闭实验开关。
+        assertFalse(resolve(unknown, VehiclePreset.GENERIC).usePanelVideoGeometry)
+    }
+
     @Test
     fun parseFallsBackToAuto() {
         assertEquals(VehiclePreset.AUTO, VehiclePreset.parse(null))
@@ -97,6 +132,8 @@ class VehiclePresetTest {
         assertEquals(VehiclePreset.CHERY, VehiclePreset.parse("CHERY"))
         // 旧版本写入的已知值继续可解析；未知/缺失回退 AUTO，不会误开新预设。
         assertEquals(VehiclePreset.MERCEDES_MB_DPP, VehiclePreset.parse("MERCEDES_MB_DPP"))
+        // 实验选项同样按名字可解析（设置里写过它的旧版本必须继续生效）。
+        assertEquals(VehiclePreset.MERCEDES_MB_E, VehiclePreset.parse("MERCEDES_MB_E"))
         assertEquals(VehiclePreset.AUTO, VehiclePreset.parse("MERCEDES_BENZ"))
     }
 }
