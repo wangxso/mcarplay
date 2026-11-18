@@ -1799,11 +1799,16 @@ object SessionController {
         secret: ByteArray?,
         host: String?,
         logLine: String,
+        recordAfterSetup: Boolean = true,
     ): Boolean {
         val started = startAudioChannel(context, client, secret, host)
         if (started) {
-            appendLog(logLine)
-            client.record()
+            if (recordAfterSetup) {
+                appendLog(logLine)
+                client.record()
+            } else {
+                appendLog("AUDIO: 初始音频流已加入——沿用已激活会话的 RECORD")
+            }
         }
         return started
     }
@@ -2849,14 +2854,13 @@ object SessionController {
      * 等车机 ctrl 邀请（`GET /ctrl-int/1/connect`）——catplay 的连接触发点。
      *
      * 邀请意味着「车机已在 WiFi 上发现我们，且已把 AirPlay 端口打开」，此时连
-     * AirPlay 才不会被 Connection refused。旧实现用固定 sleep 1.6s 赌邀请已到：
-     * 车机快时白等，慢时又不够。这里事件驱动，并且若 mDNS 已发现 `_airplay._tcp`
-     * （端口确定可连）也立即放行，避免旧机型不发邀请时白等满窗口。
+     * AirPlay 才不会被 Connection refused。无邀请时可在发现 `_airplay._tcp` 后走直连；
+     * 通用路径会先给公告及重公告留出宽限期。
      *
      * @return true = 收到邀请 / 已发现端点；false = 等待窗口耗尽
      */
     private fun awaitCtrlInvite(
-        ssid: String,
+        endpoint: Iap2SenderSession.CarPlayEndpoint,
         timeoutMillis: Long,
     ): Boolean {
         val advertiser = ctrlAdvertiser
@@ -2868,14 +2872,25 @@ object SessionController {
             if (connectCancelled) return false
             val invites = advertiser?.inviteCount ?: 0
             val now = android.os.SystemClock.uptimeMillis()
+            val discovered = endpointBrowser?.awaitEndpoint(0)
+            val preferResolvedMdns =
+                discovered != null &&
+                    ReceiverCompatibility.prefersOra03DirectDiscovery(
+                        endpoint.receiverSignals,
+                        txtValue(discovered, "model"),
+                        txtValue(discovered, "fv"),
+                        txtValue(discovered, "srcvers"),
+                        VehiclePresetRuntime.current,
+                    )
             when (
                 CtrlInviteGate.decide(
                     nowMillis = now,
                     waitStartedAtMillis = startedAt,
                     lastInviteAtMillis = advertiser?.lastInviteAtMillis ?: 0L,
-                    mdnsEndpointFound = endpointBrowser?.awaitEndpoint(0) != null,
+                    mdnsEndpointFound = discovered != null,
                     advertisedAtMillis = advertiser?.advertisedAtMillis ?: 0L,
                     reannouncedAtMillis = reannouncedAt,
+                    preferResolvedMdns = preferResolvedMdns,
                 )
             ) {
                 CtrlInviteGate.Decision.INVITED -> {
@@ -2891,6 +2906,11 @@ object SessionController {
                     return true
                 }
 
+                CtrlInviteGate.Decision.MDNS_DIRECT -> {
+                    appendLog("CTRL: ORA 03 N220346.2 已解析且等待邀请超时（${now - startedAt}ms）——直接连接 AirPlay")
+                    return true
+                }
+
                 // catplay 实测：iPhone 的 Bonjour 公告常被车机丢弃——它在每次邀请前都
                 // force_announce。这里补发一次；广播已可见时要等满宽限期，否则会把车机正要响应的那次公告注销掉。
                 CtrlInviteGate.Decision.REANNOUNCE -> {
@@ -2901,7 +2921,7 @@ object SessionController {
                             (if (advertisedAt > 0L) "广播可见 ${now - advertisedAt}ms 仍无邀请" else "${now - startedAt}ms 未确认广播可见") +
                             "——强制重新公告一次（catplay 同款 force_announce）",
                     )
-                    ctrlAdvertiser?.ensureForNetwork(ssid, force = true, network = wifiConnector?.currentNetwork)
+                    ctrlAdvertiser?.ensureForNetwork(endpoint.ssid, force = true, network = wifiConnector?.currentNetwork)
                 }
 
                 CtrlInviteGate.Decision.WAIT -> Unit
@@ -4346,7 +4366,7 @@ object SessionController {
                         // 等 ctrl 邀请（catplay CarPlayCtrlServer：邀请=车机已发现手机且
                         // AirPlay 窗口已开，收到即刻连接）。此前是「固定睡 1.6s 赌它已到」，
                         // 快的时候白等、慢的时候不够；改为事件驱动。
-                        awaitCtrlInvite(endpoint.ssid, CTRL_INVITE_WAIT_MS)
+                        awaitCtrlInvite(endpoint, CTRL_INVITE_WAIT_MS)
                     }
                     // 端点解析放在邀请之后：车机的 `_airplay._tcp` 常在受邀后才上线，
                     // 且这一步最长 3s——必须在后台线程做，不能占住网络回调线程。
@@ -5229,6 +5249,7 @@ object SessionController {
                                         host,
                                         // 奥迪曾需流后补发；受影响车机由客户端策略跳过重复 RECORD。
                                         "AUDIO: 音频流已加入——检查会话激活",
+                                        recordAfterSetup = !client.receiverCompatibility().skipRecordAfterInitialAudioSetup,
                                     )
                                 // 主音频被车机约束占用时的“未启动”不是音频故障：不写结论码，
                                 // 否则它会长期盖住后续真正需要的诊断（如屏幕暂停）。
