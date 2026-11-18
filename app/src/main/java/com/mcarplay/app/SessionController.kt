@@ -1183,6 +1183,7 @@ object SessionController {
     private fun newFormalCarLifeSession(
         context: Context,
         requestedVideoSize: Pair<Int, Int>? = null,
+        preferVehicleResolution: Boolean = false,
     ): CarLifeSession {
         lateinit var session: CarLifeSession
         session =
@@ -1242,6 +1243,7 @@ object SessionController {
                 },
                 log = { line -> appendLog(line) },
                 requestedVideoSize = requestedVideoSize,
+                preferVehicleResolution = preferVehicleResolution,
                 launchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
                 onReturnToCar = onReturnToCar@{
                     if (currentCarLifeSession !== session) return@onReturnToCar
@@ -5152,6 +5154,12 @@ object SessionController {
                                             setup.displayHeight,
                                             requestMaxLongSide,
                                         )
+                                    val compatibility = client.receiverCompatibility()
+                                    val preferVehicleResolution =
+                                        compatibility.preferVehicleResolution &&
+                                            setup.displayFromInfo &&
+                                            setup.displayWidth >= 2 &&
+                                            setup.displayHeight >= 2
                                     if (setup.experimentalPanelGeometry != null) {
                                         appendLog(
                                             "DISPLAY: 实验面板几何 ${experimentalPanelWidth}x$experimentalPanelHeight" +
@@ -5159,10 +5167,21 @@ object SessionController {
                                                 "（长边上限 $requestMaxLongSide）",
                                         )
                                     }
+                                    if (preferVehicleResolution) {
+                                        appendLog(
+                                            "CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1，请求 CarWith 按车机显示尺寸 " +
+                                                "${requestedVideo.first}x${requestedVideo.second} 编码",
+                                        )
+                                    } else if (compatibility.preferVehicleResolution) {
+                                        appendLog(
+                                            "CARLIFE: 未取得有效 /info 显示几何，暂不声明 DISABLE_RESOLUTION_OPTION",
+                                        )
+                                    }
                                     val createdCarLife =
                                         newFormalCarLifeSession(
                                             context,
                                             requestedVideo,
+                                            preferVehicleResolution = preferVehicleResolution,
                                         )
                                     carLife = createdCarLife
                                     val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)

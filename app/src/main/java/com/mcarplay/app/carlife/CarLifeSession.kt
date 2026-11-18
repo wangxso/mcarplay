@@ -30,6 +30,8 @@ class CarLifeSession(
     private val launchStrategy: CarLifeLaunchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
     /** 向 CarWith 请求的编码尺寸；null 时沿用协议默认值。CarWith 可能不采纳。 */
     private val requestedVideoSize: Pair<Int, Int>? = null,
+    /** 在功能协商里请求 CarWith 采用车机显示尺寸（DISABLE_RESOLUTION_OPTION=1）。 */
+    private val preferVehicleResolution: Boolean = false,
     private val isAppInForeground: () -> Boolean = CarLifeLauncher::isAppInForeground,
     private val connectorFactory: (String, (Int) -> Socket) -> CarLifeChannelConnector =
         { _, connect ->
@@ -51,6 +53,7 @@ class CarLifeSession(
         CarLifeStateMachine(
             CarLifeAuthVerifier.xiaomi(),
             CarLifeSeedExchange(),
+            preferVehicleResolution = preferVehicleResolution && requestedVideoSize != null,
         )
     private val commandRouter = CarLifeCommandRouter(stateMachine)
     private val videoParser = CarLifeVideoParser()
@@ -531,6 +534,13 @@ class CarLifeSession(
                 }
             }
             log("CARLIFE: TX 0x${action.kind.toString(16)} ${action.payload.size}B")
+            if (action.kind == CarLifeProtocol.HU_FEATURE_RESPONSE) {
+                val features = CarLifeProtocol.parseFeatures(action.payload)
+                log(
+                    "CARLIFE: 功能协商 " +
+                        features.entries.joinToString(" ") { (key, value) -> "$key=$value" },
+                )
+            }
         } catch (error: Exception) {
             DiagnosticExportPolicy.exception("CARLIFE_SEND_COMMAND", error)
             fail("CarLife 命令发送失败：${error.message}")

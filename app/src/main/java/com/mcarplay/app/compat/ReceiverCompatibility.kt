@@ -84,6 +84,14 @@ object ReceiverCompatibility {
          *  - 无面板几何时保持 `displays[0]` 原值，不会退化成兜底分辨率。
          */
         val usePanelVideoGeometry: Boolean = false,
+        /**
+         * 在 CarWith 的 `0x18052` 功能清单里声明 `DISABLE_RESOLUTION_OPTION=1`，让随后 `0x18007`
+         * 的宽高按车机 `/info` 显示几何生效，而不是被 CarWith 映射回自己的分辨率档位。
+         *
+         * WinPlay 台架默认启用（用于验证实际 CarWith 返回尺寸）；奔驰 MB_E-P 手动预设也启用。
+         * 其它接收端保持关闭，避免一次改动同时影响所有车型。
+         */
+        val preferVehicleResolution: Boolean = false,
     )
 
     data class PairingFallback(
@@ -127,6 +135,7 @@ object ReceiverCompatibility {
                     singleRecordPerSession = false,
                     reconnectOnStreamingInvite = false,
                     usePanelVideoGeometry = false,
+                    preferVehicleResolution = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -146,6 +155,7 @@ object ReceiverCompatibility {
                     family = Family.WINPLAY,
                     bluetoothRole = BluetoothRole.NETWORK_HANDOFF,
                     requiresRealBluetoothIdentity = true,
+                    preferVehicleResolution = true,
                     rules = policy.rules + "manual.winplay",
                 )
             VehiclePreset.DIPLAY ->
@@ -167,15 +177,18 @@ object ReceiverCompatibility {
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-dpp-blocked")
                 }
-            // 奔驰 MB_E-P / 2025 GLC（issue #62）：**实验选项，根因未定谳**。
-            // 只打开「按 displayPanels 的视频表面协商」这一条假设；其余行为与自动判定完全一致，
+            // 奔驰 MB_E-P / 2025 GLC（issue #62）：先验证「CarWith 是否按车机尺寸出流」。
+            // HyperCar 日志已给出同车机的 A/B：请求 1624x1278 时，未声明 DISABLE_RESOLUTION_OPTION
+            // 会被 CarWith 回成 1280x720，声明后才返回 1624x1278。因此当前预设不再使用 1728 面板，
+            // 保持 displays[0] 的 1624x1278，并只打开功能协商这一条改动。
             // 不附带 MB_D-PP 的单次 RECORD（那是另一代际、另一份报告的证据）。
             // 已知是别家车机时拒绝套用，避免把实验开关带到其它接收端上。
             VehiclePreset.MERCEDES_MB_E ->
                 if (manualMercedesAllowed(signals)) {
                     policy.copy(
-                        usePanelVideoGeometry = true,
-                        rules = policy.rules + "manual.mercedes-mb-e.panel-geometry-experiment",
+                        usePanelVideoGeometry = false,
+                        preferVehicleResolution = true,
+                        rules = policy.rules + "manual.mercedes-mb-e.vehicle-resolution",
                     )
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")
@@ -252,6 +265,7 @@ object ReceiverCompatibility {
                 if (cherySingleRecord) add("chery.tiggo.320.17.7.single-record")
                 if (mercedesSingleRecord) add("mercedes.mb_d-pp.320.17.7.single-record")
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
+                if (winPlay) add("winplay.vehicle-resolution")
             }
         return Policy(
             family = family,
@@ -271,6 +285,7 @@ object ReceiverCompatibility {
             singleRecordPerSession = cherySingleRecord || mercedesSingleRecord,
             arrizo8ConnectWindowHint = cherySingleRecord,
             reconnectOnStreamingInvite = vwStreamingInvite,
+            preferVehicleResolution = winPlay,
         )
     }
 
@@ -313,7 +328,8 @@ object ReceiverCompatibility {
     /** 只输出固定策略标签，不写入 SSID、MAC、序列号或原始身份文本。 */
     fun describe(policy: Policy): String =
         "COMPAT: family=${policy.family} pairing=${policy.pairingMode} bluetooth=${policy.bluetoothRole} " +
-            "link=${policy.linkGeneration} btRetireRetry=${policy.allowBluetoothRetireRetry} rules=${policy.rules.joinToString(",") }"
+            "link=${policy.linkGeneration} btRetireRetry=${policy.allowBluetoothRetireRetry} " +
+            "vehicleResolution=${policy.preferVehicleResolution} rules=${policy.rules.joinToString(",") }"
 
     private fun memoryKey(
         signals: ReceiverProfile.Signals,

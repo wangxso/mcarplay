@@ -41,8 +41,10 @@ class ReceiverCompatibilityTest {
         assertEquals(ReceiverCompatibility.Family.WINPLAY, windows.family)
         assertEquals(ReceiverCompatibility.BluetoothRole.NETWORK_HANDOFF, windows.bluetoothRole)
         assertTrue(windows.requiresRealBluetoothIdentity)
+        assertTrue(windows.preferVehicleResolution)
         assertFalse(windows.allowBluetoothRetireRetry)
         assertTrue(windows.rules.contains("winplay.1.2.4.network-handoff"))
+        assertTrue(windows.rules.contains("winplay.vehicle-resolution"))
         val windows125 = ReceiverCompatibility.resolve(winPlay.copy(firmwareVersion = "1.2.5"))
         assertEquals(ReceiverCompatibility.BluetoothRole.NETWORK_HANDOFF, windows125.bluetoothRole)
         assertTrue(windows125.requiresRealBluetoothIdentity)
@@ -64,6 +66,7 @@ class ReceiverCompatibilityTest {
         val nextWindows = ReceiverCompatibility.resolve(winPlay.copy(firmwareVersion = "1.3.0"))
         assertEquals(ReceiverCompatibility.BluetoothRole.KEEP_DURING_BRINGUP, nextWindows.bluetoothRole)
         assertTrue(nextWindows.rules.contains("winplay.unverified-firmware"))
+        assertTrue("WinPlay 身份仍明确，尺寸协商不依赖固件号", nextWindows.preferVehicleResolution)
     }
 
     @Test

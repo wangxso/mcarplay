@@ -27,12 +27,12 @@ Experimental. Source-side CarWith streaming has been tested across HyperOS OS1-O
 ARM64 AVDs as of November 4, 2026. Xiaomi-to-DiPlay and Xiaomi-to-WinPlay 1.2.5 test
 setups and one validated manual Xiaomi-to-Chery wireless path also have device or bench
 evidence as of October 31, 2026.
-The current formal release is `v0.1.6`. The test preview `v0.1.7-test.2` adds
-video-pipeline hardening (encoder-capability logging, transcoder keys, an 8-frame
-passthrough backlog, a bounded output-stall watchdog), iAP2 and connection fixes,
-issue #62 diagnostics and an **experimental, unverified Mercedes MB_E-P / GLC
-panel-geometry preset** on top of `v0.1.7-test.1`; it has not been tried on a vehicle,
-so it does not change the validated vehicle scope, which remains the manual Chery path.
+The current formal release is `v0.1.6`. The test preview `v0.1.7-test.3` is a targeted
+issue #62 trial on top of `v0.1.7-test.2`: WinPlay and the **experimental, unverified
+Mercedes MB_E-P / GLC preset** ask CarWith to encode at the vehicle display size with
+`DISABLE_RESOLUTION_OPTION=1`, and that preset keeps `displays[0]` (1624 x 1278) instead
+of the 1728-high panel. It has not been tried on a vehicle, so it does not change the
+validated vehicle scope, which remains the manual Chery path.
 
 | Capability | Validation |
 | --- | --- |
