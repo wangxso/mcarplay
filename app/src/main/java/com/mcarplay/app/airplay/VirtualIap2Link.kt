@@ -815,6 +815,11 @@ class VirtualIap2Link(
             WIRELESS_SESSION_ID,
             Iap2Csm.param(0, sessionId.toByteArray(Charsets.UTF_8)),
         )
+        // 认证后的 AirPlay 端点会再请求一次配件 Wi-Fi 配置。HyperCar 0.1.0.588 在
+        // 同一台 MB_E-P-4（480.7.4）上固定发这条空 0x5702，随后收到 0x4301、0x5000
+        // 与 StartHID；我们此前跳过它，车机在突发后 43s 内没有任何订阅。0x5703 只作
+        // 链路 ACK，不触发重新入网。仅 MIB3/事件链路走这里，不影响蓝牙或 DiPlay。
+        sendCsmLocked(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
         sendCsmLocked(AUX_STATUS_NOTIFICATION, Iap2Csm.param(0x0006, ByteArray(0)))
         sendCsmLocked(
             DEVICE_LANGUAGE,

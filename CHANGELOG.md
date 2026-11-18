@@ -3,6 +3,26 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.7-test.4] - 2026-11-18
+
+> Experimental prerelease on top of `v0.1.7-test.3`: a combined Mercedes MB_E-P / GLC tunnel-authentication trial. The manual preset now sends a 32-byte tunnel MFi challenge first, and the MIB3/event-link burst adds an empty `0x5702` after `0x4e0c`, matching the sequence observed in HyperCar 0.1.0.588 on the same head unit. This is a two-change experiment, so a pass or failure cannot be attributed to either change alone. It has not been tried on a vehicle, issue #62 remains open, and this does not establish vehicle compatibility.
+
+### English
+- **Mercedes MB_E-P / GLC tunnel MFi (issue #62):** the manual preset now pins the Wi-Fi/event-link MFi challenge to 32 bytes, sends it once and waits 40 s. The `v0.1.7-test.3` vehicle report showed a 20-byte challenge being silently ignored for 6000 ms before a 32-byte challenge succeeded in 438 ms; HyperCar 0.1.0.588 sends 32 bytes first and authenticates in about 0.5 s on the same `MB_E-P-4 / 480.7.4`. Bluetooth and DiPlay keep their existing challenge policy.
+- **Post-authentication `0x5702`:** the MIB3/event-link burst now sends an empty `0x5702` after `0x4e0c`. HyperCar 0.1.0.588 sends this in its authenticated `greetings()` sequence before the head unit emits `0x4301`, `0x5000` and `StartHID`. mcarplay previously skipped it; the test.3 report showed no `StartHID` and no subscription round-trip for 43 s after the burst. `0x5703` remains link-ACK only and does not trigger a new Wi-Fi join.
+- **Evidence:** on the same vehicle, test.3 already produced `VIDEO_INIT_DONE 1624x1278@30` and 542 sent frames with 5 IDRs and zero queue drops, so the CarWith size and video-send paths are excluded. The remaining failure is in tunnel activation: 20B was ignored for 6 s, then 32B authenticated, but no `0x6800`/`0x5000`/`0x4157`/`0x4154`/`0x4170` arrived. WinPlay 1.2.4 with test.3 passed video, touch and audio.
+- **Limits:** test.4 changes two variables in one build, so it cannot isolate 32B from `0x5702`. If the vehicle still has no picture, the next build will change only one variable. Issue #51, #26, #55, #62 and #66 remain open.
+- **Validation:** 1250 standard JVM tests and 25 remote bridge tests, 87 Python tool tests and 20 Node debug-bridge tests passed; `spotlessCheck`, `lintStandardDebug`, `lintStandardRelease` and `assembleStandardDebug` passed locally. The signed tag workflow additionally builds `assembleStandardRelease`.
+
+### 简体中文
+- **奔驰 MB_E-P / GLC 隧道 MFi（issue #62）：** 手动预设现在把 Wi-Fi/事件链路的 MFi 挑战固定为 32B，只发一次并等待 40 s。`v0.1.7-test.3` 实车报告显示，20B 挑战被车机静默 6000 ms，之后 32B 才在 438 ms 内成功；HyperCar 0.1.0.588 在同一台 `MB_E-P-4 / 480.7.4` 上直接发 32B，约 0.5 s 完成认证。蓝牙与 DiPlay 的挑战策略不变。
+- **认证后 `0x5702`：** MIB3/事件链路突发现在在 `0x4e0c` 后补发一条空 `0x5702`。HyperCar 0.1.0.588 在认证后的 `greetings()` 中固定发送这条，随后车机才发 `0x4301`、`0x5000` 与 `StartHID`。mcarplay 此前跳过它；test.3 报告里突发后 43 s 没有任何 `StartHID` 或订阅往返。`0x5703` 仍只作链路 ACK，不会触发重新入网。
+- **证据：** 同一台车的 test.3 已做到 `VIDEO_INIT_DONE 1624x1278@30`、542 帧、5 个 IDR、队满丢帧 0，因此 CarWith 尺寸和视频发送链路已排除。剩余卡点在隧道激活：20B 空等 6 s，32B 认证成功，但车机没有发 `0x6800`/`0x5000`/`0x4157`/`0x4154`/`0x4170`。WinPlay 1.2.4 的 test.3 台架画面、触控、声音均正常。
+- **限制：** test.4 在一个包里改了两个变量，无法把结果单独归因到 32B 或 `0x5702`。若实车仍无画面，下一版只改一个变量。issue #51、#26、#55、#62、#66 仍开放。
+- **验证：** standard JVM 测试 1250 个、remote bridge 测试 25 个、Python 工具测试 87 个、Node debug-bridge 测试 20 个，均通过；`spotlessCheck`、`lintStandardDebug`、`lintStandardRelease`、`assembleStandardDebug` 在本地通过。签名 tag 工作流还会构建 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.7-test.3...v0.1.7-test.4](https://github.com/wangxso/mcarplay/compare/v0.1.7-test.3...v0.1.7-test.4)
+
 ## [v0.1.7-test.3] - 2026-11-18
 
 > Experimental prerelease on top of `v0.1.7-test.2`: a targeted, single-variable issue #62 trial. WinPlay and the manual Mercedes MB_E-P / GLC preset now ask CarWith to encode at the vehicle display size with `DISABLE_RESOLUTION_OPTION=1`, and that preset keeps the `displays[0]` geometry (1624 x 1278) instead of the 1728-high `displayPanels` surface. No mcarplay result on the vehicle is included, issue #62 remains open, and this does not establish vehicle compatibility.

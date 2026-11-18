@@ -88,27 +88,57 @@
   若担心影响其他接收端，先只在手动 `MERCEDES_MB_E` 预设下启用。不要在同一轮改关键帧风暴转码、HEVC 偏好、
   1728 面板或 modesChanged/iAP2 时序；若 CarWith 真回 1624×1278，转码层根本不需要被触发。
   2560 与 mcarplay 当前 1920 长边上限的差异对本例无影响（1624 小于两者），可等本条验证后再单独评估。
-- **实现状态（2026-11-18，`v0.1.7-test.3` 预发布）：** 两个 P0 已按单变量落地：
+- **实现状态（2026-11-18，已发布 `v0.1.7-test.3`）：** 两个 P0 已按单变量落地：
   ① `ReceiverCompatibility.Policy.preferVehicleResolution` 控制 `0x18052` 是否加入
   `DISABLE_RESOLUTION_OPTION=1`；WinPlay 自动策略启用（台架验证），手动 `MERCEDES_MB_E` 启用，其他接收端保持关闭；
   ② `MERCEDES_MB_E` 预设不再取 `displayPanels` 的 1728 面板，保持 `displays[0]` 的 1624×1278，只打开功能协商。
   只有本轮 `/info` 真的带 `displays[0]` 时才发送该 feature（`displayFromInfo`）；兜底 1080×2320 不会触发。
   新增日志 `COMPAT: ... vehicleResolution=`、`CARLIFE: 功能协商 ...` 和
   `CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1`，下一份报告可直接确认它是否真的发出。
-  WinPlay 1.2.4 的同日诊断只证明接收端按 1624×1278 收到 VideoConfig 和首帧（约 40 s 内 709 帧、5.4 MB，
-  `droppedFrames=0`），**不证明 CarWith 端也返回了 1624×1278**；仍需看手机日志里的 `0x10008`。
+  **WinPlay 1.2.4 台架已完成 A/B 闭环：** 14:48:48 轮 `0x18052` 为 26B，请求 1624×1278，但 CarWith 返回
+  `1280×720@30`；15:33:25 轮 `0x18052` 为 57B，功能协商含 `DISABLE_RESOLUTION_OPTION=1`，同样请求
+  1624×1278，CarWith 返回 **`1624×1278@30`**，随后 `VIDEO: ✓ CarWith VideoConfig ... avcC=34B 1624×1278`。
+  WinPlay 侧记录 `requestedWidth=1624 requestedHeight=1278 configBytes=34`，首帧 16147B；手机侧本轮发送 173 帧 /
+  3.8MB / 5 个 IDR，WinPlay 收到 160 帧且 `droppedFrames=0`；音频发送 264 包 / 141KB，接收端
+  `decryptErrors=0`。用户确认该轮 **画面、触控、声音均正常**。会话在 14.3s 后以 `USER_STOP` 结束，非崩溃。
+  本轮 APK SHA-256 与 `v0.1.7-test.3` 资产一致，诊断报告为 `920fd8df-472f-4e95-8836-c1bedc481e24`。
+  **边界：** 这是 WinPlay 模拟接收端，不是 2025 款奔驰 GLC / `MB_E-P-4` 实车；手动 `MERCEDES_MB_E`
+  预设仍需实车复测。
   本地门禁：`spotlessCheck`、`lintStandardDebug`、`lintStandardRelease`、`assembleStandardDebug` 通过；standard 单测 1250 个、
-  remote bridge 单测 25 个，均 0 失败。WinPlay 台架尚未在本构建上复测。
-- **Wi-Fi iAP2 的时序差异（待对照）：** HyperCar 在 06:32:13.036 经事件通道建立 `WIFI-IAP#1`，06:32:13.057
-  起完成 0x1d00/0x1d01、MFi，06:32:14.146 注册 `StartHID(0x6800)`，都早于首帧；#62 的 MIB3 突发后没有订阅
-  往返。这个时序也值得看，但应放在“几何/转码”单变量测试之后。
-- **下一步（单变量）：** 让 #62 车主用带上述 feature 开关的构建复现并导出报告，先确认两行：`0x18052`
-  的功能项是否包含 `DISABLE_RESOLUTION_OPTION`，以及 `VIDEO: CarWith ...`/`0x10008` 的实际尺寸是否从
-  1280×720 变为 1624×1278。若变为 1624×1278 后车机出画，再决定是否推广到所有已知几何的接收端；若仍为
-  1280×720，说明该 CarWith 版本不认这个键，下一轮才需要试“尺寸不符强制转码”；若尺寸正确但仍黑屏，
-  再查 Wi-Fi iAP2 时序。不要同时改 1728 面板、modesChanged 时序或 iAP2 订阅，否则无法归因。
-- **验证边界：** 本节只来自 HyperCar 日志、用户口述和仓库既有第三方记录；没有 mcarplay 在该车机上的新实车
-  结果，也没有音频实际出声证据（HyperCar 日志仅显示 PCM RTP 在发，`receiver_audio=unknown`）。不构成兼容性声明。
+  remote bridge 单测 25 个，均 0 失败。
+- **旧版实车失败对照（2026-11-18 06:29–06:30，报告 `afca67a7…`，非 test.3）：** 同一台 `MB_E-P-4` 车主用上一版
+  `0.1.7-debug`（旧 `MERCEDES_MB_E` 的 1728 面板实验）实车复现，三轮均未到首帧：
+  06:29:19 轮 `0x18052` 为 26B（无 `DISABLE_RESOLUTION_OPTION`），按 `displayPanels` 请求 1624×1728，
+  CarWith 仍返回 1280×720；屏幕流 SETUP 成功后，视频口在首个 RECORD 后约 362ms EOF（启用音频时还有第二次 RECORD），
+  CarWith 首帧在 RECORD 后约 882ms 才到，应用发送 0 帧并以 `Broken pipe` 结束。
+  06:29:38 轮控制通道被车机 reset，RECORD 未确认，6030 端口 `ECONNREFUSED`。
+  06:30:30 轮关闭音频、只发一次 RECORD，视频口仍在 RECORD 后约 120ms EOF；CarWith 首帧约 824ms 后到，
+  应用仍发送 0 帧。三轮分别以 `VIDEO_CLOSED` / `SETUP_FAILED` 结束。
+  HyperCar 成功轮按 `displays[0]` 1624×1278，RECORD 后约 953ms 才发首帧，车机没有因等待首帧而关闭视频口；
+  因此“首帧太慢”不能单独解释旧版失败，旧版的 1728 几何和缺失 feature 仍是主要差异。
+  这份报告只证明旧预设在该车机失败。
+- **test.3 实车复测（2026-11-18 15:48，报告 `cfe2b32e…`，issue #62 同车）：** 同一台
+  `Mercedes-Benz / MB_E-P-4 / 480.7.4`，手机 Xiaomi 24031PN0DC / Android 17 / `CP2A.260605.016`，
+  CarWith `4.0.23-20261016`、CarLife `8.8.5 (274)`。APK SHA-256
+  `86eef69e3210dc3c7fe58d888797065b8ba6709339419d13fbe3a4b707ea73d7`（`v0.1.7-test.3`）。
+  `0x18052` 已含 `DISABLE_RESOLUTION_OPTION=1`，`VIDEO_INIT_DONE 1624x1278@30`，CarWith 首帧同为
+  1624×1278；导出前 43 s 发送 542 帧、5 个 IDR，`队满丢帧 0`、`最慢写入 16 ms`。
+  **CarWith 尺寸与视频发送链路已排除。** 车机仍无画面，隧道认证暴露新的单点：
+  15:48:36.349 先发 20B 挑战，车机静默整整 6000 ms；15:48:42.500 改发 32B，438 ms 后签名成功。
+  此后 43 s 内车机没有 `StartHID(0x6800)`、`0x5000`、`0x4157/0x4154/0x4170` 任一订阅；
+  `modesChanged` 仍为 42B `{}`，但 HyperCar 成功轮同样如此，不能再用空回执解释黑屏。
+  对照 HyperCar 0.1.0.588 同车机成功轮：06:32:13.095 直接发 32B，463 ms 后签名成功，
+  06:32:14.146 收到 `StartHID`；其 `WifiIap2Protocol.greetings()` 在 `0x4e0c` 后固定发一条空 `0x5702`
+  （源码与单测均如此），mcarplay 的 MIB3 突发此前没有这条。test.3 的蓝牙 iAP2 已按记忆走 32B 并成功，
+  说明 32B 本身可用；失败只在隧道仍从 20B 起步。
+- **test.4 组合修复（实验，尚待实车）：** ① 手动 `MERCEDES_MB_E` 预设把隧道 MFi 固定为 32B，只发一次、
+  窗口 40 s，不再让 20B 占用 6 s；② MIB3/事件链路认证后突发在 `0x4e0c` 后补发空 `0x5702`，与 HyperCar
+  一致；`0x5703` 只作链路 ACK，不触发重新入网。32B 仅在该手动预设生效，`0x5702` 仅在 MIB3/事件链路
+  突发路径生效，蓝牙与 DiPlay 不变。两项合在一个包里，**无法单独归因**；若 test.4 仍无画面，下一轮只改
+  一个变量（优先排查 `StartHID`/显示会话激活），不再同时改编码、`modesChanged` 或面板几何。
+- **验证边界：** WinPlay 1.2.4 台架已经证明 `DISABLE_RESOLUTION_OPTION=1` 能让当前 CarWith 返回
+  1624×1278，且画面、触控、声音形成闭环；`MB_E-P-4 / 480.7.4` 的 test.3 实车已证明尺寸正确、542 帧无丢帧，
+  但车机仍无画面。test.4 是 32B 与 `0x5702` 的组合实验，不构成该车型兼容性声明。
 
 ## 2026-11-13 issue #55：奔驰 MB_D-PP-4「开声音后 16–559 ms 拆链」（车主报告，未实车复测）
 

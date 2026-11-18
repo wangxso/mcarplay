@@ -75,4 +75,4 @@ WinPlay 的“网络交接完成”必须同时满足 RECORD 成功和网络 iAP
 回归包含策略矩阵、真实 TCP 视频在 ACL 事件后的持续传输、ACL/RFCOMM 共用交接判断、蓝牙身份随初始/晚到端点传递、mDNS 仅更新能力时不关闭控制连接，以及 AAC/PCM/明确无可用音频能力的选择。构建与测试不替代 WinPlay、DiPlay 或真实车机上的完整音画触控和长时复测。
 
 2026-10-27：493 项 JVM 测试通过（0 失败、0 跳过），`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 均通过；使用仓库完整 standard debug 检查命令离线验证。
-2026-11-18：新增 `preferVehicleResolution` 策略与 `DISABLE_RESOLUTION_OPTION` 单元覆盖；standard 单测 1250 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、debug/release lint 与 `assembleStandardDebug` 通过。WinPlay 台架复测边界见 `CARWITH-ENTRY-FINDINGS.md`。
+2026-11-18：`v0.1.7-test.3` 的 WinPlay 1.2.4 台架 A/B 通过：加入 `DISABLE_RESOLUTION_OPTION=1` 后 CarWith 从 1280×720 改为返回 1624×1278，画面、触控、声音均正常。同一构建在奔驰 `MB_E-P-4 / 480.7.4` 实车上已确认 1624×1278、542 帧、0 丢帧，但车机仍无画面；隧道 20B 挑战静默 6 s 后才换 32B，突发后 43 s 无 `StartHID`/订阅。`v0.1.7-test.4` 是“手动奔驰预设固定 32B + MIB3 认证后补发空 `0x5702`”的组合实验，不能单独归因，也不构成兼容声明。详见 `CARWITH-ENTRY-FINDINGS.md`。

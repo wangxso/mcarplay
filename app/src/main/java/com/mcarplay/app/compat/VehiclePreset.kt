@@ -26,11 +26,12 @@ enum class VehiclePreset {
     MERCEDES_MB_DPP,
 
     /**
-     * 奔驰 MB_E-P / 2025 GLC（issue #62，AirPlay 480.7.4）：**实验选项，尚无实车验证**。
+     * 奔驰 MB_E-P / 2025 GLC（issue #62，AirPlay 480.7.4）：**实验选项，尚无成功实车验证**。
      *
-     * 和 [MERCEDES_MB_DPP] 不是同一代际，不要混用。本项保持 `displays[0]` 的车机几何，并打开
-     * [ReceiverCompatibility.Policy.preferVehicleResolution]（CarWith `DISABLE_RESOLUTION_OPTION=1`）；
-     * 不再使用 `displayPanels` 的 1728 高假设。默认自动判定不会启用；文案必须如实标注「实验」。
+     * 和 [MERCEDES_MB_DPP] 不是同一代际，不要混用。本项保持 `displays[0]` 的车机几何，打开
+     * [ReceiverCompatibility.Policy.preferVehicleResolution]（CarWith `DISABLE_RESOLUTION_OPTION=1`），
+     * 并按 HyperCar 同车机的成功时序把隧道 MFi 固定为 32B；不再使用 `displayPanels` 的 1728 高假设。
+     * 默认自动判定不会启用；文案必须如实标注「实验」。
      */
     MERCEDES_MB_E,
     ;

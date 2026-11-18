@@ -94,10 +94,11 @@ class VehiclePresetTest {
 
     /**
      * issue #62（`MB_E-P-4 / 480.7.4`，车主称 2025 GLC）实验选项：保持 `displays[0]` 几何，
-     * 只打开 CarWith 功能协商里的 `DISABLE_RESOLUTION_OPTION=1`，且**只在手动选择时**生效。
+     * 打开 CarWith 功能协商里的 `DISABLE_RESOLUTION_OPTION=1`，并将隧道 MFi 固定为 32B；
+     * 且**只在手动选择时**生效。
      */
     @Test
-    fun mercedesMbEPresetOnlyTogglesVehicleResolutionRequest() {
+    fun mercedesMbEPresetTogglesVehicleResolutionAndTunnelMfi() {
         val unknownPolicy = resolve(unknown, VehiclePreset.MERCEDES_MB_E)
         assertFalse(unknownPolicy.usePanelVideoGeometry)
         assertTrue(unknownPolicy.preferVehicleResolution)
@@ -106,11 +107,13 @@ class VehiclePresetTest {
         assertFalse(unknownPolicy.singleRecordPerSession)
         assertFalse(unknownPolicy.releaseBluetoothAfterSetup)
         assertFalse(unknownPolicy.skipIapTunnel)
-        assertNull(unknownPolicy.pinnedMfiChallengeLength)
+        assertEquals(32, unknownPolicy.pinnedMfiChallengeLength)
+        assertTrue("manual.mercedes-mb-e.mfi-32" in unknownPolicy.rules)
         // 已知是奔驰（型号/固件不同）也放行——手动预设正是给自动判定认不出的车机用的。
         val mbep = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4", srcvers = "480.7.4")
         assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).preferVehicleResolution)
         assertFalse(resolve(mbep, VehiclePreset.MERCEDES_MB_E).usePanelVideoGeometry)
+        assertEquals(32, resolve(mbep, VehiclePreset.MERCEDES_MB_E).pinnedMfiChallengeLength)
     }
 
     @Test
@@ -126,6 +129,7 @@ class VehiclePresetTest {
             val policy = resolve(other, VehiclePreset.MERCEDES_MB_E)
             assertFalse("${other.manufacturer} 不应套用奔驰实验开关", policy.usePanelVideoGeometry)
             assertFalse("${other.manufacturer} 不应套用奔驰尺寸协商", policy.preferVehicleResolution)
+            assertFalse("${other.manufacturer} 不应套用奔驰 MFi 固定档", "manual.mercedes-mb-e.mfi-32" in policy.rules)
             assertTrue("manual.mercedes-mb-e-blocked" in policy.rules)
         }
         // 通用预设关闭实验开关。

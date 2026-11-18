@@ -177,10 +177,10 @@ object ReceiverCompatibility {
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-dpp-blocked")
                 }
-            // 奔驰 MB_E-P / 2025 GLC（issue #62）：先验证「CarWith 是否按车机尺寸出流」。
-            // HyperCar 日志已给出同车机的 A/B：请求 1624x1278 时，未声明 DISABLE_RESOLUTION_OPTION
-            // 会被 CarWith 回成 1280x720，声明后才返回 1624x1278。因此当前预设不再使用 1728 面板，
-            // 保持 displays[0] 的 1624x1278，并只打开功能协商这一条改动。
+            // 奔驰 MB_E-P / 2025 GLC（issue #62）：CarWith 尺寸协商已完成；当前实车日志显示 20B
+            // 隧道挑战被静默 6s，32B 才在约 0.44s 内应答。HyperCar 对同一车机直接发 32B，
+            // RECORD 后约 0.5s 完成认证并随后收到 StartHID。固定 32B，避免错过 MBUX 激活窗口。
+            // 仍保持 displays[0] 的 1624x1278 与 DISABLE_RESOLUTION_OPTION=1。
             // 不附带 MB_D-PP 的单次 RECORD（那是另一代际、另一份报告的证据）。
             // 已知是别家车机时拒绝套用，避免把实验开关带到其它接收端上。
             VehiclePreset.MERCEDES_MB_E ->
@@ -188,7 +188,8 @@ object ReceiverCompatibility {
                     policy.copy(
                         usePanelVideoGeometry = false,
                         preferVehicleResolution = true,
-                        rules = policy.rules + "manual.mercedes-mb-e.vehicle-resolution",
+                        pinnedMfiChallengeLength = 32,
+                        rules = policy.rules + "manual.mercedes-mb-e.vehicle-resolution" + "manual.mercedes-mb-e.mfi-32",
                     )
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")
