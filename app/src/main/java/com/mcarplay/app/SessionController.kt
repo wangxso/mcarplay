@@ -578,6 +578,52 @@ object SessionController {
 
     @Volatile
     private var disconnectCompletion: java.util.concurrent.CountDownLatch? = null
+
+    private val disconnectTail = DisconnectTail(NamedTasks { name, task -> Bg.run(name, task) })
+
+    private val disconnectLive: DisconnectLive =
+        object : DisconnectLive {
+            override fun log(message: String) = appendLog(message)
+
+            override fun detachBt(reason: String) = detachActiveBtSessions(eaStopReason = reason)
+
+            override fun stopBtServer() {
+                bluetoothServer?.stop()
+            }
+
+            override fun stopBtClient() {
+                bluetoothClient?.stop()
+            }
+
+            override fun finishBtDiagnostics() = bluetoothDiagnostics.finish()
+
+            override fun withWifiLock(body: () -> Unit) = wifiHandoffGuard.cleanup(body)
+
+            override fun stopCtrlAdvertiser() {
+                ctrlAdvertiser?.stop()
+            }
+
+            override fun stopEndpointBrowser() {
+                endpointBrowser?.stop()
+            }
+
+            override fun cleanupShellFallback() = cleanupShellFallbackNetwork()
+
+            override fun completeOuter(completed: java.util.concurrent.CountDownLatch) {
+                synchronized(SessionController) {
+                    BtSessionGate.sessionActive = false
+                    if (disconnectCompletion === completed) {
+                        // 先开放交接入口再清 completion：端点看到 null 时 begin 一定能成功；
+                        // 反过来会让“看到 null 但入口仍关闭”的首个端点被丢弃。
+                        handoffOwnership.allowNewHandoffs()
+                        disconnectCompletion = null
+                    }
+                }
+                completed.countDown()
+                appendLog("SESSION: 旧会话 TEARDOWN 与蓝牙/WiFi 清理完成")
+            }
+        }
+
     private var userStopGeneration = 0L
 
     /** 最近一次 ctrl 邀请的原子快照；换目标/换网后旧邀请不能继续免除确认。 */
@@ -1447,44 +1493,16 @@ object SessionController {
             // shell 兜底存下的系统网络（connect-network）自动 forget 还原：无互联网热点
             // 被系统当默认网会挤掉移动数据。失败只记日志（用户可到 WLAN 手动删）。
         } finally {
-            Bg.run("session-disconnect") {
-                try {
-                    if (reason == DiagnosticCode.USER_STOP && retiringClient?.sessionActive == true) {
-                        appendLog("SESSION: 按 iPhone 顺序断开（0x4E0D 不可用 → TEARDOWN 屏幕流 → TEARDOWN 会话）")
-                        if (!runCatching { retiringClient.stopLikeIphone() }.getOrDefault(false)) {
-                            appendLog("SESSION: 车机未确认 TEARDOWN——先离开车机热点，由车机自行收尾")
-                            wifiHandoffGuard.cleanup { runCatching { retiringWifi?.release() } }
-                        }
-                    } else {
-                        retiringClient?.teardownSession()
-                    }
-                } finally {
-                    runCatching { retiringVideo?.stop() }
-                    runCatching { retiringClient?.close() }
-                    // 连接到此结束：先发 0xEA01 收掉本轮 EA 会话，免得车机挡住下一次（奥迪 EAP 泄漏保护）。
-                    runCatching { detachActiveBtSessions(eaStopReason = "连接结束 ${reason.name}") }
-                    runCatching { bluetoothServer?.stop() }
-                    runCatching { bluetoothClient?.stop() }
-                    runCatching { bluetoothDiagnostics.finish() }
-                    wifiHandoffGuard.cleanup {
-                        runCatching { ctrlAdvertiser?.stop() }
-                        runCatching { endpointBrowser?.stop() }
-                        runCatching { retiringWifi?.release() }
-                    }
-                    runCatching { cleanupShellFallbackNetwork() }
-                    synchronized(this) {
-                        BtSessionGate.sessionActive = false
-                        if (disconnectCompletion === completed) {
-                            // 先开放交接入口再清 completion：端点看到 null 时 begin 一定能成功；
-                            // 反过来会让“看到 null 但入口仍关闭”的首个端点被丢弃。
-                            handoffOwnership.allowNewHandoffs()
-                            disconnectCompletion = null
-                        }
-                    }
-                    completed.countDown()
-                    appendLog("SESSION: 旧会话 TEARDOWN 与蓝牙/WiFi 清理完成")
-                }
-            }
+            disconnectTail.enqueue(
+                DisconnectSnapshot(
+                    reason = reason,
+                    client = retiringClient?.let { RetiringAirPlayClient(it) },
+                    stopCapturedVideo = { retiringVideo?.stop() },
+                    releaseCapturedWifi = { retiringWifi?.release() },
+                    completed = completed,
+                ),
+                disconnectLive,
+            )
         }
         val endAction = if (reason == DiagnosticCode.USER_STOP) "手动断开" else "自动断开（${reason.name}）"
         if (hadProjection) {
@@ -2854,6 +2872,22 @@ object SessionController {
     private fun detachActiveBtSessions(eaStopReason: String?) {
         bluetoothServer?.detachCurrentSession(eaStopReason)
         bluetoothClient?.detachCurrentSession(eaStopReason)
+    }
+
+    private class RetiringAirPlayClient(
+        private val client: AirPlayClient,
+    ) : RetiringClient {
+        override val sessionActive: Boolean get() = client.sessionActive
+
+        override fun stopLikeIphone(): Boolean = client.stopLikeIphone()
+
+        override fun teardownSession() {
+            client.teardownSession()
+        }
+
+        override fun close() {
+            client.close()
+        }
     }
 
     /**
