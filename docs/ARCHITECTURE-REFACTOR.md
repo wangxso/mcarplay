@@ -2,7 +2,9 @@
 
 基线：`main` @ `ab0cb93`（v0.1.6，文中行号与统计均以此为准，搬移后会漂移）。
 状态：**Phase 0 的代码护栏已在 `refactor/session-phase0-guardrails` 完成（只加测试与工具，不改生产代码）；基线实车报告待采集；
-Phase 1 起尚未开始。** 2026-11-10 对照代码复查后修订过一次，改动见文末「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
+Phase 1a 进行中：`AttemptScope`/`LegacyAttemptScope` 与 `SessionUiPort` 已在此 PR 栈实现（仍待 dev 合入），`SessionLog` 待做；
+本 PR 的 S1 只接入后台断连尾段，未做 S2/统一 `endAttempt`，尚无实车证据。** 2026-11-10 对照代码复查后修订过一次，改动见文末
+「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 
 ## 1. 背景与目标
 
