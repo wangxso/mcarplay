@@ -162,7 +162,8 @@ class DisconnectTailTest {
         )
         assertTrue(
             harness.events.none {
-                it.taskId == TaskId.Outer && it.identity == "B" &&
+                it.taskId == TaskId.Outer &&
+                    it.identity == "B" &&
                     it.operation in
                     setOf(
                         Operation.ACTIVE_READ,
