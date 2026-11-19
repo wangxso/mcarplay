@@ -27,6 +27,10 @@ class EndAttemptTraceTest {
         KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("TeardownCoordination.kt").readText()).code
     }
 
+    private val endNotificationSource: String by lazy {
+        KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("video/VideoEndNotification.kt").readText()).code
+    }
+
     /** 去注释/字符串后的指定函数，包含签名和函数体，避免日志文案或注释里的关键词污染断言。 */
     private fun scFunction(name: String): String = normalize(function(controller, name))
 
@@ -35,6 +39,8 @@ class EndAttemptTraceTest {
     private fun coordinationFunction(name: String): String = normalize(function(teardownCoordinationSource, name))
 
     private fun vsFunction(name: String): String = normalize(function(videoSenderSource, name))
+
+    private fun notificationFunction(name: String): String = normalize(function(endNotificationSource, name))
 
     private fun normalize(source: String): String = source.replace(Regex("\\s+"), " ")
 
@@ -478,10 +484,25 @@ class EndAttemptTraceTest {
     @Test
     fun videoSenderDrainFinallyStopsThenNotifiesOnce() {
         requireContains(
-            videoSenderSource,
+            endNotificationSource,
             "private val endedNotified = AtomicBoolean(false)",
-            "两条线程共享通知状态",
+            "每个 sender 通知器共享自己的通知状态",
         )
+        val helperBody = notificationFunction("afterDrain")
+        requireOrder(helperBody, "stop()", "endedNotified.compareAndSet(false, true)", "helper 先 stop 再 CAS")
+        requireOrder(
+            helperBody,
+            "endedNotified.compareAndSet(false, true)",
+            "runCatching { notify() }",
+            "CAS 成功才通知",
+        )
+        requireContains(videoSenderSource, "private val endNotification = VideoEndNotification()", "每个 sender 独立持有通知器")
+        requireContains(
+            videoSenderSource,
+            "endNotification.afterDrain(stop = { stop() }, notify = { onEnded?.invoke() })",
+            "两个 finally 都委托同一通知器",
+        )
+        assertFalse("不得保留旧共享 CAS 字段", videoSenderSource.contains("endedNotified"))
         val stopBody = vsFunction("stop")
         requireOrder(stopBody, "finalizeOutputHealth()", "stopped.set(true)", "health 先 finalized")
         requireOrder(stopBody, "stopped.set(true)", "running.set(false)", "先 stopped 再 running")
@@ -502,10 +523,20 @@ class EndAttemptTraceTest {
         val externalFinally = lambdaAfter(externalBody, "finally")
         val encoderBody = vsFunction("drainEncoder")
         val encoderFinally = lambdaAfter(encoderBody, "finally")
-        requireOrder(externalFinally, "stop()", "endedNotified.compareAndSet(false, true)", "透传 finally 先 stop 再 CAS")
-        requireOrder(externalFinally, "endedNotified.compareAndSet(false, true)", "runCatching { onEnded?.invoke() }", "CAS 成功才通知")
-        requireOrder(encoderFinally, "stop()", "endedNotified.compareAndSet(false, true)", "编码 finally 先 stop 再 CAS")
-        requireOrder(encoderFinally, "endedNotified.compareAndSet(false, true)", "runCatching { onEnded?.invoke() }", "CAS 成功才通知")
+        requireOrder(
+            externalFinally,
+            "endNotification.afterDrain(stop = { stop() }",
+            "notify = { onEnded?.invoke() }",
+            "透传 finally 委托 stop 闭包与延迟 onEnded 块",
+        )
+        requireOrder(
+            encoderFinally,
+            "endNotification.afterDrain(stop = { stop() }",
+            "notify = { onEnded?.invoke() }",
+            "编码 finally 委托 stop 闭包与延迟 onEnded 块",
+        )
+        assertFalse("透传 finally 不得直接保留旧 CAS", externalFinally.contains("endedNotified.compareAndSet"))
+        assertFalse("编码 finally 不得直接保留旧 CAS", encoderFinally.contains("endedNotified.compareAndSet"))
     }
 
     @Test
@@ -627,18 +658,30 @@ class EndAttemptTraceTest {
         ) { source ->
             requireContains(source, "videoSender !== sender", "sender 身份不符立即返回")
         }
-        val externalBody = vsFunction("drainExternalVideo")
-        val externalFinally = lambdaAfter(externalBody, "finally")
+        val helperBody = notificationFunction("afterDrain")
         val swappedStopAndCas =
-            externalFinally.replace(
-                "stop() if (endedNotified.compareAndSet(false, true)) runCatching { onEnded?.invoke() }",
-                "if (endedNotified.compareAndSet(false, true)) runCatching { onEnded?.invoke() } stop()",
+            helperBody.replace(
+                "stop() if (endedNotified.compareAndSet(false, true)) runCatching { notify() }",
+                "if (endedNotified.compareAndSet(false, true)) runCatching { notify() } stop()",
             )
         assertContractRejected(
             swappedStopAndCas,
             listOf("endedNotified.compareAndSet(false, true)", "stop()"),
         ) { source ->
             requireOrder(source, "stop()", "endedNotified.compareAndSet(false, true)", "stop 先于 CAS")
+        }
+        val externalBody = vsFunction("drainExternalVideo")
+        val externalFinally = lambdaAfter(externalBody, "finally")
+        val bypassedNotification =
+            externalFinally.replace(
+                "endNotification.afterDrain(stop = { stop() }, notify = { onEnded?.invoke() })",
+                "stop() if (endedNotified.compareAndSet(false, true)) runCatching { onEnded?.invoke() }",
+            )
+        assertContractRejected(
+            bypassedNotification,
+            listOf("endedNotified.compareAndSet(false, true)", "stop()"),
+        ) { source ->
+            assertTrue("finally 必须委托通知器", source.contains("endNotification.afterDrain(stop = { stop() }"))
         }
     }
 }

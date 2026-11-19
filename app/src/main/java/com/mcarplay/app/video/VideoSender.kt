@@ -141,8 +141,8 @@ class VideoSender(
     var lastReceiverRequestIdrGapMs: Long? = null
         private set
 
-    /** 透传线程与转码编码线程都会在退出时收尾：onEnded 只通知一次。 */
-    private val endedNotified = AtomicBoolean(false)
+    /** 透传线程与转码编码线程都会在退出时收尾：每个 sender 实例只通知一次。 */
+    private val endNotification = VideoEndNotification()
 
     /** 透传线程与转码编码线程可能同时写数据口：所有网络写入串行。 */
     private val writeLock = Any()
@@ -1294,8 +1294,7 @@ class VideoSender(
         } catch (error: Exception) {
             log("VIDEO: 外部视频推流中止 - ${error.message}")
         } finally {
-            stop()
-            if (endedNotified.compareAndSet(false, true)) runCatching { onEnded?.invoke() }
+            endNotification.afterDrain(stop = { stop() }, notify = { onEnded?.invoke() })
         }
     }
 
@@ -1477,9 +1476,8 @@ class VideoSender(
             // 后台线程未捕获异常会杀死整个进程（曾导致锁屏后 app 消失）
             log("VIDEO: 推流中止 - ${error.message}（等待接收端恢复后重连）")
         } finally {
-            stop()
             // 会话真实结束信号（静默降噪解除 / 状态收尾）
-            if (endedNotified.compareAndSet(false, true)) runCatching { onEnded?.invoke() }
+            endNotification.afterDrain(stop = { stop() }, notify = { onEnded?.invoke() })
         }
     }
 
