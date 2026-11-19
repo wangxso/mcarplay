@@ -14,7 +14,6 @@ import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import com.mcarplay.app.BuildConfig
-import com.mcarplay.app.SessionController
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeSourceEnvironment
@@ -40,19 +39,24 @@ object SupportReport {
         scope: String,
         currentSessionOnly: Boolean,
         fallback: String,
+        bluetoothSummary: () -> String,
         maxLogBytes: Int = 512_000,
         knownNames: List<String> = emptyList(),
     ): String {
         val log = DebugFileLog.readRecent(context, maxLogBytes, currentSessionOnly).orEmpty()
         val summary =
-            listOfNotNull(
-                ConnectionDiagnostics.timeline.snapshot()?.let { "CarPlay 连接：" + exportSummary(it) },
-                ConnectionDiagnostics.selfTest.snapshot()?.let { "CarWith 自检：" + exportSummary(it) },
-                "RECEIVER_DETECTION " + ReceiverDetectionRuntime.reportSummary(),
-                "BLUETOOTH_DIAGNOSTICS " + SessionController.bluetoothDiagnosticSummary(),
-                "CARWITH_NOTIFICATION_PROBE " + CarWithNotificationProbe.diagnosticSummary(),
-                "CARLIFE_SELF_TEST_DIAGNOSTICS " + CarLifeDiagnostics.reportSummary(),
-            ).joinToString("\n\n").ifEmpty { "本进程尚无连接尝试；请复现问题后再导出" }
+            summaryText(
+                connectionSummary = {
+                    ConnectionDiagnostics.timeline.snapshot()?.let { "CarPlay 连接：" + exportSummary(it) }
+                },
+                selfTestSummary = {
+                    ConnectionDiagnostics.selfTest.snapshot()?.let { "CarWith 自检：" + exportSummary(it) }
+                },
+                receiverDetectionSummary = ReceiverDetectionRuntime::reportSummary,
+                bluetoothSummary = bluetoothSummary,
+                notificationProbeSummary = { CarWithNotificationProbe.diagnosticSummary() },
+                carLifeSelfTestSummary = CarLifeDiagnostics::reportSummary,
+            )
         return render(
             reportId = reportId,
             environment =
@@ -73,6 +77,23 @@ object SupportReport {
             redact = !DiagnosticExportPolicy.unredacted,
         )
     }
+
+    internal fun summaryText(
+        connectionSummary: () -> String?,
+        selfTestSummary: () -> String?,
+        receiverDetectionSummary: () -> String,
+        bluetoothSummary: () -> String,
+        notificationProbeSummary: () -> String,
+        carLifeSelfTestSummary: () -> String,
+    ): String =
+        listOfNotNull(
+            connectionSummary(),
+            selfTestSummary(),
+            "RECEIVER_DETECTION " + receiverDetectionSummary(),
+            "BLUETOOTH_DIAGNOSTICS " + bluetoothSummary(),
+            "CARWITH_NOTIFICATION_PROBE " + notificationProbeSummary(),
+            "CARLIFE_SELF_TEST_DIAGNOSTICS " + carLifeSelfTestSummary(),
+        ).joinToString("\n\n").ifEmpty { "本进程尚无连接尝试；请复现问题后再导出" }
 
     private fun exportSummary(state: ConnectionTimeline.Snapshot): String =
         state.summary() + "\nEXPORT_SNAPSHOT sourceVideoFrames=${state.sourceFrames} videoFramesSent=${state.videoFrames} " +

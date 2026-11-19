@@ -64,7 +64,14 @@ class LogExportController(
         val fallback = SessionController.logText()
         val knownNames = host.diagnosticNames()
         Bg.run("export-log") {
-            val result = LogExporter.export(activity.applicationContext, fallback, scope, knownNames)
+            val result =
+                LogExporter.export(
+                    context = activity.applicationContext,
+                    fallbackText = fallback,
+                    bluetoothSummary = SessionController::bluetoothDiagnosticSummary,
+                    scope = scope,
+                    knownNames = knownNames,
+                )
             activity.runOnUiThread {
                 if (activity.isFinishing || activity.isDestroyed) return@runOnUiThread
                 if (result == null) {

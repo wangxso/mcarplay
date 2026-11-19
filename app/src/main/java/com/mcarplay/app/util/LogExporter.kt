@@ -69,6 +69,7 @@ object LogExporter {
     fun export(
         context: Context,
         fallbackText: String,
+        bluetoothSummary: () -> String,
         scope: Scope = Scope.SUPPORT,
         knownNames: List<String> = emptyList(),
     ): Result? =
@@ -81,6 +82,7 @@ object LogExporter {
                     scope.label,
                     scope == Scope.CURRENT_SESSION,
                     fallbackText,
+                    bluetoothSummary = bluetoothSummary,
                     maxLogBytes = if (scope == Scope.ALL || DiagnosticExportPolicy.unredacted) 4_000_000 else 512_000,
                     knownNames = knownNames,
                 )
