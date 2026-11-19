@@ -35,14 +35,60 @@ class EndAttemptTraceTest {
         KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("RoundRetirement.kt").readText()).code
     }
 
+    private val videoEndedSource: String by lazy {
+        KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("VideoEndedHandling.kt").readText()).code
+    }
+
     /** 去注释/字符串后的指定函数，包含签名和函数体，避免日志文案或注释里的关键词污染断言。 */
     private fun scFunction(name: String): String = normalize(function(controller, name))
+
+    private fun scFunctionLast(name: String): String {
+        val marker = "fun $name("
+        val at = controller.lastIndexOf(marker)
+        assertTrue("找不到函数 $name", at >= 0)
+        val open = controller.indexOf('{', at + marker.length)
+        check(open >= 0) { "$name 的函数体没有开始" }
+        return normalize(balancedFrom(controller, open))
+    }
+
+    private fun rawScFunctionLast(name: String): String {
+        val marker = "fun $name("
+        val at = controller.lastIndexOf(marker)
+        assertTrue("找不到函数 $name", at >= 0)
+        val open = controller.indexOf('{', at + marker.length)
+        check(open >= 0) { "$name 的函数体没有开始" }
+        return balancedFrom(controller, open)
+    }
+
+    private fun constructorCall(
+        source: String,
+        constructorName: String,
+    ): String {
+        val start = requireIndex(source, "$constructorName(", "找不到 $constructorName 构造")
+        val parenOpen = requireIndex(source, "(", start)
+        var parens = 0
+        var index = parenOpen
+        while (index < source.length) {
+            when (source[index]) {
+                '(' -> parens++
+                ')' -> {
+                    parens--
+                    if (parens == 0) break
+                }
+            }
+            index++
+        }
+        check(parens == 0) { "$constructorName 构造调用没有闭合" }
+        return normalize(source.substring(start, index + 1))
+    }
 
     private fun tailFunction(name: String): String = normalize(function(disconnectTailSource, name))
 
     private fun coordinationFunction(name: String): String = normalize(function(teardownCoordinationSource, name))
 
     private fun retirementFunction(name: String): String = normalize(function(retirementSource, name))
+
+    private fun videoEndedFunction(name: String): String = normalize(function(videoEndedSource, name))
 
     private fun vsFunction(name: String): String = normalize(function(videoSenderSource, name))
 
@@ -210,13 +256,41 @@ class EndAttemptTraceTest {
         assertTrue(message, source.contains(needle))
     }
 
+    private fun requireFirstBefore(
+        source: String,
+        first: String,
+        second: String,
+        message: String,
+    ) {
+        val firstAt = source.indexOf(first)
+        val secondAt = source.indexOf(second)
+        assertTrue("$message（第一个未找到）", firstAt >= 0)
+        assertTrue("$message（第二个未找到）", secondAt >= 0)
+        assertTrue(message, firstAt < secondAt)
+    }
+
+    private fun assertReplacementRejected(
+        label: String,
+        original: String,
+        replaced: String,
+        replacement: String,
+        needles: List<String>,
+        assertion: (String) -> Unit,
+    ) {
+        val negative = original.replace(replaced, replacement)
+        needles.forEach { needle -> assertTrue("$label 反例应包含 $needle", negative.contains(needle)) }
+        runCatching { assertion(negative) }
+            .onSuccess { throw AssertionError("$label 反例应被契约断言拒绝") }
+    }
+
     private fun assertContractRejected(
         negative: String,
         needles: List<String>,
         assertion: (String) -> Unit,
     ) {
         needles.forEach { needle -> assertTrue("反例应包含 $needle", negative.contains(needle)) }
-        assertFalse("反例应被契约断言拒绝", runCatching { assertion(negative) }.isSuccess)
+        val outcome = runCatching { assertion(negative) }
+        assertFalse("反例应被契约断言拒绝: ${needles.joinToString()}", outcome.isSuccess)
     }
 
     @Test
@@ -504,52 +578,83 @@ class EndAttemptTraceTest {
     @Test
     fun screenEndedCallbackFiltersStaleSenderBeforeSideEffects() {
         requireOrder(controller, "fun newScreenSender(", "onEnded = onVideoEnded@", "回调挂在 newScreenSender")
-        val marker = "onVideoEnded@"
-        val markerAt = requireIndex(controller, marker, "找不到 onEnded 回调")
-        val open = controller.indexOf('{', markerAt + marker.length)
-        check(open >= 0) { "onEnded 回调没有函数体" }
-        val body = normalize(balancedFrom(controller, open)).removePrefix("{").trimStart()
-        assertTrue(
-            "sender 身份守卫必须是回调第一句",
-            Regex("^if\\s*\\(\\s*videoSender\\s*!==\\s*sender\\s*\\)").containsMatchIn(body),
+        requireContains(controller, "VideoEndedHandling(", "onEnded 收尾 helper 已接入")
+        requireOrder(controller, "VideoEndedHandling(", "onEnded = onVideoEnded@", "adapter 先于回调")
+        val callback = lambdaAfter(controller, "onEnded = onVideoEnded@").removePrefix("{").trimStart()
+        requireContains(callback, "videoEndedHandling.handle(", "onEnded 直接委托 helper")
+        requireContains(callback, "override val senderIdentity: () -> VideoSender = { sender }", "延迟读取真实 sender 身份")
+        requireContains(callback, "override val carLifeBinding: () -> CarLifeSession? = { carLife }", "延迟读取真实 CarLife 绑定")
+        requireContains(
+            callback,
+            "override val mediaObservation: () -> Any? = { client.currentEndpoint.observation }",
+            "延迟读取当前端点观测",
         )
-        val guardBlock = lambdaAfter(body, "videoSender !== sender")
-        requireContains(guardBlock, "return@onVideoEnded", "身份不符立即返回")
-        requireOrder(body, "return@onVideoEnded", "lastEnvironmentSampleAt = 0L", "guard 先于副作用")
-        requireOrder(body, "lastEnvironmentSampleAt = 0L", "ConnectionDiagnostics.timeline.videoEnded(diagnosticAttempt)", "先清采样再记结束")
+        requireContains(callback, "override val attempt: String = diagnosticAttempt", "透传诊断 attempt")
+        requireContains(callback, "override val peerAddress: String? = peerAddress", "透传对端地址")
+        val adapter = constructorCall(controller, "VideoEndedHandling")
+        requireContains(
+            adapter,
+            "object : VideoEndSlots<VideoSender, Iap2BluetoothClient, CarLifeAudioBridge, Context>",
+            "adapter 必须挂接 slots",
+        )
+        requireContains(
+            adapter,
+            "object : VideoEndActions<VideoSender, CarLifeSession, Iap2BluetoothClient, CarLifeAudioBridge, Context>",
+            "adapter 必须挂接 actions",
+        )
+        requireOrder(adapter, "override val currentSender: VideoSender?", "get() = videoSender", "sender 身份必须动态转发")
+        requireOrder(adapter, "override val outputSender: VideoSender?", "get() = carLifeOutput?.sender", "输出身份必须动态转发")
+        requireOrder(adapter, "override val nativeBridge: CarLifeAudioBridge?", "get() = nativeAudioBridge", "音频桥必须动态转发")
+        requireOrder(adapter, "override val btClient: Iap2BluetoothClient?", "get() = bluetoothClient", "蓝牙客户端必须动态转发")
+        requireOrder(adapter, "override val context: Context?", "get() = appContext", "Context 必须动态转发")
+        requireOrder(adapter, "override fun log(message: String)", "appendLog(message)", "日志委托 SC")
+        requireOrder(adapter, "override fun stopCarLife(carLife: CarLifeSession)", "carLife.stop()", "CarLife stop 委托叶子")
+        requireOrder(adapter, "override fun releaseCarLife(carLife: CarLifeSession)", "releaseCarLifeSession(carLife)", "CarLife 释放委托叶子")
+        requireOrder(adapter, "override fun clearCarLifeOutput()", "carLifeOutput = null", "输出清理委托 SC")
+        requireOrder(adapter, "override fun recordAutoReconnectOutcome(", "DiagnosticCode.VIDEO_CLOSED", "记账必须透传 VIDEO_CLOSED")
+        requireOrder(adapter, "override fun disconnect(context: Context)", "DiagnosticCode.VIDEO_CLOSED", "终态收尾必须透传 VIDEO_CLOSED")
+        val helper = videoEndedFunction("handle")
+        val actionsLog = "actions.log("
+        val resetSample = "slots.resetEnvironmentSampleAt()"
+        requireOrder(helper, "capture.senderIdentity()", "if (slots.currentSender !== sender) return", "先读取身份再守卫")
+        requireContains(helper, "if (slots.currentSender !== sender) return", "身份不符立即返回")
+        val guardTail = helper.substringAfter("if (slots.currentSender !== sender) return")
+        assertFalse("守卫后不得先 return 再执行副作用", guardTail.startsWith("return"))
+        requireFirstBefore(helper, "if (slots.currentSender !== sender) return", actionsLog, "守卫先于统计日志")
+        requireOrder(helper, "if (slots.currentSender !== sender) return", resetSample, "守卫先于采样清零")
+        requireOrder(helper, "if (slots.currentSender !== sender) return", "capture.carLifeBinding()", "守卫先于 CarLife 延迟读取")
+        requireOrder(helper, "if (slots.currentSender !== sender) return", "slots.outputSender", "守卫先于输出身份读取")
+        requireOrder(helper, resetSample, "videoEndedTimeline(capture.attempt)", "先清采样再记结束")
+        requireOrder(helper, "videoEndedTimeline(capture.attempt)", "mediaEnded(capture.mediaObservation())", "诊断先于探测恢复")
+        requireOrder(helper, "mediaEnded(capture.mediaObservation())", "stopCarLife(carLife)", "探测后停 CarLife")
+        requireOrder(helper, "stopCarLife(carLife)", "releaseCarLife(carLife)", "CarLife stop 后释放")
+        requireOrder(helper, "releaseCarLife(carLife)", "clearCarLifeOutput()", "释放后再校验清理输出")
+        requireOrder(helper, "clearCarLifeOutput()", "releaseWifiLock()", "输出清理后释放 WiFi")
+        requireOrder(helper, "releaseWifiLock()", "slots.context?.let(actions::stopScreenMonitor)", "WiFi 后停锁屏监控")
         requireOrder(
-            body,
-            "ConnectionDiagnostics.timeline.videoEnded(diagnosticAttempt)",
-            "ReceiverDetectionRuntime.mediaEnded(client.currentEndpoint.observation)",
-            "诊断先于探测恢复",
+            helper,
+            "slots.context?.let(actions::stopScreenMonitor)",
+            "slots.nativeBridge?.let(actions::stopNativeBridge)",
+            "监控后停音频桥",
         )
-        requireOrder(
-            body,
-            "ReceiverDetectionRuntime.mediaEnded(client.currentEndpoint.observation)",
-            "carLife?.let { it.stop() releaseCarLifeSession(it) }",
-            "探测后停 CarLife",
+        requireOrder(helper, "slots.nativeBridge?.let(actions::stopNativeBridge)", "slots.clearNativeBridge()", "桥置空后清 native 桥")
+        requireOrder(helper, "slots.clearNativeBridge()", "slots.btClient?.let(actions::armBluetoothAfterSessionEnd)", "桥后恢复蓝牙探测")
+        requireOrder(helper, "slots.btClient?.let(actions::armBluetoothAfterSessionEnd)", "slots.setSessionInactive()", "蓝牙宽限后解除会话静默")
+        requireOrder(helper, "setSessionInactive()", "setDimmerInactive()", "静默后收暗幕")
+        requireOrder(helper, "setDimmerInactive()", "restorePhoneScreen(sleepIfCarSide = true)", "暗幕后恢复物理屏")
+        requireOrder(helper, "restorePhoneScreen(sleepIfCarSide = true)", "cleanupShellFallbackNetwork()", "屏幕恢复后 shell 清理")
+        requireOrder(helper, "cleanupShellFallbackNetwork()", "attributeAudioTeardown()", "shell 清理后音频归因")
+        requireOrder(helper, "attributeAudioTeardown()", "recordAutoReconnectOutcome(", "归因后记录熔断")
+        val finalBlock = lambdaAfter(helper, "if (actions.recordAutoReconnectOutcome")
+        requireOrder(helper, "recordAutoReconnectOutcome(", "slots.context?.let(actions::disconnect)", "熔断且 Context 存在才终态收尾")
+        requireContains(finalBlock, "slots.context?.let(actions::disconnect)", "终态 disconnect 在熔断块内")
+        assertTrue("helper 只允许一次 disconnect", helper.split("actions::disconnect").size - 1 == 1)
+        requireContains(
+            helper,
+            "if (slots.outputSender === capture.senderIdentity()) slots.clearCarLifeOutput()",
+            "输出清理必须受身份条件支配",
         )
-        requireOrder(body, "carLife?.let", "if (carLifeOutput?.sender === sender) carLifeOutput = null", "CarLife 输出身份校验")
-        requireOrder(body, "if (carLifeOutput?.sender === sender) carLifeOutput = null", "StreamingWifiLock.release()", "输出清理后释放 WiFi")
-        requireOrder(body, "StreamingWifiLock.release()", "appContext?.let(ScreenLockMonitor::stop)", "WiFi 后停锁屏监控")
-        requireOrder(body, "appContext?.let(ScreenLockMonitor::stop)", "nativeAudioBridge?.stop()", "监控后停音频桥")
-        requireOrder(body, "nativeAudioBridge?.stop()", "nativeAudioBridge = null", "桥置空")
-        requireOrder(body, "nativeAudioBridge = null", "bluetoothClient?.armAfterSessionEnd()", "桥后恢复蓝牙探测")
-        requireOrder(body, "bluetoothClient?.armAfterSessionEnd()", "BtSessionGate.sessionActive = false", "蓝牙宽限后解除会话静默")
-        requireOrder(body, "BtSessionGate.sessionActive = false", "ScreenDimmer.setSessionActive(false)", "静默后收暗幕")
-        requireOrder(body, "ScreenDimmer.setSessionActive(false)", "restorePhoneScreen(sleepIfCarSide = true)", "暗幕后恢复物理屏")
-        requireOrder(body, "restorePhoneScreen(sleepIfCarSide = true)", "cleanupShellFallbackNetwork()", "屏幕恢复后 shell 清理")
-        requireOrder(body, "cleanupShellFallbackNetwork()", "attributeAudioTeardown()", "shell 清理后音频归因")
-        requireOrder(body, "attributeAudioTeardown()", "recordAutoReconnectOutcome(", "归因后记录熔断")
-        val finalBlock = lambdaAfter(body, "if (recordAutoReconnectOutcome(")
-        requireOrder(
-            body,
-            "recordAutoReconnectOutcome(",
-            "disconnect(it, DiagnosticCode.VIDEO_CLOSED)",
-            "熔断且 Context 存在才终态收尾",
-        )
-        requireContains(finalBlock, "disconnect(it, DiagnosticCode.VIDEO_CLOSED)", "终态 disconnect 在熔断块内")
-        assertTrue("onEnded 回调只允许一次 disconnect", body.split("disconnect(").size - 1 == 1)
+        assertTrue("输出清理只允许一次", helper.split("slots.clearCarLifeOutput()").size - 1 == 1)
         listOf(
             "retireSession(",
             "bluetoothServer?.stop()",
@@ -558,11 +663,12 @@ class EndAttemptTraceTest {
             "CountDownLatch",
             "detachActiveBtSessions",
         ).forEach { needle ->
-            assertFalse("普通 onEnded 不应包含 $needle", body.contains(needle))
+            assertFalse("普通 onEnded 不应包含 $needle", callback.contains(needle) || helper.contains(needle))
         }
-        listOf("client?.secret", "audioSender", "VideoSender").forEach { needle ->
-            assertFalse("普通 onEnded 不应清理 $needle", body.contains(needle))
+        listOf("client?.secret", "audioSender").forEach { needle ->
+            assertFalse("普通 onEnded 不应清理 $needle", callback.contains(needle) || helper.contains(needle))
         }
+        assertFalse("helper 不得直接 stop sender", helper.contains("sender.stop("))
     }
 
     @Test
@@ -800,16 +906,13 @@ class EndAttemptTraceTest {
 
     @Test
     fun audioAttributionPreservesClientWatchdogGuard() {
-        val bodyTop = scFunction("attributeAudioTeardown")
+        val bodyTop = normalize(rawScFunctionLast("attributeAudioTeardown"))
         val guardScope = lambdaAfter(bodyTop, "currentClient?.let")
-        val guardBlock =
-            lambdaAfter(
-                guardScope,
-                "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)",
-            )
+        val guardBlock = lambdaAfter(guardScope, "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)")
         requireContains(bodyTop, "val profile = activeAudioProfile ?: return", "无 active profile 直接返回")
-        requireOrder(bodyTop, "val profile = activeAudioProfile ?: return", "currentClient?.let { client ->", "profile 先取，client 守卫后判断")
-        requireContains(guardScope, "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)", "MIB3 看门狗守卫")
+        requireOrder(bodyTop, "val profile = activeAudioProfile ?: return", "currentClient?.let { client ->", "profile 先取，当前 client 守卫后判断")
+        requireContains(bodyTop, "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)", "MIB3 看门狗守卫")
+        requireContains(bodyTop, "currentClient?.let { client ->", "看门狗必须读取动态当前 client")
         requireOrder(guardBlock, "activeAudioProfile = null", "activeAudioStartedAt = 0L", "profile 清理后清 start")
         requireContains(guardBlock, "return", "守卫命中直接返回")
         requireOrder(bodyTop, "currentClient?.let { client ->", "if (startedAt == 0L || identity.isBlank()) return", "client 守卫先于无记忆判断")
@@ -826,8 +929,11 @@ class EndAttemptTraceTest {
                 "handoffOwnership.blockNewHandoffs() connectCancelled = true",
                 "connectCancelled = true handoffOwnership.blockNewHandoffs()",
             )
-        assertContractRejected(
-            swappedEntry,
+        assertReplacementRejected(
+            "swapped disconnect entry",
+            disconnect,
+            "handoffOwnership.blockNewHandoffs() connectCancelled = true",
+            "connectCancelled = true handoffOwnership.blockNewHandoffs()",
             listOf("connectCancelled = true", "handoffOwnership.blockNewHandoffs()"),
         ) { source ->
             requireOrder(source, "handoffOwnership.blockNewHandoffs()", "connectCancelled = true", "交接入口先于取消标志")
@@ -835,24 +941,53 @@ class EndAttemptTraceTest {
         val completeAdapter = lambdaAfter(controller, "override fun completeOuter(completed: java.util.concurrent.CountDownLatch)")
         val completeFunction = coordinationFunction("complete")
         val syncBlock = lambdaAfter(completeFunction, "synchronized(ownerMonitor)")
-        val countDownInsideLock =
-            syncBlock.replace(
-                "state.setSessionActive(false)",
-                "state.setSessionActive(false) captured.countDown()",
-            )
-        assertContractRejected(
-            countDownInsideLock,
+        assertReplacementRejected(
+            "countDown inside sync block",
+            syncBlock,
+            "state.setSessionActive(false)",
+            "state.setSessionActive(false) captured.countDown()",
             listOf("state.setSessionActive(false)", "captured.countDown()"),
         ) { source ->
             assertTrue("countDown 不得在完成身份同步块内", !source.contains("captured.countDown()"))
         }
-        val onEnded = normalize(lambdaAfter(controller, "onEnded = onVideoEnded@"))
-        val invertedGuard = onEnded.replace("videoSender !== sender", "videoSender === sender")
-        assertContractRejected(
-            invertedGuard,
-            listOf("videoSender === sender", "return@onVideoEnded"),
+        val onEndedHelper = videoEndedFunction("handle")
+        assertReplacementRejected(
+            "inverted sender guard",
+            onEndedHelper,
+            "slots.currentSender !== sender",
+            "slots.currentSender === sender",
+            listOf("slots.currentSender === sender"),
         ) { source ->
-            requireContains(source, "videoSender !== sender", "sender 身份不符立即返回")
+            requireContains(source, "slots.currentSender !== sender", "sender 身份不符立即返回")
+        }
+        assertReplacementRejected(
+            "delayed guard",
+            onEndedHelper,
+            "if (slots.currentSender !== sender) return",
+            "actions.log(STALE_MARKER_PLACEHOLDER) slots.resetEnvironmentSampleAt() if (slots.currentSender !== sender) return",
+            listOf("STALE_MARKER_PLACEHOLDER"),
+        ) { source ->
+            requireFirstBefore(source, "if (slots.currentSender !== sender) return", "actions.log(", "守卫先于统计日志")
+        }
+        assertReplacementRejected(
+            "reversed output identity",
+            onEndedHelper,
+            "slots.outputSender === capture.senderIdentity()",
+            "slots.outputSender !== capture.senderIdentity()",
+            listOf("slots.outputSender !== capture.senderIdentity()", "slots.clearCarLifeOutput()"),
+        ) { source ->
+            assertTrue("输出身份匹配才清理", source.contains("if (slots.outputSender === capture.senderIdentity()) slots.clearCarLifeOutput()"))
+        }
+        val staticCurrentClient =
+            controller.replace("currentClient?.let { client ->", "staticClient?.let { client ->")
+        assertReplacementRejected(
+            "static current client",
+            controller,
+            "currentClient?.let { client ->",
+            "staticClient?.let { client ->",
+            listOf("staticClient?.let { client ->"),
+        ) { source ->
+            assertTrue("看门狗必须读取动态当前 client", source.contains("currentClient?.let { client ->"))
         }
         val helperBody = notificationFunction("afterDrain")
         val swappedStopAndCas =

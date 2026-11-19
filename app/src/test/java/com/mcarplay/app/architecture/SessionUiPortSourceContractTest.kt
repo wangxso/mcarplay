@@ -27,7 +27,8 @@ class SessionUiPortSourceContractTest {
     /** 从去注释/字符串后的代码里配平指定函数的参数表与函数体。 */
     private fun producerBody(name: String): String {
         val code = KotlinSource.scan(controller).code
-        val start = code.indexOf("fun $name(")
+        val marker = "fun $name("
+        val start = if (name == "attributeAudioTeardown") code.lastIndexOf(marker) else code.indexOf(marker)
         check(start >= 0) { "找不到函数 $name" }
         var parens = 0
         var i = code.indexOf('(', start)
