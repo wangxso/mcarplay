@@ -31,12 +31,18 @@ class EndAttemptTraceTest {
         KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("video/VideoEndNotification.kt").readText()).code
     }
 
+    private val retirementSource: String by lazy {
+        KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("RoundRetirement.kt").readText()).code
+    }
+
     /** 去注释/字符串后的指定函数，包含签名和函数体，避免日志文案或注释里的关键词污染断言。 */
     private fun scFunction(name: String): String = normalize(function(controller, name))
 
     private fun tailFunction(name: String): String = normalize(function(disconnectTailSource, name))
 
     private fun coordinationFunction(name: String): String = normalize(function(teardownCoordinationSource, name))
+
+    private fun retirementFunction(name: String): String = normalize(function(retirementSource, name))
 
     private fun vsFunction(name: String): String = normalize(function(videoSenderSource, name))
 
@@ -125,6 +131,16 @@ class EndAttemptTraceTest {
         return at
     }
 
+    private fun requireIndex(
+        source: String,
+        needle: String,
+        from: Int,
+    ): Int {
+        val at = source.indexOf(needle, from)
+        check(at >= 0) { "在指定起点后未找到 $needle" }
+        return at
+    }
+
     private fun requireOrder(
         source: String,
         first: String,
@@ -137,6 +153,53 @@ class EndAttemptTraceTest {
         assertTrue("$message（第一个未找到）", firstAt >= 0)
         assertTrue("$message（第二个未找到）", secondAt >= 0)
         assertTrue(message, firstAt < secondAt)
+    }
+
+    /** 在指定作用域内提取带显式类型成员的函数体，避免同名匿名成员或全局首个匹配遮蔽。 */
+    private fun memberFunction(
+        source: String,
+        kind: String,
+        name: String,
+        scope: String,
+    ): String {
+        val start = requireIndex(scope, "$kind fun $name(", "找不到成员 $name")
+        val open = source.indexOf('{', start)
+        check(open >= 0) { "成员 $name 没有函数体" }
+        return normalize(balancedFrom(source, open))
+    }
+
+    /** 在指定作用域内提取带显式类型成员的属性声明和 getter。 */
+    private fun memberProperty(
+        source: String,
+        kind: String,
+        name: String,
+        scope: String,
+    ): String {
+        val start = requireIndex(scope, "$kind $name:", "找不到成员 $name")
+        val getterAt = requireIndex(scope, "get()", start)
+        val getterOpen = requireIndex(source, "{", getterAt)
+        val getterClose = requireIndex(source, "}", getterOpen)
+        return normalize(source.substring(start, getterClose + 1))
+    }
+
+    /** 提取 `RoundRetirement(...)` 完整构造调用；其尾部用原接收者限定同名叶子。 */
+    private fun retirementConstructorCall(): String {
+        val start = requireIndex(controller, "RoundRetirement(", "找不到 RoundRetirement 构造")
+        val parenOpen = requireIndex(controller, "(", start)
+        var parens = 0
+        var i = parenOpen
+        while (i < controller.length) {
+            when (controller[i]) {
+                '(' -> parens++
+                ')' -> {
+                    parens--
+                    if (parens == 0) break
+                }
+            }
+            i++
+        }
+        check(parens == 0) { "RoundRetirement 构造调用没有闭合" }
+        return normalize(controller.substring(start, i + 1))
     }
 
     private fun requireContains(
@@ -374,36 +437,57 @@ class EndAttemptTraceTest {
     fun retireSessionIsRoundScopedAndDoesNotDetachBt() {
         assertFalse("retireSession 不应持有控制器锁", hasAnnotation("retireSession", "Synchronized"))
         val body = scFunction("retireSession")
-        requireOrder(body, "currentClient?.beginOrderlyStop()", "screenStreamRecovery = null", "begin 先撤恢复")
-        requireOrder(body, "screenStreamRecovery = null", "stopAutoPlayWatch()", "恢复先于 watch")
-        requireOrder(body, "stopAutoPlayWatch()", "val retiringSender = videoSender", "watch 先捕获 sender")
-        requireOrder(body, "val retiringSender = videoSender", "videoSender = null", "先捕获再撤 sender")
+        requireContains(body, "roundRetirement.retire(closeClient, preserveScreenSocket)", "facade 仅委托 retirement")
+        val retireBody = retirementFunction("retire")
+        requireOrder(retireBody, "slots.client?.let(actions::beginClient)", "slots.clearRecovery()", "begin 先撤恢复")
+        requireOrder(retireBody, "slots.clearRecovery()", "actions.stopAutoPlayWatch()", "恢复先于 watch")
+        requireOrder(retireBody, "actions.stopAutoPlayWatch()", "val retiringSender = slots.sender", "watch 先捕获 sender")
+        requireOrder(retireBody, "val retiringSender = slots.sender", "slots.sender = null", "先捕获再撤 sender")
         requireOrder(
-            body,
-            "videoSender = null",
-            "if (preserveScreenSocket) retiringSender?.quiesceForOrderlyStop() else retiringSender?.stop()",
-            "撤 sender 后再停或静默",
+            retireBody,
+            "slots.sender = null",
+            "if (preserveScreenSocket)",
+            "撤 sender 后再静默或停",
         )
         requireOrder(
-            body,
-            "if (preserveScreenSocket) retiringSender?.quiesceForOrderlyStop() else retiringSender?.stop()",
-            "StreamingWifiLock.release()",
-            "视频先停再释放 WiFi",
+            retireBody,
+            "if (preserveScreenSocket)",
+            "actions.releaseWifiLock()",
+            "sender 收口后释放 WiFi",
         )
-        requireOrder(body, "StreamingWifiLock.release()", "appContext?.let(ScreenLockMonitor::stop)", "WiFi 后停锁屏监控")
-        requireOrder(body, "appContext?.let(ScreenLockMonitor::stop)", "ScreenDimmer.setSessionActive(false)", "监控后收暗幕")
-        requireOrder(body, "ScreenDimmer.setSessionActive(false)", "restorePhoneScreen(sleepIfCarSide = false)", "暗幕后恢复物理屏")
-        requireOrder(body, "restorePhoneScreen(sleepIfCarSide = false)", "audioSender?.stop()", "屏幕恢复先停音频")
-        requireOrder(body, "audioSender?.stop()", "audioSender = null", "音频 sender 置空")
-        requireOrder(body, "audioSender = null", "nativeAudioBridge?.stop()", "sender 后停桥")
-        requireOrder(body, "nativeAudioBridge?.stop()", "nativeAudioBridge = null", "桥置空")
-        requireOrder(body, "nativeAudioBridge = null", "currentSharedSecret = null", "桥后清密钥")
-        requireOrder(body, "currentSharedSecret = null", "currentAudioHost = null", "密钥后清 host")
-        requireOrder(body, "currentAudioHost = null", "stopFormalCarLife()", "host 后停 CarLife")
-        requireOrder(body, "stopFormalCarLife()", "currentClient?.cancelled = true", "CarLife 后取消 client")
-        requireOrder(body, "currentClient?.cancelled = true", "if (closeClient) currentClient?.close()", "取消后按条件关闭")
-        requireOrder(body, "if (closeClient) currentClient?.close()", "currentClient = null", "关闭后清引用")
-        requireOrder(body, "currentClient = null", "BtSessionGate.sessionActive = false", "client 清理后解除静默")
+        requireOrder(retireBody, "actions.releaseWifiLock()", "val context = slots.context", "WiFi 后晚读 Context")
+        requireOrder(retireBody, "val context = slots.context", "context?.let(actions::stopScreenMonitor)", "Context 后停锁屏监控")
+        requireOrder(retireBody, "context?.let(actions::stopScreenMonitor)", "actions.setDimmerInactive()", "监控后收暗幕")
+        requireOrder(retireBody, "actions.setDimmerInactive()", "actions.restorePhoneScreen(false)", "暗幕后恢复物理屏")
+        requireOrder(retireBody, "actions.restorePhoneScreen(false)", "val retiringAudio = slots.audio", "屏幕恢复后捕获音频")
+        requireOrder(retireBody, "val retiringAudio = slots.audio", "retiringAudio?.let(actions::stopAudio)", "音频捕获后 stop")
+        requireOrder(retireBody, "retiringAudio?.let(actions::stopAudio)", "slots.audio = null", "音频 sender 置空")
+        requireOrder(retireBody, "slots.audio = null", "val retiringBridge = slots.bridge", "sender 后捕获桥")
+        requireOrder(retireBody, "val retiringBridge = slots.bridge", "retiringBridge?.let(actions::stopBridge)", "桥捕获后 stop")
+        requireOrder(retireBody, "retiringBridge?.let(actions::stopBridge)", "slots.bridge = null", "桥置空")
+        requireOrder(retireBody, "slots.bridge = null", "slots.clearSharedSecret()", "桥后清密钥")
+        requireOrder(retireBody, "slots.clearSharedSecret()", "slots.clearAudioHost()", "密钥后清 host")
+        requireOrder(retireBody, "slots.clearAudioHost()", "actions.stopFormalCarLife()", "host 后停 CarLife")
+        requireOrder(retireBody, "actions.stopFormalCarLife()", "slots.client?.let(slots::markCancelled)", "CarLife 后取消 client")
+        requireOrder(retireBody, "slots.client?.let(slots::markCancelled)", "if (closeClient)", "取消后按条件关闭")
+        requireOrder(retireBody, "if (closeClient)", "slots.client = null", "关闭后清引用")
+        requireOrder(retireBody, "slots.client = null", "slots.setSessionInactive()", "client 清理后解除静默")
+        listOf(
+            "detachActiveBtSessions",
+            "bluetoothServer?.stop()",
+            "bluetoothClient?.stop()",
+            "cleanupShellFallbackNetwork()",
+            "attributeAudioTeardown()",
+            "CarPlayService.stop(context)",
+            "CountDownLatch",
+        ).forEach { needle ->
+            assertFalse("retireSession 不应包含 $needle", body.contains(needle) || retireBody.contains(needle))
+        }
+        assertFalse("retire 不应新增锁", retireBody.contains("synchronized"))
+        assertFalse("retire 不应新增 catch", retireBody.contains("catch"))
+        assertFalse("retire 不应新增 finally", retireBody.contains("finally"))
+        assertFalse("retire 不应新增调度", retireBody.contains("Bg.run"))
+        assertFalse("retire 不应新增 BT detach", retireBody.contains("detachActiveBtSessions"))
         listOf(
             "detachActiveBtSessions",
             "bluetoothServer?.stop()",
@@ -537,6 +621,118 @@ class EndAttemptTraceTest {
         )
         assertFalse("透传 finally 不得直接保留旧 CAS", externalFinally.contains("endedNotified.compareAndSet"))
         assertFalse("编码 finally 不得直接保留旧 CAS", encoderFinally.contains("endedNotified.compareAndSet"))
+    }
+
+    @Test
+    fun retireSessionAdapterForwardsToOriginalLeaves() {
+        val call = retirementConstructorCall()
+        val slotScope = call.substringBefore("object : RoundActions")
+        val actionScope = call.substringAfter("object : RoundActions")
+        val slotClient = memberProperty(source = slotScope, kind = "override var", name = "client", scope = slotScope)
+        val slotSender = memberProperty(source = slotScope, kind = "override var", name = "sender", scope = slotScope)
+        val slotAudio = memberProperty(source = slotScope, kind = "override var", name = "audio", scope = slotScope)
+        val slotBridge = memberProperty(source = slotScope, kind = "override var", name = "bridge", scope = slotScope)
+        val slotContext = memberProperty(source = slotScope, kind = "override val", name = "context", scope = slotScope)
+        requireContains(slotClient, "get() = currentClient", "client getter 逐次转发")
+        requireContains(slotClient, "currentClient = value", "client setter 只写原字段")
+        requireContains(slotSender, "get() = videoSender", "sender getter 逐次转发")
+        requireContains(slotSender, "videoSender = value", "sender setter 只写原字段")
+        requireContains(slotAudio, "get() = audioSender", "audio getter 逐次转发")
+        requireContains(slotAudio, "audioSender = value", "audio setter 只写原字段")
+        requireContains(slotBridge, "get() = nativeAudioBridge", "bridge getter 逐次转发")
+        requireContains(slotBridge, "nativeAudioBridge = value", "bridge setter 只写原字段")
+        requireContains(slotContext, "get() = appContext", "context getter 逐次转发")
+        requireContains(slotScope, "clearRecovery() { screenStreamRecovery = null", "clear recovery 只写原字段")
+        requireContains(slotScope, "clearSharedSecret() { currentSharedSecret = null", "clear secret 只写原字段")
+        requireContains(slotScope, "clearAudioHost() { currentAudioHost = null", "clear host 只写原字段")
+        val markCancelled = memberFunction(source = slotScope, kind = "", name = "markCancelled", scope = slotScope)
+        requireContains(markCancelled, "client.cancelled = true", "markCancelled 只写传入 client")
+        val setSessionInactive = memberFunction(source = slotScope, kind = "", name = "setSessionInactive", scope = slotScope)
+        requireContains(setSessionInactive, "BtSessionGate.sessionActive = false", "gate 赋值在 slot 适配器")
+        assertFalse("setSessionInactive 不应 detach BT", setSessionInactive.contains("detachActiveBtSessions"))
+        assertFalse(
+            "setSessionInactive 不应停 BT",
+            setSessionInactive.contains("bluetoothServer?.stop") || setSessionInactive.contains("bluetoothClient?.stop"),
+        )
+
+        val beginClient = memberFunction(source = actionScope, kind = "", name = "beginClient", scope = actionScope)
+        requireContains(beginClient, "client.beginOrderlyStop()", "begin 转发原 client 方法")
+        val stopAutoPlayWatch = memberFunction(source = actionScope, kind = "", name = "stopAutoPlayWatch", scope = actionScope)
+        requireContains(stopAutoPlayWatch, "this@SessionController.stopAutoPlayWatch()", "watch 显式绑定原 SC 接收者")
+        val stopSender = memberFunction(source = actionScope, kind = "", name = "stopSender", scope = actionScope)
+        requireContains(stopSender, "sender.stop()", "stop 转发捕获 sender")
+        val quiesceSender = memberFunction(source = actionScope, kind = "", name = "quiesceSender", scope = actionScope)
+        requireContains(quiesceSender, "sender.quiesceForOrderlyStop()", "quiesce 转发捕获 sender")
+        val releaseWifiLock = memberFunction(source = actionScope, kind = "", name = "releaseWifiLock", scope = actionScope)
+        requireContains(releaseWifiLock, "StreamingWifiLock.release()", "WiFi release 转发原静态入口")
+        val stopScreenMonitor = memberFunction(source = actionScope, kind = "", name = "stopScreenMonitor", scope = actionScope)
+        requireContains(stopScreenMonitor, "ScreenLockMonitor.stop(context)", "monitor 转发原静态入口")
+        val setDimmerInactive = memberFunction(source = actionScope, kind = "", name = "setDimmerInactive", scope = actionScope)
+        requireContains(setDimmerInactive, "ScreenDimmer.setSessionActive(false)", "dimmer 转发原静态入口")
+        val restorePhoneScreen = memberFunction(source = actionScope, kind = "", name = "restorePhoneScreen", scope = actionScope)
+        requireContains(restorePhoneScreen, "this@SessionController.restorePhoneScreen(sleepIfCarSide)", "restore 显式绑定原 SC 接收者")
+        val stopAudio = memberFunction(source = actionScope, kind = "", name = "stopAudio", scope = actionScope)
+        requireContains(stopAudio, "audio.stop()", "audio 转发捕获对象")
+        val stopBridge = memberFunction(source = actionScope, kind = "", name = "stopBridge", scope = actionScope)
+        requireContains(stopBridge, "bridge.stop()", "bridge 转发捕获对象")
+        val stopFormalCarLife = memberFunction(source = actionScope, kind = "", name = "stopFormalCarLife", scope = actionScope)
+        requireContains(stopFormalCarLife, "this@SessionController.stopFormalCarLife()", "CarLife 显式绑定原 SC 接收者")
+        val closeClient = memberFunction(source = actionScope, kind = "", name = "closeClient", scope = actionScope)
+        requireContains(closeClient, "client.close()", "close 转发捕获 client")
+    }
+
+    @Test
+    fun retireSessionConstructorHasZeroReadsOrSideEffects() {
+        val constructor = retirementConstructorCall()
+        listOf("slots.client", "slots.sender", "slots.audio", "slots.bridge", "slots.context").forEach { needle ->
+            assertFalse("构造不得预读 $needle", constructor.contains(needle))
+        }
+        listOf(
+            "beginOrderlyStop",
+            "stopAutoPlayWatch",
+            "stopSender",
+            "quiesceForOrderlyStop",
+            "releaseWifiLock",
+            "ScreenLockMonitor.stop",
+            "setSessionInactive",
+        ).forEach { needle ->
+            assertFalse("构造不得预执行 $needle", constructor.startsWith(needle))
+        }
+        val facade = scFunction("retireSession")
+        assertTrue(
+            "facade 只能一行委托",
+            Regex("\\{ roundRetirement\\.retire\\(closeClient, preserveScreenSocket\\) \\}").containsMatchIn(facade),
+        )
+    }
+
+    @Test
+    fun retirementRoundScopedWithoutNewConcurrencyGuards() {
+        val body = retirementFunction("retire")
+        assertFalse("retire 不应新增锁", body.contains("synchronized"))
+        assertFalse("retire 不应新增 catch", body.contains("catch"))
+        assertFalse("retire 不应新增 finally", body.contains("finally"))
+        assertFalse("retire 不应新增调度", body.contains("Bg.run"))
+        assertFalse("retire 不应新增 latch", body.contains("CountDownLatch"))
+        assertFalse("retire 不应新增 BT detach", body.contains("detachActiveBtSessions"))
+        assertFalse("retire 不应新增 identity-CAS", body.contains("compareAndSet"))
+    }
+
+    @Test
+    fun retireSessionCallsUseSixAuthorizedSites() {
+        val facade = scFunction("retireSession")
+        requireContains(facade, "roundRetirement.retire(closeClient, preserveScreenSocket)", "facade 委托 retirement")
+        val disconnect = scFunction("disconnect")
+        requireContains(disconnect, "retireSession(closeClient = false, preserveScreenSocket = true)", "disconnect 使用 false,true")
+        val reconnect = scFunction("reconnectOnStreamingInvite")
+        requireOrder(reconnect, "streamingDiagnosticAttempt = null", "retireSession()", "invite 默认参数")
+        val startBody = scFunction("startConnection")
+        val endpointBody = scFunction("onCarPlayEndpoint")
+        val pairingScope = lambdaAfter(endpointBody, "val airPlayConnected = AtomicBoolean(false) Bg.run(\"\")")
+        requireOrder(pairingScope, "if (scope.isCurrent) retireSession()", "BtSessionGate.sessionActive = true", "pair-start 默认参数")
+        requireOrder(pairingScope, "if (scope.isCurrent) retireSession()", "appendLog(\"\")", "pair-cancel 默认参数")
+        requireOrder(pairingScope, "if (scope.isCurrent) retireSession()", "releaseHandoff()", "pair-hack 默认参数")
+        val recordScope = lambdaAfter(endpointBody, "if (!client.record())")
+        requireOrder(recordScope, "if (scope.isCurrent && currentClient === client)", "retireSession()", "record 默认参数")
     }
 
     @Test
