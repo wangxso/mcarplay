@@ -3514,7 +3514,8 @@ object SessionController {
         source: String,
     ) {
         Bg.run("pending-start-session-watch") {
-            var promptedSsid: String? = null
+            var promptedKey: String? = null
+            var loggedNoWifi = false
             var triedInvites = 0
             var tick = 0
             val deadline = android.os.SystemClock.uptimeMillis() + PENDING_START_SESSION_WAIT_MS
@@ -3540,13 +3541,33 @@ object SessionController {
                 if (connectCancelled) return@run
                 if (++tick % 5 != 0) continue
                 val ssid = liveWifiSsid()?.takeIf { it.isNotBlank() }
-                val network = wifiConnector?.currentWifiNetwork() ?: continue
-                if (ssid.isNullOrEmpty() && !hasRecentUnverifiedInvite()) continue
-                val label = ssid?.takeIf { it.isNotEmpty() } ?: INVITED_WIFI_LABEL
-                // 同一 SSID 只问一次（用户选「继续等待」后不再打扰）；换网络再问。
+                val network = wifiConnector?.currentWifiNetwork()
+                if (network == null && ssid == null) {
+                    // 没有 Network 句柄也读不到 SSID 时无法证明「当前网络」是哪一张；
+                    // 仍继续等 0x4301/邀请，但把原因写进日志，避免弹窗看起来随机消失。
+                    if (!loggedNoWifi) {
+                        loggedNoWifi = true
+                        appendLog(
+                            ">>> [$source] 当前没有可用的 WiFi Network 句柄，也读不到 SSID——" +
+                                "本轮无法弹出「按车机热点继续」确认，继续等待 0x4301/邀请",
+                        )
+                    }
+                    continue
+                }
+                loggedNoWifi = false
+                val shown = WifiNetworkToken(network, ssid)
+                val label = ssid ?: INVITED_WIFI_LABEL
+                // 同一 SSID 只问一次（用户选「继续等待」后不再打扰）；SSID 不可读时按
+                // Network 句柄去重，换网络后重新询问。
                 val promptKey = ssid ?: network.toString()
-                if (promptedSsid == promptKey) continue
-                promptedSsid = promptKey
+                if (promptedKey == promptKey) continue
+                promptedKey = promptKey
+                appendLog(
+                    ">>> [$source] 当前 WiFi（" +
+                        (if (ssid != null) "SSID 已读取" else "SSID 不可读") + "，" +
+                        (if (network != null) "Network 可用" else "Network 不可用") +
+                        "）尚未核验为车机热点——询问是否按车机热点继续",
+                )
                 val choice =
                     askWifiJoinChoice(
                         DialogSpec(
@@ -3562,11 +3583,16 @@ object SessionController {
                             negative = t(R.string.sc_keep_waiting),
                         ),
                         // 同一张网络只问一次；答案也只能在这张网络上复用。
-                        shownNetwork = WifiNetworkToken(network, ssid),
+                        shownNetwork = shown,
                     )
                 if (choice == true && !connectCancelled && !sessionStarting.get() && stillPending()) {
-                    if (wifiConnector?.currentWifiNetwork() != network) {
-                        promptedSsid = null
+                    val confirmedNetwork = wifiConnector?.currentWifiNetwork()
+                    if (confirmedNetwork == null) {
+                        appendLog(">>> [$source] 用户确认后仍拿不到 WiFi Network 句柄——继续等待，不重复弹窗")
+                        continue
+                    }
+                    if (!shown.matches(confirmedNetwork, liveWifiSsid())) {
+                        promptedKey = null
                         appendLog(">>> [$source] 用户确认期间当前网络已变化——重新等待确认")
                         continue
                     }
@@ -3577,7 +3603,7 @@ object SessionController {
                             wifiCredentialSource = WifiCredentialSource.CURRENT_NETWORK,
                         ),
                         "$source/手动入网",
-                        verifiedCurrentNetwork = network,
+                        verifiedCurrentNetwork = confirmedNetwork,
                     )
                     return@run
                 }
@@ -4807,6 +4833,22 @@ object SessionController {
                             }
                             // 像 iPhone 一样请车机关蓝牙（真 iPhone 会话开始约 0.1 s 即发，早于屏幕流）
                             if (client.receiverCompatibility().releaseBluetoothAfterSetup) client.releaseReceiverBluetooth()
+                            // MBUX 480.x（issue #62）：HyperCar 0.1.0.588 在同车机成功轮先 RECORD，
+                            // 再声明资源，最后建主屏流。MBUX 可能只在 RECORD 之后才把屏幕流接入显示
+                            // 管线；通用接收端仍保持「资源声明 → 屏幕 SETUP → RECORD」的已验证顺序。
+                            val recordBeforeScreenSetup = client.receiverCompatibility().recordBeforeScreenSetup
+                            val earlyRecordOk =
+                                if (recordBeforeScreenSetup) {
+                                    appendLog(
+                                        "AIRPLAY: MBUX 时序——先 RECORD 激活会话，再声明资源并建立主屏流" +
+                                            "（HyperCar 0.1.0.588 同车机成功时序）",
+                                    )
+                                    client.record().also { ok ->
+                                        if (!ok) appendLog("AIRPLAY: 提前 RECORD 未确认——本轮按失败收尾")
+                                    }
+                                } else {
+                                    true
+                                }
                             // 资源声明（must）：真车对未声明资源的屏幕流 SETUP 直接 400
                             client.assertModes()
                             // HID 输入模式武装：/info hidDevices（奥迪字符串 "0"/"1"，触摸="1"）。
@@ -5107,7 +5149,15 @@ object SessionController {
                                 // 返回同一毫秒、且 5 次实测全部复现。故顺序改为：
                                 //   屏幕 SETUP → 连数据端口 → RECORD → 起编码器（出帧）→ 音频 SETUP
                                 // 音频 SETUP 失败只丢声音，视频会话保持。
-                                if (!client.record()) {
+                                // MBUX 例外：上面已在屏幕 SETUP 前 RECORD（HyperCar 成功时序），
+                                // 这里不再重发；若提前 RECORD 失败则直接进入失败收尾。
+                                val recordOk =
+                                    if (recordBeforeScreenSetup) {
+                                        earlyRecordOk
+                                    } else {
+                                        client.record()
+                                    }
+                                if (!recordOk) {
                                     appendLog("AIRPLAY: RECORD 未确认——结束本轮，不启动视频或音频")
                                     ConnectionDiagnostics.timeline.finish(diagnosticAttempt, DiagnosticCode.SETUP_FAILED, true)
                                     // 该出口只关客户端、不走 disconnect：必须在这里记账。

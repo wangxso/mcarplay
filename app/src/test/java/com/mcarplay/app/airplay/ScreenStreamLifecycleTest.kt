@@ -1,5 +1,7 @@
 package com.mcarplay.app.airplay
 
+import com.mcarplay.app.compat.VehiclePreset
+import com.mcarplay.app.compat.VehiclePresetRuntime
 import com.mcarplay.app.iap2.Iap2SenderSession
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -87,6 +89,37 @@ class ScreenStreamLifecycleTest {
         assertTrue(requests.last().body.isEmpty())
     }
 
+    @Test
+    fun mercedesMbEPresetUsesOneAbsoluteSessionUriForSessionScopedRequests() {
+        val previous = VehiclePresetRuntime.current
+        VehiclePresetRuntime.current = VehiclePreset.MERCEDES_MB_E
+        try {
+            val requests =
+                exchange(6) { client ->
+                    val setup = client.runSetup()
+                    assertNotNull(setup)
+                    assertNotNull(client.runScreenStream(ByteArray(32) { 1 }, setup!!.displayUuid))
+                    assertTrue(client.record())
+                    assertTrue(client.teardownSession())
+                }
+            assertEquals("GET /info", "${requests[1].method} ${requests[1].path}")
+            val uri = requests.first().path
+            assertTrue("SETUP 应使用绝对会话 URI：$uri", uri.startsWith("rtsp://127.0.0.1/"))
+            val setupBody = requests.first().body
+            assertFalse(
+                "MB_E-P 不应提议未实现的 mainBuffered",
+                (setupBody["features"] as List<*>).contains("mainBuffered"),
+            )
+            assertEquals(
+                listOf("SETUP", "SETUP", "RECORD", "TEARDOWN", "TEARDOWN"),
+                requests.filterIndexed { index, _ -> index != 1 }.map { it.method },
+            )
+            assertTrue(requests.filterIndexed { index, _ -> index != 1 }.all { it.path == uri })
+        } finally {
+            VehiclePresetRuntime.current = previous
+        }
+    }
+
     private fun exchange(
         requestCount: Int,
         rejectScreenTeardown: Boolean = false,
@@ -128,8 +161,10 @@ class ScreenStreamLifecycleTest {
                                     val path = lines.first().split(' ')[1]
                                     val response =
                                         when {
+                                            body.containsKey("streams") ->
+                                                mapOf("streams" to listOf(mapOf("dataPort" to 12345L)))
                                             path == "/info" -> mapOf("displays" to listOf(mapOf("uuid" to "display-test")))
-                                            path == "/setup" -> mapOf("eventPort" to 0L)
+                                            path == "/setup" || path.endsWith("/setup") -> mapOf("eventPort" to 0L)
                                             method == "SETUP" -> mapOf("streams" to listOf(mapOf("dataPort" to 12345L)))
                                             else -> emptyMap<String, Any>()
                                         }

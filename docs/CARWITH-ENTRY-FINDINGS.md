@@ -182,6 +182,44 @@
   不同时改 `modesChanged`、面板几何或音频。
 - **验证边界：** 本节来自一份车主报告与离线单测，没有 mcarplay 修复后的实车结果；不构成奔驰兼容声明。
 
+## 2026-11-19 issue #62：test.5 端点已完整仍黑屏；test.6 对照 HyperCar 请求形状（实车报告 + 未验证实验）
+
+- **来源与版本：** 车主提供的脱敏报告
+  `mcarplay-log-20261119-172246-39774cc1-diagnostics.txt`（导出 2026-11-19 17:22:46）。手机
+  Xiaomi 24031PN0DC / Android 17；CarWith `4.0.23-20261016`、CarLife `8.8.5 (274)`；接收端
+  `Mercedes-Benz / MB_E-P-4`、`firmwareRevision=E354.2_4221`、AirPlay `srcvers=480.7.4`，使用手动
+  `MERCEDES_MB_E` 预设。导出环境为 `ACCESS_FINE_LOCATION=false`、`network.active=WIFI`、
+  `network.bound=none`。
+- **test.5 已排除端点回退，但仍无画面：** 稳定会话 `f07b9ce6` 在 17:21:24.248 的 StartHID 窗口内收到
+  `0x4301`，17:21:26.175 得到完整端点（非只靠网关），17:21:26.817 直接配对，17:21:28.657
+  `VIDEO_INIT_DONE 1624x1278@30`。这轮发送 3546 帧、30 个 IDR、12,074,167 B，队满丢帧 0、
+  最慢写入 21 ms，最终由用户停止；车机仍无画面。因此「早到 `0x4301` 被丢弃、只剩网关端点」不再是
+  本轮的失败解释。
+- **test.5 与 HyperCar 成功轮的请求形状差异：** test.5 初始 SETUP 为 739 B，车机返回
+  `enabledFeatures=[hevc, h.264Level5.1, mainBuffered, viewAreas]`；时序为
+  `modesChanged 200`（17:21:26.925）→ HID 输入模式 → 屏幕 SETUP（17:21:26.927）→ RECORD 200
+  （17:21:27.026）。HyperCar 0.1.0.588 在同身份车机上的成功轮是 727 B SETUP、没有 `mainBuffered`，
+  RECORD 200 后声明资源再发 167 B 屏幕 SETUP，并且会话 SETUP、屏幕 SETUP、RECORD、TEARDOWN 共用一个
+  绝对 `rtsp://<host>/<sessionId>` URI。HyperCar 的成功视频为 HEVC；CarWith 源是 H.264，
+  HEVC 是手机端转码后的输出。
+- **热点弹窗不是本轮黑屏的充分解释：** 17:07:10.629 用户确实点击过一次「按车机热点继续」，但
+  17:20:53 之后的会话已经通过 `0x4301` 的 AP 信息直接入网，17:21 没有再次请求弹窗。报告里
+  `network.bound=none` 与无定位权限会影响应用读取当前网络的稳定性，却不足以解释完整端点、稳定推流
+  仍不出画。弹窗有时有、有时无更可能来自「Network 句柄可读但 SSID 不可读」与旧逻辑只在 SSID 非空时
+  询问的组合；test.6 改为有 Network 句柄就允许询问，并在确认后重新核验。
+- **test.6 实验改动（仅手动 `MERCEDES_MB_E`）：** ① 先 RECORD，再 `modesChanged`、HID 输入模式和
+  主屏 SETUP；② 会话级四个 RTSP 请求共用一个生成的绝对会话 URI；③ 撤回本端未实现的
+  `mainBuffered` 提议；④ 热点确认在 SSID 不可读但 Network 可用时仍可触发，并按 SSID/Network 去重。
+  前三项同时改变，属于请求形状组合实验，不能把结果单独归因给某一项；第四项只改连接提示，不影响视频
+  编码或显示协议。
+- **仍未处理的最大差异：** mcarplay 仍发送 H.264 透传，HyperCar 同车成功轮使用 HEVC 转码。另一个
+  BOX OFF 日志在同一车机用 H.264 出画，说明 H.264 不是绝对不可能，但不能排除 MBUX 480.x 在该发送端
+  的请求形状下更接受 HEVC。test.6 没有改编码，因此即使仍黑屏，也不能据此否定 HEVC 假设。
+- **复测边界：** 本条目没有任何 test.6 实车结果，也没有证明 `record-first`、绝对 URI 或撤回
+  `mainBuffered` 能修复黑屏。建议车主只跑一轮干净连接，保持视频-only 至少 60 秒；若仍黑屏，用该轮报告
+  确认四项改动均已生效，下一版再单独做 HEVC 转码实验。不要在 test.6 结果出来前同时改
+  `modesChanged`、面板几何或音频。
+
 ## 2026-11-13 issue #55：奔驰 MB_D-PP-4「开声音后 16–559 ms 拆链」（车主报告，未实车复测）
 
 - **来源：** `wangxso/mcarplay#55`，mcarplay `0.1.6` standard/release 的脱敏报告

@@ -109,11 +109,23 @@ class VehiclePresetTest {
         assertFalse(unknownPolicy.skipIapTunnel)
         assertEquals(32, unknownPolicy.pinnedMfiChallengeLength)
         assertTrue("manual.mercedes-mb-e.mfi-32" in unknownPolicy.rules)
+        assertTrue("MB_E-P 需要先 RECORD", unknownPolicy.recordBeforeScreenSetup)
+        assertTrue("MB_E-P 需要绝对会话 URI", unknownPolicy.absoluteSessionUri)
+        assertFalse(
+            "MB_E-P 不应提议未实现的 mainBuffered",
+            unknownPolicy.offerMainBufferedAudio,
+        )
+        assertTrue("manual.mercedes-mb-e.record-first" in unknownPolicy.rules)
+        assertTrue("manual.mercedes-mb-e.absolute-session-uri" in unknownPolicy.rules)
+        assertTrue("manual.mercedes-mb-e.no-main-buffered" in unknownPolicy.rules)
         // 已知是奔驰（型号/固件不同）也放行——手动预设正是给自动判定认不出的车机用的。
         val mbep = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4", srcvers = "480.7.4")
         assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).preferVehicleResolution)
         assertFalse(resolve(mbep, VehiclePreset.MERCEDES_MB_E).usePanelVideoGeometry)
         assertEquals(32, resolve(mbep, VehiclePreset.MERCEDES_MB_E).pinnedMfiChallengeLength)
+        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).recordBeforeScreenSetup)
+        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).absoluteSessionUri)
+        assertFalse(resolve(mbep, VehiclePreset.MERCEDES_MB_E).offerMainBufferedAudio)
     }
 
     @Test
@@ -124,17 +136,26 @@ class VehiclePresetTest {
         assertFalse(resolve(unknown, VehiclePreset.AUTO).usePanelVideoGeometry)
         assertFalse(resolve(mbep, VehiclePreset.AUTO).preferVehicleResolution)
         assertFalse(resolve(unknown, VehiclePreset.AUTO).preferVehicleResolution)
+        assertFalse(resolve(mbep, VehiclePreset.AUTO).recordBeforeScreenSetup)
+        assertFalse(resolve(mbep, VehiclePreset.AUTO).absoluteSessionUri)
+        assertTrue(resolve(mbep, VehiclePreset.AUTO).offerMainBufferedAudio)
         // 已知是别家车机：守卫拒绝，只记录 blocked。
         listOf(chery, ReceiverProfile.Signals(manufacturer = "Volkswagen", model = "VW4131")).forEach { other ->
             val policy = resolve(other, VehiclePreset.MERCEDES_MB_E)
             assertFalse("${other.manufacturer} 不应套用奔驰实验开关", policy.usePanelVideoGeometry)
             assertFalse("${other.manufacturer} 不应套用奔驰尺寸协商", policy.preferVehicleResolution)
+            assertFalse("${other.manufacturer} 不应套用 MBUX 会话时序", policy.recordBeforeScreenSetup)
+            assertFalse("${other.manufacturer} 不应套用 MBUX 绝对 URI", policy.absoluteSessionUri)
+            assertTrue("${other.manufacturer} 不应撤回 mainBuffered", policy.offerMainBufferedAudio)
             assertFalse("${other.manufacturer} 不应套用奔驰 MFi 固定档", "manual.mercedes-mb-e.mfi-32" in policy.rules)
             assertTrue("manual.mercedes-mb-e-blocked" in policy.rules)
         }
         // 通用预设关闭实验开关。
         assertFalse(resolve(unknown, VehiclePreset.GENERIC).usePanelVideoGeometry)
         assertFalse(resolve(unknown, VehiclePreset.GENERIC).preferVehicleResolution)
+        assertFalse(resolve(unknown, VehiclePreset.GENERIC).recordBeforeScreenSetup)
+        assertFalse(resolve(unknown, VehiclePreset.GENERIC).absoluteSessionUri)
+        assertTrue(resolve(unknown, VehiclePreset.GENERIC).offerMainBufferedAudio)
     }
 
     @Test

@@ -92,6 +92,32 @@ object ReceiverCompatibility {
          * 其它接收端保持关闭，避免一次改动同时影响所有车型。
          */
         val preferVehicleResolution: Boolean = false,
+        /**
+         * 先 RECORD 激活会话，再发 `modesChanged` 资源声明，最后建主屏流。
+         *
+         * HyperCar 0.1.0.588 在同车机 `MB_E-P-4 / 480.7.4` 的成功轮（2026-11-18 06:32:13）
+         * 使用该顺序：RECORD 200 → 资源声明 → 屏幕 SETUP 200 → 首帧。mcarplay 的通用顺序是
+         * 资源声明 → 屏幕 SETUP → RECORD；两者都能拿到 200，但 MBUX 可能只在 RECORD 之后
+         * 才把屏幕流接入显示管线。只对手动 `MERCEDES_MB_E` 开启，其它接收端保持已验证顺序。
+         */
+        val recordBeforeScreenSetup: Boolean = false,
+        /**
+         * SETUP `/setup`、屏幕 SETUP `/`、RECORD `/`、TEARDOWN `/` 共用一个绝对会话 URI
+         * （`rtsp://<host>/<sessionId>`），而不是相对路径。
+         *
+         * 同一份 HyperCar 成功日志的每个请求都是绝对 URI；MBUX 的 RTSP 服务可能按 URI 中的
+         * 会话标识把屏幕流绑定到显示会话。仅对手动 `MERCEDES_MB_E` 开启。
+         */
+        val absoluteSessionUri: Boolean = false,
+        /**
+         * 会话 SETUP 是否提议 `mainBuffered`（AirPlay type 103 缓冲音频）。
+         *
+         * 本端只实现 type 100/101 的 UDP 音频；提议未实现的能力会让接收端启用后
+         * 等不到对应通道。HyperCar 0.1.0.588 在同车机成功轮明确记录
+         * `mainBuffered_proposed=false`，其 SETUP 报文也比 mcarplay 少这一项。
+         * 仅手动 `MERCEDES_MB_E` 关闭，其它接收端保持原能力集。
+         */
+        val offerMainBufferedAudio: Boolean = true,
     )
 
     data class PairingFallback(
@@ -189,7 +215,15 @@ object ReceiverCompatibility {
                         usePanelVideoGeometry = false,
                         preferVehicleResolution = true,
                         pinnedMfiChallengeLength = 32,
-                        rules = policy.rules + "manual.mercedes-mb-e.vehicle-resolution" + "manual.mercedes-mb-e.mfi-32",
+                        recordBeforeScreenSetup = true,
+                        absoluteSessionUri = true,
+                        offerMainBufferedAudio = false,
+                        rules =
+                            policy.rules + "manual.mercedes-mb-e.vehicle-resolution" +
+                                "manual.mercedes-mb-e.mfi-32" +
+                                "manual.mercedes-mb-e.record-first" +
+                                "manual.mercedes-mb-e.absolute-session-uri" +
+                                "manual.mercedes-mb-e.no-main-buffered",
                     )
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")
