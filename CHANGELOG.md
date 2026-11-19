@@ -3,6 +3,24 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.7-test.5] - 2026-11-19
+
+> Experimental prerelease on top of `v0.1.7-test.4`: a single-variable iAP2 fix for the Mercedes MB_E-P / GLC report. The head unit sent a complete `0x4301` during the optional StartHID wait, but the old receive loop logged and discarded it; the later Wi-Fi-credential window then timed out, the app prompted for hotspot confirmation and fell back to a gateway endpoint. This build defers every unexpected frame in that window and lets the existing `0x5703`/`0x4301` stages consume it in order. The test.4 changes are unchanged: 32-byte tunnel MFi and the post-authentication empty `0x5702` were both observed on the vehicle. Issue #62 remains open, and this build does not establish vehicle compatibility.
+
+### English
+- **Early `0x4301` is no longer discarded (issue #62):** `awaitOptionalHid()` now uses the same `expectOrNull()` path as the other optional waits. A complete `0x4301` that arrives during the 2-second StartHID window is stored in `pendingFrames` and consumed by the later credential/start-session stages. The regression test covers subscription noise followed by an early `0x4301` and asserts that the endpoint is delivered without the 8-second "not received" fallback.
+- **Test.4 results:** the same `MB_E-P-4 / 480.7.4` vehicle sent 32-byte MFi challenges for both Bluetooth and the Wi-Fi/event link, authenticated in about 0.45 s, received the post-authentication empty `0x5702`, and returned `0x6800`/`0x5000`/`0x4157`/`0x4154`/`0x4170`. A long session sent 1995 frames, 34 IDRs and 19.1 MB with zero queue drops, but the head unit still showed no picture. CarWith geometry, video sending, MFi, `0x5702` and subscription absence are therefore excluded from this report.
+- **Limits:** this build changes only the handling of an early `0x4301`. It corrects endpoint selection, not display activation; it does not prove that the black screen is fixed. H.264/HEVC behaviour, `modesChanged` replies, panel geometry and audio are unchanged. The next vehicle report should confirm whether the complete `0x4301` endpoint is retained and whether a stable 30-second session produces a picture.
+- **Validation:** 1251 standard JVM tests and 25 remote bridge tests passed; `spotlessCheck`, `lintStandardDebug`, `assembleStandardDebug` and the remote bridge test task passed locally. The signed tag workflow additionally builds `assembleStandardRelease`.
+
+### 简体中文
+- **早到 `0x4301` 不再被丢弃（issue #62）：** `awaitOptionalHid()` 改用与其他可选等待一致的 `expectOrNull()` 路径。落在 2 秒 StartHID 窗口内的完整 `0x4301` 会进入 `pendingFrames`，由后续凭据/启动阶段按原顺序消费。新增回归覆盖「先订阅噪声、再早到 `0x4301`」，断言端点正常交付且不再出现 8 秒「未收到」兜底。
+- **test.4 结果：** 同一台 `MB_E-P-4 / 480.7.4` 的蓝牙和 Wi-Fi/事件链路都已使用 32B MFi，约 0.45 秒完成认证；认证后收到空 `0x5702`，并收到 `0x6800`/`0x5000`/`0x4157`/`0x4154`/`0x4170`。长会话发送 1995 帧、34 个 IDR、19.1 MB，队满丢帧 0，但车机仍无画面。因此本轮可排除 CarWith 尺寸、视频发送、MFi、`0x5702` 和「订阅完全缺失」。
+- **限制：** 本构建只改变早到 `0x4301` 的处理，修正的是端点选择，不是显示激活；不证明黑屏已解决。H.264/HEVC 行为、`modesChanged` 回执、面板几何和音频均未改动。下一份实车报告应确认完整 `0x4301` 端点是否保留，以及稳定 30 秒以上是否出画。
+- **验证：** standard JVM 测试 1251 个、remote bridge 测试 25 个通过；`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 与 remote bridge 测试任务在本地通过。签名 tag 工作流还会构建 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.7-test.4...v0.1.7-test.5](https://github.com/wangxso/mcarplay/compare/v0.1.7-test.4...v0.1.7-test.5)
+
 ## [v0.1.7-test.4] - 2026-11-18
 
 > Experimental prerelease on top of `v0.1.7-test.3`: a combined Mercedes MB_E-P / GLC tunnel-authentication trial. The manual preset now sends a 32-byte tunnel MFi challenge first, and the MIB3/event-link burst adds an empty `0x5702` after `0x4e0c`, matching the sequence observed in HyperCar 0.1.0.588 on the same head unit. This is a two-change experiment, so a pass or failure cannot be attributed to either change alone. It has not been tried on a vehicle, issue #62 remains open, and this does not establish vehicle compatibility.
