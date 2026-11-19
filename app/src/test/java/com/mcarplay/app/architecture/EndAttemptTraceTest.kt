@@ -23,10 +23,16 @@ class EndAttemptTraceTest {
         KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("DisconnectTail.kt").readText()).code
     }
 
+    private val teardownCoordinationSource: String by lazy {
+        KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("TeardownCoordination.kt").readText()).code
+    }
+
     /** 去注释/字符串后的指定函数，包含签名和函数体，避免日志文案或注释里的关键词污染断言。 */
     private fun scFunction(name: String): String = normalize(function(controller, name))
 
     private fun tailFunction(name: String): String = normalize(function(disconnectTailSource, name))
+
+    private fun coordinationFunction(name: String): String = normalize(function(teardownCoordinationSource, name))
 
     private fun vsFunction(name: String): String = normalize(function(videoSenderSource, name))
 
@@ -84,6 +90,16 @@ class EndAttemptTraceTest {
         val markerAt = requireIndex(source, marker, "找不到标记 $marker")
         val open = source.indexOf('{', markerAt + marker.length)
         check(open >= 0) { "$marker 后没有花括号" }
+        return normalize(balancedFrom(source, open))
+    }
+
+    private fun lambdaBody(
+        source: String,
+        parameter: String,
+    ): String {
+        val markerAt = requireIndex(source, "$parameter = {", "找不到命名参数 $parameter")
+        val open = source.indexOf('{', markerAt + parameter.length)
+        check(open >= 0) { "$parameter 后没有花括号" }
         return normalize(balancedFrom(source, open))
     }
 
@@ -258,22 +274,58 @@ class EndAttemptTraceTest {
         )
         requireOrder(innerFinally, "runCatching { live.cleanupShellFallback() }", "live.completeOuter(snapshot.completed)", "shell 清理先于完成")
         val completeAdapter = lambdaAfter(controller, "override fun completeOuter(completed: java.util.concurrent.CountDownLatch)")
-        val syncBlock = lambdaAfter(completeAdapter, "synchronized(SessionController)")
-        val identityBlock = lambdaAfter(syncBlock, "if (disconnectCompletion === completed)")
-        requireContains(syncBlock, "BtSessionGate.sessionActive = false", "锁内先解除会话静默")
+        val completeFunction = coordinationFunction("complete")
+        val syncBlock = lambdaAfter(completeFunction, "synchronized(ownerMonitor)")
+        val identityBlock = lambdaAfter(syncBlock, "if (state.completion === captured)")
+        requireContains(completeAdapter, "teardownCoordination.complete(completed)", "完成端必须接入 TeardownCoordination")
+        requireContains(syncBlock, "state.setSessionActive(false)", "锁内先解除会话静默")
         requireOrder(
             syncBlock,
-            "BtSessionGate.sessionActive = false",
-            "if (disconnectCompletion === completed)",
+            "state.setSessionActive(false)",
+            "if (state.completion === captured)",
             "先解除静默再看完成身份",
         )
-        requireContains(identityBlock, "handoffOwnership.allowNewHandoffs()", "身份匹配后开放交接")
-        requireContains(identityBlock, "disconnectCompletion = null", "身份匹配后清 completion")
-        requireOrder(identityBlock, "handoffOwnership.allowNewHandoffs()", "disconnectCompletion = null", "仅身份匹配才开放交接并清 completion")
-        assertFalse("gate 关闭必须留在完成身份块之前", identityBlock.contains("BtSessionGate.sessionActive = false"))
-        assertFalse("countDown 不得在完成身份同步块内", syncBlock.contains("completed.countDown()"))
-        requireOrder(completeAdapter, "synchronized(SessionController)", "completed.countDown()", "countDown 在完成同步块之后")
-        requireOrder(completeAdapter, "completed.countDown()", "appendLog(", "countDown 后记录完成日志")
+        requireContains(identityBlock, "state.allowNewHandoffs()", "身份匹配后开放交接")
+        requireContains(identityBlock, "state.completion = null", "身份匹配后清 completion")
+        requireOrder(identityBlock, "state.allowNewHandoffs()", "state.completion = null", "仅身份匹配才开放交接并清 completion")
+        assertFalse("gate 关闭必须留在完成身份块之前", identityBlock.contains("setSessionActive(false)"))
+        assertFalse("countDown 不得在完成身份同步块内", syncBlock.contains("captured.countDown()"))
+        requireOrder(completeFunction, "synchronized(ownerMonitor)", "captured.countDown()", "countDown 在完成同步块之后")
+        requireContains(completeAdapter, "appendLog(", "countDown 后记录完成日志")
+        val deferFunction = coordinationFunction("deferStartIfStopping")
+        val stoppingRead = deferFunction.indexOf("val stopping = state.completion ?: return false")
+        val generationRead = deferFunction.indexOf("val stopGeneration = state.userStopGeneration")
+        val submitCall = deferFunction.indexOf("tasks.submit(")
+        assertTrue("defer 必须先读 completion 再读代际", stoppingRead >= 0 && generationRead > stoppingRead && submitCall > generationRead)
+        requireContains(deferFunction, "stopping.await(10, TimeUnit.SECONDS)", "真实等待保持 10 秒")
+        requireOrder(deferFunction, "stopping.await(10, TimeUnit.SECONDS)", "synchronized(ownerMonitor)", "等待后再取原 monitor")
+        requireOrder(deferFunction, "synchronized(ownerMonitor)", "state.userStopGeneration == stopGeneration", "锁内校验代际")
+        requireOrder(
+            deferFunction,
+            "state.userStopGeneration == stopGeneration",
+            "retryOriginalEntry()",
+            "代际一致才重入原入口",
+        )
+        val startBody = scFunction("startConnection")
+        requireContains(startBody, "teardownCoordination.deferStartIfStopping(", "start 等待必须接入 TeardownCoordination")
+        requireContains(
+            lambdaBody(startBody, "retryOriginalEntry"),
+            "startConnection(context, automatic, automaticPeerAddress)",
+            "等待端重入原 startConnection",
+        )
+        requireContains(
+            lambdaBody(startBody, "logTimeout"),
+            "appendLog(",
+            "超时日志保持在 defer 回调",
+        )
+        requireOrder(
+            startBody,
+            "AutoReconnectGuard.block(context, peer)",
+            "teardownCoordination.deferStartIfStopping(",
+            "自动冷却与熔断先于收尾等待",
+        )
+        requireOrder(startBody, "teardownCoordination.deferStartIfStopping(", "if (waitingForTeardown)", "defer 返回后立即判断等待")
+        requireOrder(startBody, "if (waitingForTeardown)", "return", "等待收尾时直接返回")
     }
 
     @Test
@@ -286,19 +338,22 @@ class EndAttemptTraceTest {
             "AutoReconnectGuard.block(context, peer)",
             "自动连接冷却与熔断先于收尾捕获",
         )
-        requireOrder(body, "AutoReconnectGuard.block(context, peer)", "val stopping = disconnectCompletion", "熔断检查先于收尾捕获")
-        requireOrder(body, "val stopping = disconnectCompletion", "val stopGeneration = userStopGeneration", "先捕获收尾再捕获代际")
-        val stoppingBranch = lambdaAfter(body, "if (stopping != null)")
-        requireContains(stoppingBranch, "Bg.run(", "等待任务已排队")
-        requireOrder(stoppingBranch, "stopping.await(10, java.util.concurrent.TimeUnit.SECONDS)", "synchronized(this)", "等待后再拿锁")
-        requireOrder(stoppingBranch, "synchronized(this)", "userStopGeneration == stopGeneration", "锁内校验代际")
         requireOrder(
-            stoppingBranch,
-            "userStopGeneration == stopGeneration",
-            "startConnection(context, automatic, automaticPeerAddress)",
-            "代际一致才递归",
+            body,
+            "AutoReconnectGuard.block(context, peer)",
+            "teardownCoordination.deferStartIfStopping(",
+            "熔断检查先于收尾捕获",
         )
-        requireOrder(stoppingBranch, "startConnection(context, automatic, automaticPeerAddress)", "return", "递归后直接返回")
+        requireContains(
+            lambdaBody(body, "retryOriginalEntry"),
+            "startConnection(context, automatic, automaticPeerAddress)",
+            "等待任务重入原入口",
+        )
+        requireContains(
+            lambdaBody(body, "logTimeout"),
+            "appendLog(",
+            "等待任务排队",
+        )
     }
 
     @Test
@@ -551,17 +606,18 @@ class EndAttemptTraceTest {
             requireOrder(source, "handoffOwnership.blockNewHandoffs()", "connectCancelled = true", "交接入口先于取消标志")
         }
         val completeAdapter = lambdaAfter(controller, "override fun completeOuter(completed: java.util.concurrent.CountDownLatch)")
-        val syncBlock = lambdaAfter(completeAdapter, "synchronized(SessionController)")
+        val completeFunction = coordinationFunction("complete")
+        val syncBlock = lambdaAfter(completeFunction, "synchronized(ownerMonitor)")
         val countDownInsideLock =
             syncBlock.replace(
-                "BtSessionGate.sessionActive = false",
-                "BtSessionGate.sessionActive = false completed.countDown()",
+                "state.setSessionActive(false)",
+                "state.setSessionActive(false) captured.countDown()",
             )
         assertContractRejected(
             countDownInsideLock,
-            listOf("BtSessionGate.sessionActive = false", "completed.countDown()"),
+            listOf("state.setSessionActive(false)", "captured.countDown()"),
         ) { source ->
-            assertTrue("countDown 不得在完成身份同步块内", !source.contains("completed.countDown()"))
+            assertTrue("countDown 不得在完成身份同步块内", !source.contains("captured.countDown()"))
         }
         val onEnded = normalize(lambdaAfter(controller, "onEnded = onVideoEnded@"))
         val invertedGuard = onEnded.replace("videoSender !== sender", "videoSender === sender")
