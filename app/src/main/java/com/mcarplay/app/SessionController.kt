@@ -1765,40 +1765,120 @@ object SessionController {
         }
     }
 
+    private val roundRetirement =
+        RoundRetirement(
+            object : RoundSlots<AirPlayClient, VideoSender, AudioSender, CarLifeAudioBridge, Context> {
+                override var client: AirPlayClient?
+                    get() = currentClient
+                    set(value) {
+                        currentClient = value
+                    }
+
+                override var sender: VideoSender?
+                    get() = videoSender
+                    set(value) {
+                        videoSender = value
+                    }
+
+                override var audio: AudioSender?
+                    get() = audioSender
+                    set(value) {
+                        audioSender = value
+                    }
+
+                override var bridge: CarLifeAudioBridge?
+                    get() = nativeAudioBridge
+                    set(value) {
+                        nativeAudioBridge = value
+                    }
+
+                override val context: Context?
+                    get() = appContext
+
+                override fun clearRecovery() {
+                    screenStreamRecovery = null
+                }
+
+                override fun clearSharedSecret() {
+                    currentSharedSecret = null
+                }
+
+                override fun clearAudioHost() {
+                    currentAudioHost = null
+                }
+
+                override fun markCancelled(client: AirPlayClient) {
+                    client.cancelled = true
+                }
+
+                override fun setSessionInactive() {
+                    // 注意：这里绝不能 detach BT 控制会话。本方法在每轮配对起步时也会执行，
+                    // 而 DiPlay 在 WiFi 隧道就绪前看到 RFCOMM 断开即判 bring-up failed、
+                    // closeWirelessStack 拆掉整轮无线栈（Bonjour/热点/AirPlay 服务），把已建立
+                    // 甚至正在推流的 AirPlay 会话一起拆掉——「连上约 3 秒即断」循环的根因
+                    // （2026-10-16 实测）。BT 退役只在用户终态做，见 disconnect()。
+                    BtSessionGate.sessionActive = false
+                }
+            },
+            object : RoundActions<AirPlayClient, VideoSender, AudioSender, CarLifeAudioBridge, Context> {
+                override fun beginClient(client: AirPlayClient) {
+                    client.beginOrderlyStop()
+                }
+
+                override fun stopAutoPlayWatch() {
+                    this@SessionController.stopAutoPlayWatch()
+                }
+
+                override fun stopSender(sender: VideoSender) {
+                    sender.stop()
+                }
+
+                override fun quiesceSender(sender: VideoSender) {
+                    sender.quiesceForOrderlyStop()
+                }
+
+                override fun releaseWifiLock() {
+                    StreamingWifiLock.release()
+                }
+
+                override fun stopScreenMonitor(context: Context) {
+                    ScreenLockMonitor.stop(context)
+                }
+
+                override fun setDimmerInactive() {
+                    // 暗幕/常亮随会话收掉（本方法在每轮配对起步也会执行，新一轮推流起来后会重新置位）
+                    ScreenDimmer.setSessionActive(false)
+                }
+
+                override fun restorePhoneScreen(sleepIfCarSide: Boolean) {
+                    // 物理屏兜底恢复：崩溃/异常路径若把面板留在 OFF，这里不会让它烂在黑屏里
+                    this@SessionController.restorePhoneScreen(sleepIfCarSide)
+                }
+
+                override fun stopAudio(audio: AudioSender) {
+                    audio.stop()
+                }
+
+                override fun stopBridge(bridge: CarLifeAudioBridge) {
+                    bridge.stop()
+                }
+
+                override fun stopFormalCarLife() {
+                    this@SessionController.stopFormalCarLife()
+                }
+
+                override fun closeClient(client: AirPlayClient) {
+                    client.close()
+                }
+            },
+        )
+
     /** 会话结束/新周期开始前彻底退役上一代会话（旧管线泄漏会累积编码器/虚拟显示器，最终 dequeueBuffer -19）。 */
     fun retireSession(
         closeClient: Boolean = true,
         preserveScreenSocket: Boolean = false,
     ) {
-        currentClient?.beginOrderlyStop()
-        screenStreamRecovery = null
-        stopAutoPlayWatch()
-        val retiringSender = videoSender
-        videoSender = null
-        if (preserveScreenSocket) retiringSender?.quiesceForOrderlyStop() else retiringSender?.stop()
-        StreamingWifiLock.release()
-        appContext?.let(ScreenLockMonitor::stop)
-        // 暗幕/常亮随会话收掉（本方法在每轮配对起步也会执行，新一轮推流起来后会重新置位）
-        ScreenDimmer.setSessionActive(false)
-        // 物理屏兜底恢复：崩溃/异常路径若把面板留在 OFF，这里不会让它烂在黑屏里
-        restorePhoneScreen(sleepIfCarSide = false)
-        audioSender?.stop()
-        audioSender = null
-        nativeAudioBridge?.stop()
-        nativeAudioBridge = null
-        currentSharedSecret = null
-        currentAudioHost = null
-        stopFormalCarLife()
-        currentClient?.cancelled = true
-        if (closeClient) currentClient?.close()
-        currentClient = null
-        // 注意：这里绝不能 detach BT 控制会话。本方法在每轮配对起步时也会执行，
-        // 而 DiPlay 在 WiFi 隧道就绪前看到 RFCOMM 断开即判 bring-up failed、
-        // closeWirelessStack 拆掉整轮无线栈（Bonjour/热点/AirPlay 服务），把已建立
-        // 甚至正在推流的 AirPlay 会话一起拆掉——「连上约 3 秒即断」循环的根因
-        // （2026-10-16 实测）。BT 退役只在用户终态做，见 disconnect()。
-        // 解除会话静默：出站探测恢复（下次会话建立时会再次置位）
-        BtSessionGate.sessionActive = false
+        roundRetirement.retire(closeClient, preserveScreenSocket)
         // 「强制应用横屏」覆盖的复原**不在这里做**（2026-10-23 奥迪 3315 真机日志定谳）：
         // 本方法在每轮配对起步时也会执行，此时距离上一轮会话结束只有几秒——上一轮的
         // 桌面/地图应用（与新一轮是同一批包）多半还活着；而本会话的应用在 attach 里
