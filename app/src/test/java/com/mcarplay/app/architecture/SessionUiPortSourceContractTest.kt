@@ -60,6 +60,27 @@ class SessionUiPortSourceContractTest {
         error("$name 的函数体没有闭合")
     }
 
+    private fun audioTeardownWiring(): String {
+        val code = KotlinSource.scan(controller).code
+        val start = code.indexOf("private val audioTeardown =")
+        check(start >= 0) { "找不到 AudioTeardown 构造块" }
+        val constructorAt = code.indexOf("AudioTeardown(", start)
+        check(constructorAt >= 0) { "找不到 AudioTeardown 构造调用" }
+        var parens = 0
+        var index = code.indexOf('(', constructorAt)
+        while (index < code.length) {
+            when (code[index]) {
+                '(' -> parens++
+                ')' -> {
+                    parens--
+                    if (parens == 0) return code.substring(start, index + 1)
+                }
+            }
+            index++
+        }
+        error("AudioTeardown 构造块没有闭合")
+    }
+
     private fun requireOrder(
         source: String,
         first: String,
@@ -222,8 +243,11 @@ class SessionUiPortSourceContractTest {
 
     @Test
     fun audioTeardownWritesTheAttributionHint() {
-        val code = code("attributeAudioTeardown")
-        requireContains(code, "ui.hint {", "音频拆链归因必须弹 uiHint")
+        val code = audioTeardownWiring()
+        val hintBlock = KotlinSource.scan(code.substringAfter("override fun hint(allDisabled: Boolean)")).code
+        val hintCall = hintBlock.substringBefore("}")
+        requireContains(hintCall, "ui.hint {", "音频拆链归因必须弹 uiHint")
+        requireContains(hintCall, "if (allDisabled) {", "音频拆链归因必须保留双档位提示分支")
         requireContains(code, "t(R.string.sc_audio_all_incompatible)", "音频拆链必须保留全部档位不兼容提示")
         requireContains(code, "t(R.string.sc_audio_profile_rejected)", "音频拆链必须保留单档位拒绝提示")
     }

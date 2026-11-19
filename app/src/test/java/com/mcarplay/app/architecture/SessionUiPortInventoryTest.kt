@@ -61,8 +61,8 @@ private object SourceUiPortInventory {
             "waitForWifiEnabled" to "ui.hint { t(R.string.sc_turn_on_wifi) }",
             "legacyJoinCarWifi" to "ui.hint { t(R.string.sc_not_staying_hint, wifi.ssid) }",
             "copyHotspotPsk" to "ui.hint { t(R.string.sc_psk_copied, passphrase.length) }",
-            "attributeAudioTeardown" to
-                "ui.hint { if (after.disabled) { t(R.string.sc_audio_all_incompatible) } " +
+            "audioTeardownWiring" to
+                "ui.hint { if (allDisabled) { t(R.string.sc_audio_all_incompatible) } " +
                 "else { t(R.string.sc_audio_profile_rejected) } }",
             "onCarPlayEndpoint" to "ui.hint { t(R.string.sc_record_unconfirmed) }",
             "onCarPlayEndpoint" to "ui.hint { t(R.string.sc_setup_rejected_hint) }",
@@ -82,6 +82,29 @@ class SessionUiPortInventoryTest {
     }
 
     private val stripped: String by lazy { KotlinSource.scan(controller).code }
+
+    /** 音频拆链归因接线已迁入 [AudioTeardown] 构造块；单独提取以保留完整源码契约。 */
+    private fun audioTeardownWiring(): String {
+        val start = stripped.indexOf("private val audioTeardown =")
+        check(start >= 0) { "找不到 AudioTeardown 构造块" }
+        val constructorAt = stripped.indexOf("AudioTeardown(", start)
+        check(constructorAt >= 0) { "找不到 AudioTeardown 构造调用" }
+        var parens = 0
+        var index = stripped.indexOf('(', constructorAt)
+        while (index < stripped.length) {
+            when (stripped[index]) {
+                '(' -> parens++
+                ')' -> {
+                    parens--
+                    if (parens == 0) return stripped.substring(start, index + 1)
+                }
+            }
+            index++
+        }
+        error("AudioTeardown 构造块没有闭合")
+    }
+
+    private fun sourceFor(function: String): String = if (function == "audioTeardownWiring") audioTeardownWiring() else body(function)
 
     /** 去注释/字符串后的指定函数体。 */
     private fun body(name: String): String {
@@ -124,7 +147,7 @@ class SessionUiPortInventoryTest {
         function: String,
         expression: String,
     ) {
-        val code = body(function)
+        val code = sourceFor(function)
         if (!normalizeWhitespace(code).contains(normalizeWhitespace(expression))) {
             throw AssertionError("$function 必须保留 $expression\n函数体=\n" + reportFunctionBody(function))
         }
@@ -235,15 +258,15 @@ class SessionUiPortInventoryTest {
     fun channelWritesDoNotEscapeTheInventory() {
         SourceUiPortInventory.PHASE_WRITES.forEach { (function, expression) ->
             val expectedCount = SourceUiPortInventory.PHASE_WRITES.count { it.first == function && it.second == expression }
-            requireExactOccurrences(body(function), expression, expectedCount, function)
+            requireExactOccurrences(sourceFor(function), expression, expectedCount, function)
         }
         SourceUiPortInventory.HINT_WRITES.forEach { (function, expression) ->
             val expectedCount = SourceUiPortInventory.HINT_WRITES.count { it.first == function && it.second == expression }
-            requireExactOccurrences(body(function), expression, expectedCount, function)
+            requireExactOccurrences(sourceFor(function), expression, expectedCount, function)
         }
         SourceUiPortInventory.SSID_WRITES.forEach { (function, expression) ->
             val expectedCount = SourceUiPortInventory.SSID_WRITES.count { it.first == function && it.second == expression }
-            requireExactOccurrences(body(function), expression, expectedCount, function)
+            requireExactOccurrences(sourceFor(function), expression, expectedCount, function)
         }
         val joinCarWifiSpecifierJoinedCount =
             SourceUiPortInventory.PHASE_WRITES

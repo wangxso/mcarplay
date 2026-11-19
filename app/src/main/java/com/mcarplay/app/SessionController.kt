@@ -12,9 +12,12 @@ import com.mcarplay.app.audio.AudioDuckingPrefs
 import com.mcarplay.app.audio.AudioProfile
 import com.mcarplay.app.audio.AudioProfileMemory
 import com.mcarplay.app.audio.AudioSender
+import com.mcarplay.app.audio.AudioTeardown
+import com.mcarplay.app.audio.AudioTeardownOutput
+import com.mcarplay.app.audio.AudioTeardownState
 import com.mcarplay.app.audio.AudioTuning
 import com.mcarplay.app.audio.CarLifeAudioBridge
-import com.mcarplay.app.bt.AUTO_RECONNECT_FAILURE_CODES
+import com.mcarplay.app.audio.Mib3LinkWatchdog
 import com.mcarplay.app.bt.AutoConnectPrefs
 import com.mcarplay.app.bt.AutoReconnectGuard
 import com.mcarplay.app.bt.BluetoothDiagnostics
@@ -544,6 +547,71 @@ object SessionController {
     /** 音频通道启动 single-flight 闸门（见 [startAudioChannel]）。 */
     private val audioStartGate = AudioStartGate()
 
+    private val audioTeardown =
+        AudioTeardown(
+            probeMillis = AUDIO_PROFILE_PROBE_MS,
+            state = {
+                AudioTeardownState(
+                    profile = activeAudioProfile,
+                    startedAtMs = activeAudioStartedAt,
+                    receiverKey = activeAudioReceiverKey,
+                )
+            },
+            clearState = { clearActiveAudioState() },
+            watchdog = {
+                currentClient?.let { client ->
+                    Mib3LinkWatchdog(
+                        armed = client.mib3LinkArmed,
+                        controlSessionDone = client.mib3ControlSessionDone,
+                    )
+                }
+            },
+            nowMs = { SystemClock.uptimeMillis() },
+            context = { appContext?.applicationContext },
+            allCandidateKeys = ::audioCandidateKeys,
+            output =
+                object : AudioTeardownOutput {
+                    override fun linkTeardown(livedMillis: Long) {
+                        appendLog(audioLinkTeardownNote(livedMillis))
+                    }
+
+                    override fun working(
+                        profile: AudioProfile,
+                        livedMillis: Long,
+                    ) {
+                        appendLog(
+                            "AUDIO: 档位 ${profile.label} 存活 ${livedMillis / 1000}s——记为本车机可用档位",
+                        )
+                    }
+
+                    override fun rejected(
+                        profile: AudioProfile,
+                        livedMillis: Long,
+                        allDisabled: Boolean,
+                    ) {
+                        appendLog(
+                            "AUDIO: ⚠ 档位 ${profile.label} 起流 ${audioLivedLabel(livedMillis)} 后整条会话被车机拆掉——" +
+                                "判定为本车机不兼容档位（已记入名单）。" +
+                                if (allDisabled) {
+                                    "全部档位均不兼容：下次连接将自动只推视频（车机侧无声音）。"
+                                } else {
+                                    "下次点「启动连接」会自动换用下一档；也可直接选「开启声音（兼容档）」。"
+                                },
+                        )
+                    }
+
+                    override fun hint(allDisabled: Boolean) {
+                        ui.hint {
+                            if (allDisabled) {
+                                t(R.string.sc_audio_all_incompatible)
+                            } else {
+                                t(R.string.sc_audio_profile_rejected)
+                            }
+                        }
+                    }
+                },
+        )
+
     @Volatile
     var currentClient: AirPlayClient? = null
 
@@ -580,6 +648,21 @@ object SessionController {
     private var disconnectCompletion: java.util.concurrent.CountDownLatch? = null
 
     private val disconnectTail = DisconnectTail(NamedTasks { name, task -> Bg.run(name, task) })
+
+    private val reconnectAttribution =
+        ReconnectAttribution(
+            context = { appContext },
+            snapshot = {
+                ConnectionDiagnostics.timeline.snapshot()?.let { snapshot ->
+                    ReconnectAttemptSnapshot(
+                        id = snapshot.id,
+                        videoFrames = snapshot.videoFrames,
+                        elapsedMs = snapshot.elapsedMs,
+                    )
+                }
+            },
+            appendLog = ::appendLog,
+        )
 
     private val teardownCoordination =
         TeardownCoordination(
@@ -1635,23 +1718,7 @@ object SessionController {
         attempt: String?,
         code: DiagnosticCode?,
         address: String? = activePeerAddress,
-    ): Boolean {
-        if (code == null || code !in AUTO_RECONNECT_FAILURE_CODES) return false
-        val app = appContext ?: return false
-        val snapshot = ConnectionDiagnostics.timeline.snapshot() ?: return false
-        if (attempt.isNullOrBlank() || snapshot.id != attempt) return false
-        if (snapshot.videoFrames > 0L) {
-            AutoReconnectGuard.recordHealthy(app, address, attempt)
-            return false
-        }
-        if (!countsAsAutoReconnectFailure(code, snapshot.videoFrames, snapshot.elapsedMs)) return false
-        val block = AutoReconnectGuard.recordFastFailure(app, address, attempt) ?: return false
-        appendLog(
-            "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
-                "（可在 App 内手动连接）",
-        )
-        return true
-    }
+    ): Boolean = reconnectAttribution.record(attempt, code, address)
 
     // ---- 物理屏真息屏（同 scrcpy -S/--turn-screen-off）----
 
@@ -3420,52 +3487,12 @@ object SessionController {
      * 注意只在「确实起过音频」时归因；纯视频会话结束不做任何记忆改写。
      */
     private fun attributeAudioTeardown() {
-        val profile = activeAudioProfile ?: return
-        val startedAt = activeAudioStartedAt
-        val identity = activeAudioReceiverKey
-        val lived = if (startedAt > 0) android.os.SystemClock.uptimeMillis() - startedAt else -1L
-        // 链路看门狗守卫（2026-10-23 车主 0.1.17 日志定谳）：MIB3 布防了但控制会话
-        // 没完成就被拆 = 车机 ~10s 链路看门狗（RECORD 后 10.18s，与 0.1.9 的 10.17s
-        // 同款），与音频档位无关。不守卫的话 t102/media 档被误记「不兼容」，下一轮
-        // 自动换到 compatibility 档——那条通路车机根本不接（AGENTS 音频三条硬约束），
-        // 从此永远没声。
-        currentClient?.let { client ->
-            if (client.mib3LinkArmed && !client.mib3ControlSessionDone) {
-                appendLog(audioLinkTeardownNote(lived))
-                activeAudioProfile = null
-                activeAudioStartedAt = 0L
-                return
-            }
-        }
-        // 本轮记忆很快失效：下次连接重新按最新记忆选档
+        audioTeardown.attribute()
+    }
+
+    private fun clearActiveAudioState() {
         activeAudioProfile = null
         activeAudioStartedAt = 0L
-        if (startedAt == 0L || identity.isBlank()) return
-        val ctx = appContext?.applicationContext
-        if (lived >= AUDIO_PROFILE_PROBE_MS) {
-            AudioProfileMemory.recordWorking(ctx, identity, profile.key)
-            appendLog("AUDIO: 档位 ${profile.label} 存活 ${lived / 1000}s——记为本车机可用档位")
-            return
-        }
-        val allKeys = audioCandidateKeys(identity)
-        AudioProfileMemory.recordRejected(ctx, identity, profile.key, allKeys)
-        val after = AudioProfileMemory.load(ctx, identity)
-        appendLog(
-            "AUDIO: ⚠ 档位 ${profile.label} 起流 ${audioLivedLabel(lived)} 后整条会话被车机拆掉——" +
-                "判定为本车机不兼容档位（已记入名单）。" +
-                if (after.disabled) {
-                    "全部档位均不兼容：下次连接将自动只推视频（车机侧无声音）。"
-                } else {
-                    "下次点「启动连接」会自动换用下一档；也可直接选「开启声音（兼容档）」。"
-                },
-        )
-        ui.hint {
-            if (after.disabled) {
-                t(R.string.sc_audio_all_incompatible)
-            } else {
-                t(R.string.sc_audio_profile_rejected)
-            }
-        }
     }
 
     /** 界面提示文案（阶段提示、Snackbar、确认弹窗；随界面语言）。日志仍写中文。 */
