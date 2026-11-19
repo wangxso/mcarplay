@@ -581,6 +581,31 @@ object SessionController {
 
     private val disconnectTail = DisconnectTail(NamedTasks { name, task -> Bg.run(name, task) })
 
+    private val teardownCoordination =
+        TeardownCoordination(
+            ownerMonitor = SessionController,
+            state =
+                object : CompletionState {
+                    override var completion: java.util.concurrent.CountDownLatch?
+                        get() = disconnectCompletion
+                        set(value) {
+                            disconnectCompletion = value
+                        }
+
+                    override val userStopGeneration: Long
+                        get() = this@SessionController.userStopGeneration
+
+                    override fun setSessionActive(active: Boolean) {
+                        BtSessionGate.sessionActive = active
+                    }
+
+                    override fun allowNewHandoffs() {
+                        handoffOwnership.allowNewHandoffs()
+                    }
+                },
+            tasks = NamedTasks { name, task -> Bg.run(name, task) },
+        )
+
     private val disconnectLive: DisconnectLive =
         object : DisconnectLive {
             override fun log(message: String) = appendLog(message)
@@ -610,17 +635,9 @@ object SessionController {
             override fun cleanupShellFallback() = cleanupShellFallbackNetwork()
 
             override fun completeOuter(completed: java.util.concurrent.CountDownLatch) {
-                synchronized(SessionController) {
-                    BtSessionGate.sessionActive = false
-                    if (disconnectCompletion === completed) {
-                        // 先开放交接入口再清 completion：端点看到 null 时 begin 一定能成功；
-                        // 反过来会让“看到 null 但入口仍关闭”的首个端点被丢弃。
-                        handoffOwnership.allowNewHandoffs()
-                        disconnectCompletion = null
-                    }
+                teardownCoordination.complete(completed) {
+                    appendLog("SESSION: 旧会话 TEARDOWN 与蓝牙/WiFi 清理完成")
                 }
-                completed.countDown()
-                appendLog("SESSION: 旧会话 TEARDOWN 与蓝牙/WiFi 清理完成")
             }
         }
 
@@ -1337,18 +1354,12 @@ object SessionController {
                 return
             }
         }
-        val stopping = disconnectCompletion
-        if (stopping != null) {
-            val stopGeneration = userStopGeneration
-            Bg.run("connect-after-disconnect") {
-                if (!stopping.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                    appendLog("SESSION: 上一轮链路清理尚未结束，本次连接不启动")
-                    return@run
-                }
-                synchronized(this) {
-                    if (userStopGeneration == stopGeneration) startConnection(context, automatic, automaticPeerAddress)
-                }
-            }
+        val waitingForTeardown =
+            teardownCoordination.deferStartIfStopping(
+                retryOriginalEntry = { startConnection(context, automatic, automaticPeerAddress) },
+                logTimeout = { appendLog("SESSION: 上一轮链路清理尚未结束，本次连接不启动") },
+            )
+        if (waitingForTeardown) {
             return
         }
         if (!automatic) {
