@@ -1873,6 +1873,117 @@ object SessionController {
             },
         )
 
+    private val videoEndedHandling =
+        VideoEndedHandling(
+            object : VideoEndSlots<VideoSender, Iap2BluetoothClient, CarLifeAudioBridge, Context> {
+                override val currentSender: VideoSender?
+                    get() = videoSender
+
+                override val outputSender: VideoSender?
+                    get() = carLifeOutput?.sender
+
+                override val nativeBridge: CarLifeAudioBridge?
+                    get() = nativeAudioBridge
+
+                override val btClient: Iap2BluetoothClient?
+                    get() = bluetoothClient
+
+                override val context: Context?
+                    get() = appContext
+
+                override val forceKeyFrames: Int
+                    get() = forceKeyFrameCount
+
+                override val requestUi: Int
+                    get() = requestUiCount
+
+                override val touches: Int
+                    get() = touchLogCount
+
+                override val consumerReleases: Int
+                    get() = consumerReleaseCount
+
+                override fun clearCarLifeOutput() {
+                    carLifeOutput = null
+                }
+
+                override fun clearNativeBridge() {
+                    nativeAudioBridge = null
+                }
+
+                override fun setSessionInactive() {
+                    BtSessionGate.sessionActive = false
+                }
+
+                override fun setDimmerInactive() {
+                    ScreenDimmer.setSessionActive(false)
+                }
+
+                override fun resetEnvironmentSampleAt() {
+                    lastEnvironmentSampleAt = 0L
+                }
+            },
+            object : VideoEndActions<VideoSender, CarLifeSession, Iap2BluetoothClient, CarLifeAudioBridge, Context> {
+                override fun log(message: String) {
+                    appendLog(message)
+                }
+
+                override fun videoEndedTimeline(attempt: String) {
+                    ConnectionDiagnostics.timeline.videoEnded(attempt)
+                }
+
+                override fun mediaEnded(observation: Any?) {
+                    @Suppress("UNCHECKED_CAST")
+                    ReceiverDetectionRuntime.mediaEnded(observation as? ReceiverObservation)
+                }
+
+                override fun stopCarLife(carLife: CarLifeSession) {
+                    carLife.stop()
+                }
+
+                override fun releaseCarLife(carLife: CarLifeSession) {
+                    releaseCarLifeSession(carLife)
+                }
+
+                override fun releaseWifiLock() {
+                    StreamingWifiLock.release()
+                }
+
+                override fun stopScreenMonitor(context: Context) {
+                    ScreenLockMonitor.stop(context)
+                }
+
+                override fun stopNativeBridge(bridge: CarLifeAudioBridge) {
+                    bridge.stop()
+                }
+
+                override fun armBluetoothAfterSessionEnd(btClient: Iap2BluetoothClient) {
+                    btClient.armAfterSessionEnd()
+                }
+
+                override fun restorePhoneScreen(sleepIfCarSide: Boolean) {
+                    this@SessionController.restorePhoneScreen(sleepIfCarSide)
+                }
+
+                override fun cleanupShellFallbackNetwork() {
+                    this@SessionController.cleanupShellFallbackNetwork()
+                }
+
+                override fun attributeAudioTeardown() {
+                    this@SessionController.attributeAudioTeardown()
+                }
+
+                override fun recordAutoReconnectOutcome(
+                    attempt: String?,
+                    peer: String?,
+                ): Boolean = this@SessionController.recordAutoReconnectOutcome(attempt, DiagnosticCode.VIDEO_CLOSED, peer)
+
+                override fun disconnect(context: Context) {
+                    this@SessionController.disconnect(context, DiagnosticCode.VIDEO_CLOSED)
+                }
+            },
+        )
+
     /** 会话结束/新周期开始前彻底退役上一代会话（旧管线泄漏会累积编码器/虚拟显示器，最终 dequeueBuffer -19）。 */
     fun retireSession(
         closeClient: Boolean = true,
@@ -5106,59 +5217,20 @@ object SessionController {
                                                     }
                                                 },
                                                 onEnded = onVideoEnded@{
-                                                    if (videoSender !==
-                                                        sender
-                                                    ) {
-                                                        return@onVideoEnded
-                                                    }
-                                                    appendLog(
-                                                        "SESSION: 本轮车机交互统计 forceKeyFrame=$forceKeyFrameCount requestUI=$requestUiCount " +
-                                                            "触摸报文=$touchLogCount 媒体键释放=$consumerReleaseCount",
+                                                    videoEndedHandling.handle(
+                                                        object : VideoEndCapture<VideoSender, CarLifeSession> {
+                                                            override val senderIdentity: () -> VideoSender = { sender }
+
+                                                            override val carLifeBinding: () -> CarLifeSession? = { carLife }
+
+                                                            override val mediaObservation: () -> Any? =
+                                                                { client.currentEndpoint.observation }
+
+                                                            override val attempt: String = diagnosticAttempt
+
+                                                            override val peerAddress: String? = peerAddress
+                                                        },
                                                     )
-                                                    lastEnvironmentSampleAt = 0L
-                                                    ConnectionDiagnostics.timeline.videoEnded(diagnosticAttempt)
-                                                    ReceiverDetectionRuntime.mediaEnded(client.currentEndpoint.observation)
-                                                    carLife?.let {
-                                                        it.stop()
-                                                        releaseCarLifeSession(it)
-                                                    }
-                                                    if (carLifeOutput?.sender === sender) carLifeOutput = null
-                                                    StreamingWifiLock.release()
-                                                    // 先于其余收尾：「息屏后多久结束」以推流终止时刻为准
-                                                    appContext?.let(ScreenLockMonitor::stop)
-                                                    nativeAudioBridge?.stop()
-                                                    nativeAudioBridge = null
-                                                    // 会话真实结束：解除静默降噪（客户端恢复探测/重连）
-                                                    appendLog(">>> CarPlay 会话结束（推流终止）——恢复蓝牙探测")
-                                                    // 只给一个短暂宽限：车机 ACL 已断（熄火）时到点即停，不整夜探测
-                                                    bluetoothClient?.armAfterSessionEnd()
-                                                    BtSessionGate.sessionActive = false
-                                                    // 车机掉线类结束（无用户断开操作）：暗幕/常亮必须一起收掉。
-                                                    // 这条路径不经过 retireSession（VirtualLauncher 仍挂着），
-                                                    // 漏掉它就会出现「会话早就断了、45s 后手机屏突然变黑」
-                                                    // （2026-10-19 用户实测）。
-                                                    ScreenDimmer.setSessionActive(false)
-                                                    // 车机侧断开：人在车外，让手机直接休眠（面板保持黑），
-                                                    // 而不是先点亮再等 60s 超时
-                                                    restorePhoneScreen(sleepIfCarSide = true)
-                                                    // shell 兜底存的系统网络也要在这里还原：车机拆链是
-                                                    // 最常见的离场方式（熄火），用户未必点「断开」——只挂
-                                                    // disconnect 一端必遗留（2026-10-23 审阅定谳）。下一轮
-                                                    // 若走深度兜底会重新登记，语义自洽。
-                                                    cleanupShellFallbackNetwork()
-                                                    // 音频拆链归因：起过音频却很快被拆 → 记下该档位
-                                                    // 不兼容，下次连接自动换档（见 attributeAudioTeardown）。
-                                                    attributeAudioTeardown()
-                                                    // 零帧结束 = 车机在出画前拆链：连续多轮触发熔断后
-                                                    // 主动收摊，别再等车机回连把循环续下去。
-                                                    if (recordAutoReconnectOutcome(
-                                                            diagnosticAttempt,
-                                                            DiagnosticCode.VIDEO_CLOSED,
-                                                            peerAddress,
-                                                        )
-                                                    ) {
-                                                        appContext?.let { disconnect(it, DiagnosticCode.VIDEO_CLOSED) }
-                                                    }
                                                 },
                                             )
                                         // 实验（issue #62，PR #78 评审 P2）：只在 VideoConfig 真正写出后判定，

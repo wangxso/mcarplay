@@ -85,7 +85,8 @@ class SessionUiPortInventoryTest {
 
     /** 去注释/字符串后的指定函数体。 */
     private fun body(name: String): String {
-        val start = stripped.indexOf("fun $name(")
+        val marker = "fun $name("
+        val start = if (name == "attributeAudioTeardown") stripped.lastIndexOf(marker) else stripped.indexOf(marker)
         check(start >= 0) { "找不到函数 $name" }
         var parens = 0
         var index = stripped.indexOf('(', start)

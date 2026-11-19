@@ -35,14 +35,29 @@ class EndAttemptTraceTest {
         KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("RoundRetirement.kt").readText()).code
     }
 
+    private val videoEndedSource: String by lazy {
+        KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("VideoEndedHandling.kt").readText()).code
+    }
+
     /** 去注释/字符串后的指定函数，包含签名和函数体，避免日志文案或注释里的关键词污染断言。 */
     private fun scFunction(name: String): String = normalize(function(controller, name))
+
+    private fun scFunctionLast(name: String): String {
+        val marker = "fun $name("
+        val at = controller.lastIndexOf(marker)
+        assertTrue("找不到函数 $name", at >= 0)
+        val open = controller.indexOf('{', at + marker.length)
+        check(open >= 0) { "$name 的函数体没有开始" }
+        return normalize(balancedFrom(controller, open))
+    }
 
     private fun tailFunction(name: String): String = normalize(function(disconnectTailSource, name))
 
     private fun coordinationFunction(name: String): String = normalize(function(teardownCoordinationSource, name))
 
     private fun retirementFunction(name: String): String = normalize(function(retirementSource, name))
+
+    private fun videoEndedFunction(name: String): String = normalize(function(videoEndedSource, name))
 
     private fun vsFunction(name: String): String = normalize(function(videoSenderSource, name))
 
@@ -504,52 +519,49 @@ class EndAttemptTraceTest {
     @Test
     fun screenEndedCallbackFiltersStaleSenderBeforeSideEffects() {
         requireOrder(controller, "fun newScreenSender(", "onEnded = onVideoEnded@", "回调挂在 newScreenSender")
-        val marker = "onVideoEnded@"
-        val markerAt = requireIndex(controller, marker, "找不到 onEnded 回调")
-        val open = controller.indexOf('{', markerAt + marker.length)
-        check(open >= 0) { "onEnded 回调没有函数体" }
-        val body = normalize(balancedFrom(controller, open)).removePrefix("{").trimStart()
-        assertTrue(
-            "sender 身份守卫必须是回调第一句",
-            Regex("^if\\s*\\(\\s*videoSender\\s*!==\\s*sender\\s*\\)").containsMatchIn(body),
+        requireContains(controller, "VideoEndedHandling(", "onEnded 收尾 helper 已接入")
+        requireOrder(controller, "VideoEndedHandling(", "onEnded = onVideoEnded@", "adapter 先于回调")
+        val callback = lambdaAfter(controller, "onEnded = onVideoEnded@").removePrefix("{").trimStart()
+        requireContains(callback, "videoEndedHandling.handle(", "onEnded 直接委托 helper")
+        requireContains(callback, "override val senderIdentity: () -> VideoSender = { sender }", "延迟读取真实 sender 身份")
+        requireContains(callback, "override val carLifeBinding: () -> CarLifeSession? = { carLife }", "延迟读取真实 CarLife 绑定")
+        requireContains(
+            callback,
+            "override val mediaObservation: () -> Any? = { client.currentEndpoint.observation }",
+            "延迟读取当前端点观测",
         )
-        val guardBlock = lambdaAfter(body, "videoSender !== sender")
-        requireContains(guardBlock, "return@onVideoEnded", "身份不符立即返回")
-        requireOrder(body, "return@onVideoEnded", "lastEnvironmentSampleAt = 0L", "guard 先于副作用")
-        requireOrder(body, "lastEnvironmentSampleAt = 0L", "ConnectionDiagnostics.timeline.videoEnded(diagnosticAttempt)", "先清采样再记结束")
+        requireContains(callback, "override val attempt: String = diagnosticAttempt", "透传诊断 attempt")
+        requireContains(callback, "override val peerAddress: String? = peerAddress", "透传对端地址")
+        val helper = videoEndedFunction("handle")
+        requireOrder(helper, "capture.senderIdentity()", "if (slots.currentSender !== sender) return", "先读取身份再守卫")
+        requireContains(helper, "if (slots.currentSender !== sender) return", "身份不符立即返回")
+        val guardTail = helper.substringAfter("if (slots.currentSender !== sender) return")
+        assertFalse("守卫后不得先 return 再执行副作用", guardTail.startsWith("return"))
+        requireOrder(helper, "resetEnvironmentSampleAt()", "videoEndedTimeline(capture.attempt)", "先清采样再记结束")
+        requireOrder(helper, "videoEndedTimeline(capture.attempt)", "mediaEnded(capture.mediaObservation())", "诊断先于探测恢复")
+        requireOrder(helper, "mediaEnded(capture.mediaObservation())", "stopCarLife(carLife)", "探测后停 CarLife")
+        requireOrder(helper, "stopCarLife(carLife)", "releaseCarLife(carLife)", "CarLife stop 后释放")
+        requireOrder(helper, "releaseCarLife(carLife)", "clearCarLifeOutput()", "释放后再校验清理输出")
+        requireOrder(helper, "clearCarLifeOutput()", "releaseWifiLock()", "输出清理后释放 WiFi")
+        requireOrder(helper, "releaseWifiLock()", "slots.context?.let(actions::stopScreenMonitor)", "WiFi 后停锁屏监控")
         requireOrder(
-            body,
-            "ConnectionDiagnostics.timeline.videoEnded(diagnosticAttempt)",
-            "ReceiverDetectionRuntime.mediaEnded(client.currentEndpoint.observation)",
-            "诊断先于探测恢复",
+            helper,
+            "slots.context?.let(actions::stopScreenMonitor)",
+            "slots.nativeBridge?.let(actions::stopNativeBridge)",
+            "监控后停音频桥",
         )
-        requireOrder(
-            body,
-            "ReceiverDetectionRuntime.mediaEnded(client.currentEndpoint.observation)",
-            "carLife?.let { it.stop() releaseCarLifeSession(it) }",
-            "探测后停 CarLife",
-        )
-        requireOrder(body, "carLife?.let", "if (carLifeOutput?.sender === sender) carLifeOutput = null", "CarLife 输出身份校验")
-        requireOrder(body, "if (carLifeOutput?.sender === sender) carLifeOutput = null", "StreamingWifiLock.release()", "输出清理后释放 WiFi")
-        requireOrder(body, "StreamingWifiLock.release()", "appContext?.let(ScreenLockMonitor::stop)", "WiFi 后停锁屏监控")
-        requireOrder(body, "appContext?.let(ScreenLockMonitor::stop)", "nativeAudioBridge?.stop()", "监控后停音频桥")
-        requireOrder(body, "nativeAudioBridge?.stop()", "nativeAudioBridge = null", "桥置空")
-        requireOrder(body, "nativeAudioBridge = null", "bluetoothClient?.armAfterSessionEnd()", "桥后恢复蓝牙探测")
-        requireOrder(body, "bluetoothClient?.armAfterSessionEnd()", "BtSessionGate.sessionActive = false", "蓝牙宽限后解除会话静默")
-        requireOrder(body, "BtSessionGate.sessionActive = false", "ScreenDimmer.setSessionActive(false)", "静默后收暗幕")
-        requireOrder(body, "ScreenDimmer.setSessionActive(false)", "restorePhoneScreen(sleepIfCarSide = true)", "暗幕后恢复物理屏")
-        requireOrder(body, "restorePhoneScreen(sleepIfCarSide = true)", "cleanupShellFallbackNetwork()", "屏幕恢复后 shell 清理")
-        requireOrder(body, "cleanupShellFallbackNetwork()", "attributeAudioTeardown()", "shell 清理后音频归因")
-        requireOrder(body, "attributeAudioTeardown()", "recordAutoReconnectOutcome(", "归因后记录熔断")
-        val finalBlock = lambdaAfter(body, "if (recordAutoReconnectOutcome(")
-        requireOrder(
-            body,
-            "recordAutoReconnectOutcome(",
-            "disconnect(it, DiagnosticCode.VIDEO_CLOSED)",
-            "熔断且 Context 存在才终态收尾",
-        )
-        requireContains(finalBlock, "disconnect(it, DiagnosticCode.VIDEO_CLOSED)", "终态 disconnect 在熔断块内")
-        assertTrue("onEnded 回调只允许一次 disconnect", body.split("disconnect(").size - 1 == 1)
+        requireOrder(helper, "slots.nativeBridge?.let(actions::stopNativeBridge)", "slots.clearNativeBridge()", "桥置空后清 native 桥")
+        requireOrder(helper, "slots.clearNativeBridge()", "slots.btClient?.let(actions::armBluetoothAfterSessionEnd)", "桥后恢复蓝牙探测")
+        requireOrder(helper, "slots.btClient?.let(actions::armBluetoothAfterSessionEnd)", "slots.setSessionInactive()", "蓝牙宽限后解除会话静默")
+        requireOrder(helper, "setSessionInactive()", "setDimmerInactive()", "静默后收暗幕")
+        requireOrder(helper, "setDimmerInactive()", "restorePhoneScreen(sleepIfCarSide = true)", "暗幕后恢复物理屏")
+        requireOrder(helper, "restorePhoneScreen(sleepIfCarSide = true)", "cleanupShellFallbackNetwork()", "屏幕恢复后 shell 清理")
+        requireOrder(helper, "cleanupShellFallbackNetwork()", "attributeAudioTeardown()", "shell 清理后音频归因")
+        requireOrder(helper, "attributeAudioTeardown()", "recordAutoReconnectOutcome(", "归因后记录熔断")
+        val finalBlock = lambdaAfter(helper, "if (actions.recordAutoReconnectOutcome")
+        requireOrder(helper, "recordAutoReconnectOutcome(", "slots.context?.let(actions::disconnect)", "熔断且 Context 存在才终态收尾")
+        requireContains(finalBlock, "slots.context?.let(actions::disconnect)", "终态 disconnect 在熔断块内")
+        assertTrue("helper 只允许一次 disconnect", helper.split("actions::disconnect").size - 1 == 1)
         listOf(
             "retireSession(",
             "bluetoothServer?.stop()",
@@ -558,10 +570,10 @@ class EndAttemptTraceTest {
             "CountDownLatch",
             "detachActiveBtSessions",
         ).forEach { needle ->
-            assertFalse("普通 onEnded 不应包含 $needle", body.contains(needle))
+            assertFalse("普通 onEnded 不应包含 $needle", callback.contains(needle) || helper.contains(needle))
         }
-        listOf("client?.secret", "audioSender", "VideoSender").forEach { needle ->
-            assertFalse("普通 onEnded 不应清理 $needle", body.contains(needle))
+        listOf("client?.secret", "audioSender").forEach { needle ->
+            assertFalse("普通 onEnded 不应清理 $needle", callback.contains(needle) || helper.contains(needle))
         }
     }
 
@@ -800,19 +812,14 @@ class EndAttemptTraceTest {
 
     @Test
     fun audioAttributionPreservesClientWatchdogGuard() {
-        val bodyTop = scFunction("attributeAudioTeardown")
-        val guardScope = lambdaAfter(bodyTop, "currentClient?.let")
-        val guardBlock =
-            lambdaAfter(
-                guardScope,
-                "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)",
-            )
+        val bodyTop = scFunctionLast("attributeAudioTeardown")
+        val guardBlock = lambdaAfter(bodyTop, "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)")
         requireContains(bodyTop, "val profile = activeAudioProfile ?: return", "无 active profile 直接返回")
-        requireOrder(bodyTop, "val profile = activeAudioProfile ?: return", "currentClient?.let { client ->", "profile 先取，client 守卫后判断")
-        requireContains(guardScope, "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)", "MIB3 看门狗守卫")
+        assertTrue("profile 先取，client 守卫后判断", bodyTop.indexOf("val profile = activeAudioProfile") < bodyTop.indexOf("mib3LinkArmed"))
+        requireContains(bodyTop, "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)", "MIB3 看门狗守卫")
         requireOrder(guardBlock, "activeAudioProfile = null", "activeAudioStartedAt = 0L", "profile 清理后清 start")
         requireContains(guardBlock, "return", "守卫命中直接返回")
-        requireOrder(bodyTop, "currentClient?.let { client ->", "if (startedAt == 0L || identity.isBlank()) return", "client 守卫先于无记忆判断")
+        assertTrue("client 守卫先于无记忆判断", bodyTop.indexOf("mib3LinkArmed") < bodyTop.indexOf("if (startedAt == 0L"))
         requireOrder(bodyTop, "if (startedAt == 0L || identity.isBlank()) return", "if (lived >= AUDIO_PROFILE_PROBE_MS)", "无记忆先于探测判定")
         requireContains(bodyTop, "AudioProfileMemory.recordWorking(ctx, identity, profile.key)", "达到阈值记 working")
         requireContains(bodyTop, "AudioProfileMemory.recordRejected(ctx, identity, profile.key, allKeys)", "未达阈值记 rejected")
@@ -846,13 +853,13 @@ class EndAttemptTraceTest {
         ) { source ->
             assertTrue("countDown 不得在完成身份同步块内", !source.contains("captured.countDown()"))
         }
-        val onEnded = normalize(lambdaAfter(controller, "onEnded = onVideoEnded@"))
-        val invertedGuard = onEnded.replace("videoSender !== sender", "videoSender === sender")
+        val onEndedHelper = videoEndedFunction("handle")
+        val invertedGuard = onEndedHelper.replace("slots.currentSender !== sender", "slots.currentSender === sender")
         assertContractRejected(
             invertedGuard,
-            listOf("videoSender === sender", "return@onVideoEnded"),
+            listOf("slots.currentSender === sender"),
         ) { source ->
-            requireContains(source, "videoSender !== sender", "sender 身份不符立即返回")
+            requireContains(source, "slots.currentSender !== sender", "sender 身份不符立即返回")
         }
         val helperBody = notificationFunction("afterDrain")
         val swappedStopAndCas =
