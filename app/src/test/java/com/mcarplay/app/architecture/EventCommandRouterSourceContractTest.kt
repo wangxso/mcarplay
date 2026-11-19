@@ -80,7 +80,7 @@ class EventCommandRouterSourceContractTest {
     fun routerGuardsAgainstStaleClientsAndCancellation() {
         assertTrue(
             "事件路由必须先核对本轮客户端与取消状态",
-            router.contains("if (currentClient !== client || wasCancelled()) return@onEvent"),
+            router.contains("if (currentClient !== client || !scope.isActive) return@onEvent"),
         )
     }
 
