@@ -19,8 +19,14 @@ class EndAttemptTraceTest {
         KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("video/VideoSender.kt").readText()).code
     }
 
+    private val disconnectTailSource: String by lazy {
+        KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("DisconnectTail.kt").readText()).code
+    }
+
     /** 去注释/字符串后的指定函数，包含签名和函数体，避免日志文案或注释里的关键词污染断言。 */
     private fun scFunction(name: String): String = normalize(function(controller, name))
+
+    private fun tailFunction(name: String): String = normalize(function(disconnectTailSource, name))
 
     private fun vsFunction(name: String): String = normalize(function(videoSenderSource, name))
 
@@ -180,40 +186,79 @@ class EndAttemptTraceTest {
         requireOrder(body, "BtSessionGate.sessionActive = true", "ui.phase(null)", "会话静默先于同步 UI 收尾")
         requireOrder(body, "ui.phase(null)", "CarPlayService", "UI 收尾先停服务")
         requireOrder(body, "CarPlayService", "boundCarSsid = null", "停服务后清热点")
-        requireOrder(body, "boundCarSsid = null", "Bg.run(", "同步收尾后提交后台清理")
+        requireOrder(body, "boundCarSsid = null", "disconnectTail.enqueue(", "同步收尾后提交后台清理")
+        requireContains(body, "retiringClient?.let { RetiringAirPlayClient(it) }", "快照 client 绑定捕获对象")
+        requireContains(body, "stopCapturedVideo = { retiringVideo?.stop() }", "快照视频绑定捕获对象")
+        requireContains(body, "releaseCapturedWifi = { retiringWifi?.release() }", "快照 WiFi 绑定捕获对象")
+        requireContains(body, "completed = completed", "快照 completion 绑定本轮身份")
     }
 
     @Test
     fun disconnectBackgroundCleanupContract() {
-        val body = scFunction("disconnect")
-        val background = lambdaAfter(body, "Bg.run(")
+        val background = tailFunction("execute")
         val innerFinally = lambdaAfter(background, "finally")
-        requireContains(background, "if (reason == DiagnosticCode.USER_STOP && retiringClient?.sessionActive == true)", "后台协议退出条件")
-        requireOrder(background, "retiringClient?.sessionActive == true", "retiringClient.stopLikeIphone()", "会话活跃才按 iPhone 顺序退出")
-        requireOrder(background, "retiringClient.stopLikeIphone()", "retiringWifi?.release()", "stopLikeIphone 失败先释放 WiFi")
-        requireOrder(background, "retiringWifi?.release()", "retiringClient?.teardownSession()", "WiFi fallback 释放先于 teardown")
-        requireContains(innerFinally, "runCatching { retiringVideo?.stop() }", "视频清理在 finally")
-        requireOrder(innerFinally, "runCatching { retiringVideo?.stop() }", "runCatching { retiringClient?.close() }", "视频先关再关 client")
+        requireContains(
+            background,
+            "if (snapshot.reason == DiagnosticCode.USER_STOP && snapshot.client?.sessionActive == true)",
+            "后台协议退出条件",
+        )
+        requireOrder(
+            background,
+            "snapshot.client?.sessionActive == true",
+            "snapshot.client.stopLikeIphone()",
+            "会话活跃才按 iPhone 顺序退出",
+        )
+        requireOrder(background, "snapshot.client.stopLikeIphone()", "live.withWifiLock", "stopLikeIphone 失败进入 WiFi 锁")
+        requireOrder(
+            background,
+            "live.withWifiLock",
+            "snapshot.releaseCapturedWifi()",
+            "WiFi fallback 释放先于 teardown",
+        )
+        requireOrder(background, "snapshot.client?.teardownSession()", "finally", "teardown 分支后进入收尾")
+        requireContains(innerFinally, "runCatching { snapshot.stopCapturedVideo() }", "视频清理在 finally")
         requireOrder(
             innerFinally,
-            "runCatching { retiringClient?.close() }",
-            "detachActiveBtSessions(eaStopReason =",
+            "runCatching { snapshot.stopCapturedVideo() }",
+            "runCatching { snapshot.client?.close() }",
+            "视频先关再关 client",
+        )
+        requireOrder(
+            innerFinally,
+            "runCatching { snapshot.client?.close() }",
+            "runCatching { live.detachBt(",
             "client 关闭先于 BT detach",
         )
-        requireOrder(innerFinally, "detachActiveBtSessions(eaStopReason =", "bluetoothServer?.stop()", "BT detach 先于 server stop")
-        requireOrder(innerFinally, "bluetoothServer?.stop()", "bluetoothClient?.stop()", "server 先停")
-        requireOrder(innerFinally, "bluetoothClient?.stop()", "bluetoothDiagnostics.finish()", "诊断收尾最后")
-        requireOrder(innerFinally, "bluetoothDiagnostics.finish()", "runCatching { ctrlAdvertiser?.stop() }", "诊断先于 WiFi 清理")
-        requireOrder(innerFinally, "runCatching { ctrlAdvertiser?.stop() }", "runCatching { endpointBrowser?.stop() }", "ctrl 先停")
+        requireOrder(innerFinally, "runCatching { live.detachBt(", "runCatching { live.stopBtServer() }", "BT detach 先于 server stop")
+        requireOrder(innerFinally, "runCatching { live.stopBtServer() }", "runCatching { live.stopBtClient() }", "server 先停")
+        requireOrder(innerFinally, "runCatching { live.stopBtClient() }", "runCatching { live.finishBtDiagnostics() }", "诊断收尾最后")
         requireOrder(
             innerFinally,
-            "retiringWifi?.release()",
-            "cleanupShellFallbackNetwork()",
-            "WiFi 捕获释放先于 shell",
-            from = innerFinally.indexOf("endpointBrowser?.stop()"),
+            "runCatching { live.finishBtDiagnostics() }",
+            "live.withWifiLock",
+            "诊断先于 WiFi 清理",
         )
-        requireOrder(innerFinally, "cleanupShellFallbackNetwork()", "synchronized(this)", "shell 清理先于完成同步块")
-        val syncBlock = lambdaAfter(innerFinally, "synchronized(this)")
+        requireOrder(
+            innerFinally,
+            "runCatching { live.stopCtrlAdvertiser() }",
+            "runCatching { live.stopEndpointBrowser() }",
+            "ctrl 先停",
+        )
+        requireOrder(
+            innerFinally,
+            "runCatching { live.stopEndpointBrowser() }",
+            "runCatching { snapshot.releaseCapturedWifi() }",
+            "浏览器后释放捕获 WiFi",
+        )
+        requireOrder(
+            innerFinally,
+            "runCatching { snapshot.releaseCapturedWifi() }",
+            "runCatching { live.cleanupShellFallback() }",
+            "WiFi 捕获释放先于 shell",
+        )
+        requireOrder(innerFinally, "runCatching { live.cleanupShellFallback() }", "live.completeOuter(snapshot.completed)", "shell 清理先于完成")
+        val completeAdapter = lambdaAfter(controller, "override fun completeOuter(completed: java.util.concurrent.CountDownLatch)")
+        val syncBlock = lambdaAfter(completeAdapter, "synchronized(SessionController)")
         val identityBlock = lambdaAfter(syncBlock, "if (disconnectCompletion === completed)")
         requireContains(syncBlock, "BtSessionGate.sessionActive = false", "锁内先解除会话静默")
         requireOrder(
@@ -227,8 +272,8 @@ class EndAttemptTraceTest {
         requireOrder(identityBlock, "handoffOwnership.allowNewHandoffs()", "disconnectCompletion = null", "仅身份匹配才开放交接并清 completion")
         assertFalse("gate 关闭必须留在完成身份块之前", identityBlock.contains("BtSessionGate.sessionActive = false"))
         assertFalse("countDown 不得在完成身份同步块内", syncBlock.contains("completed.countDown()"))
-        requireOrder(innerFinally, "disconnectCompletion = null", "completed.countDown()", "countDown 在身份判断和清 completion 之后")
-        requireOrder(innerFinally, "completed.countDown()", "appendLog(", "countDown 后记录完成日志")
+        requireOrder(completeAdapter, "synchronized(SessionController)", "completed.countDown()", "countDown 在完成同步块之后")
+        requireOrder(completeAdapter, "completed.countDown()", "appendLog(", "countDown 后记录完成日志")
     }
 
     @Test
@@ -456,11 +501,15 @@ class EndAttemptTraceTest {
 
     @Test
     fun teardownReasonLiteralsStayPinned() {
-        val innerFinally = lambdaAfter(lambdaAfter(scFunction("disconnect"), "Bg.run("), "finally")
-        val detachCall =
-            innerFinally.substringAfter("runCatching { detachActiveBtSessions(", "missing").substringBefore(") }")
-        assertTrue("disconnect 的 BT detach 必须携带非 null reason 表达式", detachCall.contains("eaStopReason = \""))
+        val innerFinally = lambdaAfter(tailFunction("execute"), "finally")
+        val detachCall = innerFinally.substringAfter("runCatching { live.detachBt(", "missing").substringBefore(") }")
+        assertTrue("disconnect 的 BT detach 必须携带非 null reason 表达式", detachCall.contains("snapshot.reason.name"))
         assertTrue("disconnect 的 BT detach 不得使用配对退役 reason", !detachCall.contains("eaStopReason = null"))
+        requireContains(
+            controller,
+            "override fun detachBt(reason: String) = detachActiveBtSessions(eaStopReason = reason)",
+            "reason 透传给 BT 拆链",
+        )
         val watchBody = scFunction("watchForPendingStartSession")
         val timeoutCall = watchBody.substringAfter("detachActiveBtSessions(", "missing")
         assertTrue("空端点等待超时必须携带非 null reason 表达式", timeoutCall.contains("eaStopReason = \""))
@@ -501,8 +550,8 @@ class EndAttemptTraceTest {
         ) { source ->
             requireOrder(source, "handoffOwnership.blockNewHandoffs()", "connectCancelled = true", "交接入口先于取消标志")
         }
-        val innerFinally = lambdaAfter(lambdaAfter(disconnect, "Bg.run("), "finally")
-        val syncBlock = lambdaAfter(innerFinally, "synchronized(this)")
+        val completeAdapter = lambdaAfter(controller, "override fun completeOuter(completed: java.util.concurrent.CountDownLatch)")
+        val syncBlock = lambdaAfter(completeAdapter, "synchronized(SessionController)")
         val countDownInsideLock =
             syncBlock.replace(
                 "BtSessionGate.sessionActive = false",
