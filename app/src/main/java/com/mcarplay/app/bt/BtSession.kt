@@ -106,6 +106,8 @@ internal fun Iap2LinkChannel.runSenderSession(
 /** 退役链路时，0xEA01 交给 socket 后到关闭 RFCOMM 之间的冲刷宽限。 */
 internal const val EA_STOP_FLUSH_MILLIS = 200L
 
+internal const val BT_EA_STOP_TASK_NAME = "iap2-ea-stop"
+
 /**
  * 退役一条 BT iAP2 控制链路。
  *
@@ -119,20 +121,24 @@ internal fun retireControlLink(
     eaStopReason: String?,
     closeLink: () -> Unit,
 ) {
-    if (eaStopReason == null || session == null || !session.hasEaSessionsToStop()) {
-        closeLink()
-        return
-    }
-    Bg.run("iap2-ea-stop") {
-        try {
-            if (session.stopEaSessions(eaStopReason) > 0) Thread.sleep(EA_STOP_FLUSH_MILLIS)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-        } finally {
-            closeLink()
-        }
-    }
+    val shutdown =
+        EaTimingShutdown(
+            reason = eaStopReason,
+            closeLink = closeLink,
+        )
+    shutdown.run(
+        session = session?.toEaStopSender(),
+        dispatcher = { name, task -> Bg.run(name, task) },
+        sleeper = { millis -> Thread.sleep(millis) },
+    )
 }
+
+private fun Iap2SenderSession.toEaStopSender(): EaTimingShutdown.Sender =
+    object : EaTimingShutdown.Sender {
+        override fun hasSessionsToStop(): Boolean = hasEaSessionsToStop()
+
+        override fun stop(reason: String): Int = stopEaSessions(reason)
+    }
 
 /**
  * 会话启动时解析真实蓝牙 MAC（0x4300 / 0x4E0E 用）。
