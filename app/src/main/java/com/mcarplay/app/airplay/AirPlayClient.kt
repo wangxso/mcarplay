@@ -29,6 +29,7 @@ import java.net.Socket
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 
 /**
  * AirPlay 客户端（Phase 2）：
@@ -246,9 +247,8 @@ class AirPlayClient(
     var sessionStopping = false
         private set
 
-    /** 一轮的兼容策略及其唯一 RECORD 结果，包括应答未知的失败；close 时唤醒所有等待者。 */
-    private var singleRecordMode: Boolean? = null
-    private var recordAttempt: java.util.concurrent.CompletableFuture<Boolean>? = null
+    /** 本轮唯一的 RECORD 结果，包括应答未知的失败；close 时唤醒所有等待者。 */
+    private var recordAttempt: CompletableFuture<Boolean>? = null
     private var feedbackThread: Thread? = null
     private var keepAliveThread: Thread? = null
     private var closingConnections = 0
@@ -290,7 +290,6 @@ class AirPlayClient(
             facts,
             formats,
             current.publicKey ?: current.deviceIdentifier,
-            airPlayFirmware = info?.get("firmwareRevision") as? String,
         )
     }
 
@@ -664,7 +663,6 @@ class AirPlayClient(
                 sessionStopping = true
                 recordAttempt?.complete(false)
                 recordAttempt = null
-                singleRecordMode = null
                 endingLink = iapLink
                 iapLink = null
                 recordAccepted = false
@@ -2572,6 +2570,8 @@ class AirPlayClient(
         sessionKey: ByteArray?,
         displayUuid: String? = null,
     ): ScreenStreamInfo? {
+        val epoch = connectionEpoch
+        if (!recordAccepted || !isSessionAlive(epoch)) return null
         // 对照 catplay（真车验证）：streamConnectionID = 随机 u64（+1 保证非零）
         val connectionId = java.security.SecureRandom().nextLong() and Long.MAX_VALUE or 1L
         val streamUuid =
@@ -2612,6 +2612,7 @@ class AirPlayClient(
                     "/",
                     body,
                     contentType = "application/x-apple-binary-plist",
+                    expectedEpoch = epoch,
                 )
             } catch (error: IOException) {
                 log("AIRPLAY: 流协商失败 - ${error.message}")
@@ -2699,44 +2700,22 @@ class AirPlayClient(
             false
         }
 
-    /**
-     * RECORD 激活会话。受影响的车机每个连接最多发一次：并发调用共享结果，超时也不能在原会话重发。
-     * 其他接收端保留音频后补发 RECORD 的既有行为。等待网络响应时不持有客户端锁，close 可随时终止。
-     *
-     * [force] 只给“屏幕流已 TEARDOWN 并重新 SETUP”的恢复路径用：新流必须重新激活，
-     * 不能被上面的单次 RECORD 缓存挡掉（艾瑞泽 8，2026-11-06：重进 CarPlay 后触控/按键失效）。
-     */
-    fun record(
-        timeoutMillis: Int = 10_000,
-        force: Boolean = false,
-    ): Boolean {
+    /** 激活本条控制连接的会话。并发调用共享一次 RECORD 的结果，超时后由新连接重新启动。 */
+    fun record(timeoutMillis: Int = 10_000): Boolean {
         val epoch: Long
-        val attempt: java.util.concurrent.CompletableFuture<Boolean>?
+        val attempt: CompletableFuture<Boolean>
         val owner: Boolean
         synchronized(this) {
             if (sessionStopping || socket?.isClosed != false) return false
             epoch = connectionEpoch
-            val single = singleRecordMode ?: receiverCompatibility().singleRecordPerSession.also { singleRecordMode = it }
             val previous = recordAttempt
-            if (single && previous != null && !force) {
-                attempt = previous
-                owner = false
-            } else {
-                attempt =
-                    if (single) {
-                        java.util.concurrent
-                            .CompletableFuture<Boolean>()
-                            .also { recordAttempt = it }
-                    } else {
-                        null
-                    }
-                owner = true
-            }
+            owner = previous == null
+            attempt = previous ?: CompletableFuture<Boolean>().also { recordAttempt = it }
         }
         if (!owner) {
             val result =
                 try {
-                    attempt!!.get()
+                    attempt.get()
                 } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     false
@@ -2771,7 +2750,7 @@ class AirPlayClient(
         } catch (error: IOException) {
             log("AIRPLAY: RECORD 失败 - ${error.message}")
         } finally {
-            attempt?.complete(accepted)
+            attempt.complete(accepted)
         }
         return accepted
     }

@@ -58,17 +58,7 @@ object ReceiverCompatibility {
          * `sem_wait` 无返回），后续挑战排队，会话结束仍有认证挂起；长度记忆还曾把 32B 误记为被拒（2026-11-02 车机日志）。
          */
         val pinnedMfiChallengeLength: Int? = null,
-        /**
-         * 对已取得日志证据的车机栈，同一会话只发送一次 RECORD，避免重复启动遗留定时器或触发拆链。
-         * 当前覆盖艾瑞泽 8（CHERY / Tiggo）与 issue #55 报告中的奔驰 MB_D-PP-3/4，均限定 AirPlay 320.17.7。
-         */
-        val singleRecordPerSession: Boolean = false,
-        /** ORA 03 时序验证：初始音频加入时沿用首个 RECORD，手动补启音频仍可激活。 */
-        val skipRecordAfterInitialAudioSetup: Boolean = false,
-        /**
-         * 连接等待超过 30 s 时显示艾瑞泽 8 专属提示（该车机此时会自行重置并重新发起）。只影响界面文案，
-         * 与 [singleRecordPerSession] 同一份 CHERY/Tiggo/320.17.7 身份判定；手动车型不改变它（车还是那台车）。
-         */
+        /** 等待超过 30 s 时显示 CHERY/Tiggo/320.17.7 的车机重置提示。 */
         val arrizo8ConnectWindowHint: Boolean = false,
         /**
          * 推流中收到车机 ctrl 邀请（`GET /ctrl-int/1/connect`）时退役当前会话并按邀请重连。大众 Cinemo 栈车机
@@ -108,9 +98,8 @@ object ReceiverCompatibility {
         mediaCapabilities: String = "",
         receiverInstance: String? = null,
         preset: VehiclePreset = VehiclePresetRuntime.current,
-        airPlayFirmware: String? = null,
     ): Policy {
-        val policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance, airPlayFirmware), preset, signals)
+        val policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset, signals)
         val features = signals.features ?: 0L
         val unifiedMfi = features and AirPlayFeatures.UNIFIED_PAIRING_AND_MFI != 0L
         val standaloneMfi = !unifiedMfi && features and AirPlayFeatures.MFI_SAP != 0L
@@ -123,9 +112,7 @@ object ReceiverCompatibility {
     /**
      * 用户在主页手动选择车型后，在自动判定结果之上叠加该车型的适配开关（[VehiclePreset.AUTO] 不改动）。
      *
-     * [signals] 只用于**冲突守卫**：手动预设是为「自动判定认不出」准备的，不能把例外套到另一台
-     * 已知厂牌的车机上。例如选了奔驰 MB_D-PP 预设但车机自报 `CHERY`，则保持原策略并只记录规则，
-     * 不启用单次 RECORD。
+     * [signals] 用于奔驰尺寸预设的厂商匹配。
      */
     fun applyPreset(
         policy: Policy,
@@ -146,8 +133,6 @@ object ReceiverCompatibility {
                     sendAppleClientHeaders = false,
                     iphoneAuthSequence = false,
                     pinnedMfiChallengeLength = null,
-                    singleRecordPerSession = false,
-                    skipRecordAfterInitialAudioSetup = false,
                     reconnectOnStreamingInvite = false,
                     usePanelVideoGeometry = false,
                     preferVehicleResolution = false,
@@ -181,22 +166,10 @@ object ReceiverCompatibility {
                     linkGeneration = ReceiverProfile.LinkGeneration.CLASSIC_MIB3,
                     rules = policy.rules + "manual.classic-mib3",
                 )
-            // 奔驰 MB_D-PP（issue #55）：只登记单次 RECORD；不附带 Chery 的蓝牙/MFi 例外。
-            // 身份为空 = 自动判定拿不到型号/厂商，正是手动预设的用途；已知是别家车机则拒绝套用。
-            VehiclePreset.MERCEDES_MB_DPP ->
-                if (manualMercedesAllowed(signals)) {
-                    policy.copy(
-                        singleRecordPerSession = true,
-                        rules = policy.rules + "manual.mercedes-mb-dpp",
-                    )
-                } else {
-                    policy.copy(rules = policy.rules + "manual.mercedes-mb-dpp-blocked")
-                }
             // 奔驰 MB_E-P / 2025 GLC（issue #62）：先验证「CarWith 是否按车机尺寸出流」。
             // HyperCar 日志已给出同车机的 A/B：请求 1624x1278 时，未声明 DISABLE_RESOLUTION_OPTION
             // 会被 CarWith 回成 1280x720，声明后才返回 1624x1278。因此当前预设不再使用 1728 面板，
             // 保持 displays[0] 的 1624x1278，并只打开功能协商这一条改动。
-            // 不附带 MB_D-PP 的单次 RECORD（那是另一代际、另一份报告的证据）。
             // 已知是别家车机时拒绝套用，避免把实验开关带到其它接收端上。
             VehiclePreset.MERCEDES_MB_E ->
                 if (manualMercedesAllowed(signals)) {
@@ -244,7 +217,6 @@ object ReceiverCompatibility {
         signals: ReceiverProfile.Signals,
         mediaCapabilities: String,
         receiverInstance: String?,
-        airPlayFirmware: String?,
     ): Policy {
         val profile = ReceiverProfile.classify(signals)
         val generation = ReceiverProfile.linkGenerationOf(signals)
@@ -276,21 +248,8 @@ object ReceiverCompatibility {
         val diPlayWire010 = diPlay && normalize(signals.firmwareVersion) == "0.1.0"
         // 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 会话期间车机蓝牙关闭（2026-11-02 车机日志）
         val cheryReleasesBluetooth = normalize(signals.manufacturer) == "chery"
-        // 只登记已取得原厂库和崩溃证据的协议身份；srcvers 是 AirPlay 栈版本，不等于整车固件。
-        val cherySingleRecord =
+        val arrizo8ConnectWindowHint =
             cheryReleasesBluetooth && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
-        // 奔驰 MB_D-PP-3/4（issue #55 车主报告：iAP2 自报 Mercedes-Benz / MB_D-PP-3，/info 为 MB_D-PP-4）：
-        // 音频 SETUP 后补发 RECORD，16–559 ms 内屏幕口 EOF/reset；同一报告里不补发 RECORD 的视频会话正常。
-        // 只登记报告实际出现的型号与 AirPlay 栈版本，不把其他 320.17.7 接收端一并纳入。
-        val mercedesSingleRecord =
-            normalize(signals.manufacturer) == "mercedes-benz" &&
-                normalize(signals.model) in MERCEDES_D_PP_MODELS &&
-                normalize(signals.srcvers) == "320.17.7"
-        // ORA 03 重连时音频 SETUP 后立即补发 RECORD，约 6 s 后车机拆链。
-        // 同一车机较晚手动开启音频时补发 RECORD 有成功记录，故只调整初始连接。
-        val oraSkipInitialAudioRecord =
-            normalize(signals.manufacturer) == "gwm" &&
-                isOra03Receiver(signals.model, airPlayFirmware, signals.srcvers)
         // 大众车机型号自报 VWxxxx（ID7 VW4131、帕萨特 2025 VW4211），厂商字段并不统一（帕萨特报 Toppower）
         val vwStreamingInvite = VW_MODEL.matches(normalize(signals.model))
         val rules =
@@ -307,9 +266,6 @@ object ReceiverCompatibility {
                 if (cheryReleasesBluetooth) add("chery.apple-client-headers")
                 if (cheryReleasesBluetooth) add("chery.iphone-auth-sequence")
                 if (cheryReleasesBluetooth) add("chery.mfi-32-only")
-                if (cherySingleRecord) add("chery.tiggo.320.17.7.single-record")
-                if (mercedesSingleRecord) add("mercedes.mb_d-pp.320.17.7.single-record")
-                if (oraSkipInitialAudioRecord) add("ora.n220346.2.no-initial-audio-record")
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
                 if (winPlay) add("winplay.vehicle-resolution")
             }
@@ -328,9 +284,7 @@ object ReceiverCompatibility {
             sendAppleClientHeaders = cheryReleasesBluetooth,
             iphoneAuthSequence = cheryReleasesBluetooth,
             pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
-            singleRecordPerSession = cherySingleRecord || mercedesSingleRecord,
-            skipRecordAfterInitialAudioSetup = oraSkipInitialAudioRecord,
-            arrizo8ConnectWindowHint = cherySingleRecord,
+            arrizo8ConnectWindowHint = arrizo8ConnectWindowHint,
             reconnectOnStreamingInvite = vwStreamingInvite,
             preferVehicleResolution = winPlay,
         )
@@ -407,9 +361,6 @@ object ReceiverCompatibility {
     private val WINPLAY_HANDOFF_FIRMWARE = setOf("1.2.4", "1.2.5")
 
     private val VW_MODEL = Regex("vw\\d{4}")
-
-    /** issue #55 报告中同一台奔驰的 iAP2（MB_D-PP-3）与 `/info`（MB_D-PP-4）自报型号。 */
-    private val MERCEDES_D_PP_MODELS = setOf("mb_d-pp-3", "mb_d-pp-4")
 
     private fun normalize(value: String?): String = value.orEmpty().trim().lowercase(java.util.Locale.ROOT)
 }

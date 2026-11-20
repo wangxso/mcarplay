@@ -1792,28 +1792,7 @@ object SessionController {
         }
         if (audioSender?.isRunning == true) return
         appendLog("MODE: 会话进行中，动态补启音频通道…")
-        startAudioAndRecord(context, client, secret, currentAudioHost, "AUDIO: 动态加入音频流——检查会话激活")
-    }
-
-    /** 启动音频并在成功后补 RECORD；连接、动态补启和仲裁重试三条入口共用。 */
-    private fun startAudioAndRecord(
-        context: Context,
-        client: AirPlayClient,
-        secret: ByteArray?,
-        host: String?,
-        logLine: String,
-        recordAfterSetup: Boolean = true,
-    ): Boolean {
-        val started = startAudioChannel(context, client, secret, host)
-        if (started) {
-            if (recordAfterSetup) {
-                appendLog(logLine)
-                client.record()
-            } else {
-                appendLog("AUDIO: 初始音频流已加入——沿用已激活会话的 RECORD")
-            }
-        }
-        return started
+        startAudioChannel(context, client, secret, currentAudioHost)
     }
 
     /**
@@ -1832,7 +1811,7 @@ object SessionController {
                 val secret = currentSharedSecret ?: return
                 Triple(context, secret, currentAudioHost)
             }
-        startAudioAndRecord(ready.first, client, ready.second, ready.third, "AUDIO: 车机归还主音频后音频流已建立——检查会话激活")
+        startAudioChannel(ready.first, client, ready.second, ready.third)
     }
 
     /**
@@ -2990,7 +2969,7 @@ object SessionController {
      * 依赖 MediaProjection（AudioPlaybackCapture 的授权来源），且需用户在「启动连接」
      * 弹窗中选择「开启声音」——音视频同时推流显著增加负载（实测会卡顿/断连）。
      *
-     * @return 音频通道是否真正启动（调用方据此决定是否补发 RECORD 激活新加入的流）
+     * @return 音频通道是否真正启动
      */
     fun startAudioChannel(
         context: Context,
@@ -3024,7 +3003,7 @@ object SessionController {
             return false
         }
         val connectionGeneration = client.connectionGeneration
-        if (!client.isConnectionCurrent(connectionGeneration)) return false
+        if (!client.sessionActive || !client.isConnectionCurrent(connectionGeneration)) return false
         val diagnosticAttempt = ConnectionDiagnostics.timeline.snapshot()?.id
         if (!audioEnabledForSession) {
             appendLog("AUDIO: 本次连接未开启车机侧声音（「启动连接」弹窗选择）——仅推视频")
@@ -4692,6 +4671,28 @@ object SessionController {
                             return@run
                         }
                         if (setup != null) {
+                            fun failMediaStartup(code: DiagnosticCode) {
+                                val sender =
+                                    synchronized(this) {
+                                        if (currentClient !== client) return
+                                        ConnectionDiagnostics.timeline.finish(diagnosticAttempt, code, true)
+                                        if (!wasCancelled() && recordAutoReconnectOutcome(diagnosticAttempt, code, peerAddress)) {
+                                            disconnect(context, code)
+                                            return
+                                        }
+                                        videoSender.also { retireSession(closeClient = false, preserveScreenSocket = true) }
+                                    }
+                                try {
+                                    if (!client.controlChannelClosed) client.teardownSession()
+                                } finally {
+                                    try {
+                                        sender?.stop()
+                                    } finally {
+                                        client.close()
+                                    }
+                                }
+                            }
+
                             // 记录会话凭据：投影授权晚于连接时用于动态补启音频。
                             // 用 client.currentEndpoint 而非 effectiveEndpoint：配对期间
                             // mDNS 刷新过端点时，真正连上的是 client 里的地址（2026-10-18：
@@ -4935,6 +4936,16 @@ object SessionController {
                                         )
                                 }
                             }
+                            // 初始 SETUP 完成后先激活会话，再协商各条媒体流。
+                            if (!client.record()) {
+                                appendLog("AIRPLAY: RECORD 未确认——结束本轮，不启动视频或音频")
+                                if (!wasCancelled() && currentClient === client) {
+                                    phaseHint = t(R.string.sc_record_unconfirmed)
+                                    uiHintSink?.invoke(t(R.string.sc_record_unconfirmed))
+                                }
+                                failMediaStartup(DiagnosticCode.SETUP_FAILED)
+                                return@run
+                            }
                             // 像 iPhone 一样请车机关蓝牙（真 iPhone 会话开始约 0.1 s 即发，早于屏幕流）
                             if (client.receiverCompatibility().releaseBluetoothAfterSetup) client.releaseReceiverBluetooth()
                             // 资源声明（must）：真车对未声明资源的屏幕流 SETUP 直接 400
@@ -4973,12 +4984,6 @@ object SessionController {
                                         )
                                     }
                                 }
-                                // 关键时序（2026-10-17 奥迪定谳）：屏幕 SETUP 后必须尽快连上
-                                // dataPort——车机有 ~2s 看门狗。音频 SETUP 实测要 ~2.1s，
-                                // 若排在前面，端口连接迟到即触发车机 reset 控制通道
-                                // （日志特征：`音频 SETUP 往返 2091ms` 与 `EVENT 读取结束
-                                // - Connection reset` 同一毫秒）。故先建 VideoSender 并
-                                // openDataPort()，再协商音频，最后 RECORD + 启动编码器。
                                 var pendingVideoW = 0
                                 var pendingVideoH = 0
                                 var carLife: CarLifeSession? = null
@@ -5168,8 +5173,11 @@ object SessionController {
                                     }
                                     sessionVideoSender = newScreenSender(screen)
                                     videoSender = sessionVideoSender
-                                    // 先连端口（车机看门狗），编码器等 RECORD 后再启动
-                                    videoSender?.openDataPort()
+                                    // 屏幕流 SETUP 后立即连接数据口，满足车机等待窗口。
+                                    if (!sessionVideoSender.openDataPort()) {
+                                        failMediaStartup(DiagnosticCode.SETUP_FAILED)
+                                        return@run
+                                    }
                                     screenStreamRecovery = recover@{
                                         fun failure(): ScreenRecoveryResult =
                                             if (wasCancelled() || client.cancelled || currentClient !== client) {
@@ -5208,10 +5216,6 @@ object SessionController {
                                             }
                                             if (!replacement.openDataPort() ||
                                                 wasCancelled() ||
-                                                // 屏幕流已 TEARDOWN/SETUP：单次 RECORD 车机也必须重发一次，
-                                                // 否则新流没有激活（艾瑞泽 8 重进后触控/按键失效）。
-                                                !client.record(force = true) ||
-                                                wasCancelled() ||
                                                 !replacement.start {} ||
                                                 wasCancelled()
                                             ) {
@@ -5226,7 +5230,7 @@ object SessionController {
                                             client.modes.onScreenStreamRestored()
                                             replacement.requestKeyFrame(fromReceiver = false)
                                             restored = true
-                                            appendLog("SCREEN: 主屏流已重新 SETUP/RECORD，等待新的 IDR 与触控")
+                                            appendLog("SCREEN: 主屏流已重新 SETUP，等待新的 IDR 与触控")
                                             ScreenRecoveryResult.RESTORED
                                         } finally {
                                             if (!restored) {
@@ -5238,138 +5242,99 @@ object SessionController {
                                             }
                                         }
                                     }
-                                }
-                                // 先 RECORD 激活会话并起视频，再协商音频（2026-10-17 奥迪定谳）：
-                                // 车机在「屏幕流 SETUP 之后」有约 2s 看门狗，等不到 RECORD/数据流即
-                                // 拆掉整轮会话。音频 SETUP 实测本身要 ~2.05-2.16s（车机侧音频通路
-                                // 初始化），排在 RECORD 之前必然超时——日志里 reset 与音频 SETUP
-                                // 返回同一毫秒、且 5 次实测全部复现。故顺序改为：
-                                //   屏幕 SETUP → 连数据端口 → RECORD → 起编码器（出帧）→ 音频 SETUP
-                                // 音频 SETUP 失败只丢声音，视频会话保持。
-                                if (!client.record()) {
-                                    appendLog("AIRPLAY: RECORD 未确认——结束本轮，不启动视频或音频")
-                                    ConnectionDiagnostics.timeline.finish(diagnosticAttempt, DiagnosticCode.SETUP_FAILED, true)
-                                    // 该出口只关客户端、不走 disconnect：必须在这里记账。
-                                    val tripped =
-                                        recordAutoReconnectOutcome(diagnosticAttempt, DiagnosticCode.SETUP_FAILED, peerAddress)
-                                    if (ownsConnection() && currentClient === client) {
-                                        phaseHint = t(R.string.sc_record_unconfirmed)
-                                        uiHintSink?.invoke(t(R.string.sc_record_unconfirmed))
-                                        retireSession()
-                                    } else {
-                                        client.close()
-                                    }
-                                    if (tripped) {
-                                        appContext?.let { app ->
-                                            Bg.run("auto-reconnect-trip") { disconnect(app, DiagnosticCode.SETUP_FAILED) }
-                                        }
-                                    }
+                                } else {
+                                    failMediaStartup(DiagnosticCode.SETUP_FAILED)
                                     return@run
                                 }
                                 ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.CARWITH)
-                                if (host != null) {
-                                    val videoW = pendingVideoW
-                                    val videoH = pendingVideoH
-                                    val output = CarLifeOutput(diagnosticAttempt, sessionVideoSender)
-                                    // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准。
-                                    // 实验（issue #62）：默认 1920 长边上限会把面板尺寸先压小（2288×1728 →
-                                    // 1920×1448），使实验连「请求正确尺寸」都做不到；命中面板时放开到面板长边，
-                                    // 但是否真的生效仍以实际返回尺寸为准（见 newFormalCarLifeSession）。
-                                    val experimentalPanelWidth = setup.experimentalPanelGeometry?.first
-                                    val experimentalPanelHeight = setup.experimentalPanelGeometry?.second
-                                    val requestMaxLongSide =
-                                        if (experimentalPanelWidth != null && experimentalPanelHeight != null) {
-                                            maxOf(
-                                                CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE,
-                                                experimentalPanelWidth,
-                                                experimentalPanelHeight,
-                                            )
-                                        } else {
-                                            CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE
-                                        }
-                                    val requestedVideo =
-                                        CarLifeProtocol.videoRequestFor(
-                                            setup.displayWidth,
-                                            setup.displayHeight,
-                                            requestMaxLongSide,
+                                val videoW = pendingVideoW
+                                val videoH = pendingVideoH
+                                val output = CarLifeOutput(diagnosticAttempt, sessionVideoSender)
+                                // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准。
+                                // 实验（issue #62）：默认 1920 长边上限会把面板尺寸先压小（2288×1728 →
+                                // 1920×1448），使实验连「请求正确尺寸」都做不到；命中面板时放开到面板长边，
+                                // 但是否真的生效仍以实际返回尺寸为准（见 newFormalCarLifeSession）。
+                                val experimentalPanelWidth = setup.experimentalPanelGeometry?.first
+                                val experimentalPanelHeight = setup.experimentalPanelGeometry?.second
+                                val requestMaxLongSide =
+                                    if (experimentalPanelWidth != null && experimentalPanelHeight != null) {
+                                        maxOf(
+                                            CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE,
+                                            experimentalPanelWidth,
+                                            experimentalPanelHeight,
                                         )
-                                    val compatibility = client.receiverCompatibility()
-                                    val preferVehicleResolution =
-                                        compatibility.preferVehicleResolution &&
-                                            setup.displayFromInfo &&
-                                            setup.displayWidth >= 2 &&
-                                            setup.displayHeight >= 2
-                                    if (setup.experimentalPanelGeometry != null) {
-                                        appendLog(
-                                            "DISPLAY: 实验面板几何 ${experimentalPanelWidth}x$experimentalPanelHeight" +
-                                                " → 请求 CarWith ${requestedVideo.first}x${requestedVideo.second}" +
-                                                "（长边上限 $requestMaxLongSide）",
-                                        )
+                                    } else {
+                                        CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE
                                     }
-                                    if (preferVehicleResolution) {
-                                        appendLog(
-                                            "CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1，请求 CarWith 按车机显示尺寸 " +
-                                                "${requestedVideo.first}x${requestedVideo.second} 编码",
-                                        )
-                                    } else if (compatibility.preferVehicleResolution) {
-                                        appendLog(
-                                            "CARLIFE: 未取得有效 /info 显示几何，暂不声明 DISABLE_RESOLUTION_OPTION",
-                                        )
-                                    }
-                                    val createdCarLife =
-                                        newFormalCarLifeSession(
-                                            context,
-                                            requestedVideo,
-                                            preferVehicleResolution = preferVehicleResolution,
-                                        )
-                                    carLife = createdCarLife
-                                    val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)
-                                    val videoStarted = claimed && videoSender?.start {} == true
-                                    // 入网已完成，此时才拿低延迟锁（持锁会让入网所需的 Wi‑Fi 扫描失败）
-                                    if (videoStarted) StreamingWifiLock.acquire(context)
-                                    if (videoStarted) streamingDiagnosticAttempt = diagnosticAttempt
-                                    // 锁屏/息屏/Doze 迁移写进日志与时间线（锁屏退出的定位依据，只读不改状态）
-                                    if (videoStarted) {
-                                        ScreenLockMonitor.start(
-                                            context,
-                                            log = ::appendLog,
-                                            note = { ConnectionDiagnostics.timeline.note(diagnosticAttempt, it) },
-                                        )
-                                    }
-                                    if (videoStarted) carLifeOutput = output
-                                    // 在 CarWith 启动前布防：CarWith 可能在 start() 内就恢复媒体，
-                                    // 启动后再取 nowPlaying 会把自动播放误当成“连接前已在播放”。
-                                    if (videoStarted) armAutoPlayBehavior(createdCarLife)
-                                    val carLifeStarted = videoStarted && createdCarLife.start()
-                                    appendLog(
-                                        "MODE: CarWith ${if (carLifeStarted) "已请求连接，等待真实视频" else "连接请求失败"} " +
-                                            "${videoW}x$videoH（等待 CarLife 首帧，不代表已完成握手）",
+                                val requestedVideo =
+                                    CarLifeProtocol.videoRequestFor(
+                                        setup.displayWidth,
+                                        setup.displayHeight,
+                                        requestMaxLongSide,
                                     )
+                                val compatibility = client.receiverCompatibility()
+                                val preferVehicleResolution =
+                                    compatibility.preferVehicleResolution &&
+                                        setup.displayFromInfo &&
+                                        setup.displayWidth >= 2 &&
+                                        setup.displayHeight >= 2
+                                if (setup.experimentalPanelGeometry != null) {
+                                    appendLog(
+                                        "DISPLAY: 实验面板几何 ${experimentalPanelWidth}x$experimentalPanelHeight" +
+                                            " → 请求 CarWith ${requestedVideo.first}x${requestedVideo.second}" +
+                                            "（长边上限 $requestMaxLongSide）",
+                                    )
+                                }
+                                if (preferVehicleResolution) {
+                                    appendLog(
+                                        "CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1，请求 CarWith 按车机显示尺寸 " +
+                                            "${requestedVideo.first}x${requestedVideo.second} 编码",
+                                    )
+                                } else if (compatibility.preferVehicleResolution) {
+                                    appendLog(
+                                        "CARLIFE: 未取得有效 /info 显示几何，暂不声明 DISABLE_RESOLUTION_OPTION",
+                                    )
+                                }
+                                val createdCarLife =
+                                    newFormalCarLifeSession(
+                                        context,
+                                        requestedVideo,
+                                        preferVehicleResolution = preferVehicleResolution,
+                                    )
+                                carLife = createdCarLife
+                                val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)
+                                val videoStarted = claimed && videoSender?.start {} == true
+                                // 入网已完成，此时才拿低延迟锁（持锁会让入网所需的 Wi‑Fi 扫描失败）
+                                if (videoStarted) StreamingWifiLock.acquire(context)
+                                if (videoStarted) streamingDiagnosticAttempt = diagnosticAttempt
+                                // 锁屏/息屏/Doze 迁移写进日志与时间线（锁屏退出的定位依据，只读不改状态）
+                                if (videoStarted) {
+                                    ScreenLockMonitor.start(
+                                        context,
+                                        log = ::appendLog,
+                                        note = { ConnectionDiagnostics.timeline.note(diagnosticAttempt, it) },
+                                    )
+                                }
+                                if (videoStarted) carLifeOutput = output
+                                // 在 CarWith 启动前布防：CarWith 可能在 start() 内就恢复媒体，
+                                // 启动后再取 nowPlaying 会把自动播放误当成“连接前已在播放”。
+                                if (videoStarted) armAutoPlayBehavior(createdCarLife)
+                                val carLifeStarted = videoStarted && createdCarLife.start()
+                                appendLog(
+                                    "MODE: CarWith ${if (carLifeStarted) "已请求连接，等待真实视频" else "连接请求失败"} " +
+                                        "${videoW}x$videoH（等待 CarLife 首帧，不代表已完成握手）",
+                                )
+                                if (!carLifeStarted) {
                                     if (!claimed) {
-                                        ConnectionDiagnostics.timeline.finish(diagnosticAttempt, DiagnosticCode.CARWITH_BUSY, true)
                                         appendLog("MODE: CarWith 自检正在占用 CarWith，本次 CarPlay 不启动视频桥接")
                                     }
-                                    if (carLifeStarted) {
-                                        appendLog("SCREEN: CarWith 尚未收到首帧，保持手机可见以完成原厂连接")
-                                    } else {
-                                        stopAutoPlayWatch()
-                                        ConnectionDiagnostics.timeline.finish(diagnosticAttempt, DiagnosticCode.CARWITH_FAILED, true)
-                                        if (carLifeOutput === output) carLifeOutput = null
-                                        releaseCarLifeSession(createdCarLife)
-                                    }
+                                    failMediaStartup(if (claimed) DiagnosticCode.CARWITH_FAILED else DiagnosticCode.CARWITH_BUSY)
+                                    return@run
                                 }
+                                appendLog("SCREEN: CarWith 尚未收到首帧，保持手机可见以完成原厂连接")
                                 // 音频通道（可选）：SETUP type=100 → UDP RTP 推流。
                                 // 会话已激活（RECORD 完成）后再协商；失败不影响视频主链路。
-                                val audioStarted =
-                                    startAudioAndRecord(
-                                        context,
-                                        client,
-                                        sessionKey,
-                                        host,
-                                        // 奥迪曾需流后补发；受影响车机由客户端策略跳过重复 RECORD。
-                                        "AUDIO: 音频流已加入——检查会话激活",
-                                        recordAfterSetup = !client.receiverCompatibility().skipRecordAfterInitialAudioSetup,
-                                    )
+                                val audioStarted = startAudioChannel(context, client, sessionKey, host)
                                 // 主音频被车机约束占用时的“未启动”不是音频故障：不写结论码，
                                 // 否则它会长期盖住后续真正需要的诊断（如屏幕暂停）。
                                 if (audioEnabledForSession &&
@@ -5379,6 +5344,9 @@ object SessionController {
                                 ) {
                                     ConnectionDiagnostics.timeline.issue(diagnosticAttempt, DiagnosticCode.AUDIO_UNAVAILABLE)
                                 }
+                            } else {
+                                failMediaStartup(DiagnosticCode.SETUP_FAILED)
+                                return@run
                             }
                         } else {
                             // 会话级 SETUP 被拒（典型：接收端按设备过滤回 403，见
