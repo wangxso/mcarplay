@@ -60,6 +60,26 @@ class EndAttemptTraceTest {
         return balancedFrom(controller, open)
     }
 
+    private fun audioTeardownConstructorBlock(): String {
+        val start = requireIndex(controller, "private val audioTeardown =", "找不到 AudioTeardown 构造块")
+        val constructorAt = requireIndex(controller, "AudioTeardown(", "找不到 AudioTeardown 构造调用")
+        val parenOpen = controller.indexOf('(', constructorAt)
+        check(parenOpen > start) { "AudioTeardown 参数表没有开始" }
+        var parens = 0
+        var index = parenOpen
+        while (index < controller.length) {
+            when (controller[index]) {
+                '(' -> parens++
+                ')' -> {
+                    parens--
+                    if (parens == 0) return controller.substring(start, index + 1)
+                }
+            }
+            index++
+        }
+        error("AudioTeardown 构造块没有闭合")
+    }
+
     private fun constructorCall(
         source: String,
         constructorName: String,
@@ -907,18 +927,17 @@ class EndAttemptTraceTest {
     @Test
     fun audioAttributionPreservesClientWatchdogGuard() {
         val bodyTop = normalize(rawScFunctionLast("attributeAudioTeardown"))
-        val guardScope = lambdaAfter(bodyTop, "currentClient?.let")
-        val guardBlock = lambdaAfter(guardScope, "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)")
-        requireContains(bodyTop, "val profile = activeAudioProfile ?: return", "无 active profile 直接返回")
-        requireOrder(bodyTop, "val profile = activeAudioProfile ?: return", "currentClient?.let { client ->", "profile 先取，当前 client 守卫后判断")
-        requireContains(bodyTop, "if (client.mib3LinkArmed && !client.mib3ControlSessionDone)", "MIB3 看门狗守卫")
-        requireContains(bodyTop, "currentClient?.let { client ->", "看门狗必须读取动态当前 client")
-        requireOrder(guardBlock, "activeAudioProfile = null", "activeAudioStartedAt = 0L", "profile 清理后清 start")
-        requireContains(guardBlock, "return", "守卫命中直接返回")
-        requireOrder(bodyTop, "currentClient?.let { client ->", "if (startedAt == 0L || identity.isBlank()) return", "client 守卫先于无记忆判断")
-        requireOrder(bodyTop, "if (startedAt == 0L || identity.isBlank()) return", "if (lived >= AUDIO_PROFILE_PROBE_MS)", "无记忆先于探测判定")
-        requireContains(bodyTop, "AudioProfileMemory.recordWorking(ctx, identity, profile.key)", "达到阈值记 working")
-        requireContains(bodyTop, "AudioProfileMemory.recordRejected(ctx, identity, profile.key, allKeys)", "未达阈值记 rejected")
+        val teardownBlock = normalize(audioTeardownConstructorBlock())
+        requireContains(bodyTop, "audioTeardown.attribute()", "收尾必须委托音频拆链归因")
+        requireContains(teardownBlock, "profile = activeAudioProfile", "音频档位必须来自 active profile")
+        requireContains(teardownBlock, "startedAtMs = activeAudioStartedAt", "音频起点必须来自真实状态")
+        requireContains(teardownBlock, "receiverKey = activeAudioReceiverKey", "音频身份必须来自真实状态")
+        requireContains(teardownBlock, "clearState = { clearActiveAudioState() }", "音频状态清理必须委托 SC")
+        requireOrder(teardownBlock, "profile = activeAudioProfile", "currentClient?.let { client ->", "身份状态先于动态 client 守卫")
+        requireContains(teardownBlock, "currentClient?.let { client ->", "看门狗必须读取动态当前 client")
+        requireOrder(teardownBlock, "currentClient?.let { client ->", "Mib3LinkWatchdog(", "动态 client 先构造看门狗")
+        requireContains(teardownBlock, "armed = client.mib3LinkArmed", "MIB3 布防状态必须透传")
+        requireContains(teardownBlock, "controlSessionDone = client.mib3ControlSessionDone", "MIB3 控制会话状态必须透传")
     }
 
     @Test
