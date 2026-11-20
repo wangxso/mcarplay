@@ -1429,7 +1429,7 @@ object SessionController {
         }
         if (automatic) {
             val peer = automaticPeerAddress ?: TargetDevicePrefs.get(context)?.address
-            AutoReconnectGuard.block(context, peer)?.let { block ->
+            reconnectAttribution.block(peer)?.let { block ->
                 appendLog(
                     "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
                         "（可在 App 内手动连接）",
@@ -4429,7 +4429,7 @@ object SessionController {
             return
         }
         // 自动重连熔断中：车机回连的端点也忽略。手动连接会先清空熔断，不受影响。
-        if (AutoReconnectGuard.block(context, peerAddress) != null) {
+        if (reconnectAttribution.block(peerAddress) != null) {
             appendLog(">>> [$source] 自动重连已暂停——忽略车机回连端点（手动连接可解除）")
             rejectPreAcquired()
             return
