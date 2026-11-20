@@ -16,28 +16,41 @@ class Phase2ReaderTest {
     @Test
     fun verifiesPersistenceWithProductionGuard() {
         val arguments = InstrumentationRegistry.getArguments()
-        val marker = ReconnectPrefsInstrumentationTestSupport.requireMarker(arguments)
-        val scenario = ReconnectPrefsInstrumentationTestSupport.requireScenario(arguments)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val handoff = ReconnectPrefsInstrumentationTestSupport.readPhase1Handoff(context)
-
-        assertEquals(marker, handoff.getString("marker"))
-        assertEquals(scenario, handoff.getString("scenario"))
-        val phase1Pid = handoff.getInt("phase1Pid")
-        val phase2Pid = Process.myPid()
-        assertTrue("Phase 2 PID $phase2Pid must differ from Phase 1 PID $phase1Pid", phase1Pid != phase2Pid)
-        val expectedKey = "mcarplay.test.handoff_$marker"
-        val expectedValue = "expected:$scenario"
-        assertEquals(expectedKey, handoff.getString("expectedKey"))
-        assertEquals(expectedValue, handoff.getString("expectedValue"))
-        val prefs = ReconnectPrefsInstrumentationTestSupport.settings(context)
-        assertEquals(expectedValue, prefs.getString(expectedKey, null))
-        assertEquals(
-            ReconnectPrefsInstrumentationTestSupport.UNRELATED_VALUE,
-            prefs.getString(ReconnectPrefsInstrumentationTestSupport.UNRELATED_KEY, null),
-        )
 
         try {
+            val marker = ReconnectPrefsInstrumentationTestSupport.requireMarker(arguments)
+            val scenario = ReconnectPrefsInstrumentationTestSupport.requireScenario(arguments)
+            val handoff = ReconnectPrefsInstrumentationTestSupport.readPhase1Handoff(context)
+            val prefs = ReconnectPrefsInstrumentationTestSupport.settings(context)
+
+            assertEquals(marker, handoff.getString("marker"))
+            assertEquals(scenario, handoff.getString("scenario"))
+            assertEquals(ReconnectPrefsInstrumentationTestSupport.KEY_STATES, handoff.getString("expectedStateKey"))
+            val expectedLegacyKeys = handoff.getJSONArray("expectedLegacyKeys")
+            assertEquals(ReconnectPrefsInstrumentationTestSupport.LEGACY_KEYS.size, expectedLegacyKeys.length())
+            ReconnectPrefsInstrumentationTestSupport.LEGACY_KEYS.forEachIndexed { index, key ->
+                assertEquals(key, expectedLegacyKeys.getString(index))
+            }
+            assertEquals(
+                ReconnectPrefsInstrumentationTestSupport.UNRELATED_KEY,
+                handoff.getString("expectedUnrelatedKey"),
+            )
+            assertEquals(
+                ReconnectPrefsInstrumentationTestSupport.UNRELATED_VALUE,
+                handoff.getString("expectedUnrelatedValue"),
+            )
+            val phase1Pid = handoff.getInt("phase1Pid")
+            val phase2Pid = Process.myPid()
+            assertTrue(
+                "Phase 2 PID $phase2Pid must differ from Phase 1 PID $phase1Pid",
+                phase1Pid != phase2Pid,
+            )
+            assertEquals(
+                ReconnectPrefsInstrumentationTestSupport.UNRELATED_VALUE,
+                prefs.getString(ReconnectPrefsInstrumentationTestSupport.UNRELATED_KEY, null),
+            )
+
             when (scenario) {
                 ReconnectPrefsInstrumentationTestSupport.SCENARIO_NORMAL -> verifyNormal(context)
                 ReconnectPrefsInstrumentationTestSupport.SCENARIO_LEGACY -> verifyLegacy(context)
@@ -45,7 +58,10 @@ class Phase2ReaderTest {
                 ReconnectPrefsInstrumentationTestSupport.SCENARIO_PARTIAL -> verifyPartial(context)
             }
         } finally {
-            ReconnectPrefsInstrumentationTestSupport.cleanup(context, marker)
+            ReconnectPrefsInstrumentationTestSupport.cleanup(
+                context,
+                arguments.getString(ReconnectPrefsInstrumentationTestSupport.ARG_MARKER),
+            )
         }
     }
 

@@ -3,6 +3,7 @@ package com.mcarplay.app.bt
 import android.content.Context
 import android.os.Bundle
 import android.os.Process
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -56,8 +57,6 @@ internal object ReconnectPrefsInstrumentationTestSupport {
         context: Context,
         marker: String,
         scenario: String,
-        expectedKey: String,
-        expectedValue: String,
     ) {
         val phase1Pid = Process.myPid()
         val handoff =
@@ -65,8 +64,10 @@ internal object ReconnectPrefsInstrumentationTestSupport {
                 .put("marker", marker)
                 .put("phase1Pid", phase1Pid)
                 .put("scenario", scenario)
-                .put("expectedKey", expectedKey)
-                .put("expectedValue", expectedValue)
+                .put("expectedStateKey", KEY_STATES)
+                .put("expectedLegacyKeys", JSONArray(LEGACY_KEYS))
+                .put("expectedUnrelatedKey", UNRELATED_KEY)
+                .put("expectedUnrelatedValue", UNRELATED_VALUE)
         val file = handoffFile(context)
         FileOutputStream(file).use { stream ->
             stream.write(handoff.toString().toByteArray(Charsets.UTF_8))
@@ -76,8 +77,24 @@ internal object ReconnectPrefsInstrumentationTestSupport {
         check(persisted.getString("marker") == marker) { "Handoff marker mismatch after flush" }
         check(persisted.getInt("phase1Pid") == phase1Pid) { "Handoff phase1Pid mismatch after flush" }
         check(persisted.getString("scenario") == scenario) { "Handoff scenario mismatch after flush" }
-        check(persisted.getString("expectedKey") == expectedKey) { "Handoff expectedKey mismatch after flush" }
-        check(persisted.getString("expectedValue") == expectedValue) { "Handoff expectedValue mismatch after flush" }
+        check(persisted.getString("expectedStateKey") == KEY_STATES) {
+            "Handoff expectedStateKey mismatch after flush"
+        }
+        val persistedLegacyKeys = persisted.getJSONArray("expectedLegacyKeys")
+        check(persistedLegacyKeys.length() == LEGACY_KEYS.size) {
+            "Handoff expectedLegacyKeys count mismatch after flush"
+        }
+        LEGACY_KEYS.forEachIndexed { index, key ->
+            check(persistedLegacyKeys.getString(index) == key) {
+                "Handoff expectedLegacyKeys entry $index mismatch after flush"
+            }
+        }
+        check(persisted.getString("expectedUnrelatedKey") == UNRELATED_KEY) {
+            "Handoff expectedUnrelatedKey mismatch after flush"
+        }
+        check(persisted.getString("expectedUnrelatedValue") == UNRELATED_VALUE) {
+            "Handoff expectedUnrelatedValue mismatch after flush"
+        }
     }
 
     fun readPhase1Handoff(context: Context): JSONObject {
@@ -88,13 +105,15 @@ internal object ReconnectPrefsInstrumentationTestSupport {
 
     fun cleanup(
         context: Context,
-        marker: String,
+        marker: String?,
     ) {
         handoffFile(context).delete()
         AutoReconnectGuard.clear(context)
-        settings(context)
-            .edit()
-            .remove("mcarplay.test.handoff_$marker")
-            .apply()
+        if (!marker.isNullOrBlank()) {
+            settings(context)
+                .edit()
+                .remove("mcarplay.test.handoff_$marker")
+                .apply()
+        }
     }
 }

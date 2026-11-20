@@ -16,29 +16,42 @@ class Phase1WriterTest {
         val scenario = ReconnectPrefsInstrumentationTestSupport.requireScenario(arguments)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = ReconnectPrefsInstrumentationTestSupport.settings(context)
-        val expectedKey = "mcarplay.test.handoff_$marker"
-        val expectedValue = "expected:$scenario"
 
         ReconnectPrefsInstrumentationTestSupport.handoffFile(context).delete()
         prefs.edit().clear().commit()
         prefs
             .edit()
-            .putString(ReconnectPrefsInstrumentationTestSupport.UNRELATED_KEY, ReconnectPrefsInstrumentationTestSupport.UNRELATED_VALUE)
-            .commit()
-        prefs.edit().putString(expectedKey, expectedValue).commit()
-        prefs.edit().putString(expectedKey, expectedValue).commit()
+            .putString(
+                ReconnectPrefsInstrumentationTestSupport.UNRELATED_KEY,
+                ReconnectPrefsInstrumentationTestSupport.UNRELATED_VALUE,
+            ).commit()
 
         when (scenario) {
             ReconnectPrefsInstrumentationTestSupport.SCENARIO_NORMAL -> {
                 assertNull(
-                    AutoReconnectGuard.recordFastFailure(context, ReconnectPrefsInstrumentationTestSupport.PEER, "$marker-0", 1_000L),
+                    AutoReconnectGuard.recordFastFailure(
+                        context,
+                        ReconnectPrefsInstrumentationTestSupport.PEER,
+                        "$marker-0",
+                        1_000L,
+                    ),
                 )
                 assertNull(
-                    AutoReconnectGuard.recordFastFailure(context, ReconnectPrefsInstrumentationTestSupport.PEER, "$marker-1", 2_000L),
+                    AutoReconnectGuard.recordFastFailure(
+                        context,
+                        ReconnectPrefsInstrumentationTestSupport.PEER,
+                        "$marker-1",
+                        2_000L,
+                    ),
                 )
                 assertEquals(
                     AutoReconnectGuard.Block(failures = 3, untilMs = 183_000L, remainingMs = 180_000L),
-                    AutoReconnectGuard.recordFastFailure(context, ReconnectPrefsInstrumentationTestSupport.PEER, "$marker-2", 3_000L),
+                    AutoReconnectGuard.recordFastFailure(
+                        context,
+                        ReconnectPrefsInstrumentationTestSupport.PEER,
+                        "$marker-2",
+                        3_000L,
+                    ),
                 )
             }
 
@@ -67,7 +80,7 @@ class Phase1WriterTest {
             }
         }
 
-        ReconnectPrefsInstrumentationTestSupport.writePhase1Handoff(context, marker, scenario, expectedKey, expectedValue)
+        ReconnectPrefsInstrumentationTestSupport.writePhase1Handoff(context, marker, scenario)
     }
 
     private companion object {
