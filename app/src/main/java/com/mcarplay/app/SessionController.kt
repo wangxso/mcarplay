@@ -61,6 +61,7 @@ import com.mcarplay.app.iap2.rememberEndpoint
 import com.mcarplay.app.input.ConsumerKeys
 import com.mcarplay.app.input.HidNavigation
 import com.mcarplay.app.input.MediaKeyEdge
+import com.mcarplay.app.input.SiriButtonEdge
 import com.mcarplay.app.input.TouchReports
 import com.mcarplay.app.media.AutoPlaySuppressor
 import com.mcarplay.app.media.MediaSessionsState
@@ -459,12 +460,18 @@ object SessionController {
         appendLog("EVENT: 车机媒体键（$source）→ 系统媒体键 keyCode=$keyCode")
     }
 
-    /**
-     * 旋钮/四向拨杆 → 方向键。CarWith 流没有可注入方向键的应用屏（原先的虚拟屏桌面已移除），
-     * 这里只记日志，便于看到车机确实发来了导航类 HID。
-     */
-    private fun injectNavigationKey(keyCode: Int) {
-        appendLog("HID: 导航键 ${HidNavigation.nameOf(keyCode)} 无处注入（CarWith 流不承载方向键）——忽略")
+    private fun routeCarNavigationKey(keyCode: Int) {
+        val name = HidNavigation.nameOf(keyCode)
+        val hardKey = CarLifeProtocol.navigationHardKeyFor(keyCode)
+        if (hardKey == null) {
+            appendLog("HID: 导航键 $name 无 CarWith 硬按键映射")
+            return
+        }
+        if (currentCarLifeSession?.sendHardKey(hardKey) == true) {
+            appendLog("HID: 导航键 $name → CarWith 硬按键 $hardKey")
+        } else {
+            appendLog("HID: 导航键 $name → CarWith 硬按键 $hardKey 未发送")
+        }
     }
 
     /**
@@ -4466,8 +4473,8 @@ object SessionController {
                             // 车机媒体键（iAP2 0x6802 通路）：方向盘/面板的上一曲、下一曲。
                             // 放在这里而不是调用点，保证重连重建 client 时也挂得上。
                             created.onMediaKey = { keyCode -> routeCarMediaKey(keyCode, "iAP2 0x6802") }
-                            // 旋钮/四向拨杆（iAP2 0x6802 通路）：注入虚拟屏的 DPAD
-                            created.onNavKey = { keyCode -> injectNavigationKey(keyCode) }
+                            // 旋钮/四向拨杆（iAP2 0x6802 通路）：转发 CarWith 硬按键。
+                            created.onNavKey = { keyCode -> routeCarNavigationKey(keyCode) }
                             // MIB3 控制会话完成 → modesChanged 资源重申 burst（082446 定谳：
                             // 只在会话早期声明过一次的话，第二控制会话把车机资源仲裁重置，
                             // 车机全程健康却永不切 CarPlay 画面）。
@@ -4637,6 +4644,7 @@ object SessionController {
                                 client.activeHost ?: EndpointHosts.candidates(client.currentEndpoint.ipAddresses).firstOrNull()
                             // 每台媒体键 HID 设备一个边沿判定器；随本条 event 通道重建，旧轮按住状态不残留
                             val mediaKeyEdges = HashMap<String, MediaKeyEdge>()
+                            val voiceButton = SiriButtonEdge()
                             client.connectEventChannel(sessionKey, setup) onEvent@{ command ->
                                 if (currentClient !== client || wasCancelled()) return@onEvent
                                 when (command["type"]) {
@@ -4667,7 +4675,7 @@ object SessionController {
                                                 else -> null
                                             }
                                         // 旋钮/四向拨杆（Generic Desktop 页的 Wheel/Hat）：
-                                        // 不是 Consumer 设备才走这里；输出 DPAD_* 注入虚拟屏。
+                                        // 不是 Consumer 设备才走这里；方向键转换为 CarWith 焦点硬按键。
                                         val navKeys =
                                             if (consumerUsages == null && report != null) {
                                                 if (HidNavigation.rawLogEnabled) {
@@ -4692,7 +4700,7 @@ object SessionController {
                                                 null
                                             }
                                         if (navKeys.isNotEmpty()) {
-                                            navKeys.forEach(::injectNavigationKey)
+                                            navKeys.forEach(::routeCarNavigationKey)
                                             appendLog(
                                                 "EVENT: 旋钮/导航键 " +
                                                     navKeys.joinToString("+") { HidNavigation.nameOf(it) } +
@@ -4704,6 +4712,10 @@ object SessionController {
                                             if (consumerUsages.isEmpty()) consumerReleaseCount++
                                             val edge = mediaKeyEdges.getOrPut(uuid.orEmpty()) { MediaKeyEdge() }
                                             for (usage in edge.onReport(consumerUsages, android.os.SystemClock.uptimeMillis())) {
+                                                if (usage == ConsumerKeys.USAGE_AC_BACK) {
+                                                    routeCarNavigationKey(KeyEvent.KEYCODE_BACK)
+                                                    continue
+                                                }
                                                 val label = "${ConsumerKeys.nameOf(usage)} uuid=$uuid usage=0x%02x".format(usage)
                                                 val keyCode = ConsumerKeys.keyCodeFor(usage)
                                                 if (keyCode != 0) {
@@ -4747,6 +4759,15 @@ object SessionController {
                                                 "EVENT: 其他 HID 报告 uuid=$uuid bytes=${report.size}" +
                                                     " hex=${report.joinToString(" ") { "%02x".format(it) }}",
                                             )
+                                        }
+                                    }
+
+                                    "requestSiri" -> {
+                                        val params = command["params"] as? Map<*, *>
+                                        val action = params?.get("siriAction")
+                                        if (voiceButton.onAction(action, android.os.SystemClock.uptimeMillis())) {
+                                            val sent = currentCarLifeSession?.sendHardKey(CarLifeProtocol.HARD_KEY_VR_START) == true
+                                            appendLog("EVENT: 方向盘语音键 → CarLife VR_START " + if (sent) "已发送" else "未发送")
                                         }
                                     }
 
