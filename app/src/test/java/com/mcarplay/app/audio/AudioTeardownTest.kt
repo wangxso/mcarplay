@@ -130,6 +130,30 @@ class AudioTeardownTest {
     }
 
     @Test
+    fun readsAudioStateSnapshotOnceAndUsesCoherentFields() {
+        var stateReads = 0
+        val state = AudioTeardownState(testProfile(), 1_000L, "receiver")
+        val memory = Memory()
+        val output = RecordingOutput()
+        val teardown =
+            audioTeardown(
+                state = {
+                    stateReads++
+                    state
+                },
+                memory = memory,
+                output = output,
+                nowValues = listOf(21_000L),
+                watchdogValues = listOf(null),
+            )
+        teardown.attribute()
+        assertEquals(1, stateReads)
+        assertEquals(1, memory.workingCount)
+        assertEquals(1, output.workingCalls)
+        assertEquals(20_000L, output.lastWorking)
+    }
+
+    @Test
     fun mib3WatchdogLogsClearsAndSkipsProfileMemory() {
         val memory = Memory()
         val output = RecordingOutput()

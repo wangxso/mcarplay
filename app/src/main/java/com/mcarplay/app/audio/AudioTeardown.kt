@@ -100,9 +100,10 @@ internal class AudioTeardown(
     private val output: AudioTeardownOutput,
 ) {
     fun attribute() {
-        val profile = state().profile ?: return
-        val startedAtMs = state().startedAtMs
-        val receiverKey = state().receiverKey
+        val snapshot = state()
+        val profile = snapshot.profile ?: return
+        val startedAtMs = snapshot.startedAtMs
+        val receiverKey = snapshot.receiverKey
         val lived = if (startedAtMs > 0) nowMs() - startedAtMs else -1L
         watchdog()?.let { watchdog ->
             if (watchdog.shouldOwnTeardown) {
