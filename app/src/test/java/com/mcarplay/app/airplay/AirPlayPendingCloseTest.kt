@@ -10,11 +10,46 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.Collections
 import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** 控制通道在请求等待应答时被对端关闭：请求必须立刻收到关闭标记，而不是等满 RTSP 超时。 */
 class AirPlayPendingCloseTest {
+    @Test
+    fun controlChannelCloseNotifiesAfterLastRequestCompletes() {
+        val executor = Executors.newSingleThreadExecutor()
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            server.soTimeout = 5_000
+            val closePeer = CountDownLatch(1)
+            val controlClosed = CountDownLatch(1)
+            val peerTask =
+                executor.submit {
+                    server.accept().use { peer ->
+                        peer.soTimeout = 5_000
+                        readRequest(peer.getInputStream())
+                        peer.getOutputStream().write("RTSP/1.0 200 OK\r\nCSeq: 1\r\nContent-Length: 0\r\n\r\n".toByteArray())
+                        check(closePeer.await(5, TimeUnit.SECONDS))
+                    }
+                }
+            val client = AirPlayClient(endpoint(server.localPort), log = {})
+            client.onControlChannelClosed = { controlClosed.countDown() }
+            try {
+                assertTrue(client.reconnect())
+                assertTrue(client.record())
+                assertFalse(client.controlChannelClosed)
+                closePeer.countDown()
+                assertTrue(controlClosed.await(5, TimeUnit.SECONDS))
+                assertTrue(client.controlChannelClosed)
+                peerTask.get(5, TimeUnit.SECONDS)
+            } finally {
+                closePeer.countDown()
+                client.close()
+                executor.shutdownNow()
+            }
+        }
+    }
+
     @Test
     fun pendingRecordFailsFastWhenControlChannelCloses() {
         val executor = Executors.newSingleThreadExecutor()
@@ -31,13 +66,18 @@ class AirPlayPendingCloseTest {
                 )
             val logs = Collections.synchronizedList(mutableListOf<String>())
             val client = AirPlayClient(endpoint(server.localPort), log = { logs += it })
+            val controlClosed = CountDownLatch(1)
+            client.onControlChannelClosed = { controlClosed.countDown() }
             try {
                 assertTrue(client.reconnect())
                 val started = System.nanoTime()
                 assertFalse(client.record())
                 val elapsedMs = (System.nanoTime() - started) / 1_000_000
                 assertTrue("关闭后应快速失败，实际 ${elapsedMs}ms", elapsedMs < 3_000)
-                assertTrue("日志应包含控制通道关闭：$logs", logs.any { "控制通道已关闭" in it })
+                val entries = synchronized(logs) { logs.toList() }
+                assertTrue("日志应包含控制通道关闭：$entries", entries.any { "控制通道已关闭" in it })
+                assertTrue(controlClosed.await(5, TimeUnit.SECONDS))
+                assertTrue(client.controlChannelClosed)
                 closed.get(5, TimeUnit.SECONDS)
             } finally {
                 client.close()

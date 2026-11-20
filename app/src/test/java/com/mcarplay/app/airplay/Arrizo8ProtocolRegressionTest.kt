@@ -132,8 +132,8 @@ class Arrizo8ProtocolRegressionTest {
                 assertEquals(44_100, profile.sampleRate)
                 assertEquals(350L, profile.latencyMs)
                 assertNull(client.runIapTunnel(ByteArray(32)))
-                assertNotNull(client.runScreenStream(null, setup!!.displayUuid))
                 assertTrue(client.record())
+                assertNotNull(client.runScreenStream(null, setup!!.displayUuid))
                 val audio = client.runAudioStream(ByteArray(32), profile)
                 assertNotNull(audio)
                 assertEquals(44_100, audio!!.sampleRate)
@@ -143,7 +143,7 @@ class Arrizo8ProtocolRegressionTest {
                 assertTrue(client.sessionActive)
 
                 val requests = List(6) { peer.next()!! }
-                assertEquals(listOf("SETUP", "GET", "SETUP", "RECORD", "SETUP", "GET_PARAMETER"), requests.map { it.method })
+                assertEquals(listOf("SETUP", "GET", "RECORD", "SETUP", "SETUP", "GET_PARAMETER"), requests.map { it.method })
                 val stream = (requests[4].plist()["streams"] as List<*>).single() as Map<*, *>
                 assertEquals(102L, stream["type"])
                 assertEquals("media", stream["audioType"])

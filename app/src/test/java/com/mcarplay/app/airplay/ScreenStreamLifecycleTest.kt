@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
@@ -24,12 +25,13 @@ class ScreenStreamLifecycleTest {
     @Test
     fun screenReturnReusesControlSessionAndDisplayWithFreshStreamKeys() {
         val requests =
-            exchange(9) { client ->
+            exchange(8) { client ->
                 val setup = client.runSetup()
                 assertNotNull(setup)
-                val first = client.runScreenStream(ByteArray(32) { 1 }, setup!!.displayUuid)
-                assertNotNull(first)
+                assertNull(client.runScreenStream(ByteArray(32) { 1 }, setup!!.displayUuid))
                 assertTrue(client.record())
+                val first = client.runScreenStream(ByteArray(32) { 1 }, setup.displayUuid)
+                assertNotNull(first)
                 assertTrue(client.teardownScreenStream())
                 val second = client.runScreenStream(ByteArray(32) { 1 }, setup.displayUuid)
                 assertNotNull(second)
@@ -42,17 +44,16 @@ class ScreenStreamLifecycleTest {
             listOf(
                 "SETUP /setup",
                 "GET /info",
-                "SETUP /",
                 "RECORD /",
+                "SETUP /",
                 "TEARDOWN /",
                 "SETUP /",
-                "RECORD /",
                 "TEARDOWN /",
                 "TEARDOWN /",
             ),
             requests.map { "${it.method} ${it.path}" },
         )
-        for (index in listOf(2, 4, 5, 7)) {
+        for (index in listOf(3, 4, 5, 6)) {
             val stream = (requests[index].body["streams"] as List<*>).single() as Map<*, *>
             assertEquals(110L, stream["type"])
             assertEquals("display-test", stream["uuid"])
@@ -64,26 +65,28 @@ class ScreenStreamLifecycleTest {
     @Test
     fun cancelledSessionStillSendsFullTeardownAfterScreenTeardownFails() {
         val requests =
-            exchange(3, rejectScreenTeardown = true) { client ->
+            exchange(4, rejectScreenTeardown = true) { client ->
+                assertTrue(client.record())
                 assertNotNull(client.runScreenStream(null, "display-test"))
                 client.cancelled = true
                 assertFalse(client.teardownSession())
             }
-        assertEquals(listOf("SETUP", "TEARDOWN", "TEARDOWN"), requests.map { it.method })
+        assertEquals(listOf("RECORD", "SETUP", "TEARDOWN", "TEARDOWN"), requests.map { it.method })
         assertTrue(requests.last().body.isEmpty())
     }
 
     @Test
     fun stoppingSessionStillSendsScreenAndSessionTeardown() {
         val requests =
-            exchange(3) { client ->
+            exchange(4) { client ->
+                assertTrue(client.record())
                 assertNotNull(client.runScreenStream(null, "display-test"))
                 client.beginOrderlyStop()
                 client.cancelled = true
                 assertTrue(client.teardownSession())
                 assertFalse(client.record())
             }
-        assertEquals(listOf("SETUP", "TEARDOWN", "TEARDOWN"), requests.map { it.method })
+        assertEquals(listOf("RECORD", "SETUP", "TEARDOWN", "TEARDOWN"), requests.map { it.method })
         assertTrue(requests.last().body.isEmpty())
     }
 

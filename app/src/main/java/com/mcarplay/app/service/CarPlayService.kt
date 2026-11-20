@@ -76,6 +76,10 @@ class CarPlayService : Service() {
                 }
                 return START_STICKY
             }
+            if (SessionController.keepBluetoothRetryAfterAclLoss(stopPeer)) {
+                fileLog("AUTO: 蓝牙握手阶段 ACL 已断开——保留监听，等待重试")
+                return START_STICKY
+            }
             fileLog("SVC: 收到「下车自动结束」——收起会话")
             if (SessionController.isSessionRunning()) {
                 SessionController.disconnect(applicationContext, DiagnosticCode.BT_LINK_CLOSED)

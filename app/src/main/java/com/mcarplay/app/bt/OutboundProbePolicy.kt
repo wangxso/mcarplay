@@ -77,6 +77,9 @@ class OutboundProbePolicy {
         armedUntil = nowMillis + durationMillis
     }
 
+    @Synchronized
+    fun hasOpenWindow(nowMillis: Long): Boolean = nowMillis < armedUntil
+
     /**
      * 本应用开始改动蓝牙链路（主动断配置文件、出站 RFCOMM 连接），与 [endSelfLinkChange] 成对调用。
      * 操作进行中（不论阻塞多久）范围一直有效；结束后再延 [SELF_LINK_TAIL_MILLIS] 接住晚到的广播。

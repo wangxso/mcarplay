@@ -589,8 +589,7 @@ class VideoSender(
     }
 
     /**
-     * 屏幕数据口是单向的（手机 → 车机），但车机若回传数据或主动关闭，透传线程只能等到写失败才知道。
-     * 单独读一遍：记下回传的字节与车机关闭时刻（帕萨特无画面时，用来区分「车机收了但解不出」与「车机已断」）。
+     * 屏幕数据口是单向的（手机 → 车机）。车机关闭数据口时关闭本端 socket，唤醒可能阻塞的发送线程。
      */
     private fun startInboundMonitor(client: Socket) {
         Thread({
@@ -605,7 +604,10 @@ class VideoSender(
                             continue
                         }
                     if (count < 0) {
-                        if (socket === client) log("VIDEO: 车机关闭了屏幕数据口（EOF，此前回传 ${inboundBytes.get()}B，已发 $framesSent 帧）")
+                        if (socket === client) {
+                            log("VIDEO: 车机关闭了屏幕数据口（EOF，此前回传 ${inboundBytes.get()}B，已发 $framesSent 帧）")
+                            if (!quiescing.get()) client.close()
+                        }
                         return@Thread
                     }
                     val total = inboundBytes.addAndGet(count.toLong())
@@ -1221,9 +1223,10 @@ class VideoSender(
     }
 
     private fun drainExternalVideo() {
-        val output = socket?.getOutputStream() ?: return
         try {
-            while (running.get()) {
+            val client = socket ?: return
+            val output = client.getOutputStream()
+            while (running.get() && !client.isClosed) {
                 val entry = externalQueue.poll(250)
                 // 转码中：帧改喂解码器，数据口（含 keepAlive）由编码线程独占
                 val pipeline = transcoder
@@ -1408,10 +1411,11 @@ class VideoSender(
 
     private fun drainEncoder() {
         val codec = encoder ?: return
-        val output = socket?.getOutputStream() ?: return
         val bufferInfo = MediaCodec.BufferInfo()
         try {
-            while (running.get()) {
+            val client = socket ?: return
+            val output = client.getOutputStream()
+            while (running.get() && !client.isClosed) {
                 val index =
                     try {
                         codec.dequeueOutputBuffer(bufferInfo, 10_000)

@@ -79,6 +79,19 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
+    fun genericPresetStillUsesAdvertisedStandaloneMfiAuthSetup() {
+        val standaloneMfi = AirPlayFeatures.HK_PAIRING_AND_ENCRYPT or AirPlayFeatures.MFI_SAP
+        val receiver = ReceiverProfile.Signals(features = standaloneMfi)
+        val generic = ReceiverCompatibility.resolve(receiver, preset = VehiclePreset.GENERIC)
+        assertTrue(generic.authSetupBeforeSession)
+        assertFalse(generic.iphoneAuthSequence)
+        assertTrue(generic.rules.contains("protocol.mfi-sap-auth-setup"))
+
+        val unified = receiver.copy(features = standaloneMfi or AirPlayFeatures.UNIFIED_PAIRING_AND_MFI)
+        assertFalse(ReceiverCompatibility.resolve(unified, preset = VehiclePreset.CHERY).authSetupBeforeSession)
+    }
+
+    @Test
     fun liveMediaSurvivesBluetoothLossForEveryFamily() {
         listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals()).forEach { signals ->
             val action = ReceiverCompatibility.bluetoothLossAction(ReceiverCompatibility.resolve(signals), true, false)
@@ -145,79 +158,16 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
-    fun singleRecordIsLimitedToTheObservedCheryStack() {
-        val observed = ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo", srcvers = "320.17.7")
+    fun arrizo8HintMatchesTheObservedCheryIdentity() {
+        val observed = ReceiverProfile.Signals(manufacturer = " chery ", model = "TIGGO ", srcvers = " 320.17.7")
         val policy = ReceiverCompatibility.resolve(observed)
-        assertTrue(policy.singleRecordPerSession)
-        assertTrue("chery.tiggo.320.17.7.single-record" in policy.rules)
+        assertTrue(policy.arrizo8ConnectWindowHint)
         listOf(
             observed.copy(manufacturer = "OTHER"),
             observed.copy(model = "OTHER"),
             observed.copy(srcvers = "320.17.8"),
             observed.copy(srcvers = null),
-            mib3,
-        ).forEach { assertFalse(ReceiverCompatibility.resolve(it).singleRecordPerSession) }
-    }
-
-    @Test
-    fun mercedesSingleRecordIsLimitedToTheReportedIdentity() {
-        // issue #55：iAP2 自报 model=MB_D-PP-3，`/info` 为 MB_D-PP-4，srcvers 均为 320.17.7。
-        val iap2 = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_D-PP-3", srcvers = "320.17.7")
-        val info = iap2.copy(model = "MB_D-PP-4")
-        for (observed in listOf(iap2, info, iap2.copy(manufacturer = " mercedes-benz ", model = " mb_d-pp-4 "))) {
-            val policy = ReceiverCompatibility.resolve(observed)
-            assertTrue("${observed.model} 应命中单次 RECORD", policy.singleRecordPerSession)
-            assertTrue("mercedes.mb_d-pp.320.17.7.single-record" in policy.rules)
-            assertFalse("单次 RECORD 不应扩大到其他 Chery 专属规则", policy.arrizo8ConnectWindowHint)
-        }
-        listOf(
-            iap2.copy(manufacturer = "OTHER"),
-            iap2.copy(model = "MB_D-PP-5"),
-            iap2.copy(srcvers = "320.17.8"),
-            iap2.copy(srcvers = null),
-            iap2.copy(manufacturer = null),
-            ReceiverProfile.Signals(model = "VW4131", manufacturer = "Volkswagen", srcvers = "320.17.7"),
-        ).forEach {
-            assertFalse(
-                "${it.manufacturer}/${it.model}/${it.srcvers} 不应命中奔驰单次 RECORD",
-                ReceiverCompatibility.resolve(it).singleRecordPerSession,
-            )
-        }
-        // 手动选择「通用」关闭全部按车机登记的例外（与艾瑞泽 8 一致）。
-        assertFalse(ReceiverCompatibility.resolve(iap2, preset = VehiclePreset.GENERIC).singleRecordPerSession)
-    }
-
-    @Test
-    fun manualMercedesPresetIsGuardedByReportedManufacturer() {
-        // 手动预设只补「自动判定认不出」的部分，不能改写别家车机，也不能伪造 BMW 例外。
-        val cheryOther = ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo", srcvers = "320.18.1")
-        val blocked = ReceiverCompatibility.resolve(cheryOther, preset = VehiclePreset.MERCEDES_MB_DPP)
-        assertFalse("手动奔驰预设不得套到奇瑞", blocked.singleRecordPerSession)
-        assertTrue("manual.mercedes-mb-dpp-blocked" in blocked.rules)
-        // 预设是叠加而非覆盖：已被自动规则命中的奇瑞仍保留自己的单次 RECORD。
-        val cheryObserved = cheryOther.copy(srcvers = "320.17.7")
-        assertTrue(ReceiverCompatibility.resolve(cheryObserved, preset = VehiclePreset.MERCEDES_MB_DPP).singleRecordPerSession)
-        // 身份为空是手动预设的正当用途：允许补上单次 RECORD。
-        val blank = ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.MERCEDES_MB_DPP)
-        assertTrue(blank.singleRecordPerSession)
-        // 已知 Mercedes-Benz 但型号/固件未登记时由手动预设补齐；不能顺带启用 Chery 的蓝牙/MFi 规则。
-        val unrecognized = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_D-PP-9", srcvers = "320.18.1")
-        val manual = ReceiverCompatibility.resolve(unrecognized, preset = VehiclePreset.MERCEDES_MB_DPP)
-        assertTrue("manual.mercedes-mb-dpp" in manual.rules)
-        assertFalse(manual.releaseBluetoothAfterSetup)
-        assertNull(manual.pinnedMfiChallengeLength)
-        // 自动规则本身仍只认报告过的型号与 320.17.7；手动预设不会把自动规则扩到品牌。
-        assertFalse(ReceiverCompatibility.resolve(unrecognized, preset = VehiclePreset.AUTO).singleRecordPerSession)
-    }
-
-    @Test
-    fun arrizo8HintSharesTheCheryIdentityNormalization() {
-        // 自报值带空格/大小写差异时，单 RECORD 与 30 s 提示必须同进同退。
-        val observed = ReceiverProfile.Signals(manufacturer = " chery ", model = "TIGGO ", srcvers = " 320.17.7")
-        val policy = ReceiverCompatibility.resolve(observed)
-        assertTrue(policy.arrizo8ConnectWindowHint)
-        assertEquals(policy.singleRecordPerSession, policy.arrizo8ConnectWindowHint)
-        assertFalse(ReceiverCompatibility.resolve(observed.copy(srcvers = "320.17.8")).arrizo8ConnectWindowHint)
+        ).forEach { assertFalse(ReceiverCompatibility.resolve(it).arrizo8ConnectWindowHint) }
         assertTrue(
             "手动车型只改适配开关，不改车型提示",
             ReceiverCompatibility.resolve(observed, preset = VehiclePreset.GENERIC).arrizo8ConnectWindowHint,
