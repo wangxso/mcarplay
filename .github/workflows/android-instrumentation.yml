@@ -38,13 +38,15 @@ jobs:
             :app:assembleStandardDebug :app:assembleStandardDebugAndroidTest
 
       - uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          ANDROID_I_WANT_MY_TCG: yes
         with:
           api-level: 34
           target: google_apis
           arch: x86_64
           profile: pixel_5
           avd-name: rgp07-emulator
-          emulator-boot-timeout: 600
+          emulator-boot-timeout: 1200
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -no-snapshot-save
           script: >-
             bash -lc 'set -euo pipefail; cleanup() { set +e; adb shell pm clear "$PACKAGE_ID" >/dev/null 2>&1 || true; set -e; }; trap cleanup EXIT; adb install -r app/build/outputs/apk/standard/debug/app-standard-debug.apk; adb install -r app/build/outputs/apk/androidTest/standard/debug/app-standard-debug-androidTest.apk; for scenario in normal legacy corrupt partial; do marker="${MARKER_PREFIX}-${scenario}"; mkdir -p "$RUNNER_TEMP/instrumentation/$scenario"; phase1_output="$RUNNER_TEMP/instrumentation/$scenario/phase1.txt"; phase2_output="$RUNNER_TEMP/instrumentation/$scenario/phase2.txt"; echo "=== scenario: $scenario; marker: $marker ==="; adb shell am force-stop "$PACKAGE_ID"; adb shell am instrument -e class "$PHASE1_CLASS" -e marker "$marker" -e scenario "$scenario" -w "$INSTRUMENTATION_TARGET" | tee "$phase1_output"; grep -q "OK (1 test)" "$phase1_output"; adb shell am force-stop "$PACKAGE_ID"; adb shell am instrument -e class "$PHASE2_CLASS" -e marker "$marker" -e scenario "$scenario" -w "$INSTRUMENTATION_TARGET" | tee "$phase2_output"; grep -q "OK (1 test)" "$phase2_output"; adb shell pm clear "$PACKAGE_ID"; done'
