@@ -1,6 +1,7 @@
 package com.mcarplay.app.compat
 
 import com.mcarplay.app.iap2.ReceiverProfile
+import com.mcarplay.app.net.AirPlayFeatures
 import java.security.MessageDigest
 
 /** 协议事实 → 可解释策略。接收端例外只在这里登记；本轮状态通过参数传入，不跨会话缓存。 */
@@ -45,11 +46,12 @@ object ReceiverCompatibility {
          */
         val sendAppleClientHeaders: Boolean = false,
         /**
-         * 按 iPhone 的配对与认证顺序：pair-setup/pair-verify 带 `X-Apple-HKP: 0`（车机对 iPhone 记 `pair-setup HK, type 0`，
-         * 对 mcarplay 的 `2` 记 `type 2`），pair-verify 后、SETUP 前发 `POST /auth-setup`（车机对 iPhone 记 `MFiSAP_Exchange`，
-         * 对 mcarplay 从未出现）。2026-11-02 艾瑞泽 8 车机日志。
+         * 艾瑞泽 8 兼容顺序：pair-setup/pair-verify 优先使用 `X-Apple-HKP: 0`，初始 SETUP 前尝试 MFi-SAP。
+         * 2026-11-02 艾瑞泽 8 车机日志。
          */
         val iphoneAuthSequence: Boolean = false,
+        /** 在加密会话的初始 SETUP 前请求 /auth-setup。 */
+        val authSetupBeforeSession: Boolean = false,
         /**
          * 蓝牙与网络隧道 iAP2 的 MFi 挑战都固定为该长度、只发一次、不学习（null = 按记忆轮换）。艾瑞泽 8 为 MFi Auth 3.0 芯片
          * （32 字节摘要），真 iPhone 每路认证一次 0.45 s 通过；mcarplay 发 20/16B 时车机芯片挂起（I2C `error -110`、认证线程
@@ -104,7 +106,16 @@ object ReceiverCompatibility {
         mediaCapabilities: String = "",
         receiverInstance: String? = null,
         preset: VehiclePreset = VehiclePresetRuntime.current,
-    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset, signals)
+    ): Policy {
+        val policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset, signals)
+        val features = signals.features ?: 0L
+        val unifiedMfi = features and AirPlayFeatures.UNIFIED_PAIRING_AND_MFI != 0L
+        val standaloneMfi = !unifiedMfi && features and AirPlayFeatures.MFI_SAP != 0L
+        return policy.copy(
+            authSetupBeforeSession = !unifiedMfi && (standaloneMfi || policy.iphoneAuthSequence),
+            rules = if (standaloneMfi) policy.rules + "protocol.mfi-sap-auth-setup" else policy.rules,
+        )
+    }
 
     /**
      * 用户在主页手动选择车型后，在自动判定结果之上叠加该车型的适配开关（[VehiclePreset.AUTO] 不改动）。

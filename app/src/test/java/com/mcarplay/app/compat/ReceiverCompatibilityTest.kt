@@ -79,6 +79,19 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
+    fun genericPresetStillUsesAdvertisedStandaloneMfiAuthSetup() {
+        val standaloneMfi = AirPlayFeatures.HK_PAIRING_AND_ENCRYPT or AirPlayFeatures.MFI_SAP
+        val receiver = ReceiverProfile.Signals(features = standaloneMfi)
+        val generic = ReceiverCompatibility.resolve(receiver, preset = VehiclePreset.GENERIC)
+        assertTrue(generic.authSetupBeforeSession)
+        assertFalse(generic.iphoneAuthSequence)
+        assertTrue(generic.rules.contains("protocol.mfi-sap-auth-setup"))
+
+        val unified = receiver.copy(features = standaloneMfi or AirPlayFeatures.UNIFIED_PAIRING_AND_MFI)
+        assertFalse(ReceiverCompatibility.resolve(unified, preset = VehiclePreset.CHERY).authSetupBeforeSession)
+    }
+
+    @Test
     fun liveMediaSurvivesBluetoothLossForEveryFamily() {
         listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals()).forEach { signals ->
             val action = ReceiverCompatibility.bluetoothLossAction(ReceiverCompatibility.resolve(signals), true, false)

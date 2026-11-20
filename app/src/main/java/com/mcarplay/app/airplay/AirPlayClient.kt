@@ -1050,7 +1050,7 @@ class AirPlayClient(
         if (!timingServer.start()) {
             log("AIRPLAY: 计时服务未启动（继续，但媒体时钟无法同步）")
         }
-        if (policy.iphoneAuthSequence) runAuthSetup()
+        if (policy.authSetupBeforeSession) runAuthSetup()
         val wifiMac =
             if (policy.reportWifiMacInSetup) {
                 WifiMacResolver.resolve(socket?.localAddress).also { resolved ->
