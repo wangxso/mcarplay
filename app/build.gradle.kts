@@ -268,6 +268,7 @@ dependencies {
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
     // 本地单测里 Android 的 org.json 是 stub（方法全抛 not mocked）：
     // 用同 API 的参考实现替换（replay fixture 与 nav 解析测试都需要）
     testImplementation("org.json:json:20240303")
