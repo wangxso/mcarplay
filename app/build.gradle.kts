@@ -118,6 +118,7 @@ android {
         applicationId = "com.mcarplay.app"
         minSdk = 31
         targetSdk = 34
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = effectiveVersionCode
         versionName = effectiveVersionName
         buildConfigField("String", "BASE_VERSION", "\"$appVersionName\"")
@@ -272,4 +273,9 @@ dependencies {
     // 本地单测里 Android 的 org.json 是 stub（方法全抛 not mocked）：
     // 用同 API 的参考实现替换（replay fixture 与 nav 解析测试都需要）
     testImplementation("org.json:json:20240303")
+
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:monitor:1.7.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
