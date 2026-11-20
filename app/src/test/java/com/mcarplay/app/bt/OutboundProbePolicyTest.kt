@@ -32,9 +32,12 @@ class OutboundProbePolicyTest {
     @Test
     fun userArmProbesUntilWindowEndsWhenAclUnknown() {
         val policy = OutboundProbePolicy()
+        assertFalse(policy.hasOpenWindow(1_000L))
         policy.arm(1_000L, user)
+        assertTrue(policy.hasOpenWindow(1_000L + user - 1))
         assertTrue(policy.shouldProbe(null, 1_000L))
         assertTrue(policy.shouldProbe(null, 1_000L + user - 1))
+        assertFalse(policy.hasOpenWindow(1_000L + user))
         assertFalse(policy.shouldProbe(null, 1_000L + user))
     }
 
