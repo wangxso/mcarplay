@@ -952,10 +952,9 @@ class Iap2SenderSession(
                 val frame = recvFrame(remaining)
                 if (frame == null) {
                     if (!channel.isAlive) {
-                        log("iap2 MFi 挑战期间链路断开（${size}B，对端不接受该长度）——记入该车机被拒档位")
-                        // 硬拒绝：链路级证据，推翻「该长度=上次成功」的记忆（防误记锁死）
-                        receiverKey?.let { MfiLengthMemory.recordHardRejected(context, it, size) }
-                        return
+                        receiverKey?.let { MfiLengthMemory.recordSilent(context, it, size) }
+                        val reason = channel.terminationReason?.let { "：$it" }.orEmpty()
+                        throw IOException("iAP2 蓝牙链路在 ${size}B MFi 挑战等待应答时断开$reason")
                     }
                     continue
                 }

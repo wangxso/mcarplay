@@ -14,8 +14,8 @@ import android.content.Context
  * 6 秒）。这里按「车机身份（model + manufacturer）」持久化三件事：
  *
  *  - [Entry.succeeded]：最近一次**成功拿到签名**的长度 → 下次直接首选，省掉试探；
- *  - [Entry.silent]：窗口内无应答的长度 → 排到后面（但仍保留为兜底，车机固件可能变）；
- *  - [Entry.rejected]：0xAA04 明确拒绝或**导致拆链**的长度 → 排到最后。
+ *  - [Entry.silent]：尚未拿到签名，且等待超时或链路断开的长度 → 排到后面；
+ *  - [Entry.rejected]：0xAA04 明确拒绝的长度 → 排到最后。
  *
  * 排序规则见 [orderAttempts]（纯函数，便于单测）：成功档位永远第一；其余沿用
  * 调用方给的基线顺序（真车 20B 优先 / 测试台 32B 优先），最后才是 silent 与
@@ -80,10 +80,10 @@ object MfiLengthMemory {
         length: Int,
     ) {
         update(context, identityText) { entry ->
-            if (entry.succeeded == length) {
+            if (entry.succeeded == length || length in entry.rejected) {
                 entry
             } else {
-                entry.copy(silent = entry.silent + length, rejected = entry.rejected - length)
+                entry.copy(silent = entry.silent + length)
             }
         }
     }
@@ -94,31 +94,10 @@ object MfiLengthMemory {
         length: Int,
     ) {
         update(context, identityText) { entry ->
-            if (entry.succeeded == length) {
-                entry
-            } else {
-                entry.copy(rejected = entry.rejected + length, silent = entry.silent - length)
-            }
-        }
-    }
-
-    /**
-     * 硬拒绝：链路在该长度的挑战期间被对端直接断开（区别于 0xAA04 拒绝字/静默）。
-     * 这是强证据——即使长度等于已记「成功」也必须推翻：MFi 应答存在归属歧义
-     * （上一档超窗后才到的迟到应答会被记到当前档头上，2026-10-24 DiPlay 实测：
-     * 32B 迟到应答记成 20B 成功，之后每轮 20B 被断链、永久锁死）。
-     */
-    fun recordHardRejected(
-        context: Context?,
-        identityText: String,
-        length: Int,
-    ) {
-        update(context, identityText) { entry ->
-            val succeeded = if (entry.succeeded == length) null else entry.succeeded
-            Entry(
-                succeeded = succeeded,
-                silent = (entry.silent - length),
+            entry.copy(
+                succeeded = entry.succeeded?.takeUnless { it == length },
                 rejected = entry.rejected + length,
+                silent = entry.silent - length,
             )
         }
     }
@@ -168,8 +147,7 @@ object MfiLengthMemory {
         baseline: List<Int>,
         entry: Entry,
     ): List<Int> {
-        // 「成功但又被硬拒绝」= 记忆矛盾（迟到应答误记），不能继续享受第一名——
-        // 降级为普通档参与排序（排在被拒档之前）
+        // 兼容记忆中同时标为成功与被拒的档位，以拒绝为准。
         val succeeded = entry.succeeded?.takeIf { it !in entry.rejected }
         val rest = baseline.filter { it != succeeded }
         // 只有「还存在没被判死的档位」时才把 rejected 排到最后；

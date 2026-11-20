@@ -13,6 +13,16 @@ import org.junit.Test
  * 记忆必须按车机身份分开存，且冷启动仍要有合理基线。
  */
 class MfiLengthMemoryTest {
+    @Test
+    fun explicitRejectionDisplacesLastSuccessAndSurvivesASilentAttempt() {
+        val receiver = "explicit-mfi-rejection-test"
+        MfiLengthMemory.recordSuccess(null, receiver, 32)
+        MfiLengthMemory.recordRejected(null, receiver, 32)
+        MfiLengthMemory.recordSilent(null, receiver, 32)
+
+        assertEquals(MfiLengthMemory.Entry(rejected = setOf(32)), MfiLengthMemory.load(null, receiver))
+    }
+
     private val baselineCar = listOf(20, 32, 16) // 真车系：20B 优先
     private val baselineTestBench = listOf(32, 20, 16) // 测试台：32B 优先
 

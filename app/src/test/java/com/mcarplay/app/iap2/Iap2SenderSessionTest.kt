@@ -1,5 +1,6 @@
 package com.mcarplay.app.iap2
 
+import com.mcarplay.app.compat.ReceiverFingerprint
 import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.transport.InMemoryStreamPair
@@ -19,6 +20,43 @@ import java.util.concurrent.atomic.AtomicReference
  * 验证 Phase 1 全序列（识别→MFi 跳过→HID→WiFi 配置→CarPlay 启动→通知）。
  */
 class Iap2SenderSessionTest {
+    @Test
+    fun linkClosedDuringMfiKeepsPreviouslySuccessfulLength() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-mfi")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-mfi")
+        val accessory = MockAccessory(accessoryChannel, closeAfterMfiChallenge = true)
+        val binding = "mfi-disconnect-test"
+        val identity =
+            checkNotNull(
+                ReceiverFingerprint.handshake(
+                    binding,
+                    ReceiverProfile.Signals(
+                        name = "MockCarPlay",
+                        model = "MU-1",
+                        manufacturer = "Mock Manufacturer",
+                        firmwareVersion = "test-1.0",
+                    ),
+                ),
+            )
+        MfiLengthMemory.recordSuccess(null, identity, 32)
+        val worker = Thread(accessory::run, "mock-accessory-mfi").apply { isDaemon = true }
+        worker.start()
+        try {
+            val failure =
+                runCatching {
+                    Iap2SenderSession(phoneChannel, log = {}, receiverBinding = binding).run(timeoutMillis = 5_000L)
+                }.exceptionOrNull()
+            worker.join(1_000)
+            assertTrue(failure?.message.orEmpty().contains("32B MFi 挑战等待应答时断开"))
+            assertEquals(listOf(32), accessory.mfiChallengeSizes)
+            assertEquals(MfiLengthMemory.Entry(succeeded = 32), MfiLengthMemory.load(null, identity))
+        } finally {
+            phoneChannel.close()
+            accessoryChannel.close()
+        }
+    }
+
     @Test
     fun fullBringUpAgainstMockAccessory() {
         val pair = InMemoryStreamPair()
@@ -1160,6 +1198,7 @@ class Iap2SenderSessionTest {
         private val closeAfterWifiRequest: Boolean = false,
         /** ≥0 = 发出 0x4301 后延迟这么久再补发 0x5703（旧协议凭据晚到，PR #71 审查 P2）。 */
         private val lateWifiConfigurationAfterMs: Long = -1L,
+        private val closeAfterMfiChallenge: Boolean = false,
     ) {
         private val parser = Iap2Csm.Parser()
         private val pending = ArrayDeque<Iap2Csm.Frame>()
@@ -1249,6 +1288,10 @@ class Iap2SenderSessionTest {
                     .parseParams(challenge.body)
                     .single { it.id == 0 }
                     .value.size
+            if (closeAfterMfiChallenge) {
+                channel.close()
+                return
+            }
             send(Iap2MessageIds.MFI_RESPONSE, Iap2Csm.param(0, ByteArray(70) { (it * 7).toByte() }))
             expect(Iap2MessageIds.MFI_AUTHENTICATION_SUCCEEDED)
 
