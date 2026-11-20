@@ -30,13 +30,20 @@ internal interface ReconnectGuardStore {
     ): AutoReconnectGuard.Block?
 }
 
-/** 自动重连 block 查询的访问边界；生产实现仍是 SharedPreferences + wall clock。 */
+/** 自动重连 block 查询与手动清空的访问边界；生产实现仍是 SharedPreferences + wall clock。 */
 internal interface ReconnectGuardQuery {
     fun block(
         context: Any?,
         address: String?,
         nowMs: Long,
     ): AutoReconnectGuard.Block?
+
+    fun activeBlock(
+        context: Any,
+        nowMs: Long,
+    ): AutoReconnectGuard.Block?
+
+    fun clear(context: Any)
 }
 
 /** [ReconnectGuardStore] 的真实持久化实现。 */
@@ -63,6 +70,15 @@ internal class DefaultReconnectGuardQuery : ReconnectGuardQuery {
         address: String?,
         nowMs: Long,
     ): AutoReconnectGuard.Block? = context?.let { AutoReconnectGuard.block(it as Context, address, nowMs) }
+
+    override fun activeBlock(
+        context: Any,
+        nowMs: Long,
+    ): AutoReconnectGuard.Block? = AutoReconnectGuard.activeBlock(context as Context, nowMs)
+
+    override fun clear(context: Any) {
+        AutoReconnectGuard.clear(context as Context)
+    }
 }
 
 /** 内存实现：复用真实 [ReconnectCircuitBreakerStore]，只为 JVM 测试提供时钟与状态。 */
@@ -101,6 +117,18 @@ internal class MemoryReconnectGuardStore(
         return store.block(states, peer, nowMs)?.let { block ->
             AutoReconnectGuard.Block(block.failures, block.untilMs, block.remainingMs)
         }
+    }
+
+    override fun activeBlock(
+        context: Any,
+        nowMs: Long,
+    ): AutoReconnectGuard.Block? {
+        val block = store.activeBlock(states, nowMs) ?: return null
+        return AutoReconnectGuard.Block(block.failures, block.untilMs, block.remainingMs)
+    }
+
+    override fun clear(context: Any) {
+        states = emptyMap()
     }
 }
 
@@ -146,5 +174,16 @@ internal class ReconnectAttribution(
     ): AutoReconnectGuard.Block? {
         val app = context() ?: return null
         return query.block(app, address, nowMs)
+    }
+
+    /** 首页 active block 查询接线；显式 Context 保持在调用点。 */
+    fun activeBlock(
+        context: Any,
+        nowMs: Long = System.currentTimeMillis(),
+    ): AutoReconnectGuard.Block? = query.activeBlock(context, nowMs)
+
+    /** 手动连接/停止清空接线；显式 Context 保持在调用点。 */
+    fun clear(context: Any) {
+        query.clear(context)
     }
 }

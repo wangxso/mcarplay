@@ -28,7 +28,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
-import com.mcarplay.app.bt.AutoReconnectGuard
 import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
@@ -1456,7 +1455,7 @@ class MainActivity : AppCompatActivity() {
         // 自动重连熔断：空闲时明确告诉用户「不是没连上，是暂缓自动重连」，并给出剩余时间。
         // 有残留屏要清理时让残留提示优先（用户需要先处理那一项）。
         if (s == HeroState.IDLE && pendingResidualDisplays == null) {
-            val block = AutoReconnectGuard.activeBlock(this)
+            val block = SessionController.activeReconnectBlock(this)
             if (block != null) {
                 idleAutoPauseShown = true
                 heroStateText.text = getString(R.string.main_hero_auto_paused)

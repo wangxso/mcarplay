@@ -39,6 +39,10 @@ class EndAttemptTraceTest {
         KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("VideoEndedHandling.kt").readText()).code
     }
 
+    private val mainActivity: String by lazy {
+        SourceTree.scan("MainActivity.kt").code
+    }
+
     /** 去注释/字符串后的指定函数，包含签名和函数体，避免日志文案或注释里的关键词污染断言。 */
     private fun scFunction(name: String): String = normalize(function(controller, name))
 
@@ -58,6 +62,13 @@ class EndAttemptTraceTest {
         val open = controller.indexOf('{', at + marker.length)
         check(open >= 0) { "$name 的函数体没有开始" }
         return balancedFrom(controller, open)
+    }
+
+    private fun mainFunction(name: String): String {
+        val marker = "fun $name("
+        val start = requireIndex(mainActivity, marker, "找不到函数 $name")
+        val open = requireIndex(mainActivity, "{", start)
+        return balancedFrom(mainActivity, open)
     }
 
     private fun audioTeardownConstructorBlock(): String {
@@ -332,8 +343,8 @@ class EndAttemptTraceTest {
         )
         requireOrder(body, "if (reason == DiagnosticCode.USER_STOP)", "userStopGeneration++", "用户停止才递增代际")
         requireOrder(body, "userStopGeneration++", "AutoConnectPrefs.recordManualStop(context)", "代际递增先记手动停止")
-        requireOrder(body, "AutoConnectPrefs.recordManualStop(context)", "AutoReconnectGuard.clear(context)", "手动停止后清熔断")
-        requireOrder(body, "AutoReconnectGuard.clear(context)", "if (disconnectCompletion != null) return", "完成去重在用户停止分支后")
+        requireOrder(body, "AutoConnectPrefs.recordManualStop(context)", "clearReconnectGuard(context)", "手动停止后清熔断")
+        requireOrder(body, "clearReconnectGuard(context)", "if (disconnectCompletion != null) return", "完成去重在用户停止分支后")
         requireContains(body, "if (disconnectCompletion != null) return", "已有收尾任务时直接返回")
         assertTrue(
             "收尾 latch 只能创建一次",
@@ -508,6 +519,20 @@ class EndAttemptTraceTest {
             "熔断检查先于收尾捕获",
         )
         assertFalse("startConnection 两条自动查询必须经 reconnectAttribution seam", body.contains("AutoReconnectGuard.block("))
+        requireOrder(
+            body,
+            "AutoConnectPrefs.clearManualStop(context)",
+            "clearReconnectGuard(context)",
+            "手动启动先记手动停止清理再清熔断",
+        )
+        requireOrder(
+            body,
+            "clearReconnectGuard(context)",
+            "TargetDevicePrefs.get(context)?.address",
+            "清熔断先于后续选 peer",
+        )
+        assertFalse("startConnection 不得直接清 AutoReconnectGuard", body.contains("AutoReconnectGuard.clear("))
+        assertFalse("SessionController 不得直接清 AutoReconnectGuard", controller.contains("AutoReconnectGuard.clear("))
         requireContains(
             lambdaBody(body, "retryOriginalEntry"),
             "startConnection(context, automatic, automaticPeerAddress)",
@@ -538,6 +563,15 @@ class EndAttemptTraceTest {
             "熔断查询先于冗余端点检查",
         )
         assertFalse("车机回连查询必须经 reconnectAttribution seam", body.contains("AutoReconnectGuard.block("))
+    }
+
+    @Test
+    fun heroTickQueriesActiveReconnectThroughFacade() {
+        val body = mainFunction("tickHero")
+
+        requireContains(body, "SessionController.activeReconnectBlock(this)", "首页 active block 必须经 SC facade")
+        assertFalse("MainActivity 不得直接读 AutoReconnectGuard.activeBlock", body.contains("AutoReconnectGuard.activeBlock("))
+        assertFalse("MainActivity 不得直接读 AutoReconnectGuard", mainActivity.contains("AutoReconnectGuard."))
     }
 
     @Test

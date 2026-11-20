@@ -78,12 +78,59 @@ class ReconnectAttributionStoreIntegrationTest {
         }
     }
 
+    /** 记录查询叶子调用参数，并在指定方法抛出原异常。 */
+    private class CountingQuery(
+        private val throwable: Throwable? = null,
+    ) : ReconnectGuardStore,
+        ReconnectGuardQuery {
+        var activeBlockCount = 0
+        var clearCount = 0
+        var lastActiveContext: Any? = null
+        var lastActiveNowMs: Long? = null
+        var lastClearContext: Any? = null
+
+        override fun recordHealthy(
+            context: Any?,
+            address: String?,
+            attempt: String?,
+        ): Unit = throw UnsupportedOperationException("store recordHealthy is not used")
+
+        override fun recordFastFailure(
+            context: Any?,
+            address: String?,
+            attempt: String?,
+        ): AutoReconnectGuard.Block? = throw UnsupportedOperationException("store recordFastFailure is not used")
+
+        override fun block(
+            context: Any?,
+            address: String?,
+            nowMs: Long,
+        ): AutoReconnectGuard.Block? = throw UnsupportedOperationException("query block is not used")
+
+        override fun activeBlock(
+            context: Any,
+            nowMs: Long,
+        ): AutoReconnectGuard.Block? {
+            activeBlockCount++
+            lastActiveContext = context
+            lastActiveNowMs = nowMs
+            throwable?.let { throw it }
+            return null
+        }
+
+        override fun clear(context: Any) {
+            clearCount++
+            lastClearContext = context
+            throwable?.let { throw it }
+        }
+    }
+
     private val testContext = TestContext()
 
     private class MemoryAttributionFixture(
         var nowMs: Long,
     ) {
-        private val context = TestContext()
+        val context = TestContext()
         var attempt: String? = null
         val logs = mutableListOf<String>()
         val store = MemoryReconnectGuardStore(nowMs = { nowMs })
@@ -109,6 +156,12 @@ class ReconnectAttributionStoreIntegrationTest {
             peer: String?,
             at: Long = nowMs,
         ): AutoReconnectGuard.Block? = attribution.block(peer, at)
+
+        fun activeBlock(at: Long = nowMs): AutoReconnectGuard.Block? = attribution.activeBlock(context, at)
+
+        fun clear() {
+            attribution.clear(context)
+        }
     }
 
     private fun attribution(
@@ -310,6 +363,20 @@ class ReconnectAttributionStoreIntegrationTest {
         assertEquals(0, store.failureCount)
         assertEquals(emptyList<String>(), logs)
     }
+
+    private fun attributionWithQuery(
+        query: CountingQuery,
+        snapshot: () -> ReconnectAttemptSnapshot?,
+        logs: MutableList<String> = mutableListOf(),
+        context: () -> Any? = { testContext },
+    ): ReconnectAttribution =
+        ReconnectAttribution(
+            store = query,
+            query = query,
+            context = context,
+            snapshot = snapshot,
+            appendLog = logs::add,
+        )
 
     @Test
     fun nullAddressWithValidSnapshotReachesMemoryStoreWithoutClockRead() {
@@ -530,6 +597,172 @@ class ReconnectAttributionStoreIntegrationTest {
         assertNull(fixture.block(null))
         assertFalse(fixture.record("attempt-null", DiagnosticCode.BT_LINK_CLOSED, null))
         assertEquals(3, fixture.block("aa:bb")?.failures)
+    }
+
+    @Test
+    fun activeBlockReturnsAnyPeerAtOneMillisecondRemaining() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        val block = fixture.activeBlock(at = 180_999L)
+
+        assertEquals(3, block?.failures)
+        assertEquals(181_000L, block?.untilMs)
+        assertEquals(1L, block?.remainingMs)
+    }
+
+    @Test
+    fun activeBlockReturnsFullCooldownRemaining() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        val block = fixture.activeBlock()
+
+        assertEquals(3, block?.failures)
+        assertEquals(181_000L, block?.untilMs)
+        assertEquals(ReconnectCircuitBreaker.COOLDOWN_MILLIS, block?.remainingMs)
+    }
+
+    @Test
+    fun activeBlockExpiresAtZeroRemaining() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        assertNull(fixture.activeBlock(at = 181_000L))
+    }
+
+    @Test
+    fun activeBlockExpiresForNegativeRemaining() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        assertNull(fixture.activeBlock(at = 181_001L))
+    }
+
+    @Test
+    fun activeBlockExpiresOnRollbackOneBeyondCooldown() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        assertNull(fixture.activeBlock(at = 999L))
+    }
+
+    @Test
+    fun activeBlockIsEmptyWithoutStates() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+
+        assertNull(fixture.activeBlock())
+    }
+
+    @Test
+    fun activeBlockFindsFirstIndependentPeerAndNewPeerCanTripLater() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        val block = fixture.activeBlock()
+        assertEquals(3, block?.failures)
+        assertFalse(fixture.record("attempt-b-1", DiagnosticCode.BT_LINK_CLOSED, "CC:DD"))
+        assertFalse(fixture.record("attempt-b-2", DiagnosticCode.VIDEO_CLOSED, "CC:DD"))
+        assertTrue(fixture.record("attempt-b-3", DiagnosticCode.SETUP_FAILED, "CC:DD"))
+        assertEquals(3, fixture.activeBlock()?.failures)
+        assertEquals(3, fixture.block("cc:dd")?.failures)
+    }
+
+    @Test
+    fun activeBlockIgnoresContextAndClearsAllPeers() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+        tripPeer(fixture, "CC:DD")
+
+        assertEquals(3, fixture.activeBlock()?.failures)
+        fixture.clear()
+        assertNull(fixture.activeBlock())
+        assertNull(fixture.block("AA:BB"))
+        assertNull(fixture.block("CC:DD"))
+    }
+
+    @Test
+    fun clearAllowsDistinctAttemptRefillThroughMemoryClock() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+        fixture.clear()
+
+        assertNull(fixture.activeBlock())
+        fixture.nowMs = 2_000L
+        assertFalse(fixture.record("attempt-4", DiagnosticCode.BT_LINK_CLOSED, "AA:BB"))
+        assertFalse(fixture.record("attempt-5", DiagnosticCode.VIDEO_CLOSED, "AA:BB"))
+        assertTrue(fixture.record("attempt-6", DiagnosticCode.SETUP_FAILED, "AA:BB"))
+        assertEquals(3, fixture.activeBlock()?.failures)
+        assertEquals(182_000L, fixture.block("AA:BB")?.untilMs)
+    }
+
+    @Test
+    fun newTripAndActiveBlockQueryRemainSeparateEvidence() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+
+        assertNull(fixture.activeBlock())
+        assertFalse(fixture.record("attempt-1", DiagnosticCode.BT_LINK_CLOSED, "AA:BB"))
+        assertFalse(fixture.record("attempt-2", DiagnosticCode.VIDEO_CLOSED, "AA:BB"))
+        assertTrue(fixture.record("attempt-3", DiagnosticCode.SETUP_FAILED, "AA:BB"))
+        val block = fixture.activeBlock()
+
+        assertEquals(3, block?.failures)
+        assertEquals(181_000L, block?.untilMs)
+        assertEquals(ReconnectCircuitBreaker.COOLDOWN_MILLIS, block?.remainingMs)
+    }
+
+    @Test
+    fun repeatedSameAttemptDoesNotNewTripButRemainsActive() {
+        val fixture = MemoryAttributionFixture(nowMs = 2_000L)
+        tripPeer(fixture, "AA:BB")
+
+        assertFalse(fixture.record("attempt-3", DiagnosticCode.BT_LINK_CLOSED, "AA:BB"))
+        assertEquals(3, fixture.activeBlock()?.failures)
+    }
+
+    @Test
+    fun activeBlockQueryExceptionKeepsIdentity() {
+        val sentinel = IllegalStateException("query active sentinel")
+        val query = CountingQuery(sentinel)
+        val attribution = attributionWithQuery(query, snapshot = { ReconnectAttemptSnapshot("attempt", 0L, 1_000L) })
+        try {
+            attribution.activeBlock(testContext)
+            fail("query active exception must escape")
+        } catch (thrown: IllegalStateException) {
+            assertSame(sentinel, thrown)
+        }
+        assertEquals(1, query.activeBlockCount)
+        assertSame(testContext, query.lastActiveContext)
+    }
+
+    @Test
+    fun clearQueryExceptionKeepsIdentity() {
+        val sentinel = UnsupportedOperationException("query clear sentinel")
+        val query = CountingQuery(sentinel)
+        val attribution = attributionWithQuery(query, snapshot = { null })
+        try {
+            attribution.clear(testContext)
+            fail("query clear exception must escape")
+        } catch (thrown: UnsupportedOperationException) {
+            assertSame(sentinel, thrown)
+        }
+        assertEquals(1, query.clearCount)
+        assertSame(testContext, query.lastClearContext)
+    }
+
+    @Test
+    fun activeBlockEntryDefaultClockReachesQuery() {
+        val query = CountingQuery()
+        val attribution = attributionWithQuery(query, snapshot = { null })
+        val before = System.currentTimeMillis()
+        attribution.activeBlock(testContext)
+        val after = System.currentTimeMillis()
+
+        assertEquals(1, query.activeBlockCount)
+        assertEquals(0, query.clearCount)
+        assertSame(testContext, query.lastActiveContext)
+        val readAt = checkNotNull(query.lastActiveNowMs)
+        assertTrue(readAt in (before - 1L)..after)
     }
 
     private fun tripLog(failures: Int): String = "AUTO: 连续 $failures 次会话在出画前被车机断开——暂停自动重连 180 秒（可在 App 内手动连接）"
