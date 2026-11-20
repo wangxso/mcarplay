@@ -36,7 +36,8 @@ object ReceiverCompatibility {
         val reportWifiMacInSetup: Boolean = false,
         /**
          * 不 SETUP type-130 iAP 隧道。艾瑞泽 8 对它报 `Unsupported stream type: 130`，真 iPhone 从不请求，
-         * 隧道在该车机上本就不可用（2026-11-02 车机日志）。去掉后断开后约 20 s 的原厂崩溃仍在，二者无关。
+         * 隧道在该车机上本就不可用（2026-11-02 车机日志）。MBUX 对该 SETUP 不回包并在约 1.4 s 后
+         * reset 控制通道（2026-11-20 issue #62 日志），HyperCar 成功路径也不请求 type-130。
          */
         val skipIapTunnel: Boolean = false,
         /**
@@ -118,6 +119,25 @@ object ReceiverCompatibility {
          * 仅手动 `MERCEDES_MB_E` 关闭，其它接收端保持原能力集。
          */
         val offerMainBufferedAudio: Boolean = true,
+        /**
+         * 会话 SETUP 是否提议 `hevc`。本端视频编码器始终输出 H.264；对只按能力集选解码器的
+         * 接收端，提议 HEVC 会让车机等待一条永远不会来的 HEVC 流。HyperCar 0.1.0.588 在
+         * `MB_E-P-4` 成功轮提议了 HEVC，但用户要求本车型固定走 H.264，故仅手动
+         * `MERCEDES_MB_E` 关闭；其它接收端保持既有能力集。
+         */
+        val offerHevc: Boolean = true,
+        /**
+         * 屏幕 SETUP 前再发一次 `modesChanged`。HyperCar 0.1.0.588 在 `MB_E-P-4` 成功轮的
+         * 顺序是 RECORD → 首次资源声明 → 第二次资源声明 → 屏幕 SETUP；第二次声明与其屏幕
+         * 资源生命周期绑定。仅手动 `MERCEDES_MB_E` 开启，其它接收端保持已验证的一次声明。
+         */
+        val repeatScreenModesDeclaration: Boolean = false,
+        /**
+         * 屏幕 SETUP 前不发送 AirPlay `hidSetInputMode`。HyperCar 0.1.0.588 在 `MB_E-P-4`
+         * 成功轮没有发这些命令，首帧后车机仍正常发送 `hidSendReport` 并完成触控。仅手动
+         * `MERCEDES_MB_E` 跳过；其它接收端（奥迪等）继续靠该命令武装触摸。
+         */
+        val skipScreenHidArming: Boolean = false,
     )
 
     data class PairingFallback(
@@ -162,6 +182,9 @@ object ReceiverCompatibility {
                     reconnectOnStreamingInvite = false,
                     usePanelVideoGeometry = false,
                     preferVehicleResolution = false,
+                    offerHevc = true,
+                    repeatScreenModesDeclaration = false,
+                    skipScreenHidArming = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -218,12 +241,20 @@ object ReceiverCompatibility {
                         recordBeforeScreenSetup = true,
                         absoluteSessionUri = true,
                         offerMainBufferedAudio = false,
+                        offerHevc = false,
+                        repeatScreenModesDeclaration = true,
+                        skipScreenHidArming = true,
+                        skipIapTunnel = true,
                         rules =
                             policy.rules + "manual.mercedes-mb-e.vehicle-resolution" +
                                 "manual.mercedes-mb-e.mfi-32" +
                                 "manual.mercedes-mb-e.record-first" +
                                 "manual.mercedes-mb-e.absolute-session-uri" +
-                                "manual.mercedes-mb-e.no-main-buffered",
+                                "manual.mercedes-mb-e.no-iap-tunnel" +
+                                "manual.mercedes-mb-e.no-main-buffered" +
+                                "manual.mercedes-mb-e.no-hevc" +
+                                "manual.mercedes-mb-e.repeat-modes" +
+                                "manual.mercedes-mb-e.no-hid-arming",
                     )
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")

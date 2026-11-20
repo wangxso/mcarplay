@@ -4836,7 +4836,8 @@ object SessionController {
                             // MBUX 480.x（issue #62）：HyperCar 0.1.0.588 在同车机成功轮先 RECORD，
                             // 再声明资源，最后建主屏流。MBUX 可能只在 RECORD 之后才把屏幕流接入显示
                             // 管线；通用接收端仍保持「资源声明 → 屏幕 SETUP → RECORD」的已验证顺序。
-                            val recordBeforeScreenSetup = client.receiverCompatibility().recordBeforeScreenSetup
+                            val screenPolicy = client.receiverCompatibility()
+                            val recordBeforeScreenSetup = screenPolicy.recordBeforeScreenSetup
                             val earlyRecordOk =
                                 if (recordBeforeScreenSetup) {
                                     appendLog(
@@ -4851,10 +4852,22 @@ object SessionController {
                                 }
                             // 资源声明（must）：真车对未声明资源的屏幕流 SETUP 直接 400
                             client.assertModes()
+                            // HyperCar 在 MB_E-P-4 成功轮于屏幕 SETUP 前连发两次 modesChanged：
+                            // 第一次随 RECORD 激活，第二次随屏幕资源生命周期。只对登记过的车型重发。
+                            if (screenPolicy.repeatScreenModesDeclaration) {
+                                appendLog("AIRPLAY: MBUX 资源二次声明——对齐 HyperCar 的屏幕 SETUP 前时序")
+                                if (!client.assertModes()) {
+                                    appendLog("AIRPLAY: MBUX 二次资源声明未确认——继续尝试屏幕 SETUP，失败原因以随后的流协商为准")
+                                }
+                            }
                             // HID 输入模式武装：/info hidDevices（奥迪字符串 "0"/"1"，触摸="1"）。
                             // display features=0x08（高保真触摸）已声明，缺这步车机不发 hidSendReport。
-                            setup.hidDeviceUuids.forEach { uuid ->
-                                client.sendHidSetInputMode(uuid, mode = 0)
+                            if (!screenPolicy.skipScreenHidArming) {
+                                setup.hidDeviceUuids.forEach { uuid ->
+                                    client.sendHidSetInputMode(uuid, mode = 0)
+                                }
+                            } else {
+                                appendLog("AIRPLAY: MBUX 跳过 hidSetInputMode（HyperCar 成功轮未发，触摸由车机 HID 报告驱动）")
                             }
                             val screen = client.runScreenStream(sessionKey, setup.displayUuid)
                             if (screen != null) {
@@ -4869,22 +4882,6 @@ object SessionController {
                                     client.startKeepAlive(host, setup.keepAlivePort!!)
                                 }
                                 client.startFeedbackLoop()
-                                // iAP 隧道（type-130）：车机→手机的 iAP2 EA 数据（触摸 HID 载体）。
-                                // 建立失败不阻塞会话（触摸不可用但视频照常）。
-                                val tunnel = client.runIapTunnel(sessionKey)
-                                tunnel?.onIapMessage = { frame ->
-                                    // 触摸证据采集：先全量记录，格式确认后接 TouchRouter
-                                    if (frame.messageId != 0x0000) {
-                                        val hex = frame.body.joinToString(" ") { "%02x".format(it) }
-                                        appendLog(
-                                            "TUNNEL: rx 0x${frame.messageId.toString(16)} " +
-                                                "(${Iap2MessageIds.nameOf(
-                                                    frame.messageId,
-                                                )}) ${frame.body.size}B" +
-                                                if (frame.body.isNotEmpty()) " hex=${hex.take(120)}" else "",
-                                        )
-                                    }
-                                }
                                 // 关键时序（2026-10-17 奥迪定谳）：屏幕 SETUP 后必须尽快连上
                                 // dataPort——车机有 ~2s 看门狗。音频 SETUP 实测要 ~2.1s，
                                 // 若排在前面，端口连接迟到即触发车机 reset 控制通道
@@ -5073,6 +5070,24 @@ object SessionController {
                                     videoSender = sessionVideoSender
                                     // 先连端口（车机看门狗），编码器等 RECORD 后再启动
                                     videoSender?.openDataPort()
+                                    // iAP 隧道（type-130）：车机→手机的 iAP2 EA 数据（触摸 HID 载体）。
+                                    // 必须在主屏端口之后：2026-11-20 MB_E-P-4 无响应，同步 SETUP
+                                    // 占住控制通道，导致屏幕 dataPort 直到车机 reset 后才开始连接。
+                                    // 建立失败不阻塞会话（触摸不可用但视频照常）。
+                                    val tunnel = client.runIapTunnel(sessionKey)
+                                    tunnel?.onIapMessage = { frame ->
+                                        // 触摸证据采集：先全量记录，格式确认后接 TouchRouter
+                                        if (frame.messageId != 0x0000) {
+                                            val hex = frame.body.joinToString(" ") { "%02x".format(it) }
+                                            appendLog(
+                                                "TUNNEL: rx 0x${frame.messageId.toString(16)} " +
+                                                    "(${Iap2MessageIds.nameOf(
+                                                        frame.messageId,
+                                                    )}) ${frame.body.size}B" +
+                                                    if (frame.body.isNotEmpty()) " hex=${hex.take(120)}" else "",
+                                            )
+                                        }
+                                    }
                                     screenStreamRecovery = recover@{
                                         fun failure(): ScreenRecoveryResult =
                                             if (wasCancelled() || client.cancelled || currentClient !== client) {

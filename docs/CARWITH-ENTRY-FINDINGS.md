@@ -220,6 +220,60 @@
   确认四项改动均已生效，下一版再单独做 HEVC 转码实验。不要在 test.6 结果出来前同时改
   `modesChanged`、面板几何或音频。
 
+## 2026-11-20 issue #62：test.6 在首帧前被 type-130 SETUP 拖死（实车报告 + 修复）
+
+- **来源与版本：** 车主提供的脱敏报告
+  `mcarplay-log-20261120-154932-47c98363-diagnostics.txt`（导出 2026-11-20 15:49:32），会话
+  `1d6ac3cf`，视频-only。手机 Xiaomi 24031PN0DC / Android 17；CarWith `4.0.3-20261016`、
+  CarLife `8.8.5 (274)`；接收端仍为 `Mercedes-Benz / MB_E-P-4 / 480.7.4`，手动 `MERCEDES_MB_E`。
+  截图停留在「等待 CarWith 首帧」/`CARWITH_FAILED`，CarPlay 图标只短暂由灰变绿后转灰。
+- **test.6 的四项请求形状改动均已生效：** 15:48:11.490 生成绝对会话 URI；11.492 初始 SETUP 为 723B；
+  11.551 车机接受的能力列表已不含 `mainBuffered`；11.601 提前 RECORD 返回 200；11.643 主屏 SETUP 返回
+  200、`dataPort=6030`。因此本轮不是绝对 URI、RECORD 顺序或 `mainBuffered` 提议被直接拒绝。
+- **直接失败点在首帧之前：** 11.687 之后控制通道上有一条等待应答的 type-130 `SETUP /`（CSeq=10）；
+  车机没有回包，15:48:13.020 reset 控制/事件通道，约 1.38 s 后 13.027 该 SETUP 才以「控制通道已关闭」
+  返回。视频口直到 13.042 才开始连接 `6030`，此时车机已拆会话，结果为 `ECONNREFUSED`。CarWith 随后
+  才尝试启动并报首帧等待失败，所以 `CARWITH_FAILED` 是下游结果，不是 CarWith 自身先失败。
+- **代码原因：** `SessionController` 在屏幕 SETUP 成功后同步调用 `runIapTunnel()`，然后才创建
+  `VideoSender` 并执行 `openDataPort()`。type-130 无应答时，这个可选隧道占住了唯一的连接线程，
+  主屏 dataPort 不能按车机约 2 s 的看门狗窗口及时连上。test.5 该隧道几乎立即返回
+  `streams=null`，所以同一顺序能侥幸连上；test.6 的超时暴露了顺序缺陷。
+- **HyperCar 对照：** 重新核对 HyperCar `f22844e` 源码，其成功路径不发送 type-130 DataStream；
+  `screen_session.rs` 在屏幕 SETUP 返回 200 后立即用返回的 `dataPort` 建 TCP，再继续 RECORD/媒体
+  流程。该仓库没有对应本项目的 type-130 隧道请求。车机对 type-130 的静默与 reset 与这一差异一致，
+  但在本车机上尚未做「只跳过 type-130」的实车 A/B。
+- **修复（未发布）：** ① 手动 `MERCEDES_MB_E` 预设登记 `skipIapTunnel=true`，不发 type-130；
+  ② 所有车型都把主屏 `openDataPort()` 放到可选 `runIapTunnel()` 之前，避免同类阻塞再次让视频口迟到；
+  ③ 新增 `VehiclePresetTest` 断言和源码顺序回归 `MediaPortOrderingTest`。其他车型的 type-130 路径保留。
+- **热点弹窗：** 本轮没有弹窗不是新故障。15:48:10.937 的 `0x4301` 已带完整 AP 凭据，
+  15:48:11.401 绑定到已核验的 Network 238 且 SSID 可读；当前网络已确认是目标热点，旧逻辑本就不应再问。
+  test.6 的「Network 可用但 SSID 不可读」修复仍未在实车触发。
+- **验证边界：** 本地只证明策略、顺序和编译回归；尚未在 `MB_E-P-4` 上复测，不能声称黑屏已修复。
+  下一轮应只验证这条 type-130 修复，保持视频-only、H.264 和既有面板几何不变；若视频口稳定连通但车机
+  仍无画面，再单独进入 HEVC/显示激活实验。
+
+## 2026-11-20 issue #62：MB_E 对齐 HyperCar 请求时序并固定 H.264（未发布实验）
+
+- **HyperCar 成功轮（2026-11-18 06:32:13，`MB_E-P-4 / 480.7.4`）：** 初始 SETUP 后
+  `enabledFeatures=[hevc,h.264Level5.1,viewAreas]`，`mainBuffered_proposed=false`；控制通道顺序为
+  RECORD 200 → 第一次 `modesChanged`（383B，应答 42B `{}`）→ 第二次同形 `modesChanged`（383B）→
+  屏幕 SETUP（167B，`latencyMs=25`）→ 立即连接 `dataPort=6030`。该轮没有 type-130 DataStream，
+  也没有发送 AirPlay `hidSetInputMode`；首帧后车机仍正常发送 `hidSendReport`。
+- **与 mcarplay test.6 的差异：** test.6 在 RECORD 后只发一次 `modesChanged`，随后连发 4 条
+  `hidSetInputMode`，再发屏幕 SETUP。HyperCar 的第二次资源声明与屏幕资源生命周期绑定，且成功轮
+  不依赖 HID 武装。该差异可能影响 MBUX 是否把随后建立的屏幕流接入显示管线，但尚无实车 A/B。
+- **本轮实验（仅手动 `MERCEDES_MB_E`）：**
+  ① 会话 SETUP 不再提议 `hevc`，与本端固定发送 H.264 的能力一致；HyperCar 成功轮本身提议了 HEVC，
+  所以这不是「HEVC 导致黑屏」的结论，只是按用户要求固定编码路径。
+  ② 屏幕 SETUP 前补发第二次 `modesChanged`，对齐 HyperCar 的 RECORD → 声明 → 再声明 → 屏幕 SETUP。
+  ③ 跳过屏幕 SETUP 前的 4 条 `hidSetInputMode`；触摸仍由车机事件通道的 `hidSendReport` 驱动。
+  保留已有的 `skipIapTunnel`、提前 RECORD、绝对会话 URI、撤回 `mainBuffered`、32B MFi 和
+  `displays[0]` 几何，不改变其他车型的 type-130、资源声明或 HID 路径。
+- **验证边界：** 本地只验证 SETUP 能力集、车型策略和源码顺序回归；尚未在 `MB_E-P-4` 上复测。
+  下一轮应只验证这三项对齐（H.264-only、二次声明、无 HID 武装），不要同时改面板几何、音频或
+  CarWith 启动参数。若视频口稳定连通但仍无画面，需用报告中的 `enabledFeatures`、第二次
+  `modesChanged` 应答和首帧时间线继续定位，不能声称该车型已兼容。
+
 ## 2026-11-13 issue #55：奔驰 MB_D-PP-4「开声音后 16–559 ms 拆链」（车主报告，未实车复测）
 
 - **来源：** `wangxso/mcarplay#55`，mcarplay `0.1.6` standard/release 的脱敏报告

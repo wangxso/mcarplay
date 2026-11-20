@@ -3,6 +3,28 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.7-test.7] - 2026-11-20
+
+> Experimental prerelease on top of `v0.1.7-test.6`: a Mercedes MB_E-P / GLC compatibility trial that aligns the AirPlay screen-resource sequence with HyperCar and fixes the request to H.264-only. The manual `MERCEDES_MB_E` preset now sends two resource declarations before screen SETUP and skips the optional `hidSetInputMode` arming. It also stops offering HEVC, matching the app's existing H.264 encoder. This build has not been tried on a vehicle, issue #62 remains open, and it does not prove that the black screen is fixed.
+
+### English
+- **HyperCar screen-resource sequence (issue #62):** after the early RECORD, the manual `MERCEDES_MB_E` preset now sends `modesChanged` twice before the main-screen SETUP. HyperCar's successful `MB_E-P-4 / 480.7.4` log used the order RECORD → first resource declaration → second resource declaration → screen SETUP, then connected the returned `dataPort` immediately. mcarplay previously sent one declaration and four `hidSetInputMode` commands before the screen SETUP.
+- **No screen HID arming on MB_E:** the same HyperCar success did not send AirPlay `hidSetInputMode`; the head unit still sent `hidSendReport` after the first frame. The MB_E preset now skips those four commands, while Audi and other receivers keep the existing touch-arming path.
+- **H.264-only session capability:** the MB_E session SETUP no longer proposes `hevc`; with the car's observed feature intersection, the enabled list should become `[h.264Level5.1, viewAreas]`. mcarplay already encodes H.264 only. HyperCar's successful run actually proposed and enabled HEVC, so this is a requested codec-path experiment, not evidence that HEVC caused the black screen.
+- **Kept fixes:** MB_E still skips the type-130 iAP tunnel, keeps RECORD before screen SETUP, uses one absolute session URI, withdraws `mainBuffered`, pins the tunnel MFi challenge to 32 bytes and keeps the `displays[0]` 1624x1278 geometry. The screen `dataPort` is connected before the optional tunnel so a non-responsive type-130 SETUP cannot miss the head unit's ~2 s watchdog.
+- **Limits:** the vehicle has not been retested. The next report should confirm the two `modesChanged` requests, absence of `hidSetInputMode` and type-130 SETUP, immediate `dataPort` connection, and `enabledFeatures` without `hevc`. Issue #62 remains open; do not claim vehicle compatibility from this build.
+- **Validation:** 1260 standard JVM tests and 25 remote bridge tests passed; `spotlessCheck`, `lintStandardDebug` and `assembleStandardDebug` passed locally. The signed tag workflow additionally builds `assembleStandardRelease`.
+
+### 简体中文
+- **HyperCar 屏幕资源时序（issue #62）：** 提前 RECORD 后，手动「奔驰 MB_E-P / GLC（实验）」预设现在会在主屏 SETUP 前发送两次 `modesChanged`。HyperCar 在 `MB_E-P-4 / 480.7.4` 的成功日志顺序为 RECORD → 第一次资源声明 → 第二次资源声明 → 屏幕 SETUP，随后立即连接返回的 `dataPort`。mcarplay 之前只声明一次，并在屏幕 SETUP 前连发 4 条 `hidSetInputMode`。
+- **MB_E 不再武装屏幕 HID：** 同一份 HyperCar 成功日志没有发送 AirPlay `hidSetInputMode`，首帧后车机仍正常发送 `hidSendReport`。MB_E 预设现在跳过这 4 条命令；奥迪等其他接收端继续保留原有触摸武装路径。
+- **会话能力改为 H.264-only：** MB_E 的会话 SETUP 不再提议 `hevc`；按车机此前的能力交集，启用列表应为 `[h.264Level5.1, viewAreas]`。mcarplay 本身只编码 H.264。HyperCar 成功轮实际提议并启用了 HEVC，因此本轮是按要求做的编码路径实验，不能据此认定 HEVC 是黑屏原因。
+- **保留的修复：** MB_E 仍跳过 type-130 iAP 隧道、先 RECORD 再建主屏流、使用绝对会话 URI、撤回 `mainBuffered`、把隧道 MFi 固定为 32B，并保持 `displays[0]` 的 1624×1278 几何。主屏 `dataPort` 先于可选隧道连接，避免 type-130 无响应时错过车机约 2 秒的看门狗窗口。
+- **限制：** 本构建尚未实车复测。下一份报告应确认两次 `modesChanged`、没有 `hidSetInputMode` 和 type-130 SETUP、`dataPort` 立即连接，以及 `enabledFeatures` 不含 `hevc`。issue #62 仍开放，不能根据本构建声称车型已兼容。
+- **验证：** standard JVM 测试 1260 个、remote bridge 测试 25 个通过；`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 在本地通过。签名 tag 工作流还会构建 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.7-test.6...v0.1.7-test.7](https://github.com/wangxso/mcarplay/compare/v0.1.7-test.6...v0.1.7-test.7)
+
 ## [v0.1.7-test.6] - 2026-11-19
 
 > Experimental prerelease on top of `v0.1.7-test.5`: a multi-variable MBUX request-shape trial for issue #62, plus a hotspot-confirmation fix. For the manual Mercedes MB_E-P / GLC preset only, the app now sends RECORD before resource declaration and screen SETUP, reuses one absolute session URI for session-scoped RTSP requests, and stops offering the unimplemented `mainBuffered` audio stream. These match the request shape observed in HyperCar 0.1.0.588 on the same head unit. This build has not been tried on a vehicle, does not change the H.264 video path, issue #62 remains open, and this does not prove that the black screen is fixed.

@@ -1131,9 +1131,13 @@ class AirPlayClient(
                 encrypted = cipher != null,
                 macAddress = wifiMac?.mac ?: PLACEHOLDER_WIFI_MAC,
                 includeMainBuffered = policy.offerMainBufferedAudio,
+                includeHevc = policy.offerHevc,
             )
         if (!policy.offerMainBufferedAudio) {
             log("AIRPLAY: 不提议 mainBuffered（本端仅实现 UDP type100/101 音频，未实现 type103 缓冲音频）")
+        }
+        if (!policy.offerHevc) {
+            log("AIRPLAY: 接收端兼容策略不提议 HEVC（本端固定 H.264）")
         }
         log(
             "AIRPLAY: 初始 SETUP body=${body.size}B timingPort=${timingServer.port} " +
@@ -1721,7 +1725,7 @@ class AirPlayClient(
             return null
         }
         if (receiverCompatibility().skipIapTunnel) {
-            log("TUNNEL: 该车机不支持 type-130（规则 chery.no-iap-tunnel）——不 SETUP iAP 隧道")
+            log("TUNNEL: 接收端兼容策略跳过 type-130——不 SETUP iAP 隧道")
             return null
         }
         val host = receiverHost() ?: return null
@@ -3619,13 +3623,13 @@ class AirPlayClient(
         macAddress: String = PLACEHOLDER_WIFI_MAC,
         /** false = 不提议 `mainBuffered`：本端没有 type 103 缓冲音频发送端。 */
         includeMainBuffered: Boolean = true,
+        /** false = 不提议 `hevc`：本端只发送 H.264。 */
+        includeHevc: Boolean = true,
     ): ByteArray {
         val features =
-            if (includeMainBuffered) {
-                CONTROLLER_FEATURES
-            } else {
-                CONTROLLER_FEATURES.filterNot { it == "mainBuffered" }
-            }
+            CONTROLLER_FEATURES
+                .filter { includeMainBuffered || it != "mainBuffered" }
+                .filter { includeHevc || it != "hevc" }
         val fields =
             linkedMapOf<String, Any?>(
                 "deviceID" to deviceId,
