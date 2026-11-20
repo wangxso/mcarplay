@@ -483,7 +483,7 @@ class EndAttemptTraceTest {
         )
         requireOrder(
             startBody,
-            "AutoReconnectGuard.block(context, peer)",
+            "reconnectAttribution.block(peer)",
             "teardownCoordination.deferStartIfStopping(",
             "自动冷却与熔断先于收尾等待",
         )
@@ -498,15 +498,16 @@ class EndAttemptTraceTest {
         requireOrder(
             body,
             "AutoConnectPrefs.isManualStopCoolingDown(context)",
-            "AutoReconnectGuard.block(context, peer)",
+            "reconnectAttribution.block(peer)",
             "自动连接冷却与熔断先于收尾捕获",
         )
         requireOrder(
             body,
-            "AutoReconnectGuard.block(context, peer)",
+            "reconnectAttribution.block(peer)",
             "teardownCoordination.deferStartIfStopping(",
             "熔断检查先于收尾捕获",
         )
+        assertFalse("startConnection 两条自动查询必须经 reconnectAttribution seam", body.contains("AutoReconnectGuard.block("))
         requireContains(
             lambdaBody(body, "retryOriginalEntry"),
             "startConnection(context, automatic, automaticPeerAddress)",
@@ -517,6 +518,26 @@ class EndAttemptTraceTest {
             "appendLog(",
             "等待任务排队",
         )
+    }
+
+    @Test
+    fun carPlayEndpointQueriesReconnectAttributionSeam() {
+        val body = scFunctionLast("onCarPlayEndpoint")
+
+        requireOrder(body, "reconnectAttribution.block(peerAddress)", "handoffOwnership.begin(", "熔断查询先于交接获取")
+        requireOrder(
+            body,
+            "ReceiverDetectionRuntime.isCurrent(endpoint.observation)",
+            "reconnectAttribution.block(peerAddress)",
+            "过期端点检查先于熔断查询",
+        )
+        requireOrder(
+            body,
+            "reconnectAttribution.block(peerAddress)",
+            "videoSender?.isRunning == true",
+            "熔断查询先于冗余端点检查",
+        )
+        assertFalse("车机回连查询必须经 reconnectAttribution seam", body.contains("AutoReconnectGuard.block("))
     }
 
     @Test

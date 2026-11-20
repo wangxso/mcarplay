@@ -80,6 +80,37 @@ class ReconnectAttributionStoreIntegrationTest {
 
     private val testContext = TestContext()
 
+    private class MemoryAttributionFixture(
+        var nowMs: Long,
+    ) {
+        private val context = TestContext()
+        var attempt: String? = null
+        val logs = mutableListOf<String>()
+        val store = MemoryReconnectGuardStore(nowMs = { nowMs })
+        val attribution =
+            ReconnectAttribution(
+                store = store,
+                query = store,
+                context = { context },
+                snapshot = { attempt?.let { ReconnectAttemptSnapshot(it, 0L, 1_000L) } },
+                appendLog = logs::add,
+            )
+
+        fun record(
+            id: String,
+            code: DiagnosticCode,
+            peer: String?,
+        ): Boolean {
+            attempt = id
+            return attribution.record(id, code, peer)
+        }
+
+        fun block(
+            peer: String?,
+            at: Long = nowMs,
+        ): AutoReconnectGuard.Block? = attribution.block(peer, at)
+    }
+
     private fun attribution(
         store: ReconnectGuardStore,
         snapshot: () -> ReconnectAttemptSnapshot?,
@@ -393,5 +424,132 @@ class ReconnectAttributionStoreIntegrationTest {
         assertEquals(180_000L, block?.remainingMs)
     }
 
+    @Test
+    fun thirdNewTripAndActiveBlockQueryRemainSeparateEvidence() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+
+        assertNull(fixture.block("AA:BB"))
+        assertFalse(fixture.record("attempt-1", DiagnosticCode.BT_LINK_CLOSED, "AA:BB"))
+        assertFalse(fixture.record("attempt-2", DiagnosticCode.VIDEO_CLOSED, "AA:BB"))
+        val newTrip = fixture.record("attempt-3", DiagnosticCode.SETUP_FAILED, "AA:BB")
+        val activeBlock = fixture.block("aa:bb")
+
+        assertTrue(newTrip)
+        assertEquals(3, activeBlock?.failures)
+        assertEquals(181_000L, activeBlock?.untilMs)
+        assertEquals(ReconnectCircuitBreaker.COOLDOWN_MILLIS, activeBlock?.remainingMs)
+    }
+
+    @Test
+    fun repeatedSameAttemptDoesNotNewTripButTrippedQueryStillBlocks() {
+        val fixture = MemoryAttributionFixture(nowMs = 2_000L)
+        tripPeer(fixture, "AA:BB")
+
+        val repeatRecorded = fixture.record("attempt-3", DiagnosticCode.BT_LINK_CLOSED, "AA:BB")
+        val activeBlock = fixture.block("aa:bb")
+
+        assertFalse(repeatRecorded)
+        assertEquals(3, activeBlock?.failures)
+        assertEquals(ReconnectCircuitBreaker.COOLDOWN_MILLIS, activeBlock?.remainingMs)
+    }
+
+    @Test
+    fun activeBlockQueryStillBlocksAtOneMillisecondRemaining() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        val activeBlock = fixture.block("AA:BB", at = 180_999L)
+
+        assertEquals(3, activeBlock?.failures)
+        assertEquals(181_000L, activeBlock?.untilMs)
+        assertEquals(1L, activeBlock?.remainingMs)
+    }
+
+    @Test
+    fun activeBlockQueryStillBlocksAtFullCooldownRemaining() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        val activeBlock = fixture.block("AA:BB")
+
+        assertEquals(3, activeBlock?.failures)
+        assertEquals(181_000L, activeBlock?.untilMs)
+        assertEquals(ReconnectCircuitBreaker.COOLDOWN_MILLIS, activeBlock?.remainingMs)
+    }
+
+    @Test
+    fun activeBlockQueryExpiresAtZeroRemaining() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        assertNull(fixture.block("AA:BB", at = 181_000L))
+    }
+
+    @Test
+    fun activeBlockQueryExpiresForNegativeRemaining() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        assertNull(fixture.block("AA:BB", at = 181_001L))
+    }
+
+    @Test
+    fun activeBlockQueryExpiresOnRollbackOneBeyondCooldown() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        assertNull(fixture.block("AA:BB", at = 999L))
+    }
+
+    @Test
+    fun activeBlockQueryMatchesSamePeerCaseInsensitively() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "aa:bb")
+
+        assertEquals(3, fixture.block("AA:BB")?.failures)
+    }
+
+    @Test
+    fun differentPeerIsNotBlockedAndTripsIndependently() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        assertNull(fixture.block("cc:dd"))
+        assertFalse(fixture.record("attempt-b-1", DiagnosticCode.BT_LINK_CLOSED, "CC:DD"))
+        assertFalse(fixture.record("attempt-b-2", DiagnosticCode.VIDEO_CLOSED, "CC:DD"))
+        assertTrue(fixture.record("attempt-b-3", DiagnosticCode.SETUP_FAILED, "CC:DD"))
+        assertEquals(3, fixture.block("cc:dd")?.failures)
+        assertEquals(3, fixture.block("aa:bb")?.failures)
+    }
+
+    @Test
+    fun nullPeerIsNotCountedOrBlockedByKnownPeer() {
+        val fixture = MemoryAttributionFixture(nowMs = 1_000L)
+        tripPeer(fixture, "AA:BB")
+
+        assertNull(fixture.block(null))
+        assertFalse(fixture.record("attempt-null", DiagnosticCode.BT_LINK_CLOSED, null))
+        assertEquals(3, fixture.block("aa:bb")?.failures)
+    }
+
     private fun tripLog(failures: Int): String = "AUTO: 连续 $failures 次会话在出画前被车机断开——暂停自动重连 180 秒（可在 App 内手动连接）"
+
+    private fun tripPeer(
+        fixture: MemoryAttributionFixture,
+        peer: String,
+    ) {
+        val attempts =
+            listOf(
+                "attempt-1" to DiagnosticCode.BT_LINK_CLOSED,
+                "attempt-2" to DiagnosticCode.VIDEO_CLOSED,
+                "attempt-3" to DiagnosticCode.SETUP_FAILED,
+            )
+        attempts.forEachIndexed { index, (attempt, code) ->
+            assertEquals(index == attempts.lastIndex, fixture.record(attempt, code, peer))
+        }
+        assertEquals(
+            fixture.nowMs + ReconnectCircuitBreaker.COOLDOWN_MILLIS,
+            fixture.block(peer)?.untilMs,
+        )
+    }
 }

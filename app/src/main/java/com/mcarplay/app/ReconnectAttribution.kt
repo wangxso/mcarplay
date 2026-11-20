@@ -30,6 +30,15 @@ internal interface ReconnectGuardStore {
     ): AutoReconnectGuard.Block?
 }
 
+/** 自动重连 block 查询的访问边界；生产实现仍是 SharedPreferences + wall clock。 */
+internal interface ReconnectGuardQuery {
+    fun block(
+        context: Any?,
+        address: String?,
+        nowMs: Long,
+    ): AutoReconnectGuard.Block?
+}
+
 /** [ReconnectGuardStore] 的真实持久化实现。 */
 internal class DefaultReconnectGuardStore : ReconnectGuardStore {
     override fun recordHealthy(
@@ -47,12 +56,22 @@ internal class DefaultReconnectGuardStore : ReconnectGuardStore {
     ): AutoReconnectGuard.Block? = context?.let { AutoReconnectGuard.recordFastFailure(it as Context, address, attempt) }
 }
 
+/** [ReconnectGuardQuery] 的真实持久化实现。 */
+internal class DefaultReconnectGuardQuery : ReconnectGuardQuery {
+    override fun block(
+        context: Any?,
+        address: String?,
+        nowMs: Long,
+    ): AutoReconnectGuard.Block? = context?.let { AutoReconnectGuard.block(it as Context, address, nowMs) }
+}
+
 /** 内存实现：复用真实 [ReconnectCircuitBreakerStore]，只为 JVM 测试提供时钟与状态。 */
 internal class MemoryReconnectGuardStore(
     private val store: ReconnectCircuitBreakerStore = ReconnectCircuitBreakerStore(),
     private var states: Map<String, ReconnectCircuitBreaker.State> = emptyMap(),
     private var nowMs: () -> Long = { 0L },
-) : ReconnectGuardStore {
+) : ReconnectGuardStore,
+    ReconnectGuardQuery {
     override fun recordHealthy(
         context: Any?,
         address: String?,
@@ -72,6 +91,17 @@ internal class MemoryReconnectGuardStore(
         states = next
         return block?.let { block -> AutoReconnectGuard.Block(block.failures, block.untilMs, block.remainingMs) }
     }
+
+    override fun block(
+        context: Any?,
+        address: String?,
+        nowMs: Long,
+    ): AutoReconnectGuard.Block? {
+        val peer = address?.takeIf { it.isNotBlank() } ?: return null
+        return store.block(states, peer, nowMs)?.let { block ->
+            AutoReconnectGuard.Block(block.failures, block.untilMs, block.remainingMs)
+        }
+    }
 }
 
 /**
@@ -82,6 +112,7 @@ internal class MemoryReconnectGuardStore(
 internal class ReconnectAttribution(
     private val codes: Set<DiagnosticCode> = AUTO_RECONNECT_FAILURE_CODES,
     private val store: ReconnectGuardStore = DefaultReconnectGuardStore(),
+    private val query: ReconnectGuardQuery = DefaultReconnectGuardQuery(),
     private val context: () -> Any?,
     private val snapshot: () -> ReconnectAttemptSnapshot?,
     private val appendLog: (String) -> Unit,
@@ -106,5 +137,14 @@ internal class ReconnectAttribution(
                 "（可在 App 内手动连接）",
         )
         return true
+    }
+
+    /** 自动重连熔断的唯一 block 查询接线；查询本身只读真实 store 状态。 */
+    fun block(
+        address: String?,
+        nowMs: Long = System.currentTimeMillis(),
+    ): AutoReconnectGuard.Block? {
+        val app = context() ?: return null
+        return query.block(app, address, nowMs)
     }
 }
