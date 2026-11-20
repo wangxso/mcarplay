@@ -1726,6 +1726,7 @@ object SessionController {
         preserveScreenSocket: Boolean = false,
     ) {
         currentClient?.beginOrderlyStop()
+        endedScreen = null
         screenStreamRecovery = null
         stopAutoPlayWatch()
         val retiringSender = videoSender
@@ -3936,17 +3937,34 @@ object SessionController {
     @Volatile
     private var streamingDiagnosticAttempt: String? = null
 
+    @Volatile
+    private var endedScreen: EndedScreen? = null
+
+    private data class EndedScreen(
+        val client: AirPlayClient,
+        val inviteBeforeStream: CtrlInviteEvidence<Network>?,
+    )
+
+    private fun retryBufferedInvite(client: AirPlayClient) {
+        val ended = endedScreen ?: return
+        val invite = ctrlInviteEvidence ?: return
+        if (ended.client === client && client.controlChannelClosed && invite !== ended.inviteBeforeStream) {
+            Bg.run("ended-session-invite-reconnect") { reconnectEndedSessionOnInvite(client, invite) }
+        }
+    }
+
     /**
      * 车机 ctrl 邀请回调（应答线程）。
      *
      * - 连接阶段：已有本轮空端点时立即触发“绑定当前网络”的交接，不再等下一次 1s 轮询；
+     * - 意外断流后：同一车机网络上的邀请复用现有绑定重建会话。
      * - 推流阶段：已登记的车机（[ReceiverCompatibility.Policy.reconnectOnStreamingInvite]）
      *   退役当前会话并按邀请重连，带 [StreamingInviteReconnect.DEBOUNCE_MS] 防抖。
      */
     private fun onCtrlInvite(localAddress: String? = null) {
         val local = localAddress?.substringBefore('%')?.takeIf { it.isNotBlank() }
         val observation = activeReceiverObservations.single()
-        ctrlInviteEvidence =
+        val invite =
             CtrlInviteEvidence(
                 receivedAtMillis = SystemClock.uptimeMillis(),
                 target = currentTargetBinding() ?: observation?.binding,
@@ -3954,12 +3972,17 @@ object SessionController {
                 network = local?.let { wifiConnector?.wifiNetworkWithLocalAddress(it) },
                 observation = observation,
             )
+        ctrlInviteEvidence = invite
         val client = currentClient
         if (client == null) {
             val pending = pendingStartSessionEndpoint.get()
             if (pending != null && !connectCancelled && !sessionStarting.get()) {
                 Bg.run("ctrl-invite-wifi-handoff") { continueOnInvitedWifi(pending, "CTRL邀请") }
             }
+            return
+        }
+        if (endedScreen?.client === client) {
+            Bg.run("ended-session-invite-reconnect") { reconnectEndedSessionOnInvite(client, invite) }
             return
         }
         val streaming = !connectCancelled && !sessionStarting.get() && videoSender?.isRunning == true
@@ -3987,6 +4010,41 @@ object SessionController {
             StreamingInviteReconnect.Decision.RECONNECT ->
                 Bg.run("streaming-invite-reconnect") { reconnectOnStreamingInvite(client) }
         }
+    }
+
+    private fun reconnectEndedSessionOnInvite(
+        client: AirPlayClient,
+        invite: CtrlInviteEvidence<Network>,
+    ) {
+        val endpoint = client.currentEndpoint
+        val network = invite.network ?: return
+        val reconnectEndpoint =
+            synchronized(this) {
+                val ssid = boundCarSsid ?: return
+                if (connectCancelled ||
+                    currentClient !== client ||
+                    endedScreen?.client !== client ||
+                    !ReceiverDetectionRuntime.isCurrent(endpoint.observation) ||
+                    SystemClock.uptimeMillis() - invite.receivedAtMillis !in 0..CTRL_INVITE_FRESH_MS ||
+                    wifiConnector?.currentNetwork != network
+                ) {
+                    return
+                }
+                val target = currentTargetBinding()
+                if (target != null && target != endpoint.observation?.binding) return
+                val observation = ReceiverDetectionRuntime.observation(endpoint.peerAddress)
+                if (!handoffOwnership.begin(observation)) return
+                retireSession()
+                endpoint.copy(ssid = ssid, observation = observation, wifiCredentialSource = WifiCredentialSource.CURRENT_NETWORK)
+            }
+        appendLog(">>> 车机在旧推流结束后发来 ctrl 邀请——复用现有 WiFi 重连 AirPlay")
+        onCarPlayEndpoint(
+            reconnectEndpoint,
+            "断流后 ctrl 邀请",
+            ownershipPreAcquired = true,
+            verifiedCurrentNetwork = network,
+            requireCurrentBinding = true,
+        )
     }
 
     private val inviteReconnectLock = Any()
@@ -4452,6 +4510,7 @@ object SessionController {
                                 )
                             },
                         ).also { created ->
+                            created.onControlChannelClosed = { retryBufferedInvite(created) }
                             created.onMilestone = { reached, detail ->
                                 if (reached == ConnectionMilestone.AIRPLAY_CONNECTED) {
                                     airPlayConnected.set(true)
@@ -4969,6 +5028,8 @@ object SessionController {
                                     fun newScreenSender(screenInfo: AirPlayClient.ScreenStreamInfo): VideoSender {
                                         lateinit var sender: VideoSender
                                         val firstFrameSent = AtomicBoolean(false)
+                                        val sessionNetwork = wifiConnector?.currentNetwork
+                                        val inviteBeforeStream = ctrlInviteEvidence
                                         sender =
                                             VideoSender(
                                                 host = host,
@@ -5064,6 +5125,13 @@ object SessionController {
                                                         )
                                                     ) {
                                                         appContext?.let { disconnect(it, DiagnosticCode.VIDEO_CLOSED) }
+                                                    } else if (currentClient === client &&
+                                                        videoSender === sender &&
+                                                        sessionNetwork != null &&
+                                                        wifiConnector?.currentNetwork == sessionNetwork
+                                                    ) {
+                                                        endedScreen = EndedScreen(client, inviteBeforeStream)
+                                                        retryBufferedInvite(client)
                                                     }
                                                 },
                                             )
