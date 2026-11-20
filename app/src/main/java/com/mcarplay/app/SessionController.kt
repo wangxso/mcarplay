@@ -1448,7 +1448,7 @@ object SessionController {
         if (!automatic) {
             AutoConnectPrefs.clearManualStop(context)
             // 用户主动点「连接」= 明确的再试意愿：清空自动重连熔断，不拦手动路径
-            AutoReconnectGuard.clear(context)
+            clearReconnectGuard(context)
         }
         val alreadyRunning = isSessionRunning()
         if (!alreadyRunning) {
@@ -1555,7 +1555,7 @@ object SessionController {
             userStopGeneration++
             AutoConnectPrefs.recordManualStop(context)
             // 用户主动断开：自动重连熔断一并清零
-            AutoReconnectGuard.clear(context)
+            clearReconnectGuard(context)
         }
         if (disconnectCompletion != null) return
         val completed = java.util.concurrent.CountDownLatch(1)
@@ -1719,6 +1719,17 @@ object SessionController {
         code: DiagnosticCode?,
         address: String? = activePeerAddress,
     ): Boolean = reconnectAttribution.record(attempt, code, address)
+
+    /** 首页展示用薄 facade；Context 与墙钟都由调用方显式传入。 */
+    internal fun activeReconnectBlock(
+        context: Context,
+        nowMs: Long = System.currentTimeMillis(),
+    ): AutoReconnectGuard.Block? = reconnectAttribution.activeBlock(context, nowMs)
+
+    /** 手动清空自动重连熔断的薄 facade。 */
+    internal fun clearReconnectGuard(context: Context) {
+        reconnectAttribution.clear(context)
+    }
 
     // ---- 物理屏真息屏（同 scrcpy -S/--turn-screen-off）----
 
