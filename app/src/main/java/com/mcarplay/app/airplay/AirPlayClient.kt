@@ -1804,6 +1804,8 @@ class AirPlayClient(
     @Volatile
     var onMilestone: ((ConnectionMilestone, String) -> Unit)? = null
 
+    internal var onControlChannelClosed: (() -> Unit)? = null
+
     private fun milestone(
         reached: ConnectionMilestone,
         detail: String = "",
@@ -3301,8 +3303,11 @@ class AirPlayClient(
         } catch (_: IOException) {
         } finally {
             // 只由「当前」读线程清账：重连会换 socket 与新读线程，旧线程不得误伤新会话
-            if (generation == readerGeneration) {
-                failAllPending("控制通道读线程结束")
+            if (generation == readerGeneration &&
+                failAllPending("控制通道读线程结束", expectedSocket = client) &&
+                !sessionStopping
+            ) {
+                onControlChannelClosed?.invoke()
             }
         }
     }
@@ -3374,20 +3379,25 @@ class AirPlayClient(
     /** 无匹配报文计数（节流日志用）。 */
     private var unmatchedMessages = 0
 
-    private fun failAllPending(reason: String) {
+    private fun failAllPending(
+        reason: String,
+        expectedSocket: Socket? = null,
+    ): Boolean {
         // 2026-11-06 21:59 掉线时 airplay-rtsp-reader 在 CHM.values.toList() 上 FATAL
         // （NoSuchElementException）。现在注册/移除/快照/清空全部由 pendingLock 串行化：
         // 快照与清空是原子的，且 controlChannelClosed 与清空同时置位，晚到的 request()
         // 会直接抛「控制通道已关闭」，不会登记后等满超时。
-        var waiting = emptyList<java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>>()
-        synchronized(pendingLock) {
-            controlChannelClosed = true
-            waiting = pendingResponses.values.toList()
-            pendingResponses.clear()
+        val waiting =
+            synchronized(pendingLock) {
+                if (expectedSocket != null && socket !== expectedSocket) return false
+                controlChannelClosed = true
+                pendingResponses.values.toList().also { pendingResponses.clear() }
+            }
+        if (waiting.isNotEmpty()) {
+            log("AIRPLAY: $reason——唤醒 ${waiting.size} 个待响应请求")
+            waiting.forEach { it.offer(RTSP_CLOSED_MARK to ByteArray(0)) }
         }
-        if (waiting.isEmpty()) return
-        log("AIRPLAY: $reason——唤醒 ${waiting.size} 个待响应请求")
-        waiting.forEach { it.offer(RTSP_CLOSED_MARK to ByteArray(0)) }
+        return true
     }
 
     private fun startReader(client: Socket) {

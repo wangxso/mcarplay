@@ -35,6 +35,39 @@ class VideoQueueHealthIntegrationTest {
     private val key = ByteArray(32) { (it * 17 + 3).toByte() }
 
     @Test
+    fun receiverEofEndsAnIdleVideoSenderWithoutWaitingForAnotherWrite() {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
+            receiver.soTimeout = 2_000
+            val ended = CountDownLatch(1)
+            val sender =
+                VideoSender(
+                    "127.0.0.1",
+                    receiver.localPort,
+                    StreamFrameCipher.ChaCha(key),
+                    640,
+                    480,
+                    log = {},
+                    externalVideoSource =
+                        object : ExternalVideoSource {
+                            override fun requestKeyFrame(): Boolean = false
+                        },
+                    onEnded = { ended.countDown() },
+                )
+            try {
+                assertTrue(sender.start {})
+                receiver.accept().use { car ->
+                    // FIN arrives while the peer still accepts writes and no new video frames are queued.
+                    car.shutdownOutput()
+                    assertTrue(ended.await(2, TimeUnit.SECONDS))
+                    assertFalse(sender.isRunning)
+                }
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
+    @Test
     fun queueOverflowDuringATransportStallAsksForOneIdrWithoutDuplicatingTheWatchdogsRequest() {
         ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { receiver ->
             val clock = AtomicLong(1_000)
