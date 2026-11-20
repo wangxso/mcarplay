@@ -362,6 +362,13 @@ class Iap2BluetoothClient(
         probePolicy.arm(SystemClock.elapsedRealtime(), OutboundProbePolicy.SESSION_END_GRACE_MILLIS)
     }
 
+    fun hasProbeWindow(): Boolean = running && probePolicy.hasOpenWindow(SystemClock.elapsedRealtime())
+
+    fun canRetryAfterAclLoss(address: String?): Boolean {
+        val acl = address?.let(BtAclTracker::observe) ?: return false
+        return running && probePolicy.shouldProbe(acl, SystemClock.elapsedRealtime())
+    }
+
     /**
      * 该设备此刻是否值得主动连：ACL 在线、或处于探测窗口内；ACL 状态未知（进程启动晚于
      * 车机连上）且窗口已过时，以 HFP/A2DP 是否在线兜底（节流，避免每轮都查）。
@@ -610,7 +617,7 @@ class Iap2BluetoothClient(
                 runCatching { connected.close() }
                 return
             }
-            runSession(connected)
+            selfLinkChange { runSession(connected) }
             sleepQuietly(RETRY_DELAY_MILLIS)
         }
         log("BT-C: 客户端已停止")
