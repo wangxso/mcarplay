@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   rgp07-two-phase-process-restart:
-    name: Auto-reconnect prefs process restart
+    name: Auto-reconnect prefs RGP07 and RGP08
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -23,7 +23,10 @@ jobs:
       INSTRUMENTATION_TARGET: com.mcarplay.app.test/androidx.test.runner.AndroidJUnitRunner
       PHASE1_CLASS: com.mcarplay.app.bt.Phase1WriterTest
       PHASE2_CLASS: com.mcarplay.app.bt.Phase2ReaderTest
+      RGP08_CLASS: com.mcarplay.app.bt.Rgp08CrossProcessPrefsTest
       MARKER_PREFIX: rgp07-${{ github.run_id }}
+      RGP08_TIMEOUT_SECONDS: "300"
+      RGP08_RUN_ATTEMPT: ${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,19 +40,25 @@ jobs:
           ./gradlew --no-daemon --console=plain \
             :app:assembleStandardDebug :app:assembleStandardDebugAndroidTest
 
+      - name: Validate instrumentation runner script
+        run: bash -n .github/scripts/run-rgp07-rgp08.sh
+
       - uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         env:
           ANDROID_I_WANT_MY_TCG: "yes"
+          EXPECTED_SERIAL: emulator-5554
         with:
           api-level: 34
           target: google_apis
           arch: x86_64
           profile: pixel_5
-          avd-name: rgp07-emulator
+          avd-name: rgp07-rgp08-emulator
           emulator-boot-timeout: 1200
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -no-snapshot-save
           script: >-
-            bash -lc 'set -euo pipefail; cleanup() { set +e; adb shell pm clear "$PACKAGE_ID" >/dev/null 2>&1 || true; set -e; }; trap cleanup EXIT; adb install -r app/build/outputs/apk/standard/debug/app-standard-debug.apk; adb install -r app/build/outputs/apk/androidTest/standard/debug/app-standard-debug-androidTest.apk; for scenario in normal legacy corrupt partial; do marker="${MARKER_PREFIX}-${scenario}"; mkdir -p "$RUNNER_TEMP/instrumentation/$scenario"; phase1_output="$RUNNER_TEMP/instrumentation/$scenario/phase1.txt"; phase2_output="$RUNNER_TEMP/instrumentation/$scenario/phase2.txt"; echo "=== scenario: $scenario; marker: $marker ==="; adb shell am force-stop "$PACKAGE_ID"; adb shell am instrument -e class "$PHASE1_CLASS" -e marker "$marker" -e scenario "$scenario" -w "$INSTRUMENTATION_TARGET" | tee "$phase1_output"; grep -q "OK (1 test)" "$phase1_output"; adb shell am force-stop "$PACKAGE_ID"; adb shell am instrument -e class "$PHASE2_CLASS" -e marker "$marker" -e scenario "$scenario" -w "$INSTRUMENTATION_TARGET" | tee "$phase2_output"; grep -q "OK (1 test)" "$phase2_output"; adb shell pm clear "$PACKAGE_ID"; done'
+            RGP08_RUN_ATTEMPT="$RGP08_RUN_ATTEMPT" APP_APK="$GITHUB_WORKSPACE/app/build/outputs/apk/standard/debug/app-standard-debug.apk"
+            ANDROID_TEST_APK="$GITHUB_WORKSPACE/app/build/outputs/apk/androidTest/standard/debug/app-standard-debug-androidTest.apk"
+            OUTPUT_DIR="$RUNNER_TEMP/instrumentation" bash "$GITHUB_WORKSPACE/.github/scripts/run-rgp07-rgp08.sh"
 
       - name: Upload instrumentation output
         if: always()
