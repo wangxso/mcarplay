@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: instrumentation-${{ github.event_name == 'pull_request' && format('{0}-pr{1}', github.event.pull_request.head.sha, github.event.pull_request.number) || format('push-{0}', github.run_id) }}
+  group: instrumentation-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
