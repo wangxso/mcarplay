@@ -130,17 +130,13 @@ class Rgp08CrossProcessPrefsTest {
                 val warmObservation = warm.read(PEER, FIXED_NOW_MS)
                 assertEquals(warmInfo.pid, warm.observedPid)
                 assertEquals(warmInfo.token, warm.observedToken)
-                assertTrue(
-                    "Warm observation must be S0 or S1: $warmObservation",
-                    warmObservation == warmReadS0 ||
-                        warmObservation == AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
-                )
+                assertEquals(warmReadS0, warmObservation)
                 events.put(
                     JSONObject()
                         .put("name", "WARM_OBSERVATION")
                         .put("pid", warm.observedPid)
                         .put("token", warm.observedToken)
-                        .put("read", if (warmObservation == warmReadS0) "S0" else "S1"),
+                        .put("read", "S0"),
                 )
 
                 ProbeConnection(context, COLD_SERVICE).use { cold ->
