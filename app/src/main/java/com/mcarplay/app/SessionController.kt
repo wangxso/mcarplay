@@ -2309,7 +2309,7 @@ object SessionController {
         val network = preferredInternetNetwork()
         if (network != InternetNetwork.PHONE) return PhoneModeSystemWifiDecision.PROCEED
         val systemWifi = wifiConnector?.systemActiveWifiState(wifi.ssid)
-        val saved = shellReady && savedNetworkIds(wifi.ssid).isNotEmpty()
+        val saved = if (shellReady) savedNetworkIds(wifi.ssid)?.isNotEmpty() else null
         return InternetNetworkPolicy.phoneModeSystemWifiDecision(
             network = network,
             activeTarget = systemWifi == WifiCarPlayConnector.SystemWifiState.TARGET,
@@ -2595,7 +2595,8 @@ object SessionController {
             "WIFI: specifier 两窗均无回调——深度兜底 connect-network 直连 \"${wifi.ssid}\"" +
                 "（本轮窗口大概率已过，为下一轮占位）",
         )
-        val preExisting = savedNetworkIds(wifi.ssid).isNotEmpty()
+        val savedIds = savedNetworkIds(wifi.ssid)
+        val preExisting = savedIds == null || savedIds.isNotEmpty()
         val security =
             if (wifi.passphrase.isEmpty()) "open" else "wpa2 ${shellQuote(wifi.passphrase)}"
         val r = Shell.exec("cmd wifi connect-network ${shellQuote(wifi.ssid)} $security", 10_000L)
@@ -2603,11 +2604,15 @@ object SessionController {
             appendLog("WIFI: connect-network 失败（${r.output.take(80)}）")
             return null
         }
-        if (preExisting) {
-            appendLog("WIFI: \"${wifi.ssid}\" 此前已保存在系统（用户选过保留）——不作会话末清除")
-        } else {
-            shellFallbackCleanupSsid = wifi.ssid
-            appendLog("WIFI: connect-network 已执行（新存系统网络，已登记会话末自动清除）")
+        when {
+            savedIds == null ->
+                appendLog("WIFI: 无法读取 \"${wifi.ssid}\" 的系统保存状态——为防误删，不作会话末清除")
+            preExisting ->
+                appendLog("WIFI: \"${wifi.ssid}\" 此前已保存在系统（用户选过保留）——不作会话末清除")
+            else -> {
+                shellFallbackCleanupSsid = wifi.ssid
+                appendLog("WIFI: connect-network 已执行（新存系统网络，已登记会话末自动清除）")
+            }
         }
         // 轮询切网完成（断旧网/关联/DHCP，实测 2-10s）
         repeat(30) {
@@ -2683,7 +2688,7 @@ object SessionController {
      */
     private fun promptForgetSavedNetworkIfAny(ssid: String) {
         if (!forgetPromptHandled.add(ssid)) return
-        val ids = savedNetworkIds(ssid)
+        val ids = savedNetworkIds(ssid) ?: return
         if (ids.isEmpty()) return
         appendLog(
             "WIFI: 系统里已保存热点 \"$ssid\"（netId=${ids.joinToString(",")}）" +
@@ -2718,11 +2723,11 @@ object SessionController {
     }
 
     /** 查系统已保存的、SSID 与目标完全一致的网络 id（`cmd wifi list-networks`）。 */
-    private fun savedNetworkIds(ssid: String): List<Int> {
+    private fun savedNetworkIds(ssid: String): List<Int>? {
         val listing = Shell.exec("cmd wifi list-networks", 5_000L)
         if (!listing.ok) {
             appendLog("WIFI: 无法读取系统已保存网络（exit=${listing.exitCode}）——跳过检查")
-            return emptyList()
+            return null
         }
         return WifiSavedNetworks.idsOf(listing.output, ssid)
     }
@@ -2874,7 +2879,7 @@ object SessionController {
                     )
                 if (isCancelled()) return false
                 if (choice == true) {
-                    appendLog("NETWORK: 系统 WiFi 名称不可读；用户确认系统未连接或保存车机热点，继续手机流量优先")
+                    appendLog("NETWORK: 系统 WLAN 连接或保存状态不可确认；用户确认无冲突，继续手机流量优先")
                     phoneModeBlockedSsid = null
                     return true
                 }

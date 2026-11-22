@@ -64,6 +64,15 @@ class InternetNetworkPrefsTest {
             ),
         )
         assertEquals(
+            PhoneModeSystemWifiDecision.CONFIRM,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = false,
+                activeIdentityUnknown = false,
+                saved = null,
+            ),
+        )
+        assertEquals(
             PhoneModeSystemWifiDecision.PROCEED,
             InternetNetworkPolicy.phoneModeSystemWifiDecision(
                 InternetNetwork.PHONE,

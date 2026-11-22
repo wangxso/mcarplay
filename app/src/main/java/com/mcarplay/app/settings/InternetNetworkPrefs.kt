@@ -75,12 +75,12 @@ object InternetNetworkPolicy {
         network: InternetNetwork,
         activeTarget: Boolean,
         activeIdentityUnknown: Boolean,
-        saved: Boolean,
+        saved: Boolean?,
     ): PhoneModeSystemWifiDecision =
         when {
             network != InternetNetwork.PHONE -> PhoneModeSystemWifiDecision.PROCEED
-            activeTarget || saved -> PhoneModeSystemWifiDecision.CONFLICT
-            activeIdentityUnknown -> PhoneModeSystemWifiDecision.CONFIRM
+            activeTarget || saved == true -> PhoneModeSystemWifiDecision.CONFLICT
+            activeIdentityUnknown || saved == null -> PhoneModeSystemWifiDecision.CONFIRM
             else -> PhoneModeSystemWifiDecision.PROCEED
         }
 }

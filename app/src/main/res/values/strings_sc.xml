@@ -51,7 +51,7 @@
     <string name="sc_phone_mode_wifi_title">手机流量优先需要清除系统热点</string>
     <string name="sc_phone_mode_wifi_body">系统已保存或正在连接 \"%1$s\"。若继续，其它应用可能仍走这个无互联网热点。\n\n请先在 WLAN 设置中忘记该热点，或改为「优先使用车机网络」后再连接。</string>
     <string name="sc_phone_mode_wifi_unknown_title">无法确认系统 WLAN 状态</string>
-    <string name="sc_phone_mode_wifi_unknown_body">系统当前连接了 Wi-Fi，但应用无法读取其名称。请确认系统没有连接或保存车机热点 \"%1$s\"；若不确定，请打开 WLAN 设置检查。</string>
+    <string name="sc_phone_mode_wifi_unknown_body">应用无法完整读取系统 WLAN 的连接或保存状态。请确认系统没有连接或保存车机热点 \"%1$s\"；若不确定，请打开 WLAN 设置检查。</string>
     <string name="sc_phone_mode_wifi_confirm">确认无冲突并继续</string>
     <string name="sc_phone_mode_wifi_blocked">手机流量优先已暂停：请确认系统 WLAN 未连接或保存车机热点 %1$s</string>
     <string name="sc_phone_mode_wifi_blocked_hint">请确认系统 WLAN 未连接或保存 \"%1$s\"，或改用车机网络优先</string>
