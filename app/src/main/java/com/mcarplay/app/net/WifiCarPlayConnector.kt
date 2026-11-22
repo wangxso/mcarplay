@@ -20,11 +20,11 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * 用车机热点承载 CarPlay 流量。
  *
- * **两种入网方式（2026-10-22 起默认静默命令行）**：
- *  - 静默路径（默认，见 `SessionController.joinCarWifiSilently`）：Shizuku 执行
+ * **两种入网方式（由「互联网网络」偏好选择）**：
+ *  - 静默路径（车机网络优先且有 Shizuku，见 `SessionController.joinCarWifiSilently`）：Shizuku 执行
  *    `cmd wifi connect-network`，系统直接把热点连上（**0 弹窗**），随后
  *    [bindCurrentWifi] 用**不带 specifier** 的 `requestNetwork` 捕获 `Network` 句柄并绑定。
- *  - [joinCarPlayNetwork]：`WifiNetworkSpecifier` 应用专属网络——静默路径不可用时的兜底。
+ *  - [joinCarPlayNetwork]：`WifiNetworkSpecifier` 应用专属网络——手机流量优先或静默路径不可用时使用。
  *    网络只对本进程可见（不保存、不成为默认网络），但首次加入会弹系统确认框。
  *
  * 关键点：

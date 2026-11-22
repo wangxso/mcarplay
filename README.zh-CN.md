@@ -113,7 +113,8 @@ Qualcomm vendor、接收端解码、声音、触控或长时间稳定性。
    本项目没有另外维护外部网盘下载渠道。
 2. 安装到已有 CarWith 和小米 CarLife 组件的小米手机。
 3. 与无线 CarPlay 接收端完成蓝牙配对，按接收端流程连接 Wi-Fi / 热点，
-   在 mcarplay 中选择目标设备并启动连接。
+   在 mcarplay 中选择目标设备并启动连接。「优先使用车机网络」开关决定下次连接时
+   车机热点是否可作为系统上网网络：关闭时车机 Wi‑Fi 仅供投屏，其它应用继续用手机流量。
 4. 按需开启声音。mcarplay 的 CarWith 原生音频无需额外录屏授权。
 5. 桌面测试可用另一台 Android 设备运行 [DiPlay](https://github.com/shihabal3amri/DiPlay)，
    或在 Windows 电脑上运行 [WinPlay](https://github.com/Roylyl/WinPlay)。
