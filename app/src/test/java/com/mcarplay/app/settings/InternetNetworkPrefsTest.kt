@@ -33,4 +33,12 @@ class InternetNetworkPrefsTest {
         assertTrue(InternetNetworkPolicy.allowExistingSystemWifi(InternetNetwork.CAR))
         assertTrue(InternetNetworkPolicy.allowSystemFallback(InternetNetwork.CAR))
     }
+
+    @Test
+    fun phoneModeStopsForActiveOrSavedSystemWifi() {
+        assertTrue(InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.PHONE, active = true, saved = false))
+        assertTrue(InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.PHONE, active = false, saved = true))
+        assertFalse(InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.PHONE, active = false, saved = false))
+        assertFalse(InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.CAR, active = true, saved = true))
+    }
 }

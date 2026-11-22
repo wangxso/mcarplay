@@ -2285,6 +2285,26 @@ object SessionController {
     private fun preferredInternetNetwork(): InternetNetwork = appContext?.let(InternetNetworkPrefs::get) ?: InternetNetworkPrefs.DEFAULT
 
     /**
+     * Phone mode promises that the car hotspot stays private to this app. A saved or
+     * globally connected matching SSID breaks that promise, so the join must stop
+     * instead of silently continuing over the system-wide route.
+     */
+    private fun phoneModeSystemWifiConflict(
+        wifi: Iap2SenderSession.WifiConfiguration,
+        shellReady: Boolean,
+    ): Boolean {
+        if (preferredInternetNetwork() != InternetNetwork.PHONE) return false
+        val active =
+            if (shellReady) {
+                shellWifiStatus().second?.let { WifiIdentity.matches(wifi.ssid, it) } == true
+            } else {
+                liveWifiMatches(wifi.ssid) == true
+            }
+        val saved = shellReady && savedNetworkIds(wifi.ssid).isNotEmpty()
+        return InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.PHONE, active, saved)
+    }
+
+    /**
      * 静默加入车机热点（**两步式，全程 0 弹窗**）。
      *
      * 第一步：Shizuku（uid 2000）执行 `cmd wifi connect-network "<SSID>" wpa2 "<密码>"`，
@@ -2444,6 +2464,13 @@ object SessionController {
         allowSystemFallback: Boolean = true,
     ): WifiCarPlayConnector.JoinResult {
         val connector = wifiConnector ?: return WifiCarPlayConnector.JoinResult.Unavailable
+        if (phoneModeSystemWifiConflict(wifi, shellWifiReady())) {
+            appendLog(
+                "NETWORK: 手机流量优先已停止——系统已保存或连接车机热点 \"${wifi.ssid}\"；" +
+                    "本轮不继续建立全局连接，请先在 WLAN 中忘记该热点或改为车机网络优先",
+            )
+            return WifiCarPlayConnector.JoinResult.Unavailable
+        }
         if (allowExistingSystemWifi && liveWifiMatches(wifi.ssid) == true) {
             appendLog("WIFI: 系统已连接同一局域网 \"${wifi.ssid}\"——直接绑定现有 Wi-Fi，跳过加入请求")
             val existing = bindExistingCarWifi(connector, wifi.ssid)
@@ -2753,6 +2780,7 @@ object SessionController {
         isCancelled: () -> Boolean = { connectCancelled },
     ) {
         if (isCancelled()) return
+        if (promptPhoneModeSystemWifiConflict(wifi, shellReady, isCancelled)) return
         val choice =
             askWifiJoinChoice(
                 DialogSpec(
@@ -2790,6 +2818,30 @@ object SessionController {
                 appendLog("WIFI: 弹窗无人应答——自动加入中止")
             }
         }
+    }
+
+    private fun promptPhoneModeSystemWifiConflict(
+        wifi: Iap2SenderSession.WifiConfiguration,
+        shellReady: Boolean,
+        isCancelled: () -> Boolean,
+    ): Boolean {
+        if (!phoneModeSystemWifiConflict(wifi, shellReady)) return false
+        val choice =
+            askWifiJoinChoice(
+                DialogSpec(
+                    title = t(R.string.sc_phone_mode_wifi_title),
+                    message = t(R.string.sc_phone_mode_wifi_body, wifi.ssid),
+                    positive = t(R.string.sc_open_wifi_settings),
+                    negative = t(R.string.sc_cancel),
+                ),
+                isCancelled = isCancelled,
+            )
+        if (isCancelled()) return true
+        if (choice == true) openWlanSettings()
+        ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))
+        ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }
+        appendLog("NETWORK: 手机流量优先需要先清除系统 WLAN 热点 \"${wifi.ssid}\"——本轮已停止")
+        return true
     }
 
     /** 手动兜底：密码进剪贴板 + 跳 WLAN 设置，轮询用户是否连上。 */

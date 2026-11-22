@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** SessionController 五通道 UI 写入经 SessionUiPort 接线后的完整清单：44 phase + 9 hint + 2 SSID + 1 ask + 1 dismiss。 */
+/** SessionController 五通道 UI 写入经 SessionUiPort 接线后的完整清单：45 phase + 10 hint + 2 SSID + 1 ask + 1 dismiss。 */
 private object SourceUiPortInventory {
     val PHASE_WRITES =
         listOf(
@@ -29,6 +29,7 @@ private object SourceUiPortInventory {
             "waitForWifiEnabled" to "ui.phase(t(R.string.sc_wifi_off))",
             "promptSpecifierFailed" to "ui.phase(t(R.string.sc_join_failed_manual))",
             "promptSpecifierFailed" to "ui.phase(t(R.string.sc_join_failed_retry))",
+            "promptPhoneModeSystemWifiConflict" to "ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))",
             "manualJoinCarWifi" to "ui.phase(t(R.string.sc_bound_current))",
             "manualJoinCarWifi" to "ui.phase(t(R.string.sc_connect_in_settings, wifi.ssid))",
             "manualJoinCarWifi" to "ui.phase(t(R.string.sc_join_aborted, wifi.ssid))",
@@ -67,6 +68,7 @@ private object SourceUiPortInventory {
             "onCarPlayEndpoint" to "ui.hint { t(R.string.sc_record_unconfirmed) }",
             "onCarPlayEndpoint" to "ui.hint { t(R.string.sc_setup_rejected_hint) }",
             "waitForManualWifiThenContinue" to "ui.hint { t(R.string.sc_not_joined_hint, wifi.ssid) }",
+            "promptPhoneModeSystemWifiConflict" to "ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }",
         )
 
     val SSID_WRITES =
@@ -285,8 +287,8 @@ class SessionUiPortInventoryTest {
         val ssidCount = Regex("""\bui\.ssidChanged\s*\{""").findAll(normalizedStripped).count()
         val askCount = Regex("""\bui\.ask\(""").findAll(normalizedStripped).count()
         val dismissCount = Regex("""\bui\.dismiss\(""").findAll(normalizedStripped).count()
-        assertEquals(44, phaseCount)
-        assertEquals(9, hintCount)
+        assertEquals(45, phaseCount)
+        assertEquals(10, hintCount)
         assertEquals(2, ssidCount)
         assertEquals(1, askCount)
         assertEquals(1, dismissCount)

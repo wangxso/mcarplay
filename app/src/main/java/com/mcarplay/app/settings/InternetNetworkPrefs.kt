@@ -59,4 +59,14 @@ object InternetNetworkPolicy {
 
     /** Phone mode must not use connect-network fallbacks that save the hotspot system-wide. */
     fun allowSystemFallback(network: InternetNetwork): Boolean = network == InternetNetwork.CAR
+
+    /**
+     * Phone mode cannot preserve mobile-data routing if Android already owns the same
+     * hotspot globally. The join path must stop and ask the user to forget it first.
+     */
+    fun phoneModeConflictsWithSystemWifi(
+        network: InternetNetwork,
+        active: Boolean,
+        saved: Boolean,
+    ): Boolean = network == InternetNetwork.PHONE && (active || saved)
 }
