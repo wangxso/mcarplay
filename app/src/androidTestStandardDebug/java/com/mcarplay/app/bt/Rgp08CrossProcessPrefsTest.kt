@@ -86,9 +86,10 @@ class Rgp08CrossProcessPrefsTest {
                     .put("commit", true),
             )
 
+            // A process can answer INFO before its first production read completes under TCG.
             ProbeConnection(context, WARM_SERVICE).use { warm ->
                 val warmInfo = warm.info
-                val warmReadS0 = warm.read(PEER, FIXED_NOW_MS)
+                val warmReadS0 = warm.read(PEER, FIXED_NOW_MS, replyTimeoutSeconds = PROBE_STARTUP_REPLY_TIMEOUT_SECONDS)
                 assertTrue(warmInfo.pid != writerPid)
                 assertEquals(Process.myUid(), warmInfo.uid)
                 assertEquals(
@@ -144,7 +145,7 @@ class Rgp08CrossProcessPrefsTest {
 
                 ProbeConnection(context, COLD_SERVICE).use { cold ->
                     val coldInfo = cold.info
-                    val coldRead = cold.read(PEER, FIXED_NOW_MS)
+                    val coldRead = cold.read(PEER, FIXED_NOW_MS, replyTimeoutSeconds = PROBE_STARTUP_REPLY_TIMEOUT_SECONDS)
                     assertTrue(coldInfo.pid != writerPid && coldInfo.pid != warmInfo.pid)
                     assertEquals(Process.myUid(), coldInfo.uid)
                     assertTrue(
@@ -311,6 +312,7 @@ class Rgp08CrossProcessPrefsTest {
         fun read(
             peer: String,
             nowMs: Long,
+            replyTimeoutSeconds: Long = MESSAGE_TIMEOUT_SECONDS,
         ): AutoReconnectGuard.Block? {
             val reply =
                 send(
@@ -319,6 +321,7 @@ class Rgp08CrossProcessPrefsTest {
                         putString(ReconnectPrefsServiceShared.KEY_PEER, peer)
                         putLong(ReconnectPrefsServiceShared.KEY_NOW_MS, nowMs)
                     },
+                    replyTimeoutSeconds = replyTimeoutSeconds,
                 )
             val failures = reply.data.getString(ReconnectPrefsServiceShared.KEY_READ_FAILURES)
             val untilMs = reply.data.getLong(ReconnectPrefsServiceShared.KEY_READ_UNTIL_MS)
@@ -344,7 +347,8 @@ class Rgp08CrossProcessPrefsTest {
             val reply =
                 send(
                     ReconnectPrefsServiceShared.COMMAND_INFO,
-                    timeoutSeconds = BIND_TIMEOUT_SECONDS,
+                    sendTimeoutSeconds = BIND_TIMEOUT_SECONDS,
+                    replyTimeoutSeconds = BIND_TIMEOUT_SECONDS,
                 )
             return Info(
                 pid = reply.data.getInt(ReconnectPrefsServiceShared.KEY_PID),
@@ -357,7 +361,8 @@ class Rgp08CrossProcessPrefsTest {
         private fun send(
             command: Int,
             data: Bundle = Bundle(),
-            timeoutSeconds: Long = MESSAGE_TIMEOUT_SECONDS,
+            sendTimeoutSeconds: Long = MESSAGE_TIMEOUT_SECONDS,
+            replyTimeoutSeconds: Long = MESSAGE_TIMEOUT_SECONDS,
         ): Message {
             var staleFailure: Exception? = null
             repeat(2) { attempt ->
@@ -388,8 +393,8 @@ class Rgp08CrossProcessPrefsTest {
                         sendLatch.countDown()
                     }
                 }
-                require(sendLatch.await(timeoutSeconds, TimeUnit.SECONDS)) {
-                    "Messenger send timeout after ${timeoutSeconds}s"
+                require(sendLatch.await(sendTimeoutSeconds, TimeUnit.SECONDS)) {
+                    "Messenger send timeout after ${sendTimeoutSeconds}s"
                 }
                 if (!sent.get()) {
                     staleFailure = RemoteException("Remote Messenger failed to send")
@@ -397,7 +402,7 @@ class Rgp08CrossProcessPrefsTest {
                     awaitFreshConnection(snapshot.generation)
                     return@repeat
                 }
-                val reply = replies.poll(timeoutSeconds, TimeUnit.SECONDS)
+                val reply = replies.poll(replyTimeoutSeconds, TimeUnit.SECONDS)
                 if (reply != null) {
                     return decodeReply(reply, command)
                 }
@@ -416,7 +421,7 @@ class Rgp08CrossProcessPrefsTest {
                     awaitFreshConnection(snapshot.generation)
                     return@repeat
                 }
-                throw IllegalArgumentException("Messenger reply timeout after ${timeoutSeconds}s")
+                throw IllegalArgumentException("Messenger reply timeout after ${replyTimeoutSeconds}s")
             }
             throw IllegalArgumentException("Messenger rebind failed", staleFailure)
         }
@@ -486,6 +491,7 @@ class Rgp08CrossProcessPrefsTest {
         const val S1_BLOCKED_UNTIL_MS = 182_000L
         const val BIND_TIMEOUT_SECONDS = 60L
         const val MESSAGE_TIMEOUT_SECONDS = 5L
+        const val PROBE_STARTUP_REPLY_TIMEOUT_SECONDS = 60L
         const val RECONNECT_TIMEOUT_SECONDS = 60L
         val LEGACY_KEYS = ReconnectPrefsInstrumentationTestSupport.LEGACY_KEYS
         val WARM_SERVICE = ComponentName(PACKAGE, "com.mcarplay.app.debug.ReconnectPrefsWarmService")
