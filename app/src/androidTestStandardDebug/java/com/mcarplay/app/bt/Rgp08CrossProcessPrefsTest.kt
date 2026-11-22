@@ -155,10 +155,14 @@ class Rgp08CrossProcessPrefsTest {
                         AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
                         coldRead,
                     )
+                    assertEquals(coldInfo.pid, cold.observedPid)
+                    assertEquals(coldInfo.token, cold.observedToken)
                     assertEquals(
                         AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
                         cold.activeBlock(FIXED_NOW_MS),
                     )
+                    assertEquals(coldInfo.pid, cold.observedPid)
+                    assertEquals(coldInfo.token, cold.observedToken)
                     events.put(
                         JSONObject()
                             .put("name", "COLD_READY")
@@ -238,7 +242,7 @@ class Rgp08CrossProcessPrefsTest {
                 replies.offer(Message.obtain(message))
                 true
             }
-        private val remote = AtomicReference<Messenger?>()
+        private val activeConnection = AtomicReference<BoundConnection?>()
         private val connectionGeneration = AtomicInteger(0)
         private val freshConnections = LinkedBlockingQueue<Int>()
         private val connected = CountDownLatch(1)
@@ -261,24 +265,24 @@ class Rgp08CrossProcessPrefsTest {
                     service: IBinder?,
                 ) {
                     val generation = connectionGeneration.incrementAndGet()
-                    remote.set(Messenger(requireNotNull(service)))
+                    activeConnection.set(BoundConnection(Messenger(requireNotNull(service)), generation))
                     cachedInfo = null
                     connected.countDown()
                     freshConnections.offer(generation)
                 }
 
                 override fun onServiceDisconnected(name: ComponentName?) {
-                    remote.set(null)
+                    activeConnection.set(null)
                 }
 
                 override fun onNullBinding(name: ComponentName?) {
-                    remote.set(null)
+                    activeConnection.set(null)
                     bindingFailure.set("Null binding for $name")
                     connected.countDown()
                 }
 
                 override fun onBindingDied(name: ComponentName?) {
-                    remote.set(null)
+                    activeConnection.set(null)
                 }
             }
 
@@ -357,12 +361,14 @@ class Rgp08CrossProcessPrefsTest {
         ): Message {
             var staleFailure: Exception? = null
             repeat(2) { attempt ->
-                val generation = connectionGeneration.get()
-                val target = remote.get()
-                if (target == null || !target.binder.isBinderAlive) {
+                val snapshot = activeConnection.get()
+                val target = snapshot?.messenger
+                if (snapshot == null || target == null || !target.binder.isBinderAlive) {
                     staleFailure = RemoteException("Remote Messenger is not alive")
-                    remote.set(null)
-                    awaitFreshConnection(generation)
+                    if (snapshot != null) {
+                        activeConnection.compareAndSet(snapshot, null)
+                    }
+                    awaitFreshConnection(snapshot?.generation ?: 0)
                     replies.clear()
                     return@repeat
                 }
@@ -386,21 +392,28 @@ class Rgp08CrossProcessPrefsTest {
                     "Messenger send timeout after ${timeoutSeconds}s"
                 }
                 if (!sent.get()) {
-                    remote.set(null)
-                    awaitFreshConnection(generation)
+                    staleFailure = RemoteException("Remote Messenger failed to send")
                     replies.clear()
+                    awaitFreshConnection(snapshot.generation)
                     return@repeat
                 }
                 val reply = replies.poll(timeoutSeconds, TimeUnit.SECONDS)
                 if (reply != null) {
                     return decodeReply(reply, command)
                 }
-                val currentTarget = remote.get()
-                if (currentTarget == null || !currentTarget.binder.isBinderAlive) {
+                val currentConnection = activeConnection.get()
+                if (currentConnection != snapshot) {
                     staleFailure = RemoteException("Remote Messenger became stale")
-                    remote.set(null)
-                    awaitFreshConnection(generation)
                     replies.clear()
+                    awaitFreshConnection(snapshot.generation)
+                    return@repeat
+                }
+                val staleConnection = requireNotNull(currentConnection)
+                if (!staleConnection.messenger.binder.isBinderAlive) {
+                    staleFailure = RemoteException("Remote Messenger became stale")
+                    activeConnection.compareAndSet(staleConnection, null)
+                    replies.clear()
+                    awaitFreshConnection(snapshot.generation)
                     return@repeat
                 }
                 throw IllegalArgumentException("Messenger reply timeout after ${timeoutSeconds}s")
@@ -408,10 +421,13 @@ class Rgp08CrossProcessPrefsTest {
             throw IllegalArgumentException("Messenger rebind failed", staleFailure)
         }
 
-        private fun awaitFreshConnection(previousGeneration: Int) {
+        private fun awaitFreshConnection(previousGeneration: Int): BoundConnection {
             val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(RECONNECT_TIMEOUT_SECONDS)
             while (true) {
                 val remainingNanos = deadlineNanos - System.nanoTime()
+                activeConnection.get()?.let { connection ->
+                    if (connection.generation > previousGeneration) return connection
+                }
                 require(remainingNanos > 0) {
                     "Fresh Messenger connection timeout after ${RECONNECT_TIMEOUT_SECONDS}s"
                 }
@@ -419,7 +435,6 @@ class Rgp08CrossProcessPrefsTest {
                 requireNotNull(generation) {
                     "Fresh Messenger connection timeout after ${RECONNECT_TIMEOUT_SECONDS}s"
                 }
-                if (generation > previousGeneration) return
             }
         }
 
@@ -438,6 +453,11 @@ class Rgp08CrossProcessPrefsTest {
                 }
             return reply
         }
+
+        private data class BoundConnection(
+            val messenger: Messenger,
+            val generation: Int,
+        )
 
         override fun close() {
             runCatching { context.unbindService(connection) }
