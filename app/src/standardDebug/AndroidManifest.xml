@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Standard-debug-only RGP08 process probes; they are not production components. -->
+        <service
+            android:name=".debug.ReconnectPrefsWarmService"
+            android:exported="false"
+            android:process=":rgp08Warm" />
+        <service
+            android:name=".debug.ReconnectPrefsColdService"
+            android:exported="false"
+            android:process=":rgp08Cold" />
+    </application>
+</manifest>
