@@ -286,7 +286,12 @@ class AirPlayClient(
                 .map { "${it["type"]}|${it["audioType"]}|${it["audioOutputFormats"]}" }
                 .sorted()
                 .joinToString(";")
-        return ReceiverCompatibility.resolve(facts, formats, current.publicKey ?: current.deviceIdentifier)
+        return ReceiverCompatibility.resolve(
+            facts,
+            formats,
+            current.publicKey ?: current.deviceIdentifier,
+            airPlayFirmware = info?.get("firmwareRevision") as? String,
+        )
     }
 
     /**
