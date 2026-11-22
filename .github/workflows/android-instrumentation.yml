@@ -1,0 +1,61 @@
+name: Instrumentation
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: instrumentation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rgp07-two-phase-process-restart:
+    name: Auto-reconnect prefs process restart
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PACKAGE_ID: com.mcarplay.app
+      INSTRUMENTATION_TARGET: com.mcarplay.app.test/androidx.test.runner.AndroidJUnitRunner
+      PHASE1_CLASS: com.mcarplay.app.bt.Phase1WriterTest
+      PHASE2_CLASS: com.mcarplay.app.bt.Phase2ReaderTest
+      MARKER_PREFIX: rgp07-${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-build
+
+      - name: Build app and instrumentation APKs
+        run: |
+          ./gradlew --no-daemon --console=plain \
+            :app:assembleStandardDebug :app:assembleStandardDebugAndroidTest
+
+      - uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          ANDROID_I_WANT_MY_TCG: "yes"
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          avd-name: rgp07-emulator
+          emulator-boot-timeout: 1200
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -no-snapshot-save
+          script: >-
+            bash -lc 'set -euo pipefail; cleanup() { set +e; adb shell pm clear "$PACKAGE_ID" >/dev/null 2>&1 || true; set -e; }; trap cleanup EXIT; adb install -r app/build/outputs/apk/standard/debug/app-standard-debug.apk; adb install -r app/build/outputs/apk/androidTest/standard/debug/app-standard-debug-androidTest.apk; for scenario in normal legacy corrupt partial; do marker="${MARKER_PREFIX}-${scenario}"; mkdir -p "$RUNNER_TEMP/instrumentation/$scenario"; phase1_output="$RUNNER_TEMP/instrumentation/$scenario/phase1.txt"; phase2_output="$RUNNER_TEMP/instrumentation/$scenario/phase2.txt"; echo "=== scenario: $scenario; marker: $marker ==="; adb shell am force-stop "$PACKAGE_ID"; adb shell am instrument -e class "$PHASE1_CLASS" -e marker "$marker" -e scenario "$scenario" -w "$INSTRUMENTATION_TARGET" | tee "$phase1_output"; grep -q "OK (1 test)" "$phase1_output"; adb shell am force-stop "$PACKAGE_ID"; adb shell am instrument -e class "$PHASE2_CLASS" -e marker "$marker" -e scenario "$scenario" -w "$INSTRUMENTATION_TARGET" | tee "$phase2_output"; grep -q "OK (1 test)" "$phase2_output"; adb shell pm clear "$PACKAGE_ID"; done'
+
+      - name: Upload instrumentation output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: instrumentation-output-${{ github.run_number }}
+          path: ${{ runner.temp }}/instrumentation/
+          if-no-files-found: ignore
+          retention-days: 14
