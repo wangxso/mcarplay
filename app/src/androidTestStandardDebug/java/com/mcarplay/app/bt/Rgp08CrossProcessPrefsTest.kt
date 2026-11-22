@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.Message
 import android.os.Messenger
 import android.os.Process
+import android.os.RemoteException
 import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -26,8 +27,10 @@ import java.io.FileOutputStream
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
@@ -236,9 +239,12 @@ class Rgp08CrossProcessPrefsTest {
                 true
             }
         private val remote = AtomicReference<Messenger?>()
+        private val connectionGeneration = AtomicInteger(0)
+        private val freshConnections = LinkedBlockingQueue<Int>()
         private val connected = CountDownLatch(1)
         private val replies = ArrayBlockingQueue<Message>(8)
         private val bindingFailure = AtomicReference<String?>()
+        private var cachedInfo: Info? = null
         var observedPid: Int = -1
             private set
         var observedToken: String? = null
@@ -254,8 +260,11 @@ class Rgp08CrossProcessPrefsTest {
                     name: ComponentName?,
                     service: IBinder?,
                 ) {
+                    val generation = connectionGeneration.incrementAndGet()
                     remote.set(Messenger(requireNotNull(service)))
+                    cachedInfo = null
                     connected.countDown()
+                    freshConnections.offer(generation)
                 }
 
                 override fun onServiceDisconnected(name: ComponentName?) {
@@ -263,13 +272,13 @@ class Rgp08CrossProcessPrefsTest {
                 }
 
                 override fun onNullBinding(name: ComponentName?) {
+                    remote.set(null)
                     bindingFailure.set("Null binding for $name")
                     connected.countDown()
                 }
 
                 override fun onBindingDied(name: ComponentName?) {
-                    bindingFailure.set("Binding died for $name")
-                    connected.countDown()
+                    remote.set(null)
                 }
             }
 
@@ -292,7 +301,8 @@ class Rgp08CrossProcessPrefsTest {
             }
         }
 
-        val info: Info by lazy { fetchInfo() }
+        val info: Info
+            get() = cachedInfo ?: fetchInfo().also { cachedInfo = it }
 
         fun read(
             peer: String,
@@ -345,26 +355,81 @@ class Rgp08CrossProcessPrefsTest {
             data: Bundle = Bundle(),
             timeoutSeconds: Long = MESSAGE_TIMEOUT_SECONDS,
         ): Message {
-            val message = Message.obtain()
-            message.what = command
-            message.data = data
-            message.replyTo = Messenger(handler)
-            val sendLatch = CountDownLatch(1)
-            val sent = AtomicBoolean(false)
-            handler.post {
-                try {
-                    val target = requireNotNull(remote.get()) { "Remote Messenger not connected" }
-                    target.send(message)
-                    sent.set(true)
-                } finally {
-                    sendLatch.countDown()
+            var staleFailure: Exception? = null
+            repeat(2) { attempt ->
+                val generation = connectionGeneration.get()
+                val target = remote.get()
+                if (target == null || !target.binder.isBinderAlive) {
+                    staleFailure = RemoteException("Remote Messenger is not alive")
+                    remote.set(null)
+                    awaitFreshConnection(generation, timeoutSeconds)
+                    replies.clear()
+                    return@repeat
                 }
+                val message = Message.obtain()
+                message.what = command
+                message.data = data
+                message.replyTo = Messenger(handler)
+                val sendLatch = CountDownLatch(1)
+                val sent = AtomicBoolean(false)
+                handler.post {
+                    try {
+                        target.send(message)
+                        sent.set(true)
+                    } catch (failure: RemoteException) {
+                        staleFailure = failure
+                    } finally {
+                        sendLatch.countDown()
+                    }
+                }
+                require(sendLatch.await(timeoutSeconds, TimeUnit.SECONDS)) {
+                    "Messenger send timeout after ${timeoutSeconds}s"
+                }
+                if (!sent.get()) {
+                    remote.set(null)
+                    awaitFreshConnection(generation, timeoutSeconds)
+                    replies.clear()
+                    return@repeat
+                }
+                val reply = replies.poll(timeoutSeconds, TimeUnit.SECONDS)
+                if (reply != null) {
+                    return decodeReply(reply, command)
+                }
+                val currentTarget = remote.get()
+                if (currentTarget == null || !currentTarget.binder.isBinderAlive) {
+                    staleFailure = RemoteException("Remote Messenger became stale")
+                    remote.set(null)
+                    awaitFreshConnection(generation, timeoutSeconds)
+                    replies.clear()
+                    return@repeat
+                }
+                throw IllegalArgumentException("Messenger reply timeout after ${timeoutSeconds}s")
             }
-            require(sendLatch.await(timeoutSeconds, TimeUnit.SECONDS) && sent.get()) {
-                "Messenger send timeout after ${timeoutSeconds}s"
+            throw IllegalArgumentException("Messenger rebind failed", staleFailure)
+        }
+
+        private fun awaitFreshConnection(
+            previousGeneration: Int,
+            timeoutSeconds: Long,
+        ) {
+            val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+            while (true) {
+                val remainingNanos = deadlineNanos - System.nanoTime()
+                require(remainingNanos > 0) {
+                    "Fresh Messenger connection timeout after ${timeoutSeconds}s"
+                }
+                val generation = freshConnections.poll(remainingNanos, TimeUnit.NANOSECONDS)
+                requireNotNull(generation) {
+                    "Fresh Messenger connection timeout after ${timeoutSeconds}s"
+                }
+                if (generation > previousGeneration) return
             }
-            val reply = replies.poll(timeoutSeconds, TimeUnit.SECONDS)
-            requireNotNull(reply) { "Messenger reply timeout" }
+        }
+
+        private fun decodeReply(
+            reply: Message,
+            command: Int,
+        ): Message {
             require(reply.what == command) { "Messenger reply mismatch: ${reply.what}" }
             observedPid =
                 reply.data.getInt(ReconnectPrefsServiceShared.KEY_PID).also { pid ->
