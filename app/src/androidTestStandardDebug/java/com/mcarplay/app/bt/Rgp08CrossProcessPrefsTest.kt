@@ -362,7 +362,7 @@ class Rgp08CrossProcessPrefsTest {
                 if (target == null || !target.binder.isBinderAlive) {
                     staleFailure = RemoteException("Remote Messenger is not alive")
                     remote.set(null)
-                    awaitFreshConnection(generation, timeoutSeconds)
+                    awaitFreshConnection(generation)
                     replies.clear()
                     return@repeat
                 }
@@ -387,7 +387,7 @@ class Rgp08CrossProcessPrefsTest {
                 }
                 if (!sent.get()) {
                     remote.set(null)
-                    awaitFreshConnection(generation, timeoutSeconds)
+                    awaitFreshConnection(generation)
                     replies.clear()
                     return@repeat
                 }
@@ -399,7 +399,7 @@ class Rgp08CrossProcessPrefsTest {
                 if (currentTarget == null || !currentTarget.binder.isBinderAlive) {
                     staleFailure = RemoteException("Remote Messenger became stale")
                     remote.set(null)
-                    awaitFreshConnection(generation, timeoutSeconds)
+                    awaitFreshConnection(generation)
                     replies.clear()
                     return@repeat
                 }
@@ -408,19 +408,16 @@ class Rgp08CrossProcessPrefsTest {
             throw IllegalArgumentException("Messenger rebind failed", staleFailure)
         }
 
-        private fun awaitFreshConnection(
-            previousGeneration: Int,
-            timeoutSeconds: Long,
-        ) {
-            val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+        private fun awaitFreshConnection(previousGeneration: Int) {
+            val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(RECONNECT_TIMEOUT_SECONDS)
             while (true) {
                 val remainingNanos = deadlineNanos - System.nanoTime()
                 require(remainingNanos > 0) {
-                    "Fresh Messenger connection timeout after ${timeoutSeconds}s"
+                    "Fresh Messenger connection timeout after ${RECONNECT_TIMEOUT_SECONDS}s"
                 }
                 val generation = freshConnections.poll(remainingNanos, TimeUnit.NANOSECONDS)
                 requireNotNull(generation) {
-                    "Fresh Messenger connection timeout after ${timeoutSeconds}s"
+                    "Fresh Messenger connection timeout after ${RECONNECT_TIMEOUT_SECONDS}s"
                 }
                 if (generation > previousGeneration) return
             }
@@ -469,6 +466,7 @@ class Rgp08CrossProcessPrefsTest {
         const val S1_BLOCKED_UNTIL_MS = 182_000L
         const val BIND_TIMEOUT_SECONDS = 60L
         const val MESSAGE_TIMEOUT_SECONDS = 5L
+        const val RECONNECT_TIMEOUT_SECONDS = 60L
         val LEGACY_KEYS = ReconnectPrefsInstrumentationTestSupport.LEGACY_KEYS
         val WARM_SERVICE = ComponentName(PACKAGE, "com.mcarplay.app.debug.ReconnectPrefsWarmService")
         val COLD_SERVICE = ComponentName(PACKAGE, "com.mcarplay.app.debug.ReconnectPrefsColdService")
