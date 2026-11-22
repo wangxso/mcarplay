@@ -18,6 +18,47 @@ class ConnectionTimelineTest {
     private val timeline = ConnectionTimeline({ 1_000_000 + now }, { now }, { "attempt-${++ids}" }, { records.add(it) })
 
     @Test
+    fun returningCarStartsBluetoothAttemptWithTheListenerStillRunning() {
+        val first = timeline.bluetoothStarted("auto_start", transportRunning = false)
+        timeline.media(first, video = true, bytes = 100)
+        val streaming = timeline.snapshot()
+        assertEquals(first, timeline.bluetoothStarted("auto_start", transportRunning = true))
+        assertEquals(streaming, timeline.snapshot())
+
+        timeline.issue(first, DiagnosticCode.WIFI_LOST)
+        timeline.videoEnded(first)
+        val second = timeline.bluetoothStarted("auto_start", transportRunning = true)
+        assertFalse(first == second)
+        timeline.videoEnded(first)
+        val retry = timeline.snapshot()!!
+        assertEquals(ConnectionStage.BLUETOOTH, retry.stage)
+        assertEquals("waiting", retry.status)
+        assertNull(retry.code)
+        assertEquals(0L, retry.videoFrames)
+        assertEquals(second, timeline.bluetoothStarted("auto_start", transportRunning = true))
+
+        timeline.finish(second, DiagnosticCode.BT_LINK_CLOSED, failed = true)
+        assertEquals(second, timeline.bluetoothStarted("auto_start", transportRunning = true))
+        assertEquals(DiagnosticCode.BT_LINK_CLOSED, timeline.snapshot()!!.code)
+        timeline.bluetoothLinkStarted()
+        assertFalse(second == timeline.snapshot()!!.id)
+        assertEquals(ConnectionStage.BLUETOOTH, timeline.snapshot()!!.stage)
+    }
+
+    @Test
+    fun incomingHandshakeBeforeTheReturnBroadcastKeepsTheSameNewAttempt() {
+        val first = timeline.bluetoothStarted("user_start", transportRunning = false)
+        timeline.media(first, video = true, bytes = 100)
+        timeline.videoEnded(first)
+        timeline.bluetoothLinkStarted()
+        val incoming = timeline.snapshot()!!
+        assertFalse(first == incoming.id)
+        assertEquals(ConnectionStage.BLUETOOTH, incoming.stage)
+        timeline.bluetoothLinkStarted()
+        assertEquals(incoming.id, timeline.bluetoothStarted("auto_start", transportRunning = true))
+    }
+
+    @Test
     fun usesMonotonicElapsedTimeAndWritesSchemaAndAttempt() {
         val id = timeline.begin("user")
         now = 2_500

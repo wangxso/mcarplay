@@ -1330,14 +1330,10 @@ object SessionController {
             activePeerAddress = if (automatic) automaticPeerAddress ?: selected else selected
         }
         val diagnosticAttempt =
-            if (isSessionRunning()) {
-                ConnectionDiagnostics.timeline.snapshot()?.id ?: ConnectionDiagnostics.begin("user_start")
-            } else {
-                ConnectionDiagnostics.begin("user_start")
-            }
-        if (ConnectionDiagnostics.timeline.snapshot()?.stage == ConnectionStage.PRECHECK) {
-            ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.BLUETOOTH)
-        }
+            ConnectionDiagnostics.timeline.bluetoothStarted(
+                if (automatic) "auto_start" else "user_start",
+                alreadyRunning,
+            )
         if (!alreadyRunning) {
             bluetoothDiagnostics.begin(diagnosticAttempt)
             ReceiverDetectionRuntime.connectionStarted(diagnosticAttempt)
@@ -1385,7 +1381,7 @@ object SessionController {
             takeBackFailures = 0
             touchLogCount = 0
         } else {
-            appendLog("SESSION: 会话已在运行——沿用当前会话，不清零邀请与要帧计数")
+            appendLog("SESSION: 蓝牙传输已在运行——保留监听与当前邀请计数")
         }
         // 后台发布：start() 首次要向 Shizuku 解析真实蓝牙 MAC（shell），不能在主线程做
         Bg.run("ctrl-publish") { ctrlAdvertiser?.start() }
@@ -1577,12 +1573,7 @@ object SessionController {
     private fun beginPreEndpointRetryAttempt() {
         if (isDisconnecting() || connectCancelled) return
         if (bluetoothClient?.isRunning != true && bluetoothServer?.isRunning != true) return
-        val previous = ConnectionDiagnostics.timeline.snapshot() ?: return
-        if (previous.stage != ConnectionStage.BLUETOOTH || previous.status != "failed" || previous.code != DiagnosticCode.BT_LINK_CLOSED) {
-            return
-        }
-        val attempt = ConnectionDiagnostics.begin("bt_retry")
-        ConnectionDiagnostics.timeline.stage(attempt, ConnectionStage.BLUETOOTH)
+        ConnectionDiagnostics.timeline.bluetoothLinkStarted()
     }
 
     /**
