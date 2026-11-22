@@ -327,7 +327,11 @@ class Rgp08CrossProcessPrefsTest {
         }
 
         private fun fetchInfo(): Info {
-            val reply = send(ReconnectPrefsServiceShared.COMMAND_INFO)
+            val reply =
+                send(
+                    ReconnectPrefsServiceShared.COMMAND_INFO,
+                    timeoutSeconds = BIND_TIMEOUT_SECONDS,
+                )
             return Info(
                 pid = reply.data.getInt(ReconnectPrefsServiceShared.KEY_PID),
                 uid = reply.data.getInt(ReconnectPrefsServiceShared.KEY_UID),
@@ -339,6 +343,7 @@ class Rgp08CrossProcessPrefsTest {
         private fun send(
             command: Int,
             data: Bundle = Bundle(),
+            timeoutSeconds: Long = MESSAGE_TIMEOUT_SECONDS,
         ): Message {
             val message = Message.obtain()
             message.what = command
@@ -348,14 +353,17 @@ class Rgp08CrossProcessPrefsTest {
             val sent = AtomicBoolean(false)
             handler.post {
                 try {
-                    remote.get()?.send(message)
+                    val target = requireNotNull(remote.get()) { "Remote Messenger not connected" }
+                    target.send(message)
                     sent.set(true)
                 } finally {
                     sendLatch.countDown()
                 }
             }
-            require(sendLatch.await(5L, TimeUnit.SECONDS) && sent.get()) { "Messenger send timeout" }
-            val reply = replies.poll(5L, TimeUnit.SECONDS)
+            require(sendLatch.await(timeoutSeconds, TimeUnit.SECONDS) && sent.get()) {
+                "Messenger send timeout after ${timeoutSeconds}s"
+            }
+            val reply = replies.poll(timeoutSeconds, TimeUnit.SECONDS)
             requireNotNull(reply) { "Messenger reply timeout" }
             require(reply.what == command) { "Messenger reply mismatch: ${reply.what}" }
             observedPid =
@@ -395,6 +403,7 @@ class Rgp08CrossProcessPrefsTest {
         const val S0_BLOCKED_UNTIL_MS = 62_000L
         const val S1_BLOCKED_UNTIL_MS = 182_000L
         const val BIND_TIMEOUT_SECONDS = 60L
+        const val MESSAGE_TIMEOUT_SECONDS = 5L
         val LEGACY_KEYS = ReconnectPrefsInstrumentationTestSupport.LEGACY_KEYS
         val WARM_SERVICE = ComponentName(PACKAGE, "com.mcarplay.app.debug.ReconnectPrefsWarmService")
         val COLD_SERVICE = ComponentName(PACKAGE, "com.mcarplay.app.debug.ReconnectPrefsColdService")
