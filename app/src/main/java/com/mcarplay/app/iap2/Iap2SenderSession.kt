@@ -893,7 +893,7 @@ class Iap2SenderSession(
     // ---- 帧收发 ----
 
     /**
-     * MFi 挑战应答：按「对端可接受的长度」依次尝试，每次失败（0xAA04 / 静默超时 / 断链）换下一档。
+     * MFi 挑战应答：0xAA04 或等待超时后可在当前链路换档，断链后的顺序留给下一轮连接。
      * 基础顺序与窗口由两端实测决定（2026-10-09/10，缺一不可）：
      *  - **32B 优先**：测试台 DiPlay（Carlinkit AuthV3 EC 身份）**只接受精确 32B**，
      *    长度不对会直接断开链路（实测 70~350ms 内断链）；其应答快（~0.2s），3s 窗口足够。
@@ -903,7 +903,7 @@ class Iap2SenderSession(
      *
      * 顺序**以按车机持久化的记忆为准**（[MfiLengthMemory]，基线只作冷启动与兜底）：
      * 2026-10-19 奥迪 MMI 3315 实测 20B 静默 6 秒、32B 0.64 秒应答——只靠基线
-     * 「真车都 20B 优先」每次连接都白等 6 秒。记忆命中后直接把上次成功的长度排第一。
+     * 「真车都 20B 优先」每次连接都白等 6 秒。优先上次成功的长度，连续断链后轮流探测其他长度。
      * 全部无应答时不抛异常直接返回——我们跳过签名校验，由后续 0x5702 是否获得应答
      * 判定对端是否放行（真车实测无应答后 0xaa05 仍可推进）。
      */
@@ -921,8 +921,9 @@ class Iap2SenderSession(
                 MFI_ATTEMPTS.map { it.first }
             }
         val windowOf = MFI_ATTEMPTS.associate { it.first to it.second }
-        val memory = receiverKey?.let { MfiLengthMemory.load(context, it) } ?: MfiLengthMemory.Entry()
-        val order = pinnedLength?.let { listOf(it) } ?: MfiLengthMemory.orderAttempts(baselineLengths, memory)
+        val (memory, order) =
+            receiverKey?.let { MfiLengthMemory.beginAttempts(context, it, baselineLengths) }
+                ?: (MfiLengthMemory.Entry() to (pinnedLength?.let { listOf(it) } ?: baselineLengths))
         if (pinnedLength != null) {
             log("iap2 MFi 固定 ${pinnedLength}B（接收端策略）——只发一次，窗口 ${MfiLengthMemory.KNOWN_GOOD_WINDOW_MS}ms")
         } else if (!memory.isEmpty) {
@@ -952,7 +953,7 @@ class Iap2SenderSession(
                 val frame = recvFrame(remaining)
                 if (frame == null) {
                     if (!channel.isAlive) {
-                        receiverKey?.let { MfiLengthMemory.recordSilent(context, it, size) }
+                        receiverKey?.let { MfiLengthMemory.recordLinkDrop(context, it, size) }
                         val reason = channel.terminationReason?.let { "：$it" }.orEmpty()
                         throw IOException("iAP2 蓝牙链路在 ${size}B MFi 挑战等待应答时断开$reason")
                     }

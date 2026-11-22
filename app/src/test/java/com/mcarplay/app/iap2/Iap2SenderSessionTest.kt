@@ -21,11 +21,7 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class Iap2SenderSessionTest {
     @Test
-    fun linkClosedDuringMfiKeepsPreviouslySuccessfulLength() {
-        val pair = InMemoryStreamPair()
-        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-mfi")
-        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-mfi")
-        val accessory = MockAccessory(accessoryChannel, closeAfterMfiChallenge = true)
+    fun repeatedMfiLinkDropsTryEachAlternateThenReturnToTheSuccessfulLength() {
         val binding = "mfi-disconnect-test"
         val identity =
             checkNotNull(
@@ -40,6 +36,23 @@ class Iap2SenderSessionTest {
                 ),
             )
         MfiLengthMemory.recordSuccess(null, identity, 32)
+
+        assertMfiLinkDrop(binding, 32)
+        assertEquals(MfiLengthMemory.Entry(succeeded = 32, successDrops = 1), MfiLengthMemory.load(null, identity))
+        assertMfiLinkDrop(binding, 32)
+        assertMfiLinkDrop(binding, 20)
+        assertMfiLinkDrop(binding, 16)
+        assertMfiLinkDrop(binding, 32)
+    }
+
+    private fun assertMfiLinkDrop(
+        binding: String,
+        length: Int,
+    ) {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-mfi")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-mfi")
+        val accessory = MockAccessory(accessoryChannel, closeAfterMfiChallenge = true)
         val worker = Thread(accessory::run, "mock-accessory-mfi").apply { isDaemon = true }
         worker.start()
         try {
@@ -48,9 +61,8 @@ class Iap2SenderSessionTest {
                     Iap2SenderSession(phoneChannel, log = {}, receiverBinding = binding).run(timeoutMillis = 5_000L)
                 }.exceptionOrNull()
             worker.join(1_000)
-            assertTrue(failure?.message.orEmpty().contains("32B MFi 挑战等待应答时断开"))
-            assertEquals(listOf(32), accessory.mfiChallengeSizes)
-            assertEquals(MfiLengthMemory.Entry(succeeded = 32), MfiLengthMemory.load(null, identity))
+            assertTrue(failure?.message.orEmpty().contains("${length}B MFi 挑战等待应答时断开"))
+            assertEquals(listOf(length), accessory.mfiChallengeSizes)
         } finally {
             phoneChannel.close()
             accessoryChannel.close()
