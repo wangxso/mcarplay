@@ -264,10 +264,12 @@ class Rgp08CrossProcessPrefsTest {
 
                 override fun onNullBinding(name: ComponentName?) {
                     bindingFailure.set("Null binding for $name")
+                    connected.countDown()
                 }
 
                 override fun onBindingDied(name: ComponentName?) {
                     bindingFailure.set("Binding died for $name")
+                    connected.countDown()
                 }
             }
 
@@ -356,8 +358,14 @@ class Rgp08CrossProcessPrefsTest {
             val reply = replies.poll(5L, TimeUnit.SECONDS)
             requireNotNull(reply) { "Messenger reply timeout" }
             require(reply.what == command) { "Messenger reply mismatch: ${reply.what}" }
-            observedPid = reply.data.getInt(ReconnectPrefsServiceShared.KEY_PID)
-            observedToken = reply.data.getString(ReconnectPrefsServiceShared.KEY_INSTANCE_TOKEN)
+            observedPid =
+                reply.data.getInt(ReconnectPrefsServiceShared.KEY_PID).also { pid ->
+                    require(pid != 0) { "Messenger reply missing PID" }
+                }
+            observedToken =
+                reply.data.getString(ReconnectPrefsServiceShared.KEY_INSTANCE_TOKEN).also { token ->
+                    requireNotNull(token) { "Messenger reply missing instance token" }
+                }
             return reply
         }
 

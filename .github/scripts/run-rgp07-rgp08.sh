@@ -111,24 +111,34 @@ rgp07_elapsed="$(( $(date +%s) - rgp07_start ))"
 mkdir -p "$OUTPUT_DIR/rgp08"
 echo "=== RGP08 cross-process prefs ==="
 rgp08_start="$(date +%s)"
-rgp08_marker="${MARKER_PREFIX}-rgp08-${RGP08_RUN_ATTEMPT}"
+rgp08_run_id="${MARKER_PREFIX}-${RGP08_RUN_ATTEMPT}"
+rgp08_marker="${rgp08_run_id}-rgp08"
 clear_package "pre-RGP08"
 adb shell am force-stop "$PACKAGE_ID"
-timeout "$RGP08_TIMEOUT_SECONDS" \
+if timeout "$RGP08_TIMEOUT_SECONDS" \
   adb shell am instrument \
   -e class "$RGP08_CLASS" \
   -e marker "$rgp08_marker" \
-  -e runId "${MARKER_PREFIX}-${RGP08_RUN_ATTEMPT}" \
-  -w "$INSTRUMENTATION_TARGET" | tee "$OUTPUT_DIR/rgp08/rgp08.txt"
-rgp08_status=${PIPESTATUS[0]}
-if [[ "$rgp08_status" -ne 0 ]]; then
+  -e runId "$rgp08_run_id" \
+  -w "$INSTRUMENTATION_TARGET" | tee "$OUTPUT_DIR/rgp08/rgp08.txt"; then
+  rgp08_status=0
+else
+  rgp08_status=$?
+fi
+rgp08_ok=1
+if [[ "$rgp08_status" -eq 0 ]]; then
+  if grep -q "OK (1 test)" "$OUTPUT_DIR/rgp08/rgp08.txt"; then
+    rgp08_ok=0
+  fi
+fi
+if [[ "$rgp08_status" -ne 0 || "$rgp08_ok" -ne 0 ]]; then
   printf 'RGP08 failed incremental elapsed: %ss\n' \
     "$(( $(date +%s) - rgp08_start ))" | tee "$OUTPUT_DIR/rgp08/failed-timing.txt"
   adb shell logcat -d -t 2000 > "$OUTPUT_DIR/rgp08/failed-logcat.txt" || true
-  echo "RGP08 instrumentation failed with exit $rgp08_status" >&2
-  exit "$rgp08_status"
-fi
-if ! grep -q "OK (1 test)" "$OUTPUT_DIR/rgp08/rgp08.txt"; then
+  if [[ "$rgp08_status" -ne 0 ]]; then
+    echo "RGP08 instrumentation failed with exit $rgp08_status" >&2
+    exit "$rgp08_status"
+  fi
   echo "RGP08 did not report one passing test" >&2
   exit 1
 fi

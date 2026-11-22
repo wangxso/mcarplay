@@ -40,6 +40,15 @@ public abstract class ReconnectPrefsServiceShared : Service() {
         Messenger(Handler(handlerThread.looper) { message -> handleMessage(message) })
     }
 
+    private val identityBundle: Bundle
+        get() =
+            Bundle().apply {
+                putString(KEY_PROCESS_NAME, serviceProcessName)
+                putInt(KEY_PID, processPid)
+                putInt(KEY_UID, processUid)
+                putString(KEY_INSTANCE_TOKEN, instanceToken)
+            }
+
     private fun handleMessage(message: Message): Boolean {
         val replyTo = requireNotNull(message.replyTo) { "Missing Messenger replyTo" }
         val reply = Message.obtain()
@@ -47,17 +56,13 @@ public abstract class ReconnectPrefsServiceShared : Service() {
         when (message.what) {
             COMMAND_INFO ->
                 reply.data =
-                    Bundle().apply {
-                        putString(KEY_PROCESS_NAME, serviceProcessName)
-                        putInt(KEY_PID, processPid)
-                        putInt(KEY_UID, processUid)
-                        putString(KEY_INSTANCE_TOKEN, instanceToken)
+                    Bundle(identityBundle).apply {
                         putLong(KEY_START_ELAPSED_MS, startElapsedMs)
                     }
 
             COMMAND_READ ->
                 reply.data =
-                    Bundle().apply {
+                    Bundle(identityBundle).apply {
                         val peer = message.data.getString(KEY_PEER)
                         val nowMs = message.data.getLong(KEY_NOW_MS)
                         val block = AutoReconnectGuard.block(applicationContext, peer, nowMs)
@@ -68,7 +73,7 @@ public abstract class ReconnectPrefsServiceShared : Service() {
 
             COMMAND_ACTIVE_BLOCK ->
                 reply.data =
-                    Bundle().apply {
+                    Bundle(identityBundle).apply {
                         val nowMs = message.data.getLong(KEY_NOW_MS)
                         val block = AutoReconnectGuard.activeBlock(applicationContext, nowMs)
                         putString(KEY_READ_FAILURES, block?.failures?.toString())
