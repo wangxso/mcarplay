@@ -122,6 +122,9 @@ timeout "$RGP08_TIMEOUT_SECONDS" \
   -w "$INSTRUMENTATION_TARGET" | tee "$OUTPUT_DIR/rgp08/rgp08.txt"
 rgp08_status=${PIPESTATUS[0]}
 if [[ "$rgp08_status" -ne 0 ]]; then
+  printf 'RGP08 failed incremental elapsed: %ss\n' \
+    "$(( $(date +%s) - rgp08_start ))" | tee "$OUTPUT_DIR/rgp08/failed-timing.txt"
+  adb shell logcat -d -t 2000 > "$OUTPUT_DIR/rgp08/failed-logcat.txt" || true
   echo "RGP08 instrumentation failed with exit $rgp08_status" >&2
   exit "$rgp08_status"
 fi
@@ -137,6 +140,8 @@ fi
 rgp08_json="$OUTPUT_DIR/rgp08/rgp08.json"
 python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]), ensure_ascii=False, indent=2))' \
   "$rgp08_output" > "$rgp08_json"
+python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); marker=data["marker"]; expected=sys.argv[2]; assert marker == expected, (marker, expected)' \
+  "$rgp08_json" "$rgp08_marker"
 rgp08_elapsed="$(( $(date +%s) - rgp08_start ))"
 printf 'RGP07 incremental elapsed: %ss\nRGP08 incremental elapsed: %ss\nTotal script elapsed: %ss\n' \
   "$rgp07_elapsed" "$rgp08_elapsed" "$(( $(date +%s) - start_time ))" | tee "$OUTPUT_DIR/timing.txt"

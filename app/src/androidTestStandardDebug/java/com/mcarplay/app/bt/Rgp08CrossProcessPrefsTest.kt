@@ -1,11 +1,9 @@
 package com.mcarplay.app.bt
 
-import android.app.Instrumentation
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
-import android.content.SharedPreferences
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -19,48 +17,35 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.mcarplay.app.debug.ReconnectPrefsServiceShared
 import org.json.JSONArray
 import org.json.JSONObject
-import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.io.FileOutputStream
-import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class Rgp08CrossProcessPrefsTest {
-    private lateinit var instrumentation: Instrumentation
-    private lateinit var context: Context
-    private lateinit var prefs: SharedPreferences
-    private lateinit var warm: ProbeConnection
-    private lateinit var cold: ProbeConnection
-
-    @Before
-    fun setUp() {
-        instrumentation = InstrumentationRegistry.getInstrumentation()
-        context = instrumentation.targetContext
-        prefs = ReconnectPrefsInstrumentationTestSupport.settings(context)
-        warm = ProbeConnection(context, WARM_SERVICE)
-        cold = ProbeConnection(context, COLD_SERVICE)
-    }
-
-    @After
-    fun tearDown() {
-        warm.close()
-        cold.close()
-    }
-
     @Test
     fun verifiesColdProductionReadAfterCrossProcessCommit() {
-        val marker = "rgp08-${UUID.randomUUID()}"
+        val arguments = InstrumentationRegistry.getArguments()
+        val runId =
+            arguments.getString(ARG_RUN_ID)?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("Missing unique runId argument")
+        val marker =
+            arguments.getString(ARG_MARKER)?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("Missing unique marker argument")
+        require(marker == "$runId-rgp08") { "RGP08 marker mismatch: marker=$marker runId=$runId" }
+
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val prefs = ReconnectPrefsInstrumentationTestSupport.settings(context)
         val writerPid = Process.myPid()
         val events = JSONArray()
 
@@ -71,7 +56,7 @@ class Rgp08CrossProcessPrefsTest {
                     .put("failures", 1)
                     .put("firstFailureAtMs", 1_000L)
                     .put("lastFailureAtMs", 1_000L)
-                    .put("blockedUntilMs", 0L)
+                    .put("blockedUntilMs", S0_BLOCKED_UNTIL_MS)
                     .put("recordedAttempt", "$marker-s0")
             val s1 =
                 JSONObject()
@@ -98,82 +83,100 @@ class Rgp08CrossProcessPrefsTest {
                     .put("commit", true),
             )
 
-            val warmInfo = warm.info
-            val warmReadS0 = warm.read(PEER, FIXED_NOW_MS)
-            assertTrue(warmInfo.pid != writerPid)
-            assertEquals(Process.myUid(), warmInfo.uid)
-            assertNull(warmReadS0)
-            assertNull(warm.activeBlock(FIXED_NOW_MS))
-            events.put(
-                JSONObject()
-                    .put("name", "WARM_READY")
-                    .put("process", "warm")
-                    .put("pid", warmInfo.pid)
-                    .put("uid", warmInfo.uid)
-                    .put("token", warmInfo.token)
-                    .put("read", "null"),
-            )
+            ProbeConnection(context, WARM_SERVICE).use { warm ->
+                val warmInfo = warm.info
+                val warmReadS0 = warm.read(PEER, FIXED_NOW_MS)
+                assertTrue(warmInfo.pid != writerPid)
+                assertEquals(Process.myUid(), warmInfo.uid)
+                assertEquals(
+                    AutoReconnectGuard.Block(1, S0_BLOCKED_UNTIL_MS, 60_000L),
+                    warmReadS0,
+                )
+                assertEquals(
+                    AutoReconnectGuard.Block(1, S0_BLOCKED_UNTIL_MS, 60_000L),
+                    warm.activeBlock(FIXED_NOW_MS),
+                )
+                events.put(
+                    JSONObject()
+                        .put("name", "WARM_READY")
+                        .put("process", "warm")
+                        .put("pid", warmInfo.pid)
+                        .put("uid", warmInfo.uid)
+                        .put("token", warmInfo.token)
+                        .put("read", "S0"),
+                )
 
-            assertTrue(
-                "S1 fixture commit failed",
-                prefs
-                    .edit()
-                    .putString(KEY_STATES, JSONObject().put(PEER.uppercase(), s1).toString())
-                    .putString(HANDOFF_KEY, marker)
-                    .commit(),
-            )
-            val s1AfterMs = SystemClock.elapsedRealtime()
-            events.put(
-                JSONObject()
-                    .put("name", "S1_COMMIT")
-                    .put("value", "S1")
-                    .put("commit", true)
-                    .put("s1AfterMs", s1AfterMs),
-            )
+                assertTrue(
+                    "S1 fixture commit failed",
+                    prefs
+                        .edit()
+                        .putString(KEY_STATES, JSONObject().put(PEER.uppercase(), s1).toString())
+                        .putString(HANDOFF_KEY, marker)
+                        .commit(),
+                )
+                val s1AfterMs = SystemClock.elapsedRealtime()
+                events.put(
+                    JSONObject()
+                        .put("name", "S1_COMMIT")
+                        .put("value", "S1")
+                        .put("commit", true)
+                        .put("s1AfterMs", s1AfterMs),
+                )
 
-            val warmObservation = warm.read(PEER, FIXED_NOW_MS)
-            assertEquals(warmInfo.pid, warm.observedPid)
-            assertEquals(warmInfo.token, warm.observedToken)
-            assertTrue(
-                "Warm observation must be S0 or S1: $warmObservation",
-                warmObservation == null ||
-                    warmObservation == AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
-            )
-            events.put(
-                JSONObject()
-                    .put("name", "WARM_OBSERVATION")
-                    .put("pid", warm.observedPid)
-                    .put("token", warm.observedToken)
-                    .put("read", if (warmObservation == null) "null" else "S1"),
-            )
+                val warmObservation = warm.read(PEER, FIXED_NOW_MS)
+                assertEquals(warmInfo.pid, warm.observedPid)
+                assertEquals(warmInfo.token, warm.observedToken)
+                assertTrue(
+                    "Warm observation must be S0 or S1: $warmObservation",
+                    warmObservation == warmReadS0 ||
+                        warmObservation == AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
+                )
+                events.put(
+                    JSONObject()
+                        .put("name", "WARM_OBSERVATION")
+                        .put("pid", warm.observedPid)
+                        .put("token", warm.observedToken)
+                        .put("read", if (warmObservation == warmReadS0) "S0" else "S1"),
+                )
 
-            val coldInfo = cold.info
-            val coldRead = cold.read(PEER, FIXED_NOW_MS)
-            assertTrue(coldInfo.pid != writerPid && coldInfo.pid != warmInfo.pid)
-            assertEquals(Process.myUid(), coldInfo.uid)
-            assertTrue(
-                "Cold process started before S1 commit returned: ${coldInfo.startElapsedMs} < $s1AfterMs",
-                coldInfo.startElapsedMs >= s1AfterMs,
-            )
-            assertEquals(AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L), coldRead)
-            assertEquals(
-                AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
-                cold.activeBlock(FIXED_NOW_MS),
-            )
-            events.put(
-                JSONObject()
-                    .put("name", "COLD_READY")
-                    .put("process", "cold")
-                    .put("pid", coldInfo.pid)
-                    .put("uid", coldInfo.uid)
-                    .put("token", coldInfo.token)
-                    .put("startElapsedMs", coldInfo.startElapsedMs)
-                    .put("read", "S1"),
-            )
+                ProbeConnection(context, COLD_SERVICE).use { cold ->
+                    val coldInfo = cold.info
+                    val coldRead = cold.read(PEER, FIXED_NOW_MS)
+                    assertTrue(coldInfo.pid != writerPid && coldInfo.pid != warmInfo.pid)
+                    assertEquals(Process.myUid(), coldInfo.uid)
+                    assertTrue(
+                        "Cold process started before S1 commit returned: ${coldInfo.startElapsedMs} < $s1AfterMs",
+                        coldInfo.startElapsedMs >= s1AfterMs,
+                    )
+                    assertEquals(
+                        AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
+                        coldRead,
+                    )
+                    assertEquals(
+                        AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
+                        cold.activeBlock(FIXED_NOW_MS),
+                    )
+                    events.put(
+                        JSONObject()
+                            .put("name", "COLD_READY")
+                            .put("process", "cold")
+                            .put("pid", coldInfo.pid)
+                            .put("uid", coldInfo.uid)
+                            .put("token", coldInfo.token)
+                            .put("startElapsedMs", coldInfo.startElapsedMs)
+                            .put("read", "S1"),
+                    )
+                }
+            }
+
             events.put(
                 JSONObject()
                     .put("name", "SENTINEL_BEFORE_CLEANUP")
                     .put("value", SENTINEL),
+            )
+            assertEquals(
+                SENTINEL,
+                prefs.getString(ReconnectPrefsInstrumentationTestSupport.UNRELATED_KEY, null),
             )
 
             val outputJson = writeEvents(context, marker, writerPid, events)
@@ -225,7 +228,7 @@ class Rgp08CrossProcessPrefsTest {
     private class ProbeConnection(
         private val context: Context,
         component: ComponentName,
-    ) {
+    ) : AutoCloseable {
         private val handlerThread = HandlerThread("Rgp08ProbeClient").apply { start() }
         private val handler =
             Handler(handlerThread.looper) { message ->
@@ -235,10 +238,16 @@ class Rgp08CrossProcessPrefsTest {
         private val remote = AtomicReference<Messenger?>()
         private val connected = CountDownLatch(1)
         private val replies = ArrayBlockingQueue<Message>(8)
+        private val bindingFailure = AtomicReference<String?>()
         var observedPid: Int = -1
             private set
         var observedToken: String? = null
             private set
+        private val callbackExecutor =
+            Executor { command ->
+                handler.post(command)
+            }
+
         private val connection =
             object : ServiceConnection {
                 override fun onServiceConnected(
@@ -252,17 +261,33 @@ class Rgp08CrossProcessPrefsTest {
                 override fun onServiceDisconnected(name: ComponentName?) {
                     remote.set(null)
                 }
+
+                override fun onNullBinding(name: ComponentName?) {
+                    bindingFailure.set("Null binding for $name")
+                }
+
+                override fun onBindingDied(name: ComponentName?) {
+                    bindingFailure.set("Binding died for $name")
+                }
             }
 
         init {
-            val bound =
-                context.bindService(
-                    Intent(Intent.ACTION_MAIN).setComponent(component).setPackage(PACKAGE),
-                    connection,
-                    Context.BIND_AUTO_CREATE,
-                )
-            require(bound) { "bindService returned false" }
-            require(connected.await(5L, TimeUnit.SECONDS)) { "Bind timeout" }
+            try {
+                val bound =
+                    context.bindService(
+                        Intent(Intent.ACTION_MAIN).setComponent(component).setPackage(PACKAGE),
+                        Context.BIND_AUTO_CREATE,
+                        callbackExecutor,
+                        connection,
+                    )
+                require(bound) { "bindService returned false" }
+                require(connected.await(BIND_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    bindingFailure.get() ?: "Bind timeout after ${BIND_TIMEOUT_SECONDS}s"
+                }
+            } catch (failure: Throwable) {
+                close()
+                throw failure
+            }
         }
 
         val info: Info by lazy { fetchInfo() }
@@ -336,8 +361,8 @@ class Rgp08CrossProcessPrefsTest {
             return reply
         }
 
-        fun close() {
-            context.unbindService(connection)
+        override fun close() {
+            runCatching { context.unbindService(connection) }
             handlerThread.quitSafely()
         }
     }
@@ -359,8 +384,9 @@ class Rgp08CrossProcessPrefsTest {
         const val PEER = "aa:bb:cc:dd:ee:08"
         const val OUTPUT_FILE = "rgp08-cross-process-prefs.json"
         const val FIXED_NOW_MS = 2_000L
+        const val S0_BLOCKED_UNTIL_MS = 62_000L
         const val S1_BLOCKED_UNTIL_MS = 182_000L
-        const val RUN_ID_ARG = "runId"
+        const val BIND_TIMEOUT_SECONDS = 60L
         val LEGACY_KEYS = ReconnectPrefsInstrumentationTestSupport.LEGACY_KEYS
         val WARM_SERVICE = ComponentName(PACKAGE, "com.mcarplay.app.debug.ReconnectPrefsWarmService")
         val COLD_SERVICE = ComponentName(PACKAGE, "com.mcarplay.app.debug.ReconnectPrefsColdService")
