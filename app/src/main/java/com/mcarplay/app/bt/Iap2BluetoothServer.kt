@@ -19,6 +19,7 @@ import com.mcarplay.app.transport.StreamDuplexStream
 import com.mcarplay.app.util.Bg
 import java.io.IOException
 import java.util.UUID
+import kotlin.concurrent.thread
 
 /**
  * 手机侧（iPhone 角色）的 iAP2 蓝牙 RFCOMM 监听。
@@ -218,6 +219,7 @@ class Iap2BluetoothServer(
                     null
                 }
             val match = peerMatch(target, peerAddress)
+            if (match != BluetoothDiagnostics.PeerMatch.OTHER) BtSessionGate.inboundAccepted()
             diagnostics.incoming(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, peerAddress, match)
             if (target != null && match == BluetoothDiagnostics.PeerMatch.OTHER) {
                 log(
@@ -229,9 +231,12 @@ class Iap2BluetoothServer(
             }
             log("BT: 接收端已连入 name=$peerName，开始 iAP2 发送端会话")
             val observation = ReceiverDetectionRuntime.observation(peerAddress)
-            Thread({ runSession(socket, observation) }, "iap2-bt-session").apply {
-                isDaemon = true
-                start()
+            thread(isDaemon = true, name = "iap2-bt-session") {
+                try {
+                    runSession(socket, observation)
+                } finally {
+                    BtSessionGate.inboundFinished()
+                }
             }
         }
     }
@@ -276,21 +281,25 @@ class Iap2BluetoothServer(
         socket: BluetoothSocket,
         observation: ReceiverObservation?,
     ) {
+        val pairing = Iap2Pairings.current.attempt(socket)
+        log("BT: iAP2 RFCOMM 入站握手角色=${pairing.role}")
         val stream =
             StreamDuplexStream(socket.inputStream, socket.outputStream) {
                 runCatching { socket.close() }
             }
-        val channel = Iap2LinkChannel(stream, name = "iap2-bt") { line -> log(line) }
+        val channel = Iap2LinkChannel(stream, name = "iap2-bt", role = pairing.role, log = log)
         synchronized(channelLock) {
             activeChannel = channel
-            BtSessionGate.inboundActive = true
         }
         try {
             channel.runSenderSession(
                 context,
                 SESSION_TIMEOUT_MILLIS,
                 log,
-                onEndpoint,
+                {
+                    pairing.complete()
+                    onEndpoint(it)
+                },
                 onWifiCredentials,
                 onEndpointUpdate,
                 onLinkClosed,
@@ -313,7 +322,6 @@ class Iap2BluetoothServer(
                 if (activeChannel === channel) {
                     activeChannel = null
                     activeSession = null
-                    BtSessionGate.inboundActive = false
                 }
             }
             channel.close()
@@ -333,7 +341,6 @@ class Iap2BluetoothServer(
                 (activeChannel to activeSession).also {
                     activeChannel = null
                     activeSession = null
-                    BtSessionGate.inboundActive = false
                 }
             }
         channel ?: return

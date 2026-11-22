@@ -143,6 +143,39 @@ class Iap2LinkEngineTest {
 
     // ---- 协商细节回归 ----
 
+    @Test
+    fun bluetoothResponderEchoesSplitMarkerAndWaitsForSynAndMatchingAck() {
+        val phone = Iap2LinkEngine()
+        phone.startBluetoothResponder()
+        phone.advanceTime(5_000)
+        assertTrue(phone.takeOutput().isEmpty())
+
+        val marker = Iap2LinkEngine.MARKER
+        phone.feed(marker.copyOfRange(0, 3), 5_001)
+        assertTrue(phone.takeOutput().isEmpty())
+        phone.feed(marker.copyOfRange(3, marker.size), 5_002)
+        assertArrayEquals(marker, phone.takeOutput())
+        phone.advanceTime(7_000)
+        assertTrue(phone.takeOutput().isEmpty())
+
+        val syn = synFrame(peerSequence = 42).drop(marker.size).toByteArray()
+        phone.feed(syn, 7_001)
+        val echo = phone.takeOutput()
+        val frame = parseFrames(echo).single()
+        assertEquals(0xC0, frame.control)
+        assertEquals(42, frame.ack)
+        assertEquals(Iap2LinkEngine.State.NEGOTIATING, phone.state)
+        assertTrue(phone.sendControl(byteArrayOf(1), 7_002))
+        assertTrue(phone.takeOutput().isEmpty())
+
+        phone.feed(ackFrame(ack = frame.sequence + 1), 7_003)
+        assertEquals(Iap2LinkEngine.State.NEGOTIATING, phone.state)
+        phone.feed(syn, 7_004)
+        assertArrayEquals(echo, phone.takeOutput())
+        phone.feed(ackFrame(ack = frame.sequence), 7_005)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+    }
+
     /**
      * SYN-ACK 必须使用**新的**发送序号（对端按 `SYN.seq + 1` 校验）。
      *
@@ -417,7 +450,7 @@ class Iap2LinkEngineTest {
     }
 
     /** Bare ACK frame with no payload, enough to complete negotiation after a SYN echo. */
-    private fun ackFrame(): ByteArray {
+    private fun ackFrame(ack: Int = 0): ByteArray {
         val frame = ByteArray(Iap2LinkEngine.HEADER_BYTES)
         frame[0] = 0xFF.toByte()
         frame[1] = 0x5A
@@ -425,7 +458,7 @@ class Iap2LinkEngineTest {
         frame[3] = Iap2LinkEngine.HEADER_BYTES.toByte()
         frame[4] = 0x40
         frame[5] = 0
-        frame[6] = 0
+        frame[6] = ack.toByte()
         frame[7] = 0
         var sum = 0
         for (index in 0 until Iap2LinkEngine.HEADER_BYTES - 1) sum += frame[index].toInt() and 0xFF

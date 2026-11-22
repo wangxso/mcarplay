@@ -16,8 +16,10 @@ import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.transport.StreamDuplexStream
+import java.io.Closeable
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -479,11 +481,11 @@ class Iap2BluetoothClient(
         val profileTrials = HashSet<String>()
         while (running && generation.get() == myGeneration) {
             // 静默降噪（2026-10-10 用户实测后启用）——会话期间完全静默，不产生任何连接尝试/日志：
-            //  - inboundActive：接收端正在连我们（两条 RFCOMM 会互相踩；Audi 实测双会话混乱）
+            //  - 有入站连接：接收端正在连我们（两条 RFCOMM 会互相踩；Audi 实测双会话混乱）
             //  - sessionActive：CarPlay 会话已建立（已拿到端点）——与其它接收端的连接尝试全部暂停
             //    典型场景：连着 Redmi/DiPlay 时不再无脑探测车机 Audi（消除日志噪音与蓝牙churn）；
             //    会话结束（任一端 BT 会话终结 / 手动断开）时自动恢复。
-            if (BtSessionGate.inboundActive || BtSessionGate.sessionActive) {
+            if (BtSessionGate.outboundPaused) {
                 sleepQuietly(2_000)
                 continue
             }
@@ -616,6 +618,11 @@ class Iap2BluetoothClient(
                 currentSocket.compareAndSet(connected, null)
                 runCatching { connected.close() }
                 return
+            }
+            if (BtSessionGate.discardLateOutbound(connected)) {
+                currentSocket.compareAndSet(connected, null)
+                log("BT-C: 拨通时已有入站连接或 CarPlay 会话，已关闭本次出站连接，跳过 iAP2 握手")
+                continue
             }
             selfLinkChange { runSession(connected) }
             sleepQuietly(RETRY_DELAY_MILLIS)
@@ -753,18 +760,23 @@ class Iap2BluetoothClient(
     }
 
     private fun runSession(socket: BluetoothSocket) {
+        val pairing = Iap2Pairings.current.attempt(socket)
+        log("BT-C: iAP2 RFCOMM 出站握手角色=${pairing.role}")
         val stream =
             StreamDuplexStream(socket.inputStream, socket.outputStream) {
                 runCatching { socket.close() }
             }
-        val channel = Iap2LinkChannel(stream, name = "iap2-bt-car") { line -> log(line) }
+        val channel = Iap2LinkChannel(stream, name = "iap2-bt-car", role = pairing.role, log = log)
         activeChannel.set(channel)
         try {
             channel.runSenderSession(
                 context,
                 SESSION_TIMEOUT_MILLIS,
                 log,
-                onEndpoint,
+                {
+                    pairing.complete()
+                    onEndpoint(it)
+                },
                 onWifiCredentials,
                 onEndpointUpdate,
                 onLinkClosed,
@@ -837,9 +849,25 @@ class Iap2BluetoothClient(
  * 目的：车机通常只有单条无线 iAP2 上下文，双向同时建链会让双方互相干扰。
  */
 object BtSessionGate {
-    /** 入站（车机主动连入）的 iAP2 会话活跃：出站暂停，避免两条 RFCOMM 互相踩。 */
-    @Volatile
-    var inboundActive: Boolean = false
+    // 从监听线程接受回连起计数，直到该连接的工作线程退出。
+    private val inboundConnections = AtomicInteger()
+
+    internal val outboundPaused: Boolean get() = inboundConnections.get() > 0 || sessionActive
+
+    internal fun inboundAccepted() {
+        inboundConnections.incrementAndGet()
+    }
+
+    internal fun inboundFinished() {
+        inboundConnections.decrementAndGet()
+    }
+
+    /** connect() 阻塞期间车机可能已经回连；在发送第一个 iAP2 包前交还出站 socket。 */
+    internal fun discardLateOutbound(socket: Closeable): Boolean {
+        if (!outboundPaused) return false
+        runCatching { socket.close() }
+        return true
+    }
 
     /**
      * CarPlay 会话已建立（任一路径成功拿到端点后置位，由 SessionController 维护）：

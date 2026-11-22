@@ -63,6 +63,9 @@ class CarBluetoothReceiver : BroadcastReceiver() {
         }
 
         if (action == BluetoothDevice.ACTION_ACL_CONNECTED) {
+            if (runCatching { device.bondState }.getOrNull() == BluetoothDevice.BOND_BONDING) {
+                Iap2Pairings.current.bondChanged(address, BluetoothDevice.BOND_BONDING)
+            }
             if (AutoConnectPrefs.isManualStopCoolingDown(app, address)) {
                 DebugFileLog.append(app, "AUTO: 手动断开后的 30 秒冷却期——忽略蓝牙回连")
                 return
