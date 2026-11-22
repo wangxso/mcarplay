@@ -89,6 +89,7 @@ import com.mcarplay.app.settings.InternetNetwork
 import com.mcarplay.app.settings.InternetNetworkPolicy
 import com.mcarplay.app.settings.InternetNetworkPrefs
 import com.mcarplay.app.settings.MediaPrefs
+import com.mcarplay.app.settings.PhoneModeSystemWifiDecision
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
@@ -503,6 +504,9 @@ object SessionController {
     private val forgetPromptHandled =
         java.util.concurrent.ConcurrentHashMap
             .newKeySet<String>()
+
+    @Volatile
+    private var phoneModeBlockedSsid: String? = null
 
     /** WiFi 绑定互斥：auto-join 与端点交接两条路径可能同时绑定同一热点。 */
     private val wifiHandoffGuard = HandoffWifiGuard()
@@ -2229,6 +2233,12 @@ object SessionController {
             // 2) 回退：应用专属网络（不影响 4G/5G、不会保存为系统网络）
             if (shellReady && shellWifiDisabled() && !waitForWifiEnabled()) return@run
             if (connectCancelled) return@run
+            if (
+                internetNetwork == InternetNetwork.PHONE &&
+                !ensurePhoneModeSystemWifiSafe(wifi, shellReady)
+            ) {
+                return@run
+            }
             if (internetNetwork == InternetNetwork.PHONE && shellReady) {
                 appendLog("NETWORK: 手机流量优先——跳过系统级存储与 connect-network 兜底")
             }
@@ -2263,6 +2273,9 @@ object SessionController {
     ): WifiCarPlayConnector.JoinResult {
         val internetNetwork = preferredInternetNetwork()
         if (!InternetNetworkPolicy.useSystemWifi(internetNetwork, shellReady)) {
+            if (!ensurePhoneModeSystemWifiSafe(wifi, shellReady)) {
+                return WifiCarPlayConnector.JoinResult.Unavailable
+            }
             return joinCarWifiSpecifier(
                 wifi,
                 allowExistingSystemWifi = InternetNetworkPolicy.allowExistingSystemWifi(internetNetwork),
@@ -2289,19 +2302,20 @@ object SessionController {
      * globally connected matching SSID breaks that promise, so the join must stop
      * instead of silently continuing over the system-wide route.
      */
-    private fun phoneModeSystemWifiConflict(
+    private fun phoneModeSystemWifiDecision(
         wifi: Iap2SenderSession.WifiConfiguration,
         shellReady: Boolean,
-    ): Boolean {
-        if (preferredInternetNetwork() != InternetNetwork.PHONE) return false
-        val active =
-            if (shellReady) {
-                shellWifiStatus().second?.let { WifiIdentity.matches(wifi.ssid, it) } == true
-            } else {
-                liveWifiMatches(wifi.ssid) == true
-            }
+    ): PhoneModeSystemWifiDecision {
+        val network = preferredInternetNetwork()
+        if (network != InternetNetwork.PHONE) return PhoneModeSystemWifiDecision.PROCEED
+        val systemWifi = wifiConnector?.systemActiveWifiState(wifi.ssid)
         val saved = shellReady && savedNetworkIds(wifi.ssid).isNotEmpty()
-        return InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.PHONE, active, saved)
+        return InternetNetworkPolicy.phoneModeSystemWifiDecision(
+            network = network,
+            activeTarget = systemWifi == WifiCarPlayConnector.SystemWifiState.TARGET,
+            activeIdentityUnknown = systemWifi == WifiCarPlayConnector.SystemWifiState.UNKNOWN,
+            saved = saved,
+        )
     }
 
     /**
@@ -2464,13 +2478,6 @@ object SessionController {
         allowSystemFallback: Boolean = true,
     ): WifiCarPlayConnector.JoinResult {
         val connector = wifiConnector ?: return WifiCarPlayConnector.JoinResult.Unavailable
-        if (phoneModeSystemWifiConflict(wifi, shellWifiReady())) {
-            appendLog(
-                "NETWORK: 手机流量优先已停止——系统已保存或连接车机热点 \"${wifi.ssid}\"；" +
-                    "本轮不继续建立全局连接，请先在 WLAN 中忘记该热点或改为车机网络优先",
-            )
-            return WifiCarPlayConnector.JoinResult.Unavailable
-        }
         if (allowExistingSystemWifi && liveWifiMatches(wifi.ssid) == true) {
             appendLog("WIFI: 系统已连接同一局域网 \"${wifi.ssid}\"——直接绑定现有 Wi-Fi，跳过加入请求")
             val existing = bindExistingCarWifi(connector, wifi.ssid)
@@ -2780,7 +2787,10 @@ object SessionController {
         isCancelled: () -> Boolean = { connectCancelled },
     ) {
         if (isCancelled()) return
-        if (promptPhoneModeSystemWifiConflict(wifi, shellReady, isCancelled)) return
+        if (preferredInternetNetwork() == InternetNetwork.PHONE && phoneModeBlockedSsid == wifi.ssid) {
+            phoneModeBlockedSsid = null
+            return
+        }
         val choice =
             askWifiJoinChoice(
                 DialogSpec(
@@ -2805,6 +2815,10 @@ object SessionController {
                             manualJoinCarWifi(wifi, isCancelled)
                         }
                     WifiCarPlayConnector.JoinResult.Unavailable -> {
+                        if (preferredInternetNetwork() == InternetNetwork.PHONE && phoneModeBlockedSsid == wifi.ssid) {
+                            phoneModeBlockedSsid = null
+                            return
+                        }
                         ui.phase(t(R.string.sc_join_failed_manual))
                         appendLog("WIFI: 重试仍未加入 \"${wifi.ssid}\"——请到系统 WLAN 手动连接")
                     }
@@ -2820,28 +2834,58 @@ object SessionController {
         }
     }
 
-    private fun promptPhoneModeSystemWifiConflict(
+    private fun ensurePhoneModeSystemWifiSafe(
         wifi: Iap2SenderSession.WifiConfiguration,
         shellReady: Boolean,
-        isCancelled: () -> Boolean,
+        isCancelled: () -> Boolean = { connectCancelled },
     ): Boolean {
-        if (!phoneModeSystemWifiConflict(wifi, shellReady)) return false
-        val choice =
-            askWifiJoinChoice(
-                DialogSpec(
-                    title = t(R.string.sc_phone_mode_wifi_title),
-                    message = t(R.string.sc_phone_mode_wifi_body, wifi.ssid),
-                    positive = t(R.string.sc_open_wifi_settings),
-                    negative = t(R.string.sc_cancel),
-                ),
-                isCancelled = isCancelled,
-            )
-        if (isCancelled()) return true
-        if (choice == true) openWlanSettings()
+        if (isCancelled()) return false
+        when (phoneModeSystemWifiDecision(wifi, shellReady)) {
+            PhoneModeSystemWifiDecision.PROCEED -> {
+                phoneModeBlockedSsid = null
+                return true
+            }
+
+            PhoneModeSystemWifiDecision.CONFLICT -> {
+                val choice =
+                    askWifiJoinChoice(
+                        DialogSpec(
+                            title = t(R.string.sc_phone_mode_wifi_title),
+                            message = t(R.string.sc_phone_mode_wifi_body, wifi.ssid),
+                            positive = t(R.string.sc_open_wifi_settings),
+                            negative = t(R.string.sc_cancel),
+                        ),
+                        isCancelled = isCancelled,
+                    )
+                if (isCancelled()) return false
+                if (choice == true) openWlanSettings()
+            }
+
+            PhoneModeSystemWifiDecision.CONFIRM -> {
+                val choice =
+                    askWifiJoinChoice(
+                        DialogSpec(
+                            title = t(R.string.sc_phone_mode_wifi_unknown_title),
+                            message = t(R.string.sc_phone_mode_wifi_unknown_body, wifi.ssid),
+                            positive = t(R.string.sc_phone_mode_wifi_confirm),
+                            negative = t(R.string.sc_open_wifi_settings),
+                        ),
+                        isCancelled = isCancelled,
+                    )
+                if (isCancelled()) return false
+                if (choice == true) {
+                    appendLog("NETWORK: 系统 WiFi 名称不可读；用户确认系统未连接或保存车机热点，继续手机流量优先")
+                    phoneModeBlockedSsid = null
+                    return true
+                }
+                if (choice == false) openWlanSettings()
+            }
+        }
+        phoneModeBlockedSsid = wifi.ssid
         ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))
         ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }
         appendLog("NETWORK: 手机流量优先需要先清除系统 WLAN 热点 \"${wifi.ssid}\"——本轮已停止")
-        return true
+        return false
     }
 
     /** 手动兜底：密码进剪贴板 + 跳 WLAN 设置，轮询用户是否连上。 */

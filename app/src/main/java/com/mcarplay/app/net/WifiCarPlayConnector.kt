@@ -51,6 +51,13 @@ class WifiCarPlayConnector(
         data object Unsupported : JoinResult
     }
 
+    enum class SystemWifiState {
+        NONE,
+        TARGET,
+        OTHER,
+        UNKNOWN,
+    }
+
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
@@ -76,6 +83,54 @@ class WifiCarPlayConnector(
                 connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
             }.getOrDefault(false)
         return chooseWifiNetworkTarget(binding.current(), connectivityManager.activeNetwork, ::isWifi)
+    }
+
+    /**
+     * Reads the system default Wi-Fi independently from any process binding. The active
+     * network is the system default even after bindProcessToNetwork, while the process
+     * binding is exposed separately by boundNetworkForProcess.
+     */
+    fun systemActiveWifiState(ssid: String): SystemWifiState {
+        val target = connectivityManager.activeNetwork ?: return SystemWifiState.NONE
+        val capabilities =
+            runCatching { connectivityManager.getNetworkCapabilities(target) }.getOrNull()
+                ?: return SystemWifiState.UNKNOWN
+        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return SystemWifiState.NONE
+        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            return SystemWifiState.UNKNOWN
+        }
+        val result = AtomicReference<String?>(null)
+        val latch = CountDownLatch(1)
+        val observer =
+            object : ConnectivityManager.NetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    capabilities: NetworkCapabilities,
+                ) {
+                    if (network != target) return
+                    val actual = WifiIdentity.normalizeSsid((capabilities.transportInfo as? WifiInfo)?.ssid) ?: return
+                    if (result.compareAndSet(null, actual)) latch.countDown()
+                }
+            }
+        val request =
+            NetworkRequest
+                .Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+        return try {
+            connectivityManager.registerNetworkCallback(request, observer)
+            latch.await(1_000, TimeUnit.MILLISECONDS)
+            val actual = result.get() ?: return SystemWifiState.UNKNOWN
+            if (WifiIdentity.matches(ssid, actual)) SystemWifiState.TARGET else SystemWifiState.OTHER
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            SystemWifiState.UNKNOWN
+        } catch (_: Exception) {
+            SystemWifiState.UNKNOWN
+        } finally {
+            runCatching { connectivityManager.unregisterNetworkCallback(observer) }
+        }
     }
 
     /**

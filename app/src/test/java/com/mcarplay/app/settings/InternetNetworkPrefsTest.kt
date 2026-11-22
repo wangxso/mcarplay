@@ -35,10 +35,51 @@ class InternetNetworkPrefsTest {
     }
 
     @Test
-    fun phoneModeStopsForActiveOrSavedSystemWifi() {
-        assertTrue(InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.PHONE, active = true, saved = false))
-        assertTrue(InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.PHONE, active = false, saved = true))
-        assertFalse(InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.PHONE, active = false, saved = false))
-        assertFalse(InternetNetworkPolicy.phoneModeConflictsWithSystemWifi(InternetNetwork.CAR, active = true, saved = true))
+    fun phoneModeStopsForKnownOrSavedSystemWifiAndConfirmsUnknownIdentity() {
+        assertEquals(
+            PhoneModeSystemWifiDecision.CONFLICT,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = true,
+                activeIdentityUnknown = false,
+                saved = false,
+            ),
+        )
+        assertEquals(
+            PhoneModeSystemWifiDecision.CONFLICT,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = false,
+                activeIdentityUnknown = false,
+                saved = true,
+            ),
+        )
+        assertEquals(
+            PhoneModeSystemWifiDecision.CONFIRM,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = false,
+                activeIdentityUnknown = true,
+                saved = false,
+            ),
+        )
+        assertEquals(
+            PhoneModeSystemWifiDecision.PROCEED,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = false,
+                activeIdentityUnknown = false,
+                saved = false,
+            ),
+        )
+        assertEquals(
+            PhoneModeSystemWifiDecision.PROCEED,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.CAR,
+                activeTarget = true,
+                activeIdentityUnknown = true,
+                saved = true,
+            ),
+        )
     }
 }

@@ -10,6 +10,12 @@ enum class InternetNetwork(
     CAR("car"),
 }
 
+enum class PhoneModeSystemWifiDecision {
+    PROCEED,
+    CONFLICT,
+    CONFIRM,
+}
+
 /**
  * Internet routing preference for the next connection.
  *
@@ -62,11 +68,19 @@ object InternetNetworkPolicy {
 
     /**
      * Phone mode cannot preserve mobile-data routing if Android already owns the same
-     * hotspot globally. The join path must stop and ask the user to forget it first.
+     * hotspot globally. If a system Wi-Fi is active but its SSID cannot be read, the
+     * caller must ask the user instead of assuming the route is safe.
      */
-    fun phoneModeConflictsWithSystemWifi(
+    fun phoneModeSystemWifiDecision(
         network: InternetNetwork,
-        active: Boolean,
+        activeTarget: Boolean,
+        activeIdentityUnknown: Boolean,
         saved: Boolean,
-    ): Boolean = network == InternetNetwork.PHONE && (active || saved)
+    ): PhoneModeSystemWifiDecision =
+        when {
+            network != InternetNetwork.PHONE -> PhoneModeSystemWifiDecision.PROCEED
+            activeTarget || saved -> PhoneModeSystemWifiDecision.CONFLICT
+            activeIdentityUnknown -> PhoneModeSystemWifiDecision.CONFIRM
+            else -> PhoneModeSystemWifiDecision.PROCEED
+        }
 }
