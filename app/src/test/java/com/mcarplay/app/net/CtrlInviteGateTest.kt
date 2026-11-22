@@ -23,6 +23,30 @@ class CtrlInviteGateTest {
     }
 
     @Test
+    fun oraDirectPathGivesLateInvitePriorityBeforeFirstFallback() {
+        fun decide(
+            elapsed: Long,
+            endpointFound: Boolean = true,
+            advertisedAt: Long = start,
+            inviteAt: Long = 0L,
+        ) = CtrlInviteGate.decide(
+            nowMillis = start + elapsed,
+            waitStartedAtMillis = start,
+            lastInviteAtMillis = inviteAt,
+            mdnsEndpointFound = endpointFound,
+            advertisedAtMillis = advertisedAt,
+            preferResolvedMdns = true,
+        )
+
+        assertEquals(Decision.WAIT, decide(905, advertisedAt = start + 891))
+        assertEquals(Decision.INVITED, decide(1_925, advertisedAt = start + 891, inviteAt = start + 1_909))
+        assertEquals(Decision.WAIT, decide(2_999))
+        assertEquals(Decision.MDNS_DIRECT, decide(3_000))
+        assertEquals(Decision.REANNOUNCE, decide(3_000, endpointFound = false))
+        assertEquals(Decision.REANNOUNCE, decide(3_000, advertisedAt = 0L))
+    }
+
+    @Test
     fun inviteExpiresWhileWaiting() {
         // 时效按当前时刻评估：开始等待时 19s 前的邀请仍新鲜，再等 2s 就过期了
         val invite = start - 19_000L

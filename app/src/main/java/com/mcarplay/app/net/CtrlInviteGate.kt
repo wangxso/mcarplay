@@ -25,7 +25,7 @@ internal object CtrlInviteGate {
     /** 一直没确认广播可见时，等这么久补一次公告（catplay force_announce：绑网瞬间的公告常丢）。 */
     const val UNSEEN_REANNOUNCE_MS = 2_000L
 
-    enum class Decision { INVITED, REANNOUNCE, MDNS_FALLBACK, WAIT }
+    enum class Decision { INVITED, MDNS_DIRECT, REANNOUNCE, MDNS_FALLBACK, WAIT }
 
     /**
      * @param advertisedAtMillis 广播最近一次确认可见的时刻（0 = 当前不可见 / 未确认）
@@ -38,10 +38,16 @@ internal object CtrlInviteGate {
         mdnsEndpointFound: Boolean,
         advertisedAtMillis: Long = 0L,
         reannouncedAtMillis: Long = 0L,
+        preferResolvedMdns: Boolean = false,
     ): Decision {
         if (isFresh(lastInviteAtMillis, nowMillis)) return Decision.INVITED
         val reannounced = reannouncedAtMillis > 0L
         val visibleSince = maxOf(waitStartedAtMillis, advertisedAtMillis, reannouncedAtMillis)
+        // ORA 03 重新打开 App 后，车机在首次公告可见约 1 秒后才发邀请。
+        // 已解析端点可以省掉重公告，但仍需给车机一次完整的邀请窗口。
+        if (preferResolvedMdns && mdnsEndpointFound && advertisedAtMillis > 0L && nowMillis - visibleSince >= MDNS_GRACE_MS) {
+            return Decision.MDNS_DIRECT
+        }
         if (!reannounced) {
             // 广播从未确认可见：catplay 的「公告丢失」场景，2 s 后补一次。
             // 已可见但宽限期内没有邀请：车机可能漏看了这次公告，直连前再给一次机会。

@@ -61,6 +61,8 @@ object ReceiverCompatibility {
          * 当前覆盖艾瑞泽 8（CHERY / Tiggo）与 issue #55 报告中的奔驰 MB_D-PP-3/4，均限定 AirPlay 320.17.7。
          */
         val singleRecordPerSession: Boolean = false,
+        /** ORA 03 时序验证：初始音频加入时沿用首个 RECORD，手动补启音频仍可激活。 */
+        val skipRecordAfterInitialAudioSetup: Boolean = false,
         /**
          * 连接等待超过 30 s 时显示艾瑞泽 8 专属提示（该车机此时会自行重置并重新发起）。只影响界面文案，
          * 与 [singleRecordPerSession] 同一份 CHERY/Tiggo/320.17.7 身份判定；手动车型不改变它（车还是那台车）。
@@ -84,6 +86,14 @@ object ReceiverCompatibility {
          *  - 无面板几何时保持 `displays[0]` 原值，不会退化成兜底分辨率。
          */
         val usePanelVideoGeometry: Boolean = false,
+        /**
+         * 在 CarWith 的 `0x18052` 功能清单里声明 `DISABLE_RESOLUTION_OPTION=1`，让随后 `0x18007`
+         * 的宽高按车机 `/info` 显示几何生效，而不是被 CarWith 映射回自己的分辨率档位。
+         *
+         * WinPlay 台架默认启用（用于验证实际 CarWith 返回尺寸）；奔驰 MB_E-P 手动预设也启用。
+         * 其它接收端保持关闭，避免一次改动同时影响所有车型。
+         */
+        val preferVehicleResolution: Boolean = false,
     )
 
     data class PairingFallback(
@@ -96,7 +106,8 @@ object ReceiverCompatibility {
         mediaCapabilities: String = "",
         receiverInstance: String? = null,
         preset: VehiclePreset = VehiclePresetRuntime.current,
-    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset, signals)
+        airPlayFirmware: String? = null,
+    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance, airPlayFirmware), preset, signals)
 
     /**
      * 用户在主页手动选择车型后，在自动判定结果之上叠加该车型的适配开关（[VehiclePreset.AUTO] 不改动）。
@@ -125,8 +136,10 @@ object ReceiverCompatibility {
                     iphoneAuthSequence = false,
                     pinnedMfiChallengeLength = null,
                     singleRecordPerSession = false,
+                    skipRecordAfterInitialAudioSetup = false,
                     reconnectOnStreamingInvite = false,
                     usePanelVideoGeometry = false,
+                    preferVehicleResolution = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -146,6 +159,7 @@ object ReceiverCompatibility {
                     family = Family.WINPLAY,
                     bluetoothRole = BluetoothRole.NETWORK_HANDOFF,
                     requiresRealBluetoothIdentity = true,
+                    preferVehicleResolution = true,
                     rules = policy.rules + "manual.winplay",
                 )
             VehiclePreset.DIPLAY ->
@@ -167,15 +181,18 @@ object ReceiverCompatibility {
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-dpp-blocked")
                 }
-            // 奔驰 MB_E-P / 2025 GLC（issue #62）：**实验选项，根因未定谳**。
-            // 只打开「按 displayPanels 的视频表面协商」这一条假设；其余行为与自动判定完全一致，
+            // 奔驰 MB_E-P / 2025 GLC（issue #62）：先验证「CarWith 是否按车机尺寸出流」。
+            // HyperCar 日志已给出同车机的 A/B：请求 1624x1278 时，未声明 DISABLE_RESOLUTION_OPTION
+            // 会被 CarWith 回成 1280x720，声明后才返回 1624x1278。因此当前预设不再使用 1728 面板，
+            // 保持 displays[0] 的 1624x1278，并只打开功能协商这一条改动。
             // 不附带 MB_D-PP 的单次 RECORD（那是另一代际、另一份报告的证据）。
             // 已知是别家车机时拒绝套用，避免把实验开关带到其它接收端上。
             VehiclePreset.MERCEDES_MB_E ->
                 if (manualMercedesAllowed(signals)) {
                     policy.copy(
-                        usePanelVideoGeometry = true,
-                        rules = policy.rules + "manual.mercedes-mb-e.panel-geometry-experiment",
+                        usePanelVideoGeometry = false,
+                        preferVehicleResolution = true,
+                        rules = policy.rules + "manual.mercedes-mb-e.vehicle-resolution",
                     )
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")
@@ -188,10 +205,35 @@ object ReceiverCompatibility {
         return manufacturer.isEmpty() || manufacturer == "mercedes-benz"
     }
 
+    /**
+     * ORA 03 现场诊断：此固件通过 0x5703 提供热点凭据，未声明 0x4301，
+     * 有时不会及时发出 ctrl 邀请。蓝牙与 mDNS 身份均吻合时只需等待首个邀请窗口。
+     */
+    internal fun prefersOra03DirectDiscovery(
+        signals: ReceiverProfile.Signals,
+        mdnsModel: String?,
+        mdnsFirmware: String?,
+        mdnsSourceVersion: String?,
+        preset: VehiclePreset,
+    ): Boolean =
+        preset == VehiclePreset.AUTO &&
+            normalize(signals.manufacturer) == "gwm" &&
+            normalize(signals.model) == "ora es11" &&
+            signals.sendIds?.let { 0x5703 in it && 0x4301 !in it } == true &&
+            signals.receiveIds?.contains(0x5702) == true &&
+            isOra03Receiver(mdnsModel, mdnsFirmware, mdnsSourceVersion)
+
+    private fun isOra03Receiver(
+        model: String?,
+        firmware: String?,
+        sourceVersion: String?,
+    ): Boolean = normalize(model) == "ora es11" && normalize(firmware) == "n220346.2" && sourceVersion == "365.10.2"
+
     private fun resolveDetected(
         signals: ReceiverProfile.Signals,
         mediaCapabilities: String,
         receiverInstance: String?,
+        airPlayFirmware: String?,
     ): Policy {
         val profile = ReceiverProfile.classify(signals)
         val generation = ReceiverProfile.linkGenerationOf(signals)
@@ -233,6 +275,11 @@ object ReceiverCompatibility {
             normalize(signals.manufacturer) == "mercedes-benz" &&
                 normalize(signals.model) in MERCEDES_D_PP_MODELS &&
                 normalize(signals.srcvers) == "320.17.7"
+        // ORA 03 重连时音频 SETUP 后立即补发 RECORD，约 6 s 后车机拆链。
+        // 同一车机较晚手动开启音频时补发 RECORD 有成功记录，故只调整初始连接。
+        val oraSkipInitialAudioRecord =
+            normalize(signals.manufacturer) == "gwm" &&
+                isOra03Receiver(signals.model, airPlayFirmware, signals.srcvers)
         // 大众车机型号自报 VWxxxx（ID7 VW4131、帕萨特 2025 VW4211），厂商字段并不统一（帕萨特报 Toppower）
         val vwStreamingInvite = VW_MODEL.matches(normalize(signals.model))
         val rules =
@@ -251,7 +298,9 @@ object ReceiverCompatibility {
                 if (cheryReleasesBluetooth) add("chery.mfi-32-only")
                 if (cherySingleRecord) add("chery.tiggo.320.17.7.single-record")
                 if (mercedesSingleRecord) add("mercedes.mb_d-pp.320.17.7.single-record")
+                if (oraSkipInitialAudioRecord) add("ora.n220346.2.no-initial-audio-record")
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
+                if (winPlay) add("winplay.vehicle-resolution")
             }
         return Policy(
             family = family,
@@ -269,8 +318,10 @@ object ReceiverCompatibility {
             iphoneAuthSequence = cheryReleasesBluetooth,
             pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
             singleRecordPerSession = cherySingleRecord || mercedesSingleRecord,
+            skipRecordAfterInitialAudioSetup = oraSkipInitialAudioRecord,
             arrizo8ConnectWindowHint = cherySingleRecord,
             reconnectOnStreamingInvite = vwStreamingInvite,
+            preferVehicleResolution = winPlay,
         )
     }
 
@@ -313,7 +364,8 @@ object ReceiverCompatibility {
     /** 只输出固定策略标签，不写入 SSID、MAC、序列号或原始身份文本。 */
     fun describe(policy: Policy): String =
         "COMPAT: family=${policy.family} pairing=${policy.pairingMode} bluetooth=${policy.bluetoothRole} " +
-            "link=${policy.linkGeneration} btRetireRetry=${policy.allowBluetoothRetireRetry} rules=${policy.rules.joinToString(",") }"
+            "link=${policy.linkGeneration} btRetireRetry=${policy.allowBluetoothRetireRetry} " +
+            "vehicleResolution=${policy.preferVehicleResolution} rules=${policy.rules.joinToString(",") }"
 
     private fun memoryKey(
         signals: ReceiverProfile.Signals,

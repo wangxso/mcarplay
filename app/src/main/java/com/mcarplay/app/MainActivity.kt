@@ -51,6 +51,8 @@ import com.mcarplay.app.media.NotificationAccess
 import com.mcarplay.app.service.BatteryExemption
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ExternalHuService
+import com.mcarplay.app.settings.InternetNetwork
+import com.mcarplay.app.settings.InternetNetworkPrefs
 import com.mcarplay.app.settings.MediaPrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
@@ -121,6 +123,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnExternalHu: TextView
     private lateinit var switchAlwaysOn: androidx.appcompat.widget.SwitchCompat
     private lateinit var switchAutoPlayMusic: androidx.appcompat.widget.SwitchCompat
+    private lateinit var switchCarNetwork: androidx.appcompat.widget.SwitchCompat
+    private lateinit var networkPrefDesc: TextView
     private lateinit var advBody: View
     private lateinit var advChevron: ImageView
     private lateinit var shellStateText: TextView
@@ -894,6 +898,8 @@ class MainActivity : AppCompatActivity() {
         btnExternalHu = findViewById(R.id.btnExternalHu)
         switchAlwaysOn = findViewById(R.id.switchAlwaysOn)
         switchAutoPlayMusic = findViewById(R.id.switchAutoPlayMusic)
+        switchCarNetwork = findViewById(R.id.switchCarNetwork)
+        networkPrefDesc = findViewById(R.id.networkPrefDesc)
         advBody = findViewById(R.id.advBody)
         advChevron = findViewById(R.id.advChevron)
         shellStateText = findViewById(R.id.shellStateText)
@@ -1179,6 +1185,34 @@ class MainActivity : AppCompatActivity() {
         switchAutoPlayMusic.setOnCheckedChangeListener { _, checked ->
             MediaPrefs.setAutoPlayOnConnect(this, checked)
             log("MODE: 上车自动播放音乐 ${if (checked) "开启" else "关闭"}")
+        }
+
+        // ---- 互联网网络：车机网络 / 手机流量（下次连接生效）----
+        var carNetworkPreferred = InternetNetworkPrefs.get(this) == InternetNetwork.CAR
+
+        fun refreshNetworkPreference(carPreferred: Boolean) {
+            switchCarNetwork.isChecked = carPreferred
+            networkPrefDesc.setText(
+                if (carPreferred) R.string.main_internet_network_car_desc else R.string.main_internet_network_phone_desc,
+            )
+        }
+
+        refreshNetworkPreference(carNetworkPreferred)
+        switchCarNetwork.setOnCheckedChangeListener { _, checked ->
+            if (checked == carNetworkPreferred) return@setOnCheckedChangeListener
+            carNetworkPreferred = checked
+            InternetNetworkPrefs.set(this, if (checked) InternetNetwork.CAR else InternetNetwork.PHONE)
+            networkPrefDesc.setText(
+                if (checked) R.string.main_internet_network_car_desc else R.string.main_internet_network_phone_desc,
+            )
+            val message =
+                if (checked && ShizukuGate.state(this) != ShizukuGate.State.READY) {
+                    R.string.main_internet_network_needs_shizuku
+                } else {
+                    if (checked) R.string.main_internet_network_car_on else R.string.main_internet_network_phone_on
+                }
+            snack(getString(message))
+            log("NETWORK: 互联网优先 ${if (checked) "车机网络" else "手机流量"}（下次连接生效）")
         }
 
         // ---- 英雄卡主操作 ----

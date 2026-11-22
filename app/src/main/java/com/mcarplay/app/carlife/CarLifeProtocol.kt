@@ -201,12 +201,21 @@ object CarLifeProtocol {
      *
      * CarWith requires CONTENT_ENCRYPTION=1 for media. Advertising it commits
      * both sides to the RSA/AES exchange before video initialization.
+     *
+     * [preferVehicleResolution] adds DISABLE_RESOLUTION_OPTION=1. CarWith maps
+     * that key to Recorder.useVehicleResolution, so the later 0x18007 request is
+     * kept instead of being reduced to CarWith's own resolution tier.
      */
-    fun featureResponsePayload(features: Map<String, Int> = linkedMapOf("CONTENT_ENCRYPTION" to 1)): ByteArray {
-        require(features.size <= MAX_FEATURE_COUNT) { "Too many CarLife features" }
+    fun featureResponsePayload(
+        features: Map<String, Int> = linkedMapOf("CONTENT_ENCRYPTION" to 1),
+        preferVehicleResolution: Boolean = false,
+    ): ByteArray {
+        val actual = LinkedHashMap(features)
+        if (preferVehicleResolution) actual["DISABLE_RESOLUTION_OPTION"] = 1
+        require(actual.size <= MAX_FEATURE_COUNT) { "Too many CarLife features" }
         val out = ByteArrayOutputStream()
-        out.write(pbInt(1, features.size))
-        features.forEach { (key, value) ->
+        out.write(pbInt(1, actual.size))
+        actual.forEach { (key, value) ->
             val entry = pbString(1, key) + pbInt(2, value)
             out.write(pbBytes(2, entry))
         }

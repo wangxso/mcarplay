@@ -85,6 +85,9 @@ import com.mcarplay.app.session.LegacySessionUiPort
 import com.mcarplay.app.session.SessionUiPort
 import com.mcarplay.app.session.attemptHandoffCancelled
 import com.mcarplay.app.settings.DisplayPrefs
+import com.mcarplay.app.settings.InternetNetwork
+import com.mcarplay.app.settings.InternetNetworkPolicy
+import com.mcarplay.app.settings.InternetNetworkPrefs
 import com.mcarplay.app.settings.MediaPrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
@@ -1342,6 +1345,7 @@ object SessionController {
     private fun newFormalCarLifeSession(
         context: Context,
         requestedVideoSize: Pair<Int, Int>? = null,
+        preferVehicleResolution: Boolean = false,
     ): CarLifeSession {
         lateinit var session: CarLifeSession
         session =
@@ -1401,6 +1405,7 @@ object SessionController {
                 },
                 log = { line -> appendLog(line) },
                 requestedVideoSize = requestedVideoSize,
+                preferVehicleResolution = preferVehicleResolution,
                 launchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
                 onReturnToCar = onReturnToCar@{
                     if (currentCarLifeSession !== session) return@onReturnToCar
@@ -2108,11 +2113,16 @@ object SessionController {
         secret: ByteArray?,
         host: String?,
         logLine: String,
+        recordAfterSetup: Boolean = true,
     ): Boolean {
         val started = startAudioChannel(context, client, secret, host)
         if (started) {
-            appendLog(logLine)
-            client.record()
+            if (recordAfterSetup) {
+                appendLog(logLine)
+                client.record()
+            } else {
+                appendLog("AUDIO: 初始音频流已加入——沿用已激活会话的 RECORD")
+            }
         }
         return started
     }
@@ -2176,23 +2186,29 @@ object SessionController {
     }
 
     /**
-     * 校对真实 WiFi 并加入车机热点。**静默路径优先**（2026-10-22 起）：
+     * 校对真实 WiFi 并加入车机热点。按「互联网网络」偏好选择入网方式：
+     *  - **车机网络优先且 Shizuku 就绪**时走静默路径：
      *  1. `cmd wifi set-wifi-enabled` + `cmd wifi connect-network`（Shizuku）：系统直接
      *     连上热点，**0 弹窗、0 用户操作**；热点被存进系统配置，下次进入范围自动重连；
      *  2. `requestNetwork(TRANSPORT_WIFI)`（**不带 specifier**）拿到 WiFi 的 `Network`
      *     句柄并绑定进程网络——没有 specifier 就不会弹系统确认框；
      *  3. 各环节检查 [connectCancelled]——用户取消后不得继续跑（否则 phaseHint 被覆盖、
      *     ctrl 广播被重新拉起，表现为「取消不了」）。
-     * 静默路径失败（Shizuku 不可用/命令行连网失败）才退回应用专属网络
-     * （`WifiNetworkSpecifier`，首次加入会弹一次系统确认框）。
+     *  - **手机流量优先**或静默路径失败时走应用专属网络（`WifiNetworkSpecifier`）：
+     *    热点不写入系统配置、不成为系统默认网络，其它应用继续用手机流量；首次加入会弹系统确认框。
      * 全失败时回退「系统 WLAN 手动加入」指引（密码可经「去连接」复制）。
      */
     private fun autoJoinCarWifi(wifi: Iap2SenderSession.WifiConfiguration) {
         Bg.run("wifi-auto-join") {
+            val internetNetwork = preferredInternetNetwork()
             val shellReady =
                 appContext?.let { ShizukuGate.state(it) == ShizukuGate.State.READY } == true
+            appendLog(
+                "NETWORK: 互联网优先=${if (internetNetwork == InternetNetwork.CAR) "车机网络" else "手机流量"}" +
+                    "（${if (internetNetwork == InternetNetwork.CAR) "允许系统级使用车机热点" else "车机热点仅绑定本进程"}）",
+            )
             // 1) 首选静默路径：Shizuku 命令行连网（0 弹窗）
-            if (shellReady) {
+            if (InternetNetworkPolicy.useSystemWifi(internetNetwork, shellReady)) {
                 if (joinCarWifiSilently(wifi) is WifiCarPlayConnector.JoinResult.Joined) return@run
                 if (connectCancelled) return@run
                 // 热点已连上、只是 Network 通道没绑成：绝不能退回 specifier——那会重新
@@ -2213,12 +2229,26 @@ object SessionController {
             // 2) 回退：应用专属网络（不影响 4G/5G、不会保存为系统网络）
             if (shellReady && shellWifiDisabled() && !waitForWifiEnabled()) return@run
             if (connectCancelled) return@run
-            when (val result = joinCarWifiSpecifier(wifi)) {
+            if (internetNetwork == InternetNetwork.PHONE && shellReady) {
+                appendLog("NETWORK: 手机流量优先——跳过系统级存储与 connect-network 兜底")
+            }
+            val result =
+                joinCarWifiSpecifier(
+                    wifi,
+                    allowExistingSystemWifi = InternetNetworkPolicy.allowExistingSystemWifi(internetNetwork),
+                    allowSystemFallback = InternetNetworkPolicy.allowSystemFallback(internetNetwork),
+                )
+            when (result) {
                 is WifiCarPlayConnector.JoinResult.Joined -> Unit
 
                 WifiCarPlayConnector.JoinResult.Unsupported -> {
-                    appendLog("WIFI: 热点安全类型 ${wifi.securityType} 无法用应用专属网络表达——退回系统级加入")
-                    legacyJoinCarWifi(wifi, shellReady)
+                    if (internetNetwork == InternetNetwork.CAR) {
+                        appendLog("WIFI: 热点安全类型 ${wifi.securityType} 无法用应用专属网络表达——退回系统级加入")
+                        legacyJoinCarWifi(wifi, shellReady)
+                    } else {
+                        appendLog("WIFI: 手机流量优先——该热点安全类型无法使用应用专属网络，请到 WLAN 手动加入")
+                        promptSpecifierFailed(wifi, shellReady)
+                    }
                 }
 
                 WifiCarPlayConnector.JoinResult.Unavailable -> promptSpecifierFailed(wifi, shellReady)
@@ -2226,15 +2256,19 @@ object SessionController {
         }
     }
 
-    /**
-     * 端点先于 0x5703 到达（或上一轮换网失败）时的入网入口：静默路径优先，
-     * 静默失败再退回应用专属网络。
-     */
+    /** 端点先于 0x5703 到达（或上一轮换网失败）时的入网入口，遵循「互联网网络」偏好。 */
     private fun joinCarWifi(
         wifi: Iap2SenderSession.WifiConfiguration,
         shellReady: Boolean,
     ): WifiCarPlayConnector.JoinResult {
-        if (!shellReady) return joinCarWifiSpecifier(wifi)
+        val internetNetwork = preferredInternetNetwork()
+        if (!InternetNetworkPolicy.useSystemWifi(internetNetwork, shellReady)) {
+            return joinCarWifiSpecifier(
+                wifi,
+                allowExistingSystemWifi = InternetNetworkPolicy.allowExistingSystemWifi(internetNetwork),
+                allowSystemFallback = InternetNetworkPolicy.allowSystemFallback(internetNetwork),
+            )
+        }
         val silent = joinCarWifiSilently(wifi)
         if (silent is WifiCarPlayConnector.JoinResult.Joined) return silent
         // 热点已连上但通道没绑成：不再走会弹窗的 specifier（见 autoJoinCarWifi 同款判断）；
@@ -2247,6 +2281,8 @@ object SessionController {
         }
         return joinCarWifiSpecifier(wifi)
     }
+
+    private fun preferredInternetNetwork(): InternetNetwork = appContext?.let(InternetNetworkPrefs::get) ?: InternetNetworkPrefs.DEFAULT
 
     /**
      * 静默加入车机热点（**两步式，全程 0 弹窗**）。
@@ -2398,14 +2434,17 @@ object SessionController {
     /**
      * 用应用专属网络（`WifiNetworkSpecifier`）加入车机热点，成功后进程网络已绑定。
      *
-     * **只是静默路径的兜底**（Shizuku 不可用，或 ROM 屏蔽了 `cmd wifi connect-network`）：
      * 该网络只对本进程可见、不保存、不成为默认网络，但首次加入会弹系统确认框。
-     * 也因此不再询问「清除系统里保存的同名热点」——静默路径本来就会把热点存进
-     * 系统配置（这是设计，不是旧版本残留）。
+     * 手机流量优先时会禁用「直接采用系统现有 Wi-Fi」与 connect-network 兜底，
+     * 避免偏好被保存网络或 ROM 自动切网绕过。
      */
-    private fun joinCarWifiSpecifier(wifi: Iap2SenderSession.WifiConfiguration): WifiCarPlayConnector.JoinResult {
+    private fun joinCarWifiSpecifier(
+        wifi: Iap2SenderSession.WifiConfiguration,
+        allowExistingSystemWifi: Boolean = true,
+        allowSystemFallback: Boolean = true,
+    ): WifiCarPlayConnector.JoinResult {
         val connector = wifiConnector ?: return WifiCarPlayConnector.JoinResult.Unavailable
-        if (liveWifiMatches(wifi.ssid) == true) {
+        if (allowExistingSystemWifi && liveWifiMatches(wifi.ssid) == true) {
             appendLog("WIFI: 系统已连接同一局域网 \"${wifi.ssid}\"——直接绑定现有 Wi-Fi，跳过加入请求")
             val existing = bindExistingCarWifi(connector, wifi.ssid)
             if (existing != null) {
@@ -2434,8 +2473,8 @@ object SessionController {
                         securityType = wifi.securityType,
                         timeoutMillis = SPECIFIER_JOIN_TIMEOUT_MS,
                         isCancelled = { connectCancelled },
-                        quickFallback = { specifierQuickFallback(wifi) },
-                        deepFallback = { specifierDeepFallback(wifi) },
+                        quickFallback = if (allowSystemFallback) ({ specifierQuickFallback(wifi) }) else null,
+                        deepFallback = if (allowSystemFallback) ({ specifierDeepFallback(wifi) }) else null,
                         userChoicePending = { requestedAt ->
                             WifiCarPlayConnector.isUserChoicePending(uiPausedAtMs, uiStopped, requestedAt)
                         },
@@ -2448,7 +2487,7 @@ object SessionController {
             // 关键时机：bindProcessToNetwork 完成后再注册，车机才能看到 ctrl 广播
             ctrlAdvertiser?.ensureForNetwork(wifi.ssid, force = true, network = connector.currentNetwork)
             appendLog(">>> WiFi 已加入车机热点（应用专属网络），ctrl 广播已重新注册，等待车机 ctrl 邀请")
-        } else if (!connectCancelled) {
+        } else if (allowExistingSystemWifi && !connectCancelled) {
             appendLog("WIFI: 应用专属网络加入未成功（${result.javaClass.simpleName}）")
             // 兜底：系统里保存过该热点时，系统可能已自动全局连上它——specifier 挂起
             // 的形态下这条近路反而最稳（2026-10-22 真机：用户选「保留系统网络」+
@@ -2730,7 +2769,13 @@ object SessionController {
             true -> {
                 when (val retry = joinCarWifi(wifi, shellReady)) {
                     is WifiCarPlayConnector.JoinResult.Joined -> Unit
-                    WifiCarPlayConnector.JoinResult.Unsupported -> legacyJoinCarWifi(wifi, shellReady, isCancelled)
+                    WifiCarPlayConnector.JoinResult.Unsupported ->
+                        if (preferredInternetNetwork() == InternetNetwork.CAR) {
+                            legacyJoinCarWifi(wifi, shellReady, isCancelled)
+                        } else {
+                            appendLog("NETWORK: 手机流量优先——无法使用应用专属网络，转手动 WLAN 指引")
+                            manualJoinCarWifi(wifi, isCancelled)
+                        }
                     WifiCarPlayConnector.JoinResult.Unavailable -> {
                         ui.phase(t(R.string.sc_join_failed_manual))
                         appendLog("WIFI: 重试仍未加入 \"${wifi.ssid}\"——请到系统 WLAN 手动连接")
@@ -3174,14 +3219,13 @@ object SessionController {
      * 等车机 ctrl 邀请（`GET /ctrl-int/1/connect`）——catplay 的连接触发点。
      *
      * 邀请意味着「车机已在 WiFi 上发现我们，且已把 AirPlay 端口打开」，此时连
-     * AirPlay 才不会被 Connection refused。旧实现用固定 sleep 1.6s 赌邀请已到：
-     * 车机快时白等，慢时又不够。这里事件驱动，并且若 mDNS 已发现 `_airplay._tcp`
-     * （端口确定可连）也立即放行，避免旧机型不发邀请时白等满窗口。
+     * AirPlay 才不会被 Connection refused。无邀请时可在发现 `_airplay._tcp` 后走直连；
+     * 通用路径会先给公告及重公告留出宽限期。
      *
      * @return true = 收到邀请 / 已发现端点；false = 等待窗口耗尽
      */
     private fun awaitCtrlInvite(
-        ssid: String,
+        endpoint: Iap2SenderSession.CarPlayEndpoint,
         timeoutMillis: Long,
     ): Boolean {
         val advertiser = ctrlAdvertiser
@@ -3193,14 +3237,25 @@ object SessionController {
             if (connectCancelled) return false
             val invites = advertiser?.inviteCount ?: 0
             val now = android.os.SystemClock.uptimeMillis()
+            val discovered = endpointBrowser?.awaitEndpoint(0)
+            val preferResolvedMdns =
+                discovered != null &&
+                    ReceiverCompatibility.prefersOra03DirectDiscovery(
+                        endpoint.receiverSignals,
+                        txtValue(discovered, "model"),
+                        txtValue(discovered, "fv"),
+                        txtValue(discovered, "srcvers"),
+                        VehiclePresetRuntime.current,
+                    )
             when (
                 CtrlInviteGate.decide(
                     nowMillis = now,
                     waitStartedAtMillis = startedAt,
                     lastInviteAtMillis = advertiser?.lastInviteAtMillis ?: 0L,
-                    mdnsEndpointFound = endpointBrowser?.awaitEndpoint(0) != null,
+                    mdnsEndpointFound = discovered != null,
                     advertisedAtMillis = advertiser?.advertisedAtMillis ?: 0L,
                     reannouncedAtMillis = reannouncedAt,
+                    preferResolvedMdns = preferResolvedMdns,
                 )
             ) {
                 CtrlInviteGate.Decision.INVITED -> {
@@ -3216,6 +3271,11 @@ object SessionController {
                     return true
                 }
 
+                CtrlInviteGate.Decision.MDNS_DIRECT -> {
+                    appendLog("CTRL: ORA 03 N220346.2 已解析且等待邀请超时（${now - startedAt}ms）——直接连接 AirPlay")
+                    return true
+                }
+
                 // catplay 实测：iPhone 的 Bonjour 公告常被车机丢弃——它在每次邀请前都
                 // force_announce。这里补发一次；广播已可见时要等满宽限期，否则会把车机正要响应的那次公告注销掉。
                 CtrlInviteGate.Decision.REANNOUNCE -> {
@@ -3226,7 +3286,7 @@ object SessionController {
                             (if (advertisedAt > 0L) "广播可见 ${now - advertisedAt}ms 仍无邀请" else "${now - startedAt}ms 未确认广播可见") +
                             "——强制重新公告一次（catplay 同款 force_announce）",
                     )
-                    ctrlAdvertiser?.ensureForNetwork(ssid, force = true, network = wifiConnector?.currentNetwork)
+                    ctrlAdvertiser?.ensureForNetwork(endpoint.ssid, force = true, network = wifiConnector?.currentNetwork)
                 }
 
                 CtrlInviteGate.Decision.WAIT -> Unit
@@ -4639,7 +4699,7 @@ object SessionController {
                         // 等 ctrl 邀请（catplay CarPlayCtrlServer：邀请=车机已发现手机且
                         // AirPlay 窗口已开，收到即刻连接）。此前是「固定睡 1.6s 赌它已到」，
                         // 快的时候白等、慢的时候不够；改为事件驱动。
-                        awaitCtrlInvite(endpoint.ssid, CTRL_INVITE_WAIT_MS)
+                        awaitCtrlInvite(endpoint, CTRL_INVITE_WAIT_MS)
                     }
                     // 端点解析放在邀请之后：车机的 `_airplay._tcp` 常在受邀后才上线，
                     // 且这一步最长 3s——必须在后台线程做，不能占住网络回调线程。
@@ -5408,6 +5468,12 @@ object SessionController {
                                             setup.displayHeight,
                                             requestMaxLongSide,
                                         )
+                                    val compatibility = client.receiverCompatibility()
+                                    val preferVehicleResolution =
+                                        compatibility.preferVehicleResolution &&
+                                            setup.displayFromInfo &&
+                                            setup.displayWidth >= 2 &&
+                                            setup.displayHeight >= 2
                                     if (setup.experimentalPanelGeometry != null) {
                                         appendLog(
                                             "DISPLAY: 实验面板几何 ${experimentalPanelWidth}x$experimentalPanelHeight" +
@@ -5415,10 +5481,21 @@ object SessionController {
                                                 "（长边上限 $requestMaxLongSide）",
                                         )
                                     }
+                                    if (preferVehicleResolution) {
+                                        appendLog(
+                                            "CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1，请求 CarWith 按车机显示尺寸 " +
+                                                "${requestedVideo.first}x${requestedVideo.second} 编码",
+                                        )
+                                    } else if (compatibility.preferVehicleResolution) {
+                                        appendLog(
+                                            "CARLIFE: 未取得有效 /info 显示几何，暂不声明 DISABLE_RESOLUTION_OPTION",
+                                        )
+                                    }
                                     val createdCarLife =
                                         newFormalCarLifeSession(
                                             context,
                                             requestedVideo,
+                                            preferVehicleResolution = preferVehicleResolution,
                                         )
                                     carLife = createdCarLife
                                     val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)
@@ -5466,6 +5543,7 @@ object SessionController {
                                         host,
                                         // 奥迪曾需流后补发；受影响车机由客户端策略跳过重复 RECORD。
                                         "AUDIO: 音频流已加入——检查会话激活",
+                                        recordAfterSetup = !client.receiverCompatibility().skipRecordAfterInitialAudioSetup,
                                     )
                                 // 主音频被车机约束占用时的“未启动”不是音频故障：不写结论码，
                                 // 否则它会长期盖住后续真正需要的诊断（如屏幕暂停）。

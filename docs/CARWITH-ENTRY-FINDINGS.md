@@ -43,6 +43,73 @@
   `Mib3SubscriptionWatchdogTest`、`ReceiverCapabilitiesTest` 的面板摘要用例）与本地门禁；**没有在 2025 款 GLC、
   #55 的 S 级或任何其他车上验证**。本条目不代表该车型兼容，也不证明根因。
 
+## 2026-11-18 issue #62 对照：HyperCar 0.1.0.588 在同车机成功出画（用户反馈 + 第三方日志，非 mcarplay 证据）
+
+- **来源与边界：** 车主提供的 HyperCar 调试日志（导出 2026-11-18 06:46:07，保留 15,321 行）。应用 `0.1.0.588`
+  （versionCode 10684）；手机 Xiaomi 24031PN0DC / Android 17 / SDK 37，系统 `CP2A.260605.016`
+  （`OS4.0.30.0.XEOCNXM`）；车机 iAP2 自报 `MBUX 00081 / MB_E-P-4 / Mercedes-Benz`、
+  `firmwareRevision=E354.2_4221`、AirPlay `srcvers=480.7.4`，与 issue #62 同一身份。日志头仍写
+  `receiver_display=unknown receiver_audio=unknown`；用户反馈本次已成功连接，且 06:32:16.802 起车机连续下发
+  `hidSendReport` 触摸坐标（06:32:16.802、06:32:16.853、06:32:19.836…），可作为“本次确实出画并可操作”的旁证。
+  这仍是一次第三方发送端的成功，不是 mcarplay 的兼容性证据。
+- **成功时间线：** 06:32:10.553 车机回连 RFCOMM；06:32:11.163 收到 0x4301；06:32:12.627 发 0x4300（37B）；
+  06:32:13.000 `/info` 200；06:32:13.033 RECORD 200；06:32:13.052 SCREEN SETUP（type=110、latencyMs=25）；
+  06:32:13.074 SETUP 200（dataPort=6030）；06:32:13.424 首个 HEVC IDR；06:32:13.986 `FIRST_VIDEO_FRAME`。
+  之后持续推流约 14 分钟；06:33:32 车机 `changeModes` 收回主屏，06:33:36 `requestUI` 后重建，06:34:58 再次收回，
+  06:36:12 车机重新交回主屏后再次重建。
+- **对 #62 三条假设的修正：**
+  1. **`modesChanged` 42B `{}` 不是决定性异常。** HyperCar 的 CSeq=9/11 资源声明同样只收到 42B `{}`；
+     首帧时 `requestUI=0`，`requestUI` 到 06:33:36 才首次出现（车机 06:33:32 收回主屏之后）。因此
+     “空回执 + requestUI=0”不能解释 #62 的黑屏；它更像该车机的正常初始行为。
+  2. **`displayPanels` 1728 高不是必需。** HyperCar 用 `/info` 的 `displays[0]` 1624×1278 与同一 display UUID
+     建 type=110 屏幕流，车机出画并回传触摸，没有按 1728 面板协商。此前“必须改发 1728”的假设应降级。
+  3. **更值得优先验证的是“CarWith 是否按车机尺寸出流”。** HyperCar 的 CarWith 源为 H.264 1624×1278，
+     手机端转码为 HEVC 1624×1278@60，VideoConfig/SPS 均为 1624×1278；仓库里另一份同车机第三方日志
+     （BOX OFF）用 H.264 1624×1278@30 同样出画。**两种编码都能成功，精确几何是共同点。** 而 11-12 的
+     同车机 mcarplay 报告记录 CarWith 返回 1280×720@30、应用透传。仅按 `TranscodePolicy` 猜测“尺寸不符
+     再转码”会漏掉更上游的一层：CarWith 在功能协商时就可以拒绝 1624×1278，直接回 1280×720。
+- **源码对照（HyperCar commit `4e8d7ca`，0.1.0.588）：**
+  - HyperCar 在 `rust-core/src/carlife/session.rs:175` 回复 `0x18052` 功能清单时，只要本轮已取得显示尺寸，
+    就在 `CONTENT_ENCRYPTION`、`VOICE_MIC` 之外加入 **`DISABLE_RESOLUTION_OPTION=1`**。其
+    `docs/VIDEO-STREAM-REVIEW.md:23` 记录了依据：CarWith 的 `FeatureConfigManager` 把这个键传给
+    `Recorder.useVehicleResolution`。随后 `0x18007` 用本轮 `/info` 尺寸请求，按 2560 长边等比收敛并对齐偶数
+    （`canvas_for_receiver`，`session.rs:11`）。
+  - **同一份日志内就是 A/B 对照：** 22:24:38、22:35:56、22:42:51、15:41:00、15:41:26、15:43:51 各轮
+    `0x18052` 均为 **41B**（两项：`CONTENT_ENCRYPTION` + `VOICE_MIC`，没有 `DISABLE_RESOLUTION_OPTION`），
+    `0x18007` 都请求 1624×1278，`0x10008` 都返回 **1280×720**；06:32:11 的成功轮 `0x18052` 为 **72B**
+    （增加 `DISABLE_RESOLUTION_OPTION`），同样请求 1624×1278，`0x10008` 返回 **1624×1278**。
+    41B/72B 与 2/3 项 feature 的 protobuf 长度逐字节吻合，排除“只是日志轮次不同”的解释。
+  - mcarplay 目前只声明 `CONTENT_ENCRYPTION`：`app/src/main/java/com/mcarplay/app/carlife/CarLifeProtocol.kt:205`
+    的默认 map 只有这一项，`CarLifeStateMachine.kt:156` 也按默认值发送。因此即使 `0x18007` 请求了 1624×1278，
+    CarWith 仍可按自己的分辨率档位回 1280×720；这发生在视频编码和 `TranscodePolicy` 之前，是比“强制转码”
+    更直接的根因候选。
+- **最小改动建议（仍属单变量）：** 在已取得 `/info` 显示几何时，把 `DISABLE_RESOLUTION_OPTION=1` 加入
+  `0x18052`，保持 1624×1278 的 `0x18007` 请求不变，并在日志里记录 feature 名称与 `0x10008` 实际尺寸；
+  若担心影响其他接收端，先只在手动 `MERCEDES_MB_E` 预设下启用。不要在同一轮改关键帧风暴转码、HEVC 偏好、
+  1728 面板或 modesChanged/iAP2 时序；若 CarWith 真回 1624×1278，转码层根本不需要被触发。
+  2560 与 mcarplay 当前 1920 长边上限的差异对本例无影响（1624 小于两者），可等本条验证后再单独评估。
+- **实现状态（2026-11-18，`v0.1.7-test.3` 预发布）：** 两个 P0 已按单变量落地：
+  ① `ReceiverCompatibility.Policy.preferVehicleResolution` 控制 `0x18052` 是否加入
+  `DISABLE_RESOLUTION_OPTION=1`；WinPlay 自动策略启用（台架验证），手动 `MERCEDES_MB_E` 启用，其他接收端保持关闭；
+  ② `MERCEDES_MB_E` 预设不再取 `displayPanels` 的 1728 面板，保持 `displays[0]` 的 1624×1278，只打开功能协商。
+  只有本轮 `/info` 真的带 `displays[0]` 时才发送该 feature（`displayFromInfo`）；兜底 1080×2320 不会触发。
+  新增日志 `COMPAT: ... vehicleResolution=`、`CARLIFE: 功能协商 ...` 和
+  `CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1`，下一份报告可直接确认它是否真的发出。
+  WinPlay 1.2.4 的同日诊断只证明接收端按 1624×1278 收到 VideoConfig 和首帧（约 40 s 内 709 帧、5.4 MB，
+  `droppedFrames=0`），**不证明 CarWith 端也返回了 1624×1278**；仍需看手机日志里的 `0x10008`。
+  本地门禁：`spotlessCheck`、`lintStandardDebug`、`lintStandardRelease`、`assembleStandardDebug` 通过；standard 单测 1250 个、
+  remote bridge 单测 25 个，均 0 失败。WinPlay 台架尚未在本构建上复测。
+- **Wi-Fi iAP2 的时序差异（待对照）：** HyperCar 在 06:32:13.036 经事件通道建立 `WIFI-IAP#1`，06:32:13.057
+  起完成 0x1d00/0x1d01、MFi，06:32:14.146 注册 `StartHID(0x6800)`，都早于首帧；#62 的 MIB3 突发后没有订阅
+  往返。这个时序也值得看，但应放在“几何/转码”单变量测试之后。
+- **下一步（单变量）：** 让 #62 车主用带上述 feature 开关的构建复现并导出报告，先确认两行：`0x18052`
+  的功能项是否包含 `DISABLE_RESOLUTION_OPTION`，以及 `VIDEO: CarWith ...`/`0x10008` 的实际尺寸是否从
+  1280×720 变为 1624×1278。若变为 1624×1278 后车机出画，再决定是否推广到所有已知几何的接收端；若仍为
+  1280×720，说明该 CarWith 版本不认这个键，下一轮才需要试“尺寸不符强制转码”；若尺寸正确但仍黑屏，
+  再查 Wi-Fi iAP2 时序。不要同时改 1728 面板、modesChanged 时序或 iAP2 订阅，否则无法归因。
+- **验证边界：** 本节只来自 HyperCar 日志、用户口述和仓库既有第三方记录；没有 mcarplay 在该车机上的新实车
+  结果，也没有音频实际出声证据（HyperCar 日志仅显示 PCM RTP 在发，`receiver_audio=unknown`）。不构成兼容性声明。
+
 ## 2026-11-13 issue #55：奔驰 MB_D-PP-4「开声音后 16–559 ms 拆链」（车主报告，未实车复测）
 
 - **来源：** `wangxso/mcarplay#55`，mcarplay `0.1.6` standard/release 的脱敏报告
@@ -1864,3 +1931,302 @@ standard/release，签名摘要 `ea628c8b`。接收端 iAP2 `0x1D01` 自报 `AH4
   （仅在凭据确有变化或本轮尚无完整配置时回调，避免车机周期重发反复推翻网络绑定）。
   该回归由 `Iap2SenderSessionTest.lateWifiConfigurationAfterPhaseOneIsStillDelivered` 钉住
   （已验证去掉该处理时用例失败）。
+
+## BOX OFF 的出图链路：CarWith 画面 → 编码器 → AirPlay → 车机（2026-11-15，静态分析 + 上述奔驰日志）
+
+本节回答「它为什么能出图」，用的仍是上节那个闭源 APK 与 2026-11-07 的两轮日志（`a13ca61c`、`f72cfee4`）。
+所有结论都来自 APK 静态代码与该日志的交叉印证，**没有本仓库代码变更**，也不构成任何车机兼容性证据。
+
+- **链路总览（与 mcarplay 方向相反）：** `prepareCast`（事务 1）写入
+  `int 1 / width 1624 / height 1278 / dpi 160 / Parcelable Surface`，这块 Surface 是**它自己编码器的输入面**
+  （`Ct5VideoCodecSession.createInputSurface`）。CarWith 收到后直接把 CarLife 界面渲染进这块 Surface，
+  手机端只做一次编码，没有解码、缩放或合成。日志两侧对得上：
+  `prepareCast accepted size=1624x1278 dpi=160 encoderFPS=30`、
+  `Video encoder=c2.qti.avc.encoder size=1624x1278 fps=30 bitrate=7783020 input=CarWith-Surface;
+  queue=direct no unbounded buffering`。
+  因为像素尺寸在 `prepareCast` 时就按车机 `/info` 原样给定，
+  **「CarWith 输出尺寸 ≠ 车机屏尺寸」这个问题在它的架构里不存在**；mcarplay 的 `CarWithTranscoder`
+  （硬解 → GL 拉伸 → 编码）在它这里没有对应物。
+- **编码器参数（`surfaceInput=true` 分支）：** `color-format=0x7f000789`（Surface）、`bitrate`、`frame-rate`、
+  `i-frame-interval = Ct5Variants.keyframeInterval()`（本次 `negotiation profile=modern-base` ⇒ `g==1` ⇒ 1 秒）、
+  `profile=1`（Baseline）、`max-bframes=0`；Surface 路径额外写 `max-fps-to-encoder=fps` 与
+  `repeat-previous-frame-after = 1e6/fps`（微秒，即 1/fps 秒）。`Ct5EncoderPolicy` 再克隆一份 format 加
+  `priority=0`、`latency=1`、`bitrate-mode=2`（CBR），`configure` 抛异常时 `reset()` 并按原 format 重配一次。
+  **没有指定 `level`**，交给编码器自选。
+- **码率公式：** `coerceIn(w*h*fps/8, 2_000_000, 12_000_000)`。1624×1278@30 = 7,783,020 bps，与日志
+  `bitrate=7783020` 逐位吻合，说明本次 clamp 未生效、走的正是这条公式。对照 mcarplay 的
+  `w*h*6` clamp 2–10 Mbps：1624×1278 处 mcarplay 会取 10 Mbps（更高），1280×720 处 mcarplay 取 5.5 Mbps 而它取
+  3.46 Mbps——两者不是一个量纲的策略，不能直接说谁更清晰。
+- **取帧与时间戳：** `Ct5VideoDrain.dequeue` 只在请求超时**恰好等于 2000 µs** 时改按 30 000 µs 取帧（日志
+  `timeout-us=30000 original-timeout-us=2000`），避免 2 ms 空转；编码输出 PTS 非递增时整体加偏移修补
+  （日志 `same-pts=0 backward-pts=0`）。同一个编码器同时只允许一个 relay 写在途，`Ct5RelayQueue` 用代际号校验，
+  重入直接抛 `Overlapping relay sends`。
+- **队列与丢弃：** `Sink.frames` 是容量 8 的 `Channel`，初始 `awaitingKey=true`；`trySend` 失败时**清空整个队列**
+  （逐个 `tryReceive` 并累计 `dropped`、记 `queue-overflow-drained`），置 `awaitingKey=true`，然后
+  **只有当前这一帧是关键帧才重新入队**，否则调 `Ct5RelayRecovery.request`（最多 3 次、间隔 ≥1 s）去要一个 IDR。
+  正常路径日志 `produced=151 delivered=151 dropped=0 queue-avg-ms=1.14 queue-max-ms=20.4`，30 fps 全程无堆积；
+  写阻塞那次最后的统计窗口只剩 `produced=9 delivered=9`（12:04:25），随后 12:04:26–29 出现 3 条
+  `origins=overflow` 要帧请求——这正是 `trySend` 失败 → 清队 → 补 IDR 的路径，只是会话在 12:04:38 结束，
+  没能再打出一行带 `dropped` / `queue-overflow-drained` 的统计，因此**丢帧数量未记录**。
+- **线格式与 mcarplay 逐字节相同：** config 为 128 字节头 + avcC（u32LE body 长度、`[4]=1`、`[6]=4` 表示加密、
+  偏移 16/20 写宽高的 f32LE）；frame 为 128 字节头 + body + 16 字节 tag，头部 `[0]` 写 body+16，NTP 32.32 在
+  偏移 8，ChaCha20-Poly1305 以整头作 AAD；NAL 用 4 字节 BE 长度前缀，关键帧判定为 NAL type 5。与
+  `app/src/main/java/com/mcarplay/app/video/VideoSender.kt` 的实现一致，没有新增格式发现。
+- **NTP 与帧计数的两处差异（仅记录，不建议在无证据时改动）：**
+  ① 它把帧时间换算成 wall clock 后**显式加 1904 纪元偏移**
+  `((epochMillis/1000 + 2208988800) << 32) | frac`（`baseMillis` 取 `System.currentTimeMillis()`）；mcarplay
+  直接拆 `System.nanoTime()`（全仓库搜不到 `2208988800`）。**本日志只证明奔驰接受带纪元的那种**，mcarplay 的
+  变体在这台车上没有证据，不能据此说「两种都行」。
+  ② ChaCha 帧计数是 session 级 `Ref.LongRef`，只在会话建立时创建；两轮日志各发出 2 条
+  `Video codec configuration sent sps-bytes=19 pps-bytes=4`（`a13ca61c` 在 +6.3 s 与 +15.6 s，后者与
+  CarWith 把帧率从 30 降到 20 同一秒），期间计数不归零，与 mcarplay 的 `frameCounter` 不因重发 config
+  归零一致。**注意 `configurations=` 不是配置包数量**：`a13ca61c` 在只发过 1 条配置时记 `configurations=2`，
+  发出第 2 条后记 `configurations=4`；该计数的确切语义未从代码确认，不要拿它当「重发次数」。
+- **关键帧请求：** `MediaCodec.setParameters(Bundle{"request-sync"=0})`；`"request-sync"` 就是
+  `MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME` 的字符串值，源码里写成字面量，所以按常量名 grep 曾落空。
+  请求带来源标记（`peer` / `overflow` / `restore` / `watchdog` / `unattributed`），日志
+  `Video keyframe request submitted; origins=…; IDR-output=unverified`。本次两轮日志去重后共 5 条：每轮各 1 条
+  `origins=unattributed`（会话建立后 6–15 s，首次出画前），另 3 条 `origins=overflow` 全部落在
+  `f72cfee4` 那次写阻塞里（12:04:26/28/29）——**队列溢出丢掉帧之后它会主动补一个 IDR**，
+  这与 mcarplay「溢出后等下一个 IDR」的做法是同一目的、不同触发方式。
+- **输出停滞看门狗：** `Ct5VideoWatchdog` 每秒读一次「上一次成功写完的时刻」（`sentAt`），20 s 无更新 → 请一次
+  关键帧（最多 3 轮，每轮间隔 20 s）→ 仍无输出则停止自动补救并记 `automatic keyframe requests exhausted`，
+  **不拆传输**；恢复后记 `output resumed`。本次日志 0 条 `VIDEO_HEALTH`——它一次都没触发。
+  同一段日志里确有一次**写阻塞**可作反证：`f72cfee4` 的 `actual-send-fps` 在 12:04:11 → 12:04:16 →
+  12:04:21 依次为 12.95 → 2.19 → 0.0，12:04:20 的 `VIDEO_DRAIN` 整 5 s `outputs=0`，同时出现
+  `Video transport write pending for 5s` 与 `VIDEO_OUTPUT status=pending stage=write age-ms=5848`；
+  看门狗全程没触发（该窗口内的 3 次要帧来源是 `overflow` 而非 `watchdog`），12:04:31 后自行恢复到 20.96，
+  恢复原因日志未写明。也就是说**卡在 socket 写上的停滞不会更新 `sentAt`，20 s 阈值对这类停滞偏宽**。
+  mcarplay 侧两道相关机制是：
+  `TcpLiveness`（keepalive 10 s/3 s×3 + `TCP_USER_TIMEOUT` 20 s，判死约 19 s）与
+  `PassthroughStreamStats` 的 ≥500 ms 发送间隔统计（`sendStalls`，只计数不动作）。若要在 mcarplay 补看门狗，
+  需要区分「编码器无输出」与「socket 写阻塞」两种情况，不能照抄它这一个 20 s 阈值。
+- **几何与编码能力探测：** `Ct5VideoSelection.geometry(display, fallback)` 只要车机 `/info` 尺寸可用
+  （偶数、128–4096、w·h ≤ 8,294,400）就原样采用，否则退到第二候选，均不可用直接抛异常（早失败）。
+  `NativeVideoSelection` 先用 `MediaCodecList.findEncoderForFormat` + `areSizeAndRateSupported`
+  以带/不带 `i-frame-interval` 两种 format 校验，再从所有支持 `COLOR_FormatSurface` 的编码器收集
+  `getWidthAlignment`/`getHeightAlignment`，按对齐把车机尺寸向上取整生成候选，挑宽高比最接近且被支持的一组。
+  日志 `VIDEO selection receiver=1624x1278 maxFPS=30 maxFPS-present=true selected=1624x1278@30`。
+- **帧率跟随 CarWith：** `selectVideo` 从 CarWith 的 settings Bundle 读 `max-fps-to-encoder`，落在 1–60 才采纳为
+  `nativeFps`；对外 `selectedFps = min(nativeFps, clamp(receiverFps,1,60))`。运行中 CarWith 改帧率会走
+  `formatFor(fps)` 重算 `frame-rate`/`max-fps-to-encoder`/`repeat-previous-frame-after` 与码率
+  （`oldBitrate*newFps/origFps`，无 bitrate 键时用 `w*h*fps/8`，仍 clamp 2–12 Mbps）后 `configure` 重配编码器。
+  本次两轮日志的 `requested-fps` 都只有开头 1–4 个统计窗口为 30（每个 5 s），此后全部为 20——**CarWith 中途
+  把帧率降到 20，它跟随即改编码器**；mcarplay 只在 `VIDEO_INIT_DONE` 把 fps 解析进 `videoFormat` 并记日志，
+  发送端帧率始终取面板设置（`DisplayPrefs.fps`），运行中不跟随 CarWith。
+- **它没有屏幕流 keepAlive：** 全 APK 找不到 opcode 2/5 的构造，只有车机 `/info` 的 `keepAliveLowPower` /
+  `keepAliveSendStatsAsBody` 字段名；`/feedback` 属 RTSP 层、与视频数据口无关。奔驰 12 分钟裸发帧未断流，
+  但这不能推翻 mcarplay 的做法（`VideoSender.kt` 注释记录：奥迪 3315 缺这条时 RECORD 后约 10 s 会被 reset
+  整轮会话，2026-10-19 两轮实测；该证据只存在于代码注释，本文件尚未收录对应日志）——两条观察指向不同的
+  接收端，keepAlive 保留。
+- **对本仓库的可用结论（按性价比排序，均需真机验证后才算落地）：**
+  ① 编码器补 `max-bframes=0` 与 `repeat-previous-frame-after`，Surface 路径再试
+  `priority=0/latency=1/bitrate-mode=2` 并在失败时按原 format 重配——改动小、可回退，且直接针对「首帧慢 / 车机
+  等参考帧」这类现象；② 透传队列 64 → 8 帧：64 帧在 30 fps 下允许约 2.1 s 积压，会把「车机慢一拍」放大成
+  「越来越慢」，8 帧约 270 ms，溢出丢到下一个 IDR 更符合实时性；③ 增加输出停滞看门狗，但要分两类：
+  编码器无输出（补关键帧，最多 3 轮）与数据口写阻塞（不补帧，只记诊断，交给 `TcpLiveness` 判死）；阈值取
+  5 s 量级报警、20 s 量级判失败——BOX OFF 的单一 20 s 阈值在它自己的日志里就没覆盖到那次十余秒的写阻塞；
+  ④ 把编码能力探测前置到 `configure` 之前（`findEncoderForFormat` + `areSizeAndRateSupported` + 对齐收集），
+  选不出可用几何就明确失败。
+  **不照抄的：** 省掉 keepAlive、放弃 `KEY_LEVEL=4.0`（`VideoSender.kt` 记录：奥迪 DELPHI 对 level 3.2 静默
+  不渲染，2026-10-22 奥迪 0628 真机定谳）、CBR 与 NTP 1904 纪元（两者在本仓库均无证据）、以及「把画面直接
+  交给 CarWith 渲染进编码器 Surface」这条路线（依赖同包名冒充，本仓库明确不做）。
+- **边界：** 上述全部来自一台车（MBUX `MB_E-P-4`，`maxFPS=30`，CarWith `4.0.20-20260923`）的一段日志与静态代码。
+  任何一条落地前都要按本文档的记录要求补手机型号、HyperOS、CarWith/CarLife 版本、接收端与固件、连接步骤与
+  观察到的画面/声音/触控，不能据此声称任何车机受支持。
+
+## BOX OFF 的蓝牙公告与「伪装 iPhone」：三层里只有一层是协议层的（2026-11-16，静态分析 + 上述奔驰日志）
+
+本节回答「它在蓝牙侧是怎么被车机当成 iPhone 的、有没有本仓库能借鉴的部分」。对象仍是那个闭源 APK 与
+2026-11-07 的两轮日志（`a13ca61c`、`f72cfee4`）。**没有本仓库代码变更**，也不构成任何车机兼容性证据。
+
+- **先看结论最重要的一条：奔驰那两轮成功会话，三层伪装一层都没启用。** 两轮 `Session begin` 都写
+  `profile=hangsheng-responder-then-generic wireless-experiment=true reference-handshake=false
+  eir-experiment=false native-modify=false`；全文没有 `Module entry` / `Native module loaded` /
+  `HFP identity` / `CarPlayEirHook` 任一行（各命中 0 次），也没有 `Requesting system discoverability`。
+  蓝牙侧只留 `Inbound iAP2 phone SDP listener registered uuid=00000000-deca-fade-deca-deafdecacafe
+  wait=60000ms continuous=true selected-peer=…; discoverability not requested`，
+  随后 `RFCOMM inbound accepted`。所以「它像 iPhone 所以奔驰连上了」这个解释在这两轮里不成立——
+  连的是应用层默认路径。
+- **它确实带了三层伪装，但分别需要不同的代价：**
+
+  | 层 | 做法 | 代价 | 本次是否启用 |
+  |---|---|---|---|
+  | 系统蓝牙（SDP/EIR） | Xposed 注入 `com.android.bluetooth`，再由 `libcarplay_eir_hook.so` 改 `SDP_AddSequence`、`WriteEIR` | 越权 + 锁死一台 ROM | 否 |
+  | HFP AT 身份 | hook `HeadsetStateMachine.processAtCgmi/Cgmm/Cgmr`、`HeadsetNativeInterface.atResponseString` | 越权（AT 应答由系统 BT 栈生成） | 否 |
+  | iAP2 协议身份 | 0x4300 里填 Apple 形态的传输标识串 | 纯应用层 | 是 |
+
+- **系统蓝牙层（`hook/BluetoothHook` + native）：** 三重门禁是 SDK==37、整机 fingerprint
+  `Xiaomi/pudding/pudding:…OS4.0.0.32.XPCCNXM`、`/apex/com.android.bt/lib64/libbluetooth_jni.so` 的
+  SHA-256 `047c9421…`；任一不符只记日志、不装 hook。native 侧两条可观察的日志串说明了它改什么：
+  `SDP phone registration handle=0x%08x mode=modify attr=0x0001
+  classes=[00000000-deca-fade-deca-deafdecacafe,0x1101] result=%d; existing RFCOMM channel preserved`
+  （在系统里补一条「手机 iAP2 + SPP」服务记录，并保留已有 RFCOMM 通道），以及
+  `EIR write #%u mode=%s valid=%d used=%zu phoneUUID-before=%d phoneUUID-after=%d patch=%s fec=%u`
+  （在 EIR 的 128 位 UUID 列表里塞入手机 UUID，并报告占用字节数与是否被补丁成功）。
+  `mode` 有两档，`observe` 是默认，`modify` 由带签名权限的广播开启且**租期 180 秒**
+  （`Mode applied=%s; modifying lease=180s; existing EIR refresh requires a system write`）。
+  另一条 `EIR write #%u forwarded opcode=0x0c52; controller completion not observed` 是它自述的边界：
+  只拦到下发、拿不到控制器完成回执。
+- **HFP 身份层（`hook/HfpIdentityHook` + `HfpIdentityProfile`）：** 把 `CGMI`/`CGMM`/`CGMR` 的应答
+  分别换成 `Apple Inc.` / `iPhone` / `iOS 26.0`。它自己在安装日志里写明默认是 observe、
+  且 `test values are not captured from a real iPhone`；每替换一次都打 `profile=generic-Apple-unverified`。
+  也就是说这三条字符串**不是从真 iPhone 抓来的**，是猜的。
+- **协议身份层（`Ct5Variants.availabilityBody`）：** 0x4300 参数 0 由 9 字节前缀加
+  `00008110` + 本机 MAC（12 位大写无冒号）+ `0000` + NUL 组成，参数 1 是小写冒号 MAC。
+  奔驰那轮日志里逐字节对得上（`TX CSM 0x4300 parameter=0x0000 … hex=00 05 00 00 01 00 1D 00 01 30 30 …`，
+  `parameter=0x0001` 为 `…39 63 3a 39 65 …`）。取不到 MAC 时回落到硬编码常量
+  `00008110000105201EDA801E`——这看着是某台真机的标识，**不能抄**。
+  对照本仓库：`Iap2SenderSession` 的 0x4300 用 `Iap2Csm.group(1, u8(0,1), string(1, bluetoothMac))`，
+  0x4E0E 也用真实 MAC，设备 UUID 由本机 MAC `nameUUIDFromBytes` 派生——同样“稳定且属于自己”，
+  但没有借用别人的标识。
+- **它在 0x4E09 里并没有冒充 iPhone：** 日志 `TX CSM 0x4E09 … hex=43 61 72 50 6C 61 79 20 41 6E 64 72 6F 69 64 00`
+  就是 `"CarPlay Android"`，mDNS 实例名同样是 `CarPlay Android <后缀>`。本仓库的 0x4E09 发的是本机蓝牙名
+  （取不到时回落 `iPhone`）。**在“设备显示名”这一层，它比我们更不像 iPhone**，
+  可见显示名不是它被接受的原因。
+- **SDP 公告：我们比它更全。** 它定义了 `PHONE_EIR_UUID = 2d8d2466-e14d-451c-88bc-7301abea291a`，
+  但全 APK 只把 `ACCESSORY_UUID`（`…caff`）用于设备列表匹配，**从不注册** `2d8d2466…`；
+  注册的只有 `listenUsingRfcommWithServiceRecord("CarPlay Probe", …cafe)`。
+  本仓库 `PhoneSdpRecords` 同时注册 `…cafe` 与 `2d8d2466…`（后者有 2022 艾瑞泽 8 的正面证据：
+  车机 `isSupportCarplay()` 由 false 翻为 true）。这条**不要后退**。
+- **可被发现窗口：它走系统弹窗，我们从不请求。** 无指定目标时它在开始等待前发
+  `REQUEST_DISCOVERABLE` 300 秒；已处于可被发现（`getScanMode()==23`）时复用现有窗口、不重复弹窗
+  （`Already discoverable; reusing current window without another system dialog`）。
+  本仓库全源码没有 `REQUEST_DISCOVERABLE` / `setScanMode`，连 `BLUETOOTH_ADVERTISE` 都没声明。
+  已配对的真车场景（车机在**自己**的列表里回连手机）不需要它，所以这只在“首次配对、且要在手机列表里
+  让车机发现本机”时才有意义——属可选补齐，不是缺陷。
+- **RFCOMM 通道：它在无目标时硬编码 29。** `Ct5RfcommServer.listen(adapter, 29)` 反射调
+  `listenUsingRfcommOn`。这与它的 SDP 补丁是一套（补丁日志 `existing RFCOMM channel preserved`），
+  单拎出来只会和系统通道分配打架。本仓库一律 `listenUsingRfcommWithServiceRecord`，不借鉴。
+- **链路协商角色：它先当响应方。** `BluetoothSyncExperiment.HANGSHENG_RESPONDER`
+  标 `accessory-initiated`、`peerSynWaitMillis=25000`，日志为
+  `SYNC EXPERIMENT round=1/2 profile=hangsheng-accessory-initiated RFCOMM-initiator=car
+  iAP2-initiator=car fresh-RFCOMM=true`、`Probe start: … peer-SYN-wait=25000ms; marker-timeout=12000ms`；
+  失败一轮后才退到通用档。本仓库 `Iap2LinkChannel` 一律 `engine.start()`（marker + SYN 都主动发），
+  `startResponder()` 已实现但只用于虚拟 EA 链路。我们有自己的反向证据：
+  事件通道上“主动发 SYN 且被 500 ms 重发放大”会把车机 CarPlay 栈打懵（见 `Iap2LinkEngine` 注释，
+  2026-10-11 实测）。**这条值得做成画像档位、默认关闭**，不宜改默认值。
+- **最值得借鉴的一条：用对端声明清单过滤可选消息。** `WirelessBootstrap.publish()` 在发
+  0x4E0D / 0x4E0E 前逐条查车机在 0x1D01 参数 7 里声明的“可接收”清单，未声明就跳过并记
+  `negotiation profile=MODERN skip=0x4E0D reason=accessory-did-not-advertise`（每轮 2 条：iap2 与
+  runtime-command 各一条，日志轮转后重复成 6 行）或 `skip=0x4E0E`。奔驰两轮都跳过了 0x4E0D。
+  注意它的 0x4300 **不**走这张清单，而是由 `Ct5NegotiationProfile.sendsAvailability4300()` 决定；
+  这一点与本仓库按链路代际决定是否发 0x4300 的结构不同，不能照搬。
+  本仓库 `sendDeviceStateGreetings()` 无条件发 0x4E0D，0x4E0E 无条件发后不管
+  （奥迪对它“接受但从不 ACK”，不 `sendFireAndForget` 会被重传看门狗在 +20 s 杀掉整条蓝牙链路）。
+  两者其实是同一根因的两面：**给车机发一条它没要的消息，轻则被无视、重则引发重传风暴**。
+  本仓库已有 `accessoryDeclaresReceive()`，目前只用于 0x5702 / 0xEA01；把它接到问候语与 0x4E0E 上
+  是十几行的改动。注意边界：奥迪**是**声明了 0x4E0E 却不 ACK 的，过滤救不了它，
+  `sendFireAndForget` 必须保留；过滤救的是奔驰这类压根没声明的车机。
+- **EIR 空间这条线索值得记住（但不是靠补丁解决）。** native 日志里的 `used=%zu` 说明它自己在数 EIR 的
+  240 字节预算。本仓库的 btsnoop 分析器已会报「128 位 UUID 列表标记为不完整（空间或槽位不足）」
+  并能判「对端是否收到过含 CarPlay 的 SDP 回复」。真遇到截断，正当解法是减少 128 位记录数量，
+  而不是补丁；且 `2d8d2466…` 那条有艾瑞泽 8 的正面证据，**不要**为腾空间先删它。
+- **明确不借鉴：** ① Xposed 注入系统蓝牙 + native 改 `SDP_AddSequence`/`WriteEIR`（rva 硬编码到一台
+  ROM 的 `.so`，任何 OTA 即失效，且改的是系统进程）；② HFP `CGMI/CGMM/CGMR` 伪造（应用层做不到，
+  且它自己标注这三个值未从真机抓取）；③ 硬编码 RFCOMM 通道 29；④ 常量 `00008110000105201EDA801E`
+  （借用他人设备标识）。
+- **边界：** 本节全部来自一款闭源 APK 的静态代码与一台车（MBUX `MB_E-P-4`，CarWith `4.0.20-20260923`）
+  的两轮日志。日志只证明“这两轮没启用伪装也能连上”，**不能**据此断言伪装对任何车机无效；
+  也不能据此声称任何车机受支持。
+
+## ORA 03 N220346.2：车机邀请与重新打开 App 后的配对（2026-11-17）
+
+小米 15（`24129PN74C`），HyperOS `OS4.0.4.0.XOCCNXM` / Android 17，CarWith
+`4.0.23-20261016`、小米 CarLife `8.8.5`（来自基线报告）。本地测试包为 `0.1.7-rd`，
+手填蓝牙地址，Shizuku 未就绪。iAP2 自报 `GWM / ORA ES11`，mDNS 自报
+`fv=N220346.2`、`srcvers=365.10.2`。
+
+- 车主确认首次配对后车机正确出画。会话仍在但车机持有主屏时，手机继续接收 CarWith 帧，
+  屏幕输出暂停。车机发来 `requestUI` 后约 183 ms 放行 IDR，车主确认恢复出画，USB 日志证实持续发帧。
+- 结束并重新打开 App 后，自动模式在公告可见 14 ms 后即走 mDNS 直连，复用配对成功，
+  首个 `SETUP` 超时。该轮车机在公告可见约 1 s 后才发送首次连接邀请。
+- 通用模式发起对照时，首次公告可见约 1.6 s 后收到车机邀请。TCP 建立，但复用配对的
+  `pair-verify` 请求反复超时，随后 iAP2 链路结束。该结果单独记录，原因待确认。
+- 调整 ORA 03 的时序，让邀请优先，并在首次有效公告满 3 s 且端点已解析时使用直连兜底。
+  回归测试重放了上述邀请时序。
+- 同签名覆盖安装后，自动模式正确等到邀请，旧配对验证仍超时。车主用方向盘左右两侧的向下键
+  重启多媒体与仪表后，在同一 APK 和原有配对下重试：收到邀请后约 43 ms 完成加密通道，
+  约 213 ms 收到 `RECORD` 成功应答。主屏归还后持续发送视频，车主确认出画。
+  该轮确认车机重启可恢复连接。强制结束 App 后直接重连的稳定性仍需验证。
+
+同日另一次重连中，车机前一轮收到 CarWith「返回车机」，随后主动关闭视频和控制通道。
+重新连接时，mDNS 与 `/info` 都自报 `OEM MODEL / 0.0.1`，但接收端标识与正常会话一致。
+会话及事件通道均建立，CarWith 输入为 `1920x720`。主屏归车机，用户点车机的 CarPlay 图标后
+手机未收到 `requestUI`，累计跳过 8361 个源帧，视频发送数为 0。车机端断开后再连仍复现。
+车机重启后，同一 App 进程再次收到 `ORA ES11 / N220346.2`。主屏最初仍归车机，随后收到
+`requestUI`，恢复 `1280x480@30` 推流，用户确认出画。车机为何进入 `OEM MODEL` 状态仍待查证。
+
+恢复出画后做了退出路径对照。车主在手机 mcarplay 点「断开连接」，日志记录整会话
+`TEARDOWN` 获得 `200 OK` 并完成清理。再次连接时车机继续自报 `ORA ES11 / N220346.2`，
+主屏初始归手机，首帧按 `1280x480@30` 送出，车主确认无需重启车机即可重连。
+
+随后复测车机侧退出。车主先点 CarWith「返回车机」交还主屏与主音频，再在 ORA 原生界面
+点「断开连接」。控制、视频和事件通道在归还后约 6.6 s 由车机关闭，约 0.26 s 后蓝牙断开。
+手机日志没有记录独立的断开预告，推流终止后恢复蓝牙探测。此处不能把 CarWith「返回车机」
+视为用户终止连接。
+约 1 分 54 秒后，日志再次观察到车机自报 `ORA ES11 / N220346.2`。车主在车机仍开机时
+重新选手机，车机发邀请并完成会话建立。随后收到 `requestUI` 并送出首帧，车主确认出画。
+此轮只记录正常身份出现和重连成功的时间，不据此推定固定恢复等待时间。
+下一轮重复同一车屏操作，车机关闭屏幕数据口约 12 s 后即恢复正常身份并发出邀请；
+`requestUI` 后发送首帧，距旧轮关闭屏幕口约 17 s。该轮同样未重启车机。
+
+车主补充此前两轮未运行目的地导航。在高德导航进行中复现时，车机原生断开后的第一次重连
+仍自报 `ORA ES11 / N220346.2` 并完成 `RECORD`，但约 2.1 s 后就关闭视频口，发送 0 帧，
+其后才显示 `OEM MODEL / 0.0.1`。本次连接关闭了车机侧音频，故未发送车机音频流。
+车主确认结束导航后重新选手机，接收端再次自报正常，收到 `requestUI` 后成功发送首帧。
+此对照记录导航状态与断开后出画的相关性，仍需同样退出方式的复测来确认触发条件。
+车主随后重启车机并保留高德目的地导航，接收端自报 `ORA ES11 / N220346.2`，点击图标后
+成功出画，首帧后一秒多收到 CarWith TTS 初始化。导航开启的状态可与正常出画同时存在。
+
+之后继续监控车机端断开。第一轮在车机断链后系统记录了 mcarplay 进程的 `FORCE STOP`，新进程
+重连并出画。第二轮在同一 App 进程中完成，车机关闭视频口约 7.4 s 后发送新邀请、约 10.9 s 后
+发送首帧，两轮均自报 `ORA ES11 / N220346.2`。第二轮重连后的 TTS 初始化与持续发帧并存。
+
+播放音乐时，既有会话内手动开启音频成功，车机端断开前累计发送 1513 个音频包。随后重连
+时，接收端初始自报正常，开启车机侧声音并在首次 `RECORD` 后约 91 ms 补发第二次
+`RECORD`。收到 `requestUI` 并发送 89 个视频帧后，车机约在第二次 `RECORD` 后 6.3 s
+重置事件与视频连接，音频包为 0。之后再次自报 `OEM MODEL / 0.0.1`。
+本地候选仅对该固件的初始音频流跳过补发 `RECORD`，保留会话中手动开启音频的行为。
+该时序差异是待实车对照的假设。
+
+音频对照包首次测试卡在复用配对，车机已经发邀请但 `pair-verify` 超时，未进入音频阶段。
+取消后下一轮复用原有配对成功，`/info` 命中 ORA 音频策略。初始音频流已加入且启动阶段
+仅收到一次 `RECORD` 成功应答。首帧之后播放音乐，日志确认至少发送 80 个实际音频包、
+超过 1200 个视频帧。该结果验证新时序能启动音视频，尚未重复播放音乐时的车机侧断开流程。
+
+随后复测播放音乐时从车机断开并在车机端重新发起。首轮结束前共发送 2995 个音频包；
+车机先关控制、事件、视频端口并断开蓝牙，手机停止推流并恢复探测。新会话复用已有配对，
+仍报 `ORA ES11 / N220346.2`，启动音频后沿用首次 `RECORD`，收到 `requestUI` 后出画。
+随后至少发送 1127 个音频包与 841 个视频帧，车主确认连接成功。
+
+此后手机正常结束另一轮可用会话，两条 `TEARDOWN` 得到 `200 OK`。再次在启动时选择
+「开启声音」，车机在 17 s 内没有蓝牙回连，用户取消，未到音频协商。切到「仅视频」后，
+接收端自报 `OEM MODEL / 0.0.1`，配对、`SETUP` 和 `RECORD` 均完成，主屏初始归手机。
+手机以 `1920x720` 持续发出超过 600 帧，车主仍无法通过车机图标进入画面。故此前
+`OEM MODEL` 时看到的暂停发帧并非此类无画面的唯一表现。
+
+车机设备列表截图显示小米 15 的互联按钮为 `Unavailable`，蓝牙按钮为 `Disconnect`，
+左侧为圆形 CarPlay 图标；Pixel 设备显示不同的三角形图标。手机侧仅见 HFP/A2DP，
+未收到 iAP2 回连。下一轮选择开启声音后车机重新自报 `ORA ES11 / N220346.2` 并发邀请，
+音频沿用首次 `RECORD`，用户确认有声连接成功。日志显示视频持续发送，音频累计至少
+1068 包，其中包含补静音帧。
+
+### `OEM MODEL / 0.0.1` 转换的时间对照
+
+- 导航复现轮（报告 `edd0618d`）：20:07:01.138 自报 `N220346.2`；20:07:03.422 车机关闭屏幕口，
+  20:07:03.526 发现服务消失，20:07:29.731 同一端点重新出现并自报 `0.0.1`，其间无新的
+  RTSP `SETUP`。这一轮没有发送车机侧音频。
+- 音乐复现轮（报告 `659ae38f`）：20:58:48.144 自报 `N220346.2`；20:58:54.784 事件和屏幕口收到
+  reset，20:58:54.887 发现服务消失，20:59:20.154 同一端点重新出现并自报 `0.0.1`，
+  其间无新的 RTSP `SETUP`；此前有音频加入后的第二次 `RECORD`。
+- 手机有序结束轮（报告 `a726f21b`）：21:24:25.538 整会话 `TEARDOWN` 收到 `200 OK`；
+  后续选择开启声音的一轮没有收到蓝牙回连；21:25:07.473 下一轮首次观察到 `0.0.1`，
+  早于同轮 `SETUP`。退出至重新入网期间没有连续的 mDNS 观测，转换时刻未知。
+- 四份报告内，mDNS 和 `/info` 一致，接收端实例 ID、AirPlay 栈版本 `365.10.2` 保持一致；
+  `/info` 厂商、型号、修订号、图标标签和显示尺寸成组变化。证据支持接收端对外使用了
+  通用身份，仍需车机进程日志区分服务重启、配置初始化失败等内部原因。
+- 原生断开后保持待机的隔离轮：21:40:33.724 关闭视频口，期间 App 没有发送新 `SETUP`；
+  21:41:15.275（约 42 s 后）手机重新解析到的仍是 `ORA ES11 / N220346.2`。
+  21:42:10.516 再从车机发起时仍为正常身份，随后配对、首次 `RECORD`、音频建立和首帧均成功。
+  本轮未观察到 `OEM MODEL`。该车机端断开动作在这轮可以独立完成，未复现身份变化。

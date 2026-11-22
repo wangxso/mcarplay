@@ -41,8 +41,10 @@ class ReceiverCompatibilityTest {
         assertEquals(ReceiverCompatibility.Family.WINPLAY, windows.family)
         assertEquals(ReceiverCompatibility.BluetoothRole.NETWORK_HANDOFF, windows.bluetoothRole)
         assertTrue(windows.requiresRealBluetoothIdentity)
+        assertTrue(windows.preferVehicleResolution)
         assertFalse(windows.allowBluetoothRetireRetry)
         assertTrue(windows.rules.contains("winplay.1.2.4.network-handoff"))
+        assertTrue(windows.rules.contains("winplay.vehicle-resolution"))
         val windows125 = ReceiverCompatibility.resolve(winPlay.copy(firmwareVersion = "1.2.5"))
         assertEquals(ReceiverCompatibility.BluetoothRole.NETWORK_HANDOFF, windows125.bluetoothRole)
         assertTrue(windows125.requiresRealBluetoothIdentity)
@@ -64,6 +66,7 @@ class ReceiverCompatibilityTest {
         val nextWindows = ReceiverCompatibility.resolve(winPlay.copy(firmwareVersion = "1.3.0"))
         assertEquals(ReceiverCompatibility.BluetoothRole.KEEP_DURING_BRINGUP, nextWindows.bluetoothRole)
         assertTrue(nextWindows.rules.contains("winplay.unverified-firmware"))
+        assertTrue("WinPlay 身份仍明确，尺寸协商不依赖固件号", nextWindows.preferVehicleResolution)
     }
 
     @Test
@@ -73,6 +76,68 @@ class ReceiverCompatibilityTest {
         val modernOldVersion = ReceiverCompatibility.resolve(winPlay.copy(srcvers = "210.81"))
         assertEquals(ReceiverCompatibility.PairingMode.PAIR_AND_ENCRYPT, modernOldVersion.pairingMode)
         assertEquals(ReceiverCompatibility.PairingMode.PROBE, ReceiverCompatibility.resolve(ReceiverProfile.Signals()).pairingMode)
+    }
+
+    @Test
+    fun ora03DirectDiscoveryRequiresMatchingBluetoothAndMdnsEvidenceInAutoMode() {
+        val ora =
+            ReceiverProfile.Signals(
+                model = "ORA ES11",
+                manufacturer = "GWM",
+                sendIds = setOf(0xaa06, 0x5703),
+                receiveIds = setOf(0x4e09, 0x4e0a, 0x4e0b, 0x4e0c, 0x4e0d, 0x4e0e, 0x5702),
+            )
+
+        fun prefersDirect(
+            signals: ReceiverProfile.Signals = ora,
+            model: String? = "ORA ES11",
+            firmware: String? = "N220346.2",
+            sourceVersion: String? = "365.10.2",
+            preset: VehiclePreset = VehiclePreset.AUTO,
+        ) = ReceiverCompatibility.prefersOra03DirectDiscovery(signals, model, firmware, sourceVersion, preset)
+
+        assertTrue(prefersDirect())
+        assertFalse(prefersDirect(signals = ora.copy(manufacturer = null)))
+        assertFalse(prefersDirect(signals = ora.copy(model = "Other")))
+        assertFalse(prefersDirect(signals = ora.copy(sendIds = ora.sendIds.orEmpty() + 0x4301)))
+        assertFalse(prefersDirect(signals = ora.copy(receiveIds = emptySet())))
+        assertFalse(prefersDirect(model = null))
+        assertFalse(prefersDirect(firmware = "N220346.3"))
+        assertFalse(prefersDirect(sourceVersion = "365.10.3"))
+        assertFalse(prefersDirect(preset = VehiclePreset.GENERIC))
+    }
+
+    @Test
+    fun ora03SkipsOnlyTheRecordAfterInitialAudioSetupOnTheObservedFirmware() {
+        val ora =
+            ReceiverProfile.Signals(
+                model = "ORA ES11",
+                manufacturer = "GWM",
+                srcvers = "365.10.2",
+            )
+        val policy = ReceiverCompatibility.resolve(ora, preset = VehiclePreset.AUTO, airPlayFirmware = "N220346.2")
+        assertTrue(policy.skipRecordAfterInitialAudioSetup)
+        assertFalse(policy.singleRecordPerSession)
+        assertFalse(ReceiverCompatibility.resolve(ora, preset = VehiclePreset.AUTO).skipRecordAfterInitialAudioSetup)
+        assertFalse(
+            ReceiverCompatibility.resolve(ora, preset = VehiclePreset.AUTO, airPlayFirmware = "0.0.1").skipRecordAfterInitialAudioSetup,
+        )
+        assertFalse(
+            ReceiverCompatibility
+                .resolve(ora, preset = VehiclePreset.GENERIC, airPlayFirmware = "N220346.2")
+                .skipRecordAfterInitialAudioSetup,
+        )
+        listOf(
+            ora.copy(model = "OEM MODEL"),
+            ora.copy(manufacturer = null),
+            ora.copy(srcvers = "365.10.3"),
+        ).forEach {
+            assertFalse(
+                ReceiverCompatibility
+                    .resolve(it, preset = VehiclePreset.AUTO, airPlayFirmware = "N220346.2")
+                    .skipRecordAfterInitialAudioSetup,
+            )
+        }
     }
 
     @Test

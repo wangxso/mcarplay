@@ -286,7 +286,12 @@ class AirPlayClient(
                 .map { "${it["type"]}|${it["audioType"]}|${it["audioOutputFormats"]}" }
                 .sorted()
                 .joinToString(";")
-        return ReceiverCompatibility.resolve(facts, formats, current.publicKey ?: current.deviceIdentifier)
+        return ReceiverCompatibility.resolve(
+            facts,
+            formats,
+            current.publicKey ?: current.deviceIdentifier,
+            airPlayFirmware = info?.get("firmwareRevision") as? String,
+        )
     }
 
     /**
@@ -1148,6 +1153,9 @@ class AirPlayClient(
             } else {
                 null
             }
+        val infoDisplayWidth = (display?.get("widthPixels") as? Long)?.toInt()
+        val infoDisplayHeight = (display?.get("heightPixels") as? Long)?.toInt()
+        val displayFromInfo = infoDisplayWidth != null && infoDisplayWidth >= 2 && infoDisplayHeight != null && infoDisplayHeight >= 2
         if (compat.usePanelVideoGeometry) {
             log(
                 if (panelGeometry != null) {
@@ -1232,8 +1240,9 @@ class AirPlayClient(
                 timingPort = portOf(root["timingPort"]),
                 keepAlivePort = root["keepAlivePort"]?.let(::portOf)?.takeIf { it != 0 },
                 enabledFeatures = (root["enabledFeatures"] as? List<*>)?.map { it.toString() }.orEmpty(),
-                displayWidth = (panelGeometry?.width ?: (display?.get("widthPixels") as? Long)?.toInt()) ?: 1080,
-                displayHeight = (panelGeometry?.height ?: (display?.get("heightPixels") as? Long)?.toInt()) ?: 2320,
+                displayWidth = panelGeometry?.width ?: infoDisplayWidth ?: 1080,
+                displayHeight = panelGeometry?.height ?: infoDisplayHeight ?: 2320,
+                displayFromInfo = displayFromInfo,
                 // /info displays[0] 的显示屏 UUID（真实 iPhone 会把它回填进屏幕流 SETUP；
                 // 键名以小写 "uuid" 为准，大写 "UUID" 兜底）
                 displayUuid = displayUuidRaw,
@@ -1436,6 +1445,8 @@ class AirPlayClient(
         val displayHeight: Int,
         val displayUuid: String?,
         val maxFps: Int,
+        /** 宽高是否来自本轮 `/info` 的 displays[0]，而不是手机端兜底值。 */
+        val displayFromInfo: Boolean = false,
         /** /info hidDevices[].uuid 列表（0=触摸、1=旋钮；DiPlay 同款编号）。 */
         val hidDeviceUuids: List<String> = emptyList(),
         /**
