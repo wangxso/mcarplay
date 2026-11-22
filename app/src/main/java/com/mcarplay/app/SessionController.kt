@@ -3496,7 +3496,7 @@ object SessionController {
     }
 
     /**
-     * 释放交接所有权；释放成功时唤醒其他仍在等待的 RFCOMM observation。
+     * 释放交接所有权，唤醒等待中的 ctrl 邀请和晚到 RFCOMM 端点。
      */
     private fun releaseHandoffOwnership(observation: ReceiverObservation?) {
         if (handoffOwnership.endIfOwnedBy(observation)) wakePendingHandoffs(observation)
@@ -3924,19 +3924,13 @@ object SessionController {
     private var streamingDiagnosticAttempt: String? = null
 
     @Volatile
-    private var endedScreen: EndedScreen? = null
-
-    private data class EndedScreen(
-        val client: AirPlayClient,
-        val inviteBeforeStream: CtrlInviteEvidence<Network>?,
-    )
+    private var endedScreen: EndedScreen<Network>? = null
 
     private fun retryBufferedInvite(client: AirPlayClient) {
         val ended = endedScreen ?: return
-        val invite = ctrlInviteEvidence ?: return
-        if (ended.client === client && client.controlChannelClosed && invite !== ended.inviteBeforeStream) {
-            Bg.run("ended-session-invite-reconnect") { reconnectEndedSessionOnInvite(client, invite) }
-        }
+        if (ended.client !== client) return
+        val invite = ended.bufferedInvite(ctrlInviteEvidence) ?: return
+        scheduleInviteReconnect(client, invite)
     }
 
     /**
@@ -3968,7 +3962,7 @@ object SessionController {
             return
         }
         if (endedScreen?.client === client) {
-            Bg.run("ended-session-invite-reconnect") { reconnectEndedSessionOnInvite(client, invite) }
+            scheduleInviteReconnect(client, invite)
             return
         }
         val streaming = !connectCancelled && !sessionStarting.get() && videoSender?.isRunning == true
@@ -3998,6 +3992,13 @@ object SessionController {
         }
     }
 
+    private fun scheduleInviteReconnect(
+        client: AirPlayClient,
+        invite: CtrlInviteEvidence<Network>,
+    ) {
+        Bg.run("ended-session-invite-reconnect") { reconnectEndedSessionOnInvite(client, invite) }
+    }
+
     private fun reconnectEndedSessionOnInvite(
         client: AirPlayClient,
         invite: CtrlInviteEvidence<Network>,
@@ -4007,9 +4008,11 @@ object SessionController {
         val reconnectEndpoint =
             synchronized(this) {
                 val ssid = boundCarSsid ?: return
+                val ended = endedScreen ?: return
                 if (connectCancelled ||
                     currentClient !== client ||
-                    endedScreen?.client !== client ||
+                    ended.client !== client ||
+                    ctrlInviteEvidence !== invite ||
                     !ReceiverDetectionRuntime.isCurrent(endpoint.observation) ||
                     SystemClock.uptimeMillis() - invite.receivedAtMillis !in 0..CTRL_INVITE_FRESH_MS ||
                     wifiConnector?.currentNetwork != network
@@ -4019,7 +4022,7 @@ object SessionController {
                 val target = currentTargetBinding()
                 if (target != null && target != endpoint.observation?.binding) return
                 val observation = ReceiverDetectionRuntime.observation(endpoint.peerAddress)
-                if (!handoffOwnership.begin(observation)) return
+                if (!ended.beginReconnect(observation, invite) { scheduleInviteReconnect(client, it) }) return
                 retireSession()
                 endpoint.copy(ssid = ssid, observation = observation, wifiCredentialSource = WifiCredentialSource.CURRENT_NETWORK)
             }
@@ -5156,7 +5159,7 @@ object SessionController {
                                                         sessionNetwork != null &&
                                                         wifiConnector?.currentNetwork == sessionNetwork
                                                     ) {
-                                                        endedScreen = EndedScreen(client, inviteBeforeStream)
+                                                        endedScreen = EndedScreen(client, inviteBeforeStream, handoffOwnership)
                                                         retryBufferedInvite(client)
                                                     }
                                                 },
@@ -5374,40 +5377,36 @@ object SessionController {
                     // 只记异常，不在此结束本轮：finally 按阶段/取消原因统一判定结果
                     ConnectionDiagnostics.timeline.note(diagnosticAttempt, "EXCEPTION ${error.stackTraceToString()}")
                 } finally {
-                    releaseHandoff()
-                    // 配对未成功建立推流（fail/异常/start 失败提前退出）时解除静默降噪，
-                    // 否则 BT-C 会永久停在门闸外、连真车路径失效。
-                    // 推流活跃时保持关闭，由 VideoSender.onEnded（推流终止）负责解除。
-                    if (ownsConnection() && videoSender?.isRunning != true) {
-                        ConnectionDiagnostics.timeline.abandon(
-                            diagnosticAttempt,
-                            wasCancelled(),
-                            if (!airPlayConnected.get() && !wasCancelled()) DiagnosticCode.AIRPLAY_CONNECT_FAILED else null,
-                        )
-                        // 配对/加入/异常等失败都从这里收尾，且不经过 disconnect：按实际结束码记账。
-                        val abandonCode = ConnectionDiagnostics.timeline.snapshot()?.code
-                        if (recordAutoReconnectOutcome(diagnosticAttempt, abandonCode, peerAddress)) {
-                            appContext?.let { app ->
-                                Bg.run("auto-reconnect-trip") {
-                                    disconnect(app, abandonCode ?: DiagnosticCode.CONNECTION_INCOMPLETE)
+                    val pending =
+                        try {
+                            // 推流仍活跃时，由 VideoSender.onEnded 解除 BT 门闸。
+                            if (ownsConnection() && videoSender?.isRunning != true) {
+                                ConnectionDiagnostics.timeline.abandon(
+                                    diagnosticAttempt,
+                                    wasCancelled(),
+                                    if (!airPlayConnected.get() && !wasCancelled()) DiagnosticCode.AIRPLAY_CONNECT_FAILED else null,
+                                )
+                                val abandonCode = ConnectionDiagnostics.timeline.snapshot()?.code
+                                if (recordAutoReconnectOutcome(diagnosticAttempt, abandonCode, peerAddress)) {
+                                    appContext?.let { app ->
+                                        Bg.run("auto-reconnect-trip") {
+                                            disconnect(app, abandonCode ?: DiagnosticCode.CONNECTION_INCOMPLETE)
+                                        }
+                                    }
                                 }
-                            }
-                        }
-                        BtSessionGate.sessionActive = false
-                        // 收尾竞态：晚到 0x4301 若恰好在「配对已失败、互斥尚未释放」的
-                        // 窗口内到达，会被暂存但没人消费。此处补投一次——车机等 15s
-                        // 无人连入就拆链，错过这一投就是整轮失败（2026-10-18 分析）。
-                        val pending =
-                            if (!wasCancelled()) {
-                                pendingEndpointUpdate.takeIf { it.observation === endpoint.observation }
+                                BtSessionGate.sessionActive = false
+                                pendingEndpointUpdate.takeIf { !wasCancelled() && it.observation === endpoint.observation }
                             } else {
                                 null
                             }
-                        if (pending != null && !wasCancelled()) {
-                            appendLog(">>> 收尾时发现暂存的晚到 0x4301——立即按新端点重走一轮")
-                            Bg.run("late-endpoint-retry") {
-                                onCarPlayEndpoint(pending, "0x4301 晚到（本轮收尾补投）")
-                            }
+                        } finally {
+                            // 旧会话收尾完成后再唤醒等待的交接。
+                            releaseHandoff()
+                        }
+                    if (pending != null && !wasCancelled()) {
+                        appendLog(">>> 收尾时发现暂存的晚到 0x4301——立即按新端点重走一轮")
+                        Bg.run("late-endpoint-retry") {
+                            onCarPlayEndpoint(pending, "0x4301 晚到（本轮收尾补投）")
                         }
                     }
                 }

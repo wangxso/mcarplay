@@ -38,6 +38,19 @@ class SessionHandoffOwnershipTest {
     }
 
     @Test
+    fun cancelledHandoffDiscardsDeferredInvite() {
+        val ownership = SessionHandoffOwnership(AtomicBoolean(false))
+        val owner = ReceiverObservation("receiver", epoch = 1, session = 1)
+        val reconnect = ReceiverObservation("receiver", epoch = 1, session = 2)
+
+        assertTrue(ownership.begin(owner))
+        assertFalse(ownership.begin(reconnect, retryWhenReleased = { error("Cancelled invite was retried") }))
+        assertTrue(ownership.cancelIfOwnedBy(owner) {})
+        assertTrue(ownership.begin(reconnect))
+        assertTrue(ownership.endIfOwnedBy(reconnect))
+    }
+
+    @Test
     fun beginCancelThenReconnectCanBeginAgain() {
         val active = AtomicBoolean(false)
         val ownership = SessionHandoffOwnership(active)
