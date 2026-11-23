@@ -3,6 +3,26 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.7-test.3] - 2026-11-18
+
+> Experimental prerelease on top of `v0.1.7-test.2`: a targeted, single-variable issue #62 trial. WinPlay and the manual Mercedes MB_E-P / GLC preset now ask CarWith to encode at the vehicle display size with `DISABLE_RESOLUTION_OPTION=1`, and that preset keeps the `displays[0]` geometry (1624 x 1278) instead of the 1728-high `displayPanels` surface. No mcarplay result on the vehicle is included, issue #62 remains open, and this does not establish vehicle compatibility.
+
+### English
+- **CarWith vehicle-resolution request (issue #62):** the `0x18052` feature response now adds `DISABLE_RESOLUTION_OPTION=1` when the receiver policy allows it and the current `/info` actually supplies a valid `displays[0]` width and height. Empty geometry and the 1080 x 2320 phone fallback do not trigger it. WinPlay enables this automatically; the manual Mercedes MB_E-P / GLC preset also enables it; other receiver profiles keep the previous feature list.
+- **Mercedes MB_E-P / GLC preset:** the experimental preset no longer takes the `displayPanels` geometry. It keeps `displays[0]` and changes only the CarWith feature negotiation, making this a single-variable trial against `v0.1.7-test.2`. It remains off by default, `AUTO` never enables it, and it still refuses to apply to another reported manufacturer.
+- **Diagnostics:** new log lines make the trial directly checkable: `COMPAT: ... vehicleResolution=`, `CARLIFE: 功能协商 ...`, `CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1`, and the existing `CARLIFE: VIDEO_INIT_DONE ...`. The line to confirm is `CARLIFE: VIDEO_INIT_DONE 1624x1278@30`; a remaining `1280x720` means CarWith did not accept the request.
+- **Validation:** 1250 standard JVM tests and 25 remote bridge tests, 87 Python tool tests and 20 Node debug-bridge tests passed; `spotlessCheck`, `lintStandardDebug`, `lintStandardRelease` and `assembleStandardDebug` passed locally. The supplied WinPlay 1.2.4 log proves only that the receiver accepted a 1624 x 1278 video configuration and received frames; it does not prove that CarWith returned that size. This build was not rerun on WinPlay and has not been tried on a vehicle. The signed tag workflow additionally builds `assembleStandardRelease`.
+- **Known limits:** issue #51, #26, #55, #62 and #66 remain open. Do not combine this trial with a forced-transcode or HEVC change in the same report; if CarWith still returns 1280 x 720, the next step is the separate size-mismatch transcode experiment.
+
+### 简体中文
+- **CarWith 按车机尺寸编码（issue #62）：** `0x18052` 功能应答在策略允许、且本轮 `/info` 确实给出有效 `displays[0]` 宽高时追加 `DISABLE_RESOLUTION_OPTION=1`。空几何和手机端兜底的 1080 × 2320 不会触发。WinPlay 自动启用；手动「奔驰 MB_E-P / GLC（实验）」预设也启用；其他接收端保持原功能清单。
+- **奔驰 MB_E-P / GLC 预设：** 实验预设不再取 `displayPanels` 几何，保持 `displays[0]`，只改 CarWith 功能协商，因此相对 `v0.1.7-test.2` 是单变量对照。它仍默认关闭，`AUTO` 永不启用，识别到别家厂商时拒绝套用。
+- **诊断：** 新增 `COMPAT: ... vehicleResolution=`、`CARLIFE: 功能协商 ...`、`CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1`，配合原有的 `CARLIFE: VIDEO_INIT_DONE ...` 可直接判断是否生效。重点是看到 `CARLIFE: VIDEO_INIT_DONE 1624x1278@30`；若仍是 `1280x720`，说明 CarWith 没有采纳该请求。
+- **验证：** standard JVM 测试 1250 个、remote bridge 测试 25 个、Python 工具测试 87 个、Node debug-bridge 测试 20 个，均通过；`spotlessCheck`、`lintStandardDebug`、`lintStandardRelease`、`assembleStandardDebug` 在本地通过。用户提供的 WinPlay 1.2.4 日志只证明接收端按 1624 × 1278 接受了视频配置并收到帧，**不证明 CarWith 返回了该尺寸**。本构建未在 WinPlay 上复测，也未上车验证。签名 tag 工作流还会构建 `assembleStandardRelease`。
+- **已知限制：** issue #51、#26、#55、#62、#66 仍开放。本轮不要同时加入强制转码或 HEVC 改动；若 CarWith 仍回 1280 × 720，下一轮单独验证“尺寸不符强制转码”。
+
+Full changes / 完整变更: [v0.1.7-test.2...v0.1.7-test.3](https://github.com/wangxso/mcarplay/compare/v0.1.7-test.2...v0.1.7-test.3)
+
 ## [v0.1.7-test.2] - 2026-11-17
 
 > Experimental prerelease on top of v0.1.7-test.1: video-pipeline hardening (encoder-capability logging, B-frame/frame-repeat keys, an 8-frame passthrough backlog with IDR-on-overflow, a bounded output-stall watchdog), iAP2 and connection fixes from the Porsche/SAIC/StartHID reports, the Mercedes MB_D-PP manual preset, diagnostics for the issue #62 unknowns, and an **experimental Mercedes MB_E-P / GLC panel-geometry preset that is off by default and has not been validated on any vehicle**. Nothing in this build has been tried on a vehicle, and the four-receiver regression (DiPlay, WinPlay, macplay, Chery Arrizo 8) has not been run for it. Issue #51, #26, #55, #62 and #66 remain open. This does not establish real-vehicle compatibility.

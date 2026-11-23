@@ -40,6 +40,7 @@ class VehiclePresetTest {
         val policy = resolve(chery, VehiclePreset.GENERIC)
         assertFalse(policy.releaseBluetoothAfterSetup)
         assertFalse(policy.sendAppleClientHeaders)
+        assertFalse(policy.preferVehicleResolution)
         assertNull(policy.pinnedMfiChallengeLength)
         assertTrue("manual.generic" in policy.rules)
     }
@@ -50,6 +51,7 @@ class VehiclePresetTest {
         val win = resolve(unknown, VehiclePreset.WINPLAY)
         assertEquals(ReceiverCompatibility.BluetoothRole.NETWORK_HANDOFF, win.bluetoothRole)
         assertTrue(win.requiresRealBluetoothIdentity)
+        assertTrue(win.preferVehicleResolution)
         assertTrue(resolve(unknown, VehiclePreset.DIPLAY).allowBluetoothRetireRetry)
         assertEquals(ReceiverProfile.LinkGeneration.CLASSIC_MIB3, resolve(unknown, VehiclePreset.CLASSIC_MIB3).linkGeneration)
     }
@@ -91,14 +93,15 @@ class VehiclePresetTest {
     }
 
     /**
-     * issue #62（`MB_E-P-4 / 480.7.4`，车主称 2025 GLC）实验选项：只打开「按 displayPanels
-     * 协商显示几何」这一条未定谳假设，且**只在手动选择时**生效。
+     * issue #62（`MB_E-P-4 / 480.7.4`，车主称 2025 GLC）实验选项：保持 `displays[0]` 几何，
+     * 只打开 CarWith 功能协商里的 `DISABLE_RESOLUTION_OPTION=1`，且**只在手动选择时**生效。
      */
     @Test
-    fun mercedesMbEPresetOnlyTogglesPanelGeometryExperiment() {
+    fun mercedesMbEPresetOnlyTogglesVehicleResolutionRequest() {
         val unknownPolicy = resolve(unknown, VehiclePreset.MERCEDES_MB_E)
-        assertTrue(unknownPolicy.usePanelVideoGeometry)
-        assertTrue("manual.mercedes-mb-e.panel-geometry-experiment" in unknownPolicy.rules)
+        assertFalse(unknownPolicy.usePanelVideoGeometry)
+        assertTrue(unknownPolicy.preferVehicleResolution)
+        assertTrue("manual.mercedes-mb-e.vehicle-resolution" in unknownPolicy.rules)
         // 不得顺手带上 MB_D-PP 的单次 RECORD：那是另一代际、另一份报告的证据。
         assertFalse(unknownPolicy.singleRecordPerSession)
         assertFalse(unknownPolicy.releaseBluetoothAfterSetup)
@@ -106,7 +109,8 @@ class VehiclePresetTest {
         assertNull(unknownPolicy.pinnedMfiChallengeLength)
         // 已知是奔驰（型号/固件不同）也放行——手动预设正是给自动判定认不出的车机用的。
         val mbep = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4", srcvers = "480.7.4")
-        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).usePanelVideoGeometry)
+        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).preferVehicleResolution)
+        assertFalse(resolve(mbep, VehiclePreset.MERCEDES_MB_E).usePanelVideoGeometry)
     }
 
     @Test
@@ -115,14 +119,18 @@ class VehiclePresetTest {
         val mbep = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4", srcvers = "480.7.4")
         assertFalse(resolve(mbep, VehiclePreset.AUTO).usePanelVideoGeometry)
         assertFalse(resolve(unknown, VehiclePreset.AUTO).usePanelVideoGeometry)
+        assertFalse(resolve(mbep, VehiclePreset.AUTO).preferVehicleResolution)
+        assertFalse(resolve(unknown, VehiclePreset.AUTO).preferVehicleResolution)
         // 已知是别家车机：守卫拒绝，只记录 blocked。
         listOf(chery, ReceiverProfile.Signals(manufacturer = "Volkswagen", model = "VW4131")).forEach { other ->
             val policy = resolve(other, VehiclePreset.MERCEDES_MB_E)
             assertFalse("${other.manufacturer} 不应套用奔驰实验开关", policy.usePanelVideoGeometry)
+            assertFalse("${other.manufacturer} 不应套用奔驰尺寸协商", policy.preferVehicleResolution)
             assertTrue("manual.mercedes-mb-e-blocked" in policy.rules)
         }
         // 通用预设关闭实验开关。
         assertFalse(resolve(unknown, VehiclePreset.GENERIC).usePanelVideoGeometry)
+        assertFalse(resolve(unknown, VehiclePreset.GENERIC).preferVehicleResolution)
     }
 
     @Test

@@ -65,6 +65,22 @@ class CarLifeAuthenticationTest {
     }
 
     @Test
+    fun featureResponseCarriesVehicleResolutionRequestWhenEnabled() {
+        val machine = connectedMachine(preferVehicleResolution = true)
+        machine.onFeatureRequest()
+        machine.onInfo(infoPayload())
+        val features =
+            machine
+                .onAuthResponse(CarLifeProtocol.pbString(1, proof))
+                .last { it.kind == CarLifeProtocol.HU_FEATURE_RESPONSE }
+                .payload
+        assertEquals(
+            mapOf("CONTENT_ENCRYPTION" to 1, "DISABLE_RESOLUTION_OPTION" to 1),
+            CarLifeProtocol.parseFeatures(features),
+        )
+    }
+
+    @Test
     fun encryptedLateAdmissionStillGatesVideoInitialization() {
         val machine = connectedMachine(CarLifeSeedExchange())
         machine.onInfo(infoPayload())
@@ -125,8 +141,16 @@ class CarLifeAuthenticationTest {
         assertEquals(CarLifeStateMachine.State.FAILED, features.state)
     }
 
-    private fun connectedMachine(exchange: CarLifeSeedExchange? = null): CarLifeStateMachine =
-        CarLifeStateMachine(CarLifeAuthVerifier.xiaomi(), exchange, challengeFactory = { challenge }).apply {
+    private fun connectedMachine(
+        exchange: CarLifeSeedExchange? = null,
+        preferVehicleResolution: Boolean = false,
+    ): CarLifeStateMachine =
+        CarLifeStateMachine(
+            CarLifeAuthVerifier.xiaomi(),
+            exchange,
+            challengeFactory = { challenge },
+            preferVehicleResolution = preferVehicleResolution,
+        ).apply {
             onConnected()
             onProtocolMatched()
         }

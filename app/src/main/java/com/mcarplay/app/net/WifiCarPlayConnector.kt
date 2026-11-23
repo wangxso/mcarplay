@@ -20,11 +20,11 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * 用车机热点承载 CarPlay 流量。
  *
- * **两种入网方式（2026-10-22 起默认静默命令行）**：
- *  - 静默路径（默认，见 `SessionController.joinCarWifiSilently`）：Shizuku 执行
+ * **两种入网方式（由「互联网网络」偏好选择）**：
+ *  - 静默路径（车机网络优先且有 Shizuku，见 `SessionController.joinCarWifiSilently`）：Shizuku 执行
  *    `cmd wifi connect-network`，系统直接把热点连上（**0 弹窗**），随后
  *    [bindCurrentWifi] 用**不带 specifier** 的 `requestNetwork` 捕获 `Network` 句柄并绑定。
- *  - [joinCarPlayNetwork]：`WifiNetworkSpecifier` 应用专属网络——静默路径不可用时的兜底。
+ *  - [joinCarPlayNetwork]：`WifiNetworkSpecifier` 应用专属网络——手机流量优先或静默路径不可用时使用。
  *    网络只对本进程可见（不保存、不成为默认网络），但首次加入会弹系统确认框。
  *
  * 关键点：
@@ -49,6 +49,13 @@ class WifiCarPlayConnector(
 
         /** 该安全类型无法用 WifiNetworkSpecifier 表达（WEP）——调用方走旧路径。 */
         data object Unsupported : JoinResult
+    }
+
+    enum class SystemWifiState {
+        NONE,
+        TARGET,
+        OTHER,
+        UNKNOWN,
     }
 
     private val connectivityManager =
@@ -76,6 +83,54 @@ class WifiCarPlayConnector(
                 connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
             }.getOrDefault(false)
         return chooseWifiNetworkTarget(binding.current(), connectivityManager.activeNetwork, ::isWifi)
+    }
+
+    /**
+     * Reads the system default Wi-Fi independently from any process binding. The active
+     * network is the system default even after bindProcessToNetwork, while the process
+     * binding is exposed separately by boundNetworkForProcess.
+     */
+    fun systemActiveWifiState(ssid: String): SystemWifiState {
+        val target = connectivityManager.activeNetwork ?: return SystemWifiState.NONE
+        val capabilities =
+            runCatching { connectivityManager.getNetworkCapabilities(target) }.getOrNull()
+                ?: return SystemWifiState.UNKNOWN
+        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return SystemWifiState.NONE
+        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            return SystemWifiState.UNKNOWN
+        }
+        val result = AtomicReference<String?>(null)
+        val latch = CountDownLatch(1)
+        val observer =
+            object : ConnectivityManager.NetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    capabilities: NetworkCapabilities,
+                ) {
+                    if (network != target) return
+                    val actual = WifiIdentity.normalizeSsid((capabilities.transportInfo as? WifiInfo)?.ssid) ?: return
+                    if (result.compareAndSet(null, actual)) latch.countDown()
+                }
+            }
+        val request =
+            NetworkRequest
+                .Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+        return try {
+            connectivityManager.registerNetworkCallback(request, observer)
+            latch.await(1_000, TimeUnit.MILLISECONDS)
+            val actual = result.get() ?: return SystemWifiState.UNKNOWN
+            if (WifiIdentity.matches(ssid, actual)) SystemWifiState.TARGET else SystemWifiState.OTHER
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            SystemWifiState.UNKNOWN
+        } catch (_: Exception) {
+            SystemWifiState.UNKNOWN
+        } finally {
+            runCatching { connectivityManager.unregisterNetworkCallback(observer) }
+        }
     }
 
     /**

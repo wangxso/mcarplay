@@ -11,6 +11,8 @@ class CarLifeStateMachine(
     private val authVerifier: CarLifeAuthVerifier?,
     private val seedExchange: CarLifeSeedExchange? = null,
     private val challengeFactory: () -> String = CarLifeAuthentication::newChallenge,
+    /** 在 0x18052 功能清单里请求 CarWith 采用车机显示尺寸。 */
+    private val preferVehicleResolution: Boolean = false,
 ) : AutoCloseable {
     enum class State {
         CONNECTED,
@@ -153,7 +155,7 @@ class CarLifeStateMachine(
         return listOf(
             Action(
                 CarLifeProtocol.HU_FEATURE_RESPONSE,
-                CarLifeProtocol.featureResponsePayload(),
+                CarLifeProtocol.featureResponsePayload(preferVehicleResolution = preferVehicleResolution),
             ),
         )
     }
