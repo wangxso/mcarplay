@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.mcarplay.app.R
+import com.mcarplay.app.bt.Iap2Pairings
 import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.compat.ReceiverDetection
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
