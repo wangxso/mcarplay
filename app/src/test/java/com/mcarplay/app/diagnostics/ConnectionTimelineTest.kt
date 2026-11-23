@@ -1,5 +1,9 @@
 package com.mcarplay.app.diagnostics
 
+import com.mcarplay.app.bt.ReconnectCircuitBreaker
+import com.mcarplay.app.bt.ReconnectCircuitBreakerStore
+import com.mcarplay.app.bt.countsAsAutoReconnectFailure
+import com.mcarplay.app.recoverWifiHandoffFailure
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -31,6 +35,55 @@ class ConnectionTimelineTest {
         assertTrue(records.map(::JSONObject).any { it.optString("event") == "END" && it.optString("code") == "WIFI_JOIN_FAILED" })
         timeline.retryBluetooth(first)
         assertEquals(retry, timeline.snapshot())
+    }
+
+    @Test
+    fun thirdWifiHandoffFailureStartsCooldownInsteadOfAnotherBluetoothAttempt() {
+        val peer = "AA:BB:CC:DD:EE:01"
+        val breaker = ReconnectCircuitBreakerStore()
+        var states = emptyMap<String, ReconnectCircuitBreaker.State>()
+        var stops = 0
+        var attempt = timeline.bluetoothStarted("auto_start", transportRunning = false)
+        val failures = listOf(DiagnosticCode.WIFI_JOIN_FAILED, DiagnosticCode.AIRPLAY_CONNECT_FAILED, DiagnosticCode.WIFI_JOIN_FAILED)
+
+        failures.forEachIndexed { index, code ->
+            timeline.stage(attempt, if (code == DiagnosticCode.WIFI_JOIN_FAILED) ConnectionStage.WIFI else ConnectionStage.PAIRING)
+            now += 5_000L
+            timeline.abandon(attempt, cancelled = false, fallback = code)
+
+            assertTrue(
+                recoverWifiHandoffFailure(
+                    recordFailure = {
+                        val failed = checkNotNull(timeline.snapshot())
+                        assertEquals(attempt, failed.id)
+                        assertEquals(code, failed.code)
+                        assertTrue(countsAsAutoReconnectFailure(failed.code, failed.videoFrames, failed.elapsedMs))
+                        val (next, block) = breaker.recordFailure(states, peer, failed.id, now)
+                        states = next
+                        block != null
+                    },
+                    retryBluetooth = {
+                        timeline.retryBluetooth(attempt)
+                        true
+                    },
+                    stop = { stops++ },
+                ),
+            )
+
+            val current = checkNotNull(timeline.snapshot())
+            if (index < failures.lastIndex) {
+                assertFalse(attempt == current.id)
+                assertEquals(ConnectionStage.BLUETOOTH, current.stage)
+                assertNull(breaker.block(states, peer, now))
+                attempt = current.id
+            } else {
+                assertEquals(attempt, current.id)
+                assertEquals("failed", current.status)
+                assertEquals(3, breaker.block(states, peer, now)?.failures)
+                assertEquals(ReconnectCircuitBreaker.COOLDOWN_MILLIS, breaker.block(states, peer, now)?.remainingMs)
+            }
+        }
+        assertEquals(1, stops)
     }
 
     @Test

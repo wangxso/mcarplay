@@ -4464,6 +4464,24 @@ object SessionController {
                 ),
             ),
         )
+
+        fun recoverHandoff(
+            code: DiagnosticCode?,
+            retry: Boolean = true,
+        ): Boolean =
+            recoverWifiHandoffFailure(
+                recordFailure = {
+                    recordAutoReconnectOutcome(diagnosticAttempt, code, peerAddress) ||
+                        (retry && !wasCancelled() && appContext?.let { AutoReconnectGuard.block(it, peerAddress) } != null)
+                },
+                retryBluetooth = { retry && !wasCancelled() && retryAfterWifiHandoff(endpoint.observation, diagnosticAttempt) },
+                stop = {
+                    appContext?.let { app ->
+                        Bg.run("auto-reconnect-trip") { disconnect(app, code ?: DiagnosticCode.CONNECTION_INCOMPLETE) }
+                    }
+                },
+            )
+
         // 先绑网络再解析端点：mDNS 组播跟随 bindProcessToNetwork 的网络，解析放前面
         // 只会拿到旧网络的结果（此前靠 resolveEndpointHost 内部重试掩盖，白等数秒）。
         // 绑定完成后再并行做三件事：ctrl 广播针对新网络重注册、后台发现 _airplay._tcp、
@@ -4478,7 +4496,7 @@ object SessionController {
                 } else {
                     appendLog(">>> [$source] 网络交接已被取消或蓝牙链路失效——结束本轮入网阶段")
                 }
-                if (retryAfterWifiHandoff(endpoint.observation, diagnosticAttempt)) {
+                if (recoverHandoff(joinCode)) {
                     releaseHandoff()
                     return@proceed
                 }
@@ -4486,12 +4504,6 @@ object SessionController {
                 if (late != null) {
                     appendLog(">>> [$source] 网络交接失败时收到完整 0x4301——接替本轮连接")
                     onCarPlayEndpoint(late, "$source/交接失败晚到0x4301", ownershipPreAcquired = true)
-                }
-                // 加入热点失败不经过 disconnect：在这里记账，避免连续失败绕过熔断。
-                if (recordAutoReconnectOutcome(diagnosticAttempt, joinCode, peerAddress)) {
-                    appContext?.let { app ->
-                        Bg.run("auto-reconnect-trip") { disconnect(app, joinCode ?: DiagnosticCode.WIFI_JOIN_FAILED) }
-                    }
                 }
                 return@proceed
             }
@@ -5486,18 +5498,10 @@ object SessionController {
                                     if (!airPlayConnected.get() && !wasCancelled()) DiagnosticCode.AIRPLAY_CONNECT_FAILED else null,
                                 )
                                 val abandonCode = ConnectionDiagnostics.timeline.snapshot()?.code
-                                val retryBluetooth =
-                                    !airPlayConnected.get() && retryAfterWifiHandoff(endpoint.observation, diagnosticAttempt)
-                                if (!retryBluetooth && recordAutoReconnectOutcome(diagnosticAttempt, abandonCode, peerAddress)) {
-                                    appContext?.let { app ->
-                                        Bg.run("auto-reconnect-trip") {
-                                            disconnect(app, abandonCode ?: DiagnosticCode.CONNECTION_INCOMPLETE)
-                                        }
-                                    }
-                                }
+                                val recovered = recoverHandoff(abandonCode, retry = !airPlayConnected.get())
                                 BtSessionGate.sessionActive = false
                                 pendingEndpointUpdate.takeIf {
-                                    !retryBluetooth && !wasCancelled() && it.observation === endpoint.observation
+                                    !recovered && !wasCancelled() && it.observation === endpoint.observation
                                 }
                             } else {
                                 null
@@ -6216,6 +6220,19 @@ internal fun countsLinkCloseForAutoReconnect(
     ownsCurrentSession: Boolean,
     ownsPendingStartSession: Boolean,
 ): Boolean = ownedHandoffEnded || ownedHandoff || ownsCurrentSession || ownsPendingStartSession
+
+/** 先记当前轮次，避免蓝牙重试替换诊断 attempt 后漏计。 */
+internal fun recoverWifiHandoffFailure(
+    recordFailure: () -> Boolean,
+    retryBluetooth: () -> Boolean,
+    stop: () -> Unit,
+): Boolean {
+    if (recordFailure()) {
+        stop()
+        return true
+    }
+    return retryBluetooth()
+}
 
 /** 音频起流后的存活时间：不足 10 s 用毫秒，避免拆链窗口附近的整秒取整丢失间隔。 */
 internal fun audioLivedLabel(livedMillis: Long): String =
