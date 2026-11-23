@@ -2230,3 +2230,271 @@ standard/release，签名摘要 `ea628c8b`。接收端 iAP2 `0x1D01` 自报 `AH4
   21:41:15.275（约 42 s 后）手机重新解析到的仍是 `ORA ES11 / N220346.2`。
   21:42:10.516 再从车机发起时仍为正常身份，随后配对、首次 `RECORD`、音频建立和首帧均成功。
   本轮未观察到 `OEM MODEL`。该车机端断开动作在这轮可以独立完成，未复现身份变化。
+
+## 小米 14 Ultra / 奔驰 MBUX 3.3：已连接但用户反馈无画面（2026-11-12，待实车复测）
+
+- **来源：** 用户提供的脱敏支持报告 `e7d70add…`；原文不入库。手机为小米 14 Ultra（`24031PN0DC`），用户称 HyperOS 4，
+  报告记录 Android 17（SDK 37，HyperOS 完整版本未知）、CarWith `4.0.20-20260923`、小米 CarLife `8.8.5`（274）及
+  mcarplay `0.1.6` standard/release。用户称接收端为奔驰 MBUX 3.3；车机自报 `Mercedes-Benz / MB_E-P-4`，
+  firmwareRevision `E354.2_4221`、sourceVersion `480.7.4`，具体车型及年款未知。
+- **过程与画面：** 用户反馈车机 CarPlay 标志显示已连接，也手动点过入口，但从未出现画面（包括开启声音前）；
+  点击后停留的具体界面尚未确认。14:38:25 首轮完成 RECORD，先选择仅视频，CarWith 七路连接与鉴权成功；
+  按车机通告请求 1624×1278，CarWith 返回 1280×720@30，应用透传该码流。14:38:26–14:38:44 共记录 341 个源帧、
+  340 次视频写入，含 9 个 IDR，应用未记录车机关键帧请求、`requestUI` 或触控报文；写入成功不证明车机已解码或显示。
+  用户点击入口的具体时间未知，`requestUI=0` 不能否定点击，也不能证明车机切屏失败的原因。分辨率不同是待验证线索，不能据此定因。
+- **声音与断开：** 14:38:43 动态补启音频，type 102 AAC-LC 的 SETUP 成功，14:38:44.053 第二次 RECORD 应答成功，
+  20 ms 后控制通道读线程结束、随后屏幕及事件连接 reset；音频输入及发包计数均为 0，无法确认声音是否可用。
+  再次连接时也有一次第二次 RECORD 之后立即断流；相关时序值得单独对照，但不能单凭时序断言重复 RECORD 是原因。
+  14:40 一轮全程选择仅视频，车机在 CarWith 首帧到达前即关闭屏幕数据口（EOF），随后写出的首帧不能证明接收端收到。
+- **独立的应用异常：** 14:39:16 一轮在控制读线程结束时，`pendingResponses.values.toList()` 与请求完成并发，抛出
+  `NoSuchElementException`。代码改为在请求登记所用锁内按连接代次取出待响应队列，并避免对并发集合按 size 快捷取元素；
+  这修复的是断链清理期间的异常，**不能证明它造成首轮无画面或车机拆链**。
+- **待验证：** 在静止状态从干净车机会话开始，先保持仅视频至少 30 秒，记录车机屏幕界面、是否手动进入 CarPlay、
+  画面和触控；单独复测开启声音及声音是否到达，记录开启前后时间并导出新脱敏报告。需要对比视频尺寸、控制消息、
+  接收端行为与单次/重复 RECORD 等候选因素；尚无该奔驰组合的画面、音频、触控或稳定性通过证据。
+
+## 保时捷 MIB2+ / ALPINE + 0.1.6：车友反馈关闭「优先 CarLife 转换盒连接」后恢复正常（2026-11-14，待验证）
+
+- **来源：** 车友口头反馈，无新脱敏报告佐证；对应脱敏报告 `7b0eeb79…` 的分析见 issue
+  [wangxso/mcarplay#64](https://github.com/wangxso/mcarplay/issues/64)。
+- **反馈内容：** 在 CarWith 设置中关闭「优先 CarLife 转换盒连接」后，该保时捷车机的连接恢复正常（单次体验）。
+- **与本报告证据的关联：** 报告中出现过一次 `CARWITH_ENTRY_BLOCKED`（后台发起被拦截，CarLife listener 连 7240
+  端口 ECONNREFUSED，且前两次 listener 尝试同样 REFUSED、第三次才成功）；「优先转换盒」开启时 CarWith 会优先等待
+  外接 CarLife 转换盒而非自身响应，与该现象机制上吻合。该设置是否也影响 iAP2 会话内 0x5703 凭据回包，尚未验证。
+- **未验证：** 多次冷启动/重连是否稳定；是否只有保时捷受影响；CarWith `4.0.20-20260923` 中该设置的具体行为未做静态
+  或动态检查。本条目只记录一次车友反馈，不据此改代码、不扩展为通用结论。
+
+## 2026-11-14 本机复测：DiPlay 正常（转换盒优先关闭）
+
+- **环境：** 手机 `2509FPN0BC`（Android 17 / SDK 37，HyperOS `OS4.0`），mcarplay `0.1.7` (1070000) standard/release，
+  无线 adb `10.0.0.242:44837`。CarWith 设置「优先 CarLife 转换盒连接」确认为**关闭**状态。
+- **结果：** 用户实车操作，目标接收端为 **DiPlay**（非保时捷）：无线连接正常，**画面与声音均正常**。
+  本轮无应用内导出的新报告可查（复测期间无线 adb 断开，未能拉取数据）。
+- **说明：** 本次仅证明「转换盒优先关闭」时 DiPlay 组合正常，不能单独证明该设置与保时捷 CARWITH_ENTRY_BLOCKED
+  的因果关系；保时捷上开关两种状态各复测多次并导出脱敏报告后才能升级该结论。对应分析见 issue
+  [wangxso/mcarplay#64](https://github.com/wangxso/mcarplay/issues/64)。
+
+### 对照轮（同日）：「优先 CarLife 转换盒连接」开启后重连，DiPlay 同样正常
+
+- **环境：** 同机同构建（`2509FPN0BC`，mcarplay `0.1.7`）；本轮在 CarWith 设置里**重新开启**「优先 CarLife
+  转换盒连接」后重连。
+- **结果：** 用户确认本轮 DiPlay 连接同样正常（画面声音正常）。本轮无线 adb 失联（Connection refused），
+  未拉到脱敏报告。
+- **含义与边界：** 两轮（关/开）DiPlay 均正常，说明该设置对 DiPlay 组合的连接没有可观察影响；而车友反馈只涉及
+  保时捷。这把焦点收窄到「保时捷 + 转换盒优先开启」的具体组合——DiPlay 不复现该问题。仍需在保时捷上开关对比
+  多轮（各 ≥2 次，含冷启动，每轮导出报告）才能定因。
+
+## 保时捷 MIB2+ / ALPINE + 0.1.7 首份实车数据：WIFI_JOIN 已解、重连出现「退化 0x1d01」新形态（2026-11-14）
+
+- **来源：** 车友提供的脱敏支持报告 `e8d08d37…`（2026-11-14T11:10:29Z 导出，0.1.7 (1070000) standard/release，
+  Xiaomi 25113PN0EC，CarWith 4.0.20-20260923，CarLife 8.8.5）；分析见 issue
+  [wangxso/mcarplay#64](https://github.com/wangxso/mcarplay/issues/64)。
+- **WIFI_JOIN 已解决：** 保时捷长会话（attempt 6d0d398f，进程 7b1a8bfa）BT_LINK +34s → WIFI_CREDENTIALS
+  (source=endpoint) → WIFI_JOINED +73ms → PAIRING/SETUP 约 3.4s → STREAMING 1920x720 + AAC 44100（外部 PCM
+  累计 1.8 万+ 包），持续 652 秒后 VIDEO_CLOSED。0.1.6 卡 228 秒的 WIFI_JOIN 路径在 0.1.7 已消除（修复来自
+  `7775b64` 的热点交接策略与凭据缓存）。此前 8e70885c 等卡 WIFI 的小会话为 0.1.7 早期轮次，最终被 SUPERSEDED。
+- **重连阶段新形态「退化 0x1d01 + 协商重启」：** 导出时的活动会话 f3d73004（19:06 起）BLOCKED_AT
+  BLUETOOTH:WIFI_INFO 224s+。日志：出站连保时捷 CONNECT READ_FAILED（84ms，1/1）；车机回连后 0x1d01 只声明
+  2 条发送消息（0x5703、0xea03）、可收 7 条、CarPlayStartSession(0x4301)=不发（对照 DiPlay 正常轮次为 14 条
+  完整清单）；应用发 0x5702 后车机立刻重启 iAP2 协商（`LINK closed: peer restarted iAP2 negotiation seq=171
+  oldSeq=2`），19:07/19:08 两次重放后 19:09/19:10 两次「iAP2 链路协商超时」，凭据交换无法完成，UI 提示手动
+  选择热点。该形态只出现在**重连阶段**；上午首连与 652s 长推流均正常。
+- **息屏拆链仍在：** 6d0d398f 在 POWER SCREEN_OFF @652568ms 后 297ms 即 END（VIDEO_CLOSED）；另一轮日志
+  afterScreenOffMs=434。0.1.6 报告为 2786ms——仍是车机侧行为，非 app 主动拆链。
+- **CARWITH_ENTRY_BLOCKED 仍在但影响收窄：** attempt 9d4f1812 28.5s 失败一次；后续正常轮次七路入口重试有效
+  （尝试 1 对 7240 REFUSED → 尝试 2 全通，waitMs≈420ms）。
+- **DiPlay 佐证：** 同报告内 15:09:54 起的 DiPlay 会话稳定推流 7933 帧约 4.7 分钟后由用户 USER_STOP；DiPlay
+  头几轮也出现「会话在链路协商完成前被车机拆掉（~10s 看门狗形态）」（502/9 帧即被拆，第 5 轮起稳定），疑似
+  接收端会话启动看门狗，待单独归类。
+- **边界：** 车友单机单日数据；「退化 0x1d01」的触发条件（是否与「优先转换盒」开关、上会话残留状态、车机
+  电源状态相关）未确认，需要成对的成功/失败报告对比。不据此宣布保时捷已支持。
+
+## 保时捷 MIB2+ / ALPINE 重连死循环逐轮分解：失败轮次不结束时间线、熔断不覆盖（2026-11-14 夜，0.1.7）
+
+- **来源：** 脱敏报告 `e8d08d37…`（同上条目）的 19:06–19:10 死循环窗口逐轮分析，见 issue
+  [wangxso/mcarplay#66](https://github.com/wangxso/mcarplay/issues/66)。attempt `f3d73004`（19:06:44
+  user_start，目标保时捷 <NAME-1>/<MAC-1>）。
+- **逐轮形态（7 轮中的卡死段）：** 出站 CONNECT READ_FAILED（84ms，1/1）→ 转等回连。车机回连后：
+  轮 1/2（19:07、19:08）：0x1d01 仅 2 发（0x5703、0xea03）/7 收、无 0x4301、peerMaxControl=2038；MFi 通过
+  （aa01 912B 证书、20B challenge、aa03 132B 签名）；发 0x4e0d 问候 + 0xea00，0xea03 未到；应用发 0x5702 后
+  **车机立即重启协商**（`LINK closed: peer restarted iAP2 negotiation (seq=171/148 oldSeq=2
+  sessions=1/k0/v1,2/k1/v1,3/k2/v1)`）→「链路在发送 0x5702 时关闭」。轮 3/4（19:09、19:10）：车机回连后应用
+  只采纳会话表、无 link ready、未发 0x1d00；车机约 40s 一次重发 SYN 无响应 → 入站 **60s 超时**
+  （`Iap2BluetoothServer.SESSION_TIMEOUT_MILLIS=60_000`）→「iAP2 链路协商超时」。
+- **实测确认两个代码问题（与 #66 只读排查一致）：** ① 失败轮次不结束时间线——attempt `f3d73004` 全程仅 5 条
+  事件（BEGIN、STAGE、BT_LINK/IAP2_IDENTIFIED/IAP2_AUTHENTICATED @+39s），其后 4 轮失败每轮都无
+  END/WARNING/新 attempt，`BLOCKED_AT BLUETOOTH:WIFI_INFO` 持续到导出（224s+）；`onLinkClosed` 只在
+  `endpointDelivered` 后回调（`BtSession.kt`）。② 熔断不覆盖——轮 3/4 轮时长恰为 60s（≥
+  `AutoReconnectGuard.AUTO_RECONNECT_FAST_FAILURE_MAX_MS=60_000`），轮 1/2 在端点交付前关闭，两条路都绕过记账，
+  自动重连无限持续。与「每次要重试五六七八次才成功」的共性反馈同谱系。
+- **口径修正（后续 1115 数据再修正一次，见下条）：** 本报告内所有 14 条完整 0x1d01 清单均来自 DiPlay
+  （key=diplay）；上午成功会话（attempt 6d0d398f，13:51 起，652s）的日志在 13:57 前截断，保时捷正常态清单
+  不在日志内——「2 发/7 收」只能说相对 DiPlay 是差异，不能断定相对保时捷常态是退化。但「声明可收 0x5702 却在
+  收到 0x5702 后立即重启协商」且 0.1.6 无此行为，是 0.1.7 之夜的硬证据新形态。触发窗口锁定为**上一会话息屏
+  拆链结束后对保时捷的重连**（14:01:54 息屏后 ACL/热点 ~1.3s 内关闭；19:06 重连立即进入死循环；下午 DiPlay
+  轮正常；间隔约 5 小时，疑似车机残留状态）。
+
+## 保时捷 MIB2+ / ALPINE 复测：同车机 0.7s 内切换两种 0x1d01 形态，LEGACY 残留态与 NEW 态振荡（2026-11-15）
+
+- **来源：** 车主脱敏报告 `4951a988…`（2026-11-15T02:24:53Z 导出，0.1.7，同手机；车主于 02:10:19Z clear data，
+  `savedCount=0`，缓存热点凭据与 AirPlay 配对信任已丢失）；分析见 issue
+  [wangxso/mcarplay#66](https://github.com/wangxso/mcarplay/issues/66)。
+- **七轮握手（10:20–10:24，车机点火后）：** 出站 1 成（120ms）/1 败；车机回连 7 轮中 6 轮为「2 发/7 收退化
+  清单 + 发 0x5702 即被重启协商」（与 1114 夜完全同构，含重启点位 `seq=197/85/230/227/158 oldSeq=2
+  sessions=1/k0/v1,2/k1/v1,3/k2/v1`），2 次「协商超时」（10:21:51、10:22:53，同 1114 夜轮 3/4 形态）。
+- **关键新证据：** 10:22:33 一轮车机给出**完整 29 项清单**（17 发/12 收：0x4c00…0x6803、0xea02、0x00b1/0xb3、
+  0xea03；声明会发 0x6800 StartHID；**0x4301=不发、无 0x5702/0x5703**）→ 画像判 NEW（BMW iD9 形态）→ 应用
+  跳过 0x5702、发 0x4300 → 车机未声明发 0x4301、也不发 ctrl 邀请 → 3 秒后失败「0x5702/0x4301 都没给出 AP
+  信息」。**同一台车机 0.7 秒内先 2 条退化轮、再 29 项完整轮、之后又回退化轮**——「退化清单」定性修正为
+  LEGACY 残留态与 NEW 态振荡，非常态/异常之差。
+- **车主观察对上：** 车主称「车机跳出一个连接 CarPlay 的页面、一闪而过」。17 项清单轮声明会发 0x6800
+  StartHID（CarPlay 输入准备），时间与 10:22:33–36 吻合。推测链：车机进入 CarPlay 准备态（页面出现）→ 应用
+  判 NEW 跳过 0x5702 → 拿不到 AP 信息本轮失败 → 车机回退清理 → 下一轮回残留态 → 页面消失。
+- **NEW 态在当前策略下必失败：** 该轮车机不声明发 0x4301、不发 ctrl 邀请、应用无缓存热点——三个 AP 来源
+  全无。待验证：保时捷 NEW 态下 0x4300→0x4301 真实行为；是否需要先完成 0x6800 StartHID/HID 会话才进入
+  CarPlay 会话建立（当前「声明会发却 2s 未到」的分支只跳过等待，不处理）。
+- **边界与待办：** 车主单机两日数据；clear data 叠加使「无缓存」成为必然，**建议下次复测前不清数据**，让成功
+  会话重建缓存后再看 NEW 态是否可走通；卡死时录屏车机以确认「一闪而过」页面与 29 项清单轮的同刻性。修复方向
+  更新为两层：LEGACY 残留态识别后退避（等车机自行完成/清理），NEW 态补 0x4301/StartHID 分支。均未实车修复，
+  不据此宣布保时捷已支持。
+
+## 小米 14 Ultra / 奔驰 MBUX（`MB_E-P-4`）：另一款发送端的两轮视频会话（2026-11-07，用户提供的第三方日志，非 mcarplay 证据）
+
+- **来源与归属：** 车主（称车机为奔驰 GLC 300L）于 2026-11-15 提供的导出日志；原文不入库，本节只记录脱敏
+  事实。日志**不属于 mcarplay**：构建串 `CarPlay Android wireless 8.1.1-carplay.C (carplayB)`，堆栈为
+  `io.github.iamr0s.carplay.ConnectionService`；`Attempt:` / `Bounded logs:` / `CARWITH DIRECT` /
+  `VIDEO_TRANSPORT_METRICS` 等短语在本仓库当前与历史版本中均不存在。手机为小米 14 Ultra（`24031PN0DC`，
+  Android 17 / SDK 37，CarWith `4.0.20-20260923/104000020`）——**与 11-12 那份 mcarplay 无画面报告同一台手机、
+  同一个 CarWith 版本**，但不能据此认定同一台车机或同一次连接。
+- **时间与结构：** attempt `f72cfee4` 11:52:23Z–12:04:38Z（735 s，用户/服务主动 end，`provider-stop
+  source=CarlifeConnectService`），attempt `a13ca61c` 12:04:39Z–12:09:10Z（271 s，导出时仍在推流）。
+  导出文件里 `connection.start.log`（2046 行）与 `connection.log`（5180 行）**末 2046 行逐行相同**——所谓
+  「attempt 起始段」实际写进了最近的尾部窗口，两段正文需先去重再计数。
+- **车机画像（`/info`，两轮字段相同、报文 3128B 与 3085B，差异未逐字段比对）：** `Mercedes-Benz` / `MB_E-P-4`，`firmwareRevision=E354.2_4221`、
+  `sourceVersion=480.7.4`、`OSInfo=Linux`、`hardwareRevision=1.0.0`；features `0x6104040280`（bit7/9/18/26/
+  32/37/38，含 HK 配对与 CarPlay 控制）；单一显示屏 1624×1278、`maxFPS=30`、physical 206×162mm、
+  `viewAreas` 1 个（safeArea 起点 (0,15)、1624×1238、`drawUIOutsideSafeArea=true`）；`hidDevices` 四路——
+  `TouchScreen`(uuid 2)、`ButtonInput`(3)、`OFNInput`(1)、`PhoneInput`(4)，vendor/product `0x25E1/0x4352`；
+  另含 `audioFormats`/`audioLatencies`（compatibility/default/media/telephony/speechRecognition/alert）、
+  `bluetoothIDs`、`keepAliveSendStatsAsBody=true`、`nightMode=true`。**这是目前记录最完整的一台现代 MBUX。**
+- **链路形态：** 两轮都是出站 RFCOMM 失败（`read failed … read ret: -1`）→ 转等车机回连 → 车机 0.28 s / 2.5 s
+  内连入 → iAP2 marker `FF550200EE10` → SYN/ACK（会话表 2 条）→ MFi 挑战签名有效（`trust-chain-verified=false`，
+  开发信任模式）→ `0x4301` 下发凭据（SSID `<SSID>`、`security=3`、`channel=149`、port 7000、
+  `receiver-id=<RECV-MAC>`、`pi` 为不透明 UUID、地址为车机自报的链路本地 IPv6）→ 入网后直连 7000 并保持
+  同一条 TCP 承载认证与媒体控制。
+- **配对与认证：** 首轮 `saved-peer=false` 走 `pair-setup` → `pair-verify`；第二轮 `saved-peer=true` 只走
+  `pair-verify`。两轮都在 SETUP 前发 `POST /auth-setup`（MFiSAP：608B EC 证书、SHA-256、64B 签名，往返
+  495 ms / 465 ms），随后 `screen-encryption=ChaCha`、`MFi-chain=unverified`。**与 mcarplay 的 iPhone 认证序列同构**
+  （`iphoneAuthSequence` 的 Chery 专用路径）。
+- **SETUP 与信息交换：** 初始 SETUP 应答 `{"eventPort":5001, "timingPort":6020,
+  "enabledFeatures":["viewAreas"]}`——车机只启用了 `viewAreas` 一项；主屏 `SETUP type=110` 仍被受理并返回
+  `dataPort=6030`；timing 首包 32B 有应答。`RECORD` 后车机经 `/command` 的 `iAPSendMessage` 开虚拟 iAP2 链路
+  （与 mcarplay `VirtualIap2Link` 同一形态），全程 `parse-rejected=0`、`retries=0`。
+- **视频链路与 mcarplay 根本不同（最重要的边界）：** 该 app 绑 `com.miui.carlink/com.xiaomi.ucar.carlife.
+  CarlifeConnService`（`com.baidu.carlife.mixing.aidl.ICarLifeCastManager`）调 `prepareCast` 把自己编码器的
+  input Surface 交给 CarWith 渲染（`input=CarWith-Surface`，日志同时记
+  `CarLife Binder is a separate entry; no network/USB CarLife startup`），触摸/音频另走 CarLife Binder 监听。
+  mcarplay 走的是七路 CarLife 协议 + 透传/转码码流，**全仓没有 `prepareCast` 调用**。因此「这台车机上它出图」
+  只能说明车机 AirPlay 侧接受本机推流，**不能推出 mcarplay 的七路路径在同一车机上会成功**。
+  早先记为「待核对的矛盾」（`CarlifeConnService.i()` 校验调用方 UID 包名 vs 日志里 `prepareCast accepted`）已由下节
+  APK 静态分析解释：该 APK 的 manifest 包名就是 `com.baidu.carlife.xiaomi`，按包名查 UID 的校验自然通过；
+  它替换的正是百度 CarLife 这个用户应用（见下节）。
+- **视频：** `prepareCast(size=1624x1278, dpi=160, encoderFPS=30)` 被 CarWith 采纳，编码器
+  `c2.qti.avc.encoder` 1624×1278@30、7,783,020 bps、`input=CarWith-Surface`，首帧 IDR 即 1624×1278；
+  帧率由 CarWith 的 `carlife_dynamic_params` 驱动（`carlife_frame=30` → 20），实发稳定 20–21 fps，
+  `dropped=0`、`awaiting-idr=false`、`configurations=4`。第 1 轮 +721 s 出现一次 5 秒窗口仅 9 帧、连续三次
+  `keyframe request … origins=overflow`，约 6 秒后自行恢复到 20 fps；第 2 轮 +252 s 起由 20 fps 降到 11–19 fps，
+  随后日志导出，未观察到断开。
+- **资源仲裁（两轮的车机行为不同，值得对照 `ModeArbiter`）：** 第 1 轮 +50.4 s 车机发
+  `changeModes{transferType:3, borrowID:"Borrow_Never", unborrowConstraint:1000}`，该 app 回 **`501 Not
+  Implemented`** 且不认归属；第 1 轮 +731 s 与第 2 轮 +10.5 s 车机改发
+  `changeModes{transferType:1, takeConstraint:500, borrowConstraint:100}`，该 app 回 `status=0` 并补发完整
+  `modesChanged`。**同一台车机先后使用借用式与接管式两种参数**，对前者的 501 没有导致拆链。
+- **触控：** 车机侧主动发 `hidSendReport{uuid:"2", 5 字节}`，坐标直接按 1624×1278 转发给 CarWith
+  （`source == target`，无缩放），`target=CarWith dispatched=true`。第 1 轮 +32.6 s 一次滑动（down/move/move/up）；
+  第 2 轮 +12.4 s 起三次点按。车机只有在渲染出画面后才会去点，这是「车机确实出了图」的强旁证——但**画面内容
+  仍无法判定**（APK 里没有任何回读车机屏的路径），日志本身也仍标 `receiver-rendering=unmeasured`、
+  `receiver-display-fps=unknown`。
+- **未应答的 iAP2 订阅：** 车机重复下发 `0xAE00`(power)、`0x4157`(communications)、`0x4170`(list)、
+  `0x5200`(route guidance)、`0x4154`(call state) 五条 CSM，该 app 一律记 `unhandled` 不回包；对照之下它**回了**
+  `0x5000`(NowPlaying)→`0x5001`（第 1 轮 1 次、第 2 轮 2 次）。mcarplay 的 `VirtualIap2Link` 里 4157/4154/4170/5000 的空态回包**仅对
+  CLASSIC_MIB3 生效**，0xAE00 与 0x5200 则从未应答。本日志说明：MBUX 会要这五条；一支对其中四类完全不回、
+  只回 NowPlaying 的实现能连满 12 分钟——**「不回这些订阅」不足以解释拆链**（但也无法证明车机没有静默重试）。
+- **蓝牙：** 第 2 轮 RECORD 应答后 2.8 s 发 `disableBluetooth`（RTSP 200、plist `status` 缺省），随后记
+  `Runtime command authentication complete; Bluetooth handoff accepted`，之后 4 分多钟纯 Wi-Fi 会话正常。
+  mcarplay 目前只在 `releaseBluetoothAfterSetup`（Chery）下发送；MBUX 接受该命令这一事实本身不含「是否必需」。
+- **音频：** **零音频证据。** 全程没有音频 `SETUP`、没有 type 100/102、没有 PCM/RTP 计数，只有
+  `awaiting valid PCM before live-audio activation` 与 `microphone route selection=vehicle capability-only`。
+  车主口述的「视频连接成功」严格讲只覆盖视频链路，声音完全未被验证。
+- **不能从本日志推出的结论：** ① 画面内容仍未确认——app 自述 `receiver rendering still needs confirmation`，
+  且**全部成本行都带 `generator=cached-YUV`、`render-ms=0.0`、`copy-ms=0.0`**（跨两轮 12 分钟无变化）。
+  经下节 APK 静态分析，这三点**不能**当作「可能在重发缓存帧」的证据：`generator=cached-YUV` 是该 app 日志里的
+  硬编码常量，`render-ms/copy-ms` 的计数器只包住 CPU 测试图案与 YUV 平面拷贝，Surface 输入路径本就不走它们，
+  所以 Surface 模式下恒为 0.0 是预期结果；该模式下也不存在周期性的测试图案渲染。也就是说，这两项既不能证明
+  也不是反证「车机看到的是实时 CarWith 画面」。② 发送成功不等于车机解码，11-12 那份 mcarplay 报告同一教训。
+  ③ 两轮的 fps 窗口、分辨率一致，但 **未记录 CarWith 实际编码尺寸**，无法据此判断「CarWith 返回 1280×720」是否为
+  MBUX 无画面的原因。④ 单车主、单次导出，不代表该车型稳定。
+- **待办（问车主即可推进）：** ① 车机屏上实际看到的内容（CarWith 界面 / 测试图案 / 黑屏）与点击反馈；
+  ② 打开声音后重连再导出一份，覆盖音频路径；③ 该 app 的名称与版本已由 APK 确认为「BOX OFF」
+  `8.1.1-carplay.C`（见下节）：它的界面只有启用开关、选择目标车机（或手填地址）、导出/复制日志、打开 CarWith
+  这几项，**没有**「原始流 / 手机端重编码」开关，也没有分辨率或帧率选项——视频恒为手机端再编码、几何取自车机
+  `/info`，因此不必再向车主索取这些取值；
+  ④ 若要判断 mcarplay 在这台车机上的差距，需要同一台车机、同一手机上的 mcarplay 脱敏报告做**成对**比较。
+  转发与归档时注意：原始文件含车机热点明文口令与接收端 MAC，已按仓库规则排除在本文之外。
+
+## 上述第三方发送端的 APK 静态分析：BOX OFF 8.1.1-carplay.C（2026-11-15，车主提供的闭源 APK，非本仓库代码）
+
+- **样本与归属：** 车主提供的 `BOX-OFF-8.1.1-carplay.C-100022-debugfalse-r8.apk`，10,941,416 B，SHA-256
+  `e9c03b4de4ddde00b6a7ce4602a6212e9b28af4f41635866bf581703644ef462`；证书 CN「CarWith CT5 Research」、
+  O「Jianfeng Zou」、自签 3072-bit RSA（SHA-256 `39:EA:8A:…:1E:E1`）。`BuildConfig` 为
+  `APPLICATION_ID=com.baidu.carlife.xiaomi`、`VERSION_NAME=8.1.1-carplay.C`、`VERSION_CODE=100022`、
+  `GIT_SHA=carplayB`、`NATIVE_HOOK_ID=provider-no-hook`，与上一节日志头的 `8.1.1-carplay.C (carplayB)` 一致，
+  可确认是同一款软件。APK 本身不入库，本节只记录静态事实。
+- **身份伪装是整个方案的地基：** manifest 包名直接取 `com.baidu.carlife.xiaomi`，并保留百度侧类名
+  （`com.baidu.carlife.CarlifeActivity` 别名、`com.baidu.carlife.service.CarlifeConnectService` 导出服务、
+  `com.baidu.carlife.mix.xiaomi.XiaomiPermissionActivity`）。它替换的是**百度 CarLife 这个用户应用**，不是 CarWith；
+  由此 `CarlifeConnService.i()` 按包名查调用方 UID 的校验天然通过，「第三方 APK 不能调 `prepareCast`」的限制在这条
+  路上不成立——这正是上节那个「矛盾」的解释。代价是与原厂 CarLife `8.8.4` 不能共存（同包名）。
+- **三条接入路径，日志证明跑的是最弱的一条：** `CarWithBridge.Transport` 有 `HOOK` / `DIRECT` /
+  `CARLIFE_SESSION` 三种。`HOOK` 与 `CARLIFE_SESSION` 需要 LSPosed 注入 CarWith 进程，且都硬性要求 CarWith
+  `4.0.14-20260801`（`SUPPORTED`/`expected inspected` 常量，版本不等即抛异常）；本次车机手机上是 `4.0.20-20260923`，
+  日志也记 `transport selected=DIRECT`、`formalSession=false requires-LSPosed=false`，因此**无 Xposed、无 root**
+  的 `DIRECT` 路径即已完成出图。`DIRECT` 的握手全部是手写 Parcel：tx 3 注册 `ISystemAudioCallback`、tx 4 注册
+  `ICarLifeCastCallback`、tx 5 发 `Intent("carlife_connect_audio_type")`、tx 1 依次写
+  `int 1 / width / height / dpi 160 / Parcelable Surface`（首个 int 恒为 1，具体语义未从 CarWith 侧确认）；
+  会话结束时用 tx 2 释放。触控/按键/音频三个监听器由 CarWith 反过来在 cast 回调上以
+  `IRemoteTouchListener`/3、`IRemoteKeyListener`/5、`IRemoteAudioListener`/12 交付 binder，之后该 app 在每个
+  监听器上调 tx 1 发送事件（这几个号属于回调与监听器接口，与 manager 的 1–5 各自独立）。
+  日志里的 `prepareCast accepted` 是该客户端 `transact()` 返回后的**本地**日志行，不是 CarWith 的回执——
+  CarWith 真正的回执是随后的
+  `onCastPrepared displayId=5/7`（回调事务 2），上一节记的「本地判断」猜测在此得到证实。
+- **视频方向与 mcarplay 相反：** 它把**自己**的 `MediaCodec` 输入 Surface 交给 CarWith，由 CarWith 把 CarLife 界面
+  渲染到这个 Surface（`TestVideo` 中 `carWith=true` ⇒ `surfaceInput=true` ⇒ 日志标 `input=CarWith-Surface`），
+  再从同一个编码器取 H.264 送 AirPlay。`BRAND_SURFACE startup frame submitted` 是启动时向该 Surface 画一次
+  `boxoff-test.webp` 品牌图（`Ct5BrandSurface.draw` → EGL 上传），随后 `CarWithBridge.begin(surface,w,h,fps)` 发布
+  会话。`render-ms=0.0 / copy-ms=0.0` 之所以恒为 0 也在这里：`TestPattern.render()` 与 YUV 平面拷贝只在
+  `carWith=false` 的 CPU 路径上执行并计数；Surface 路径不经过它们。`generator=cached-YUV` 更是
+  `TestVideo.smali` 里一条 `const-string` 常量（全 APK 仅此一处），与运行时实际取帧方式无关。
+  结论：上一节据此推断「车机可能在看缓存帧」不成立；该常量与 0.0 成本行**既不能证明也不能否证**车机看到的是实时画面。
+- **音频与触控同样是 Binder 旁路：** 音频不是自己抓取，而是由 CarWith 通过 `ISystemAudioCallback` 推 PCM
+  （`Ct5AudioIngressBinder` 校验 8–48 kHz、1–2 声道、encoding=2、分块整除，再走 24 深度队列；日志中的
+  `pcm handler completed`、`pcm rejected category=` 即此处）；触控由车机 `hidSendReport` 直接转发给 CarWith
+  （`CarWithDirectContract.coordinate()` 做缩放，本次 source==target 故无缩放）。**它全程不建立任何 CarLife 七路
+  TCP 连接**：全 APK 搜不到 7240/8240/9240/9241/9242/9340/9440 的常量用法（命中的都是 BouncyCastle 常量），
+  socket 只出现在 AirPlay 与接收端发现代码里。所以它与 mcarplay 的能力不重叠，「它能出图」对七路路径没有证据价值。
+- **权限面与 mcarplay 的分界：** 除正常蓝牙/定位/网络/前台服务权限外只有 `moe.shizuku.manager.permission.API_V23`；
+  Shizuku 只用于 `desktop/` 那套「车机桌面镜像」（`DesktopProjection` 创建 VirtualDisplay，`ShizukuDisplaySession`
+  注入输入），本次日志未走该分支。APK 内含 Xposed 实现（`hook/BluetoothHook` 注入 `com.android.bluetooth`、
+  `CarWithHook`/`CarWithSessionHook` 注入 `com.miui.carlink`、`res/values/arrays.xml` 的 `xposed_scope`），但
+  **没有 `xposed_init` 资产或模块元数据**，即当前不是可安装的 Xposed 模块；且 `BluetoothHook` 额外用
+  SDK==37 + 整机 fingerprint `Xiaomi/pudding/pudding:…OS4.0.0.32.XPCCNXM` + `/apex/com.android.bt/lib64/
+  libbluetooth_jni.so` 的 SHA-256 三重门禁，native 库 `libcarplay_eir_hook.so` 才 patch `SDP_AddSequence`
+  (rva 0x8ceaa8) 与 `WriteEIR` (rva 0xb02c80)，把 SPP 服务描述改成 `…cafe`、并伪造 HFP 的
+  CGMI/CGMM/CGMR 为 Apple/iPhone/iOS 26.0。这些是它能在部分机型上表现得像 iPhone 的原因，也是 mcarplay
+  明确不做的事（本仓库不 patch 系统蓝牙、不伪造 UID、不冒充百度包名）。
+- **对本仓库的可用结论：** ① 在 CarWith 4.0.20 + MBUX 上，**仅凭一个同包名应用 + 公开 Binder 事务**就能让
+  CarWith 把界面渲染给第三方 Surface 并由第三方编码送出，无需 root/Xposed——这条路 mcarplay 未采用，也不建议采用；
+  ② 它证明 MBUX 接受手机端 H.264 + `viewAreas` 的推流形态，与 mcarplay 的七路 + 转码路径是两条独立路线，不能互相
+  背书；③ 它的日志自述多处 `unverified`（`receiver rendering still needs confirmation`、
+  `receiver-display-fps=unknown`、`audibleOutputProven=false`、`foreground=unverified`），车主口述的「视频成功」
+  仍只能算**车机侧出现了画面**，画面内容与声音依旧未证实。
