@@ -219,7 +219,6 @@ class Iap2BluetoothServer(
                     null
                 }
             val match = peerMatch(target, peerAddress)
-            if (match != BluetoothDiagnostics.PeerMatch.OTHER) BtSessionGate.inboundAccepted()
             diagnostics.incoming(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, peerAddress, match)
             if (target != null && match == BluetoothDiagnostics.PeerMatch.OTHER) {
                 log(
@@ -229,10 +228,12 @@ class Iap2BluetoothServer(
                 runCatching { socket.close() }
                 continue
             }
+            val outboundFinished = BtSessionGate.inboundAccepted()
             log("BT: 接收端已连入 name=$peerName，开始 iAP2 发送端会话")
             val observation = ReceiverDetectionRuntime.observation(peerAddress)
             thread(isDaemon = true, name = "iap2-bt-session") {
                 try {
+                    outboundFinished?.await()
                     runSession(socket, observation)
                 } finally {
                     BtSessionGate.inboundFinished()
@@ -281,7 +282,7 @@ class Iap2BluetoothServer(
         socket: BluetoothSocket,
         observation: ReceiverObservation?,
     ) {
-        val pairing = Iap2Pairings.current.attempt(socket)
+        val pairing = Iap2Pairings.current(context).attempt(socket)
         log("BT: iAP2 RFCOMM 入站握手角色=${pairing.role}")
         val stream =
             StreamDuplexStream(socket.inputStream, socket.outputStream) {

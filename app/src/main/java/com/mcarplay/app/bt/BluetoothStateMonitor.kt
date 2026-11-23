@@ -51,7 +51,7 @@ internal class BluetoothStateMonitor(
                     BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
                         val before = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1)
                         val after = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
-                        if (before != after) Iap2Pairings.current.bondChanged(address, after)
+                        if (before != after) Iap2Pairings.current(context).bondChanged(address, after)
                         diagnostics.bondChanged(
                             epoch,
                             address,

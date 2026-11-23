@@ -10,7 +10,7 @@ class BtSessionGateTest {
     fun outgoingSocketThatCompletesDuringIndependentWifiHandoffIsClosed() {
         var closed = false
         val outbound = Closeable { closed = true }
-        assertTrue(BtSessionGate.discardLateOutbound(outbound, wifiHandoffDetached = true))
+        assertTrue(!BtSessionGate.runOutbound(outbound, wifiHandoffDetached = true) { error("unexpected admission") })
         assertTrue(closed)
         assertFalse(BtSessionGate.outboundPaused)
     }
@@ -22,7 +22,7 @@ class BtSessionGateTest {
         assertFalse(BtSessionGate.outboundPaused)
         BtSessionGate.inboundAccepted()
         try {
-            assertTrue(BtSessionGate.discardLateOutbound(outbound))
+            assertFalse(BtSessionGate.runOutbound(outbound) { error("unexpected admission") })
             assertTrue(closed)
             assertTrue(BtSessionGate.outboundPaused)
         } finally {
@@ -30,8 +30,26 @@ class BtSessionGateTest {
         }
 
         closed = false
-        assertFalse(BtSessionGate.discardLateOutbound(outbound))
+        assertTrue(BtSessionGate.runOutbound(outbound) {})
         assertFalse(closed)
+    }
+
+    @Test
+    fun inboundPreemptsAdmittedOutboundAndWaitsForItToExit() {
+        var closed = false
+        var finished: java.util.concurrent.CountDownLatch? = null
+        try {
+            assertTrue(
+                BtSessionGate.runOutbound(Closeable { closed = true }) {
+                    finished = checkNotNull(BtSessionGate.inboundAccepted())
+                    assertTrue(closed)
+                    assertTrue(finished?.count == 1L)
+                },
+            )
+            assertTrue(finished?.count == 0L)
+        } finally {
+            BtSessionGate.inboundFinished()
+        }
     }
 
     @Test

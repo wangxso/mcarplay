@@ -3,20 +3,26 @@ package com.mcarplay.app.bt
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
+import android.content.Context
 import com.mcarplay.app.transport.Iap2LinkChannel
-import java.util.concurrent.ConcurrentHashMap
 
 /** 保留应用观察到的新配对的首次蓝牙会话时序。 */
-internal class Iap2Pairings {
-    private val pending = ConcurrentHashMap<String, Any>()
+internal class Iap2Pairings(
+    private val completed: (String) -> Boolean,
+    private val save: (String, Boolean) -> Unit,
+) {
+    private val pending = mutableMapOf<String, Any>()
 
+    @Synchronized
     fun bondChanged(
         address: String,
         state: Int,
     ) {
         when (state) {
-            BluetoothDevice.BOND_NONE -> pending.remove(address)
-            BluetoothDevice.BOND_BONDING, BluetoothDevice.BOND_BONDED -> pending.putIfAbsent(address, Any())
+            BluetoothDevice.BOND_NONE, BluetoothDevice.BOND_BONDING -> {
+                pending[address] = Any()
+                save(address, false)
+            }
         }
     }
 
@@ -28,19 +34,24 @@ internal class Iap2Pairings {
         return attempt(address, bond)
     }
 
+    @Synchronized
     fun attempt(
         address: String?,
         bond: Int?,
     ): Attempt {
-        val pairing = address?.let(pending::get)
+        val pairing = address?.let { pending.getOrPut(it) { Any() } }
         val role =
-            if (address != null && bond == BluetoothDevice.BOND_BONDED && pairing == null) {
+            if (address != null && bond == BluetoothDevice.BOND_BONDED && completed(address)) {
                 Iap2LinkChannel.Role.RESPONDER
             } else {
                 Iap2LinkChannel.Role.INITIATOR
             }
         return Attempt(role) {
-            if (address != null && pairing != null) pending.remove(address, pairing)
+            synchronized(this) {
+                if (address != null && bond == BluetoothDevice.BOND_BONDED && pending[address] === pairing) {
+                    save(address, true)
+                }
+            }
         }
     }
 
@@ -50,6 +61,15 @@ internal class Iap2Pairings {
     )
 
     companion object {
-        val current = Iap2Pairings()
+        private var instance: Iap2Pairings? = null
+
+        @Synchronized
+        fun current(context: Context): Iap2Pairings {
+            instance?.let { return it }
+            val prefs = context.getSharedPreferences("iap2_pairings", Context.MODE_PRIVATE)
+            return Iap2Pairings({ prefs.getBoolean(it, false) }) { address, done ->
+                prefs.edit().putBoolean(address, done).apply()
+            }.also { instance = it }
+        }
     }
 }

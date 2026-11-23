@@ -19,7 +19,7 @@ import com.mcarplay.app.transport.StreamDuplexStream
 import java.io.Closeable
 import java.io.IOException
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -624,12 +624,21 @@ class Iap2BluetoothClient(
                 runCatching { connected.close() }
                 return
             }
-            if (BtSessionGate.discardLateOutbound(connected, wifiHandoffDetached())) {
+            val ran =
+                BtSessionGate.runOutbound(connected, wifiHandoffDetached()) {
+                    try {
+                        selfLinkChange { runSession(connected) }
+                    } catch (error: IOException) {
+                        currentSocket.compareAndSet(connected, null)
+                        runCatching { connected.close() }
+                        log("BT-C: RFCOMM 初始化失败 - ${error.message}")
+                    }
+                }
+            if (!ran) {
                 currentSocket.compareAndSet(connected, null)
                 log("BT-C: 拨通时已有入站连接或 CarPlay 会话，已关闭本次出站连接，跳过 iAP2 握手")
                 continue
             }
-            selfLinkChange { runSession(connected) }
             sleepQuietly(RETRY_DELAY_MILLIS)
         }
         log("BT-C: 客户端已停止")
@@ -765,7 +774,7 @@ class Iap2BluetoothClient(
     }
 
     private fun runSession(socket: BluetoothSocket) {
-        val pairing = Iap2Pairings.current.attempt(socket)
+        val pairing = Iap2Pairings.current(context).attempt(socket)
         log("BT-C: iAP2 RFCOMM 出站握手角色=${pairing.role}")
         val stream =
             StreamDuplexStream(socket.inputStream, socket.outputStream) {
@@ -855,25 +864,57 @@ class Iap2BluetoothClient(
  */
 object BtSessionGate {
     // 从监听线程接受回连起计数，直到该连接的工作线程退出。
-    private val inboundConnections = AtomicInteger()
+    private val lock = Any()
+    private var inboundConnections = 0
+    private var outbound: Outbound? = null
 
-    internal val outboundPaused: Boolean get() = inboundConnections.get() > 0 || sessionActive
+    private class Outbound(
+        val socket: Closeable,
+        val finished: CountDownLatch = CountDownLatch(1),
+    )
 
-    internal fun inboundAccepted() {
-        inboundConnections.incrementAndGet()
+    internal val outboundPaused: Boolean get() = synchronized(lock) { inboundConnections > 0 || sessionActive }
+
+    /** 车机回连优先。关闭出站 socket，入站工作线程等出站退出后再发送 iAP2。 */
+    internal fun inboundAccepted(): CountDownLatch? {
+        val previous =
+            synchronized(lock) {
+                inboundConnections++
+                outbound
+            }
+        previous?.let { runCatching { it.socket.close() } }
+        return previous?.finished
     }
 
     internal fun inboundFinished() {
-        inboundConnections.decrementAndGet()
+        synchronized(lock) { inboundConnections-- }
     }
 
-    /** connect() 阻塞期间车机可能已经回连；在发送第一个 iAP2 包前交还出站 socket。 */
-    internal fun discardLateOutbound(
+    internal fun runOutbound(
         socket: Closeable,
         wifiHandoffDetached: Boolean = false,
+        run: () -> Unit,
     ): Boolean {
-        if (!outboundPaused && !wifiHandoffDetached) return false
-        runCatching { socket.close() }
+        val lease =
+            synchronized(lock) {
+                if (outbound != null || inboundConnections > 0 || sessionActive || wifiHandoffDetached) {
+                    null
+                } else {
+                    Outbound(socket).also { outbound = it }
+                }
+            }
+        if (lease == null) {
+            runCatching { socket.close() }
+            return false
+        }
+        try {
+            run()
+        } finally {
+            synchronized(lock) {
+                outbound = null
+                lease.finished.countDown()
+            }
+        }
         return true
     }
 

@@ -38,7 +38,8 @@ class CarBluetoothReceiver : BroadcastReceiver() {
     ) {
         val action = intent.action ?: return
         if (action != BluetoothDevice.ACTION_ACL_CONNECTED &&
-            action != BluetoothDevice.ACTION_ACL_DISCONNECTED
+            action != BluetoothDevice.ACTION_ACL_DISCONNECTED &&
+            action != BluetoothDevice.ACTION_BOND_STATE_CHANGED
         ) {
             return
         }
@@ -46,6 +47,10 @@ class CarBluetoothReceiver : BroadcastReceiver() {
         val app = context.applicationContext
         // 这些访问需要 BLUETOOTH_CONNECT；未授权时放弃（无法判断是不是目标车机）
         val address = runCatching { device.address }.getOrNull() ?: return
+        if (action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
+            Iap2Pairings.current(app).bondChanged(address, intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR))
+            return
+        }
         // ACL 状态无论是否开启自动连接都要记：出站探测据此在车机离线后停下（见 OutboundProbePolicy）
         BtAclTracker.record(address, action == BluetoothDevice.ACTION_ACL_CONNECTED, SystemClock.elapsedRealtime())
         // 「上车自动连接」开关（设置 → 显示，默认开）
@@ -64,7 +69,7 @@ class CarBluetoothReceiver : BroadcastReceiver() {
 
         if (action == BluetoothDevice.ACTION_ACL_CONNECTED) {
             if (runCatching { device.bondState }.getOrNull() == BluetoothDevice.BOND_BONDING) {
-                Iap2Pairings.current.bondChanged(address, BluetoothDevice.BOND_BONDING)
+                Iap2Pairings.current(app).bondChanged(address, BluetoothDevice.BOND_BONDING)
             }
             if (AutoConnectPrefs.isManualStopCoolingDown(app, address)) {
                 DebugFileLog.append(app, "AUTO: 手动断开后的 30 秒冷却期——忽略蓝牙回连")
