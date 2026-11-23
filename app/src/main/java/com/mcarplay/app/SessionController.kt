@@ -67,7 +67,10 @@ import com.mcarplay.app.net.AirPlayFeatures
 import com.mcarplay.app.net.CarPlayCtrlAdvertiser
 import com.mcarplay.app.net.CarPlayServiceBrowser
 import com.mcarplay.app.net.CtrlInviteGate
+import com.mcarplay.app.net.DiscoveredEndpoint
 import com.mcarplay.app.net.EndpointHosts
+import com.mcarplay.app.net.EndpointResolver
+import com.mcarplay.app.net.InviteView
 import com.mcarplay.app.net.StreamingInviteReconnect
 import com.mcarplay.app.net.WifiCarPlayConnector
 import com.mcarplay.app.net.WifiConnectCommand
@@ -3325,87 +3328,7 @@ object SessionController {
     private fun awaitCtrlInvite(
         endpoint: Iap2SenderSession.CarPlayEndpoint,
         timeoutMillis: Long,
-    ): Boolean {
-        val advertiser = ctrlAdvertiser
-        val deadline = android.os.SystemClock.uptimeMillis() + timeoutMillis
-        val startedAt = android.os.SystemClock.uptimeMillis()
-        var lastLogAt = startedAt
-        var reannouncedAt = 0L
-        while (android.os.SystemClock.uptimeMillis() < deadline) {
-            if (connectCancelled) return false
-            val invites = advertiser?.inviteCount ?: 0
-            val now = android.os.SystemClock.uptimeMillis()
-            val discovered = endpointBrowser?.awaitEndpoint(0)
-            val preferResolvedMdns =
-                discovered != null &&
-                    ReceiverCompatibility.prefersOra03DirectDiscovery(
-                        endpoint.receiverSignals,
-                        txtValue(discovered, "model"),
-                        txtValue(discovered, "fv"),
-                        txtValue(discovered, "srcvers"),
-                        VehiclePresetRuntime.current,
-                    )
-            when (
-                CtrlInviteGate.decide(
-                    nowMillis = now,
-                    waitStartedAtMillis = startedAt,
-                    lastInviteAtMillis = advertiser?.lastInviteAtMillis ?: 0L,
-                    mdnsEndpointFound = discovered != null,
-                    advertisedAtMillis = advertiser?.advertisedAtMillis ?: 0L,
-                    reannouncedAtMillis = reannouncedAt,
-                    preferResolvedMdns = preferResolvedMdns,
-                )
-            ) {
-                CtrlInviteGate.Decision.INVITED -> {
-                    appendLog("CTRL: ✓ 收到车机邀请（${now - startedAt}ms，第 $invites 次）——立即连接 AirPlay")
-                    return true
-                }
-
-                CtrlInviteGate.Decision.MDNS_FALLBACK -> {
-                    appendLog(
-                        "CTRL: 已发现 _airplay._tcp，广播可见/重公告后 ${CtrlInviteGate.MDNS_GRACE_MS}ms 内无新鲜邀请" +
-                            "（旧邀请 $invites 次不算，共等 ${now - startedAt}ms）——按旧机型直接连接 AirPlay",
-                    )
-                    return true
-                }
-
-                CtrlInviteGate.Decision.MDNS_DIRECT -> {
-                    appendLog("CTRL: ORA 03 N220346.2 已解析且等待邀请超时（${now - startedAt}ms）——直接连接 AirPlay")
-                    return true
-                }
-
-                // catplay 实测：iPhone 的 Bonjour 公告常被车机丢弃——它在每次邀请前都
-                // force_announce。这里补发一次；广播已可见时要等满宽限期，否则会把车机正要响应的那次公告注销掉。
-                CtrlInviteGate.Decision.REANNOUNCE -> {
-                    reannouncedAt = now
-                    val advertisedAt = advertiser?.advertisedAtMillis ?: 0L
-                    appendLog(
-                        "CTRL: " +
-                            (if (advertisedAt > 0L) "广播可见 ${now - advertisedAt}ms 仍无邀请" else "${now - startedAt}ms 未确认广播可见") +
-                            "——强制重新公告一次（catplay 同款 force_announce）",
-                    )
-                    ctrlAdvertiser?.ensureForNetwork(endpoint.ssid, force = true, network = wifiConnector?.currentNetwork)
-                }
-
-                CtrlInviteGate.Decision.WAIT -> Unit
-            }
-            if (now - lastLogAt > 1_200) {
-                val advertisedAt = advertiser?.advertisedAtMillis ?: 0L
-                appendLog(
-                    "CTRL: 等待车机 ctrl 邀请…（已等 ${now - startedAt}ms，" +
-                        (if (advertisedAt > 0L) "广播已可见 ${now - advertisedAt}ms" else "广播尚未确认可见") + "）",
-                )
-                lastLogAt = now
-            }
-            try {
-                Thread.sleep(50)
-            } catch (_: InterruptedException) {
-                return false
-            }
-        }
-        appendLog("CTRL: ${timeoutMillis}ms 未收到邀请——按超时继续连接（可能车机走旧发现路径）")
-        return false
-    }
+    ): Boolean = endpointResolver.awaitCtrlInvite(endpoint, timeoutMillis)
 
     // ---- 以下方法体自 MainActivity 原样迁入（会话逻辑不依赖 Activity）----
 
@@ -3732,6 +3655,56 @@ object SessionController {
         }
     }
 
+    private fun discoveredEndpoint(info: android.net.nsd.NsdServiceInfo): DiscoveredEndpoint =
+        object : DiscoveredEndpoint {
+            override val hostAddress: String?
+                get() = info.host?.hostAddress
+            override val port: Int
+                get() = info.port
+
+            override fun txtBytes(key: String): ByteArray? = info.attributes[key]
+        }
+
+    private val endpointResolver =
+        EndpointResolver(
+            uptimeMillis = { android.os.SystemClock.uptimeMillis() },
+            sleepMillis = { millis -> Thread.sleep(millis) },
+            isConnectCancelled = { connectCancelled },
+            captureInviteView = {
+                val advertiser = ctrlAdvertiser
+                advertiser?.let { captured ->
+                    object : InviteView {
+                        override val inviteCount: Int
+                            get() = captured.inviteCount
+                        override val lastInviteAtMillis: Long
+                            get() = captured.lastInviteAtMillis
+                        override val advertisedAtMillis: Long
+                            get() = captured.advertisedAtMillis
+                    }
+                }
+            },
+            awaitEndpoint = { timeoutMs ->
+                endpointBrowser?.awaitEndpoint(timeoutMs)?.let(::discoveredEndpoint)
+            },
+            forceAnnounce = { ssid ->
+                ctrlAdvertiser?.ensureForNetwork(ssid, force = true, network = wifiConnector?.currentNetwork)
+            },
+            gatewayCandidates = {
+                wifiConnector?.gatewayCandidates().orEmpty()
+            },
+            directDiscoveryPolicy = { endpoint, discovered ->
+                ReceiverCompatibility.prefersOra03DirectDiscovery(
+                    endpoint.receiverSignals,
+                    txtValue(discovered, "model"),
+                    txtValue(discovered, "fv"),
+                    txtValue(discovered, "srcvers"),
+                    VehiclePresetRuntime.current,
+                )
+            },
+            log = ::appendLog,
+            resolveWaitMillis = ENDPOINT_RESOLVE_WAIT_MS,
+        )
+
     /**
      * 端点补全：优先吸收 mDNS 解析出的地址，再决定是否等待/兜底。
      *
@@ -3741,85 +3714,16 @@ object SessionController {
      * mDNS**：那样会把唯一验证过的 IPv4 路径丢掉。这里先做一次「零等待」缓存合并，
      * 拿到 IPv4 就按 EndpointHosts 的优先级（IPv4 → IPv6）使用；缓存没命中才按需等。
      */
+    @Suppress("ktlint:standard:function-expression-body")
     private fun resolveEndpointHost(
         endpoint: Iap2SenderSession.CarPlayEndpoint,
         source: String,
     ): Iap2SenderSession.CarPlayEndpoint {
-        var effective = endpoint
-        val cached = endpointBrowser?.awaitEndpoint(0)
-        if (cached != null) {
-            effective = mergeBrowserEndpoint(effective, cached, source, needPort = effective.airPlayPort <= 0)
-        }
-        val needHost = !EndpointHosts.hasUsable(effective.ipAddresses)
-        val needPort = effective.airPlayPort <= 0
-        if (!needHost && !needPort) return effective
-
-        ui.phase(t(R.string.sc_mdns))
-        appendLog(">>> [$source] 0x4301 端点不完整（port=${effective.airPlayPort} ips=${effective.ipAddresses}），取 mDNS 车机 _airplay._tcp…")
-        // 用常驻发现器的缓存（绑网时已开始后台发现，通常此时已命中）。
-        // 此前现起一次发现并硬重试 3×6s：车机 mDNS 稳定时白等，不稳定时又拖满 18s。
-        // 网段过滤（防误连同网 macOS 接收器）由 browser 的 accept 统一做。
-        val info =
-            endpointBrowser?.awaitEndpoint(ENDPOINT_RESOLVE_WAIT_MS) ?: run {
-                // 兜底：热点场景车机 IP = 网关（Audi 实测 .1，但取网关更通用）。
-                // mDNS 在部分网络/机型上不稳定（2026-10-11 实测车机 mDNS 时有时无）；
-                // 网关地址 + 默认端口 7000 直接连，AirPlay 端口是固定约定。
-                val gateways = wifiConnector?.gatewayCandidates().orEmpty()
-                val gateway = gateways.firstOrNull()
-                if (gateway != null) {
-                    val others = if (gateways.size > 1) "；其余默认路由网关 ${gateways.drop(1).joinToString("、")}" else ""
-                    appendLog(">>> [$source] mDNS 未发现，兜底使用网关地址 $gateway:7000（车机热点网关=车机$others）")
-                    return effective.copy(
-                        ipAddresses = listOf(gateway) + effective.ipAddresses,
-                        airPlayPort = if (needPort) 7000 else effective.airPlayPort,
-                        portIsFallback = needPort,
-                    )
-                }
-                appendLog(">>> [$source] mDNS 未发现车机 AirPlay 服务（车机可能尚未启动无线会话）")
-                return effective
-            }
-        return mergeBrowserEndpoint(effective, info, source, needPort)
-    }
-
-    /**
-     * 把一次 mDNS 解析结果并入端点：地址**追加到最前**（EndpointHosts 会按
-     * IPv4 → 全局 IPv6 → 链路本地 IPv6 重排，顺序只影响同类型内部）。
-     * 其余字段只在缺失时补（0x4301 的权威值不覆盖）。
-     */
-    private fun mergeBrowserEndpoint(
-        endpoint: Iap2SenderSession.CarPlayEndpoint,
-        info: android.net.nsd.NsdServiceInfo,
-        source: String,
-        needPort: Boolean,
-    ): Iap2SenderSession.CarPlayEndpoint {
-        var result = endpoint
-        val address = info.host?.hostAddress
-        if (address != null &&
-            EndpointHosts.candidates(listOf(address)).isNotEmpty() &&
-            result.ipAddresses.none { EndpointHosts.stripScope(it) == EndpointHosts.stripScope(address) }
-        ) {
-            result = result.copy(ipAddresses = listOf(address) + result.ipAddresses)
-            appendLog(">>> [$source] mDNS 解析到车机地址 $address:${info.port}")
-        }
-        if ((needPort || result.portIsFallback) && info.port > 0) {
-            result = result.copy(airPlayPort = info.port, portIsFallback = false)
-        }
-        // TXT 公钥兜底（pair-verify 校验用；0x4301 缺失时只能从这里拿）
-        if (result.publicKey == null) {
-            txtValue(info, "pk")?.let { result = result.copy(publicKey = it) }
-        }
-        if (result.deviceIdentifier == null) {
-            txtValue(info, "deviceid")?.let { result = result.copy(deviceIdentifier = it) }
-        }
-        if (result.sourceVersion == null) {
-            txtValue(info, "srcvers")?.let { result = result.copy(sourceVersion = it) }
-        }
-        if (result.advertisedFeatures == null) {
-            AirPlayFeatures.parse(txtValue(info, "features"))?.let {
-                result = result.copy(advertisedFeatures = it)
-            }
-        }
-        return result
+        return endpointResolver.resolveEndpointHost(
+            endpoint = endpoint,
+            source = source,
+            onResolutionNeeded = { ui.phase(t(R.string.sc_mdns)) },
+        )
     }
 
     /**
@@ -4447,49 +4351,12 @@ object SessionController {
     private fun enrichEndpointFromBrowser(
         endpoint: Iap2SenderSession.CarPlayEndpoint,
         source: String,
-    ): Iap2SenderSession.CarPlayEndpoint? {
-        val info = endpointBrowser?.awaitEndpoint(0) ?: return null
-        var result = endpoint
-        val address = info.host?.hostAddress
-        if (address != null &&
-            EndpointHosts.candidates(listOf(address)).isNotEmpty() &&
-            result.ipAddresses.none { EndpointHosts.stripScope(it) == EndpointHosts.stripScope(address) }
-        ) {
-            result = result.copy(ipAddresses = listOf(address) + result.ipAddresses)
-        }
-        if ((result.airPlayPort <= 0 || result.portIsFallback) && info.port > 0) {
-            result = result.copy(airPlayPort = info.port, portIsFallback = false)
-        }
-        if (result.publicKey == null) {
-            txtValue(info, "pk")?.let { result = result.copy(publicKey = it) }
-        }
-        if (result.deviceIdentifier == null) {
-            txtValue(info, "deviceid")?.let { result = result.copy(deviceIdentifier = it) }
-        }
-        if (result.sourceVersion == null) {
-            txtValue(info, "srcvers")?.let { result = result.copy(sourceVersion = it) }
-        }
-        if (result.advertisedFeatures == null) {
-            AirPlayFeatures.parse(txtValue(info, "features"))?.let {
-                result = result.copy(advertisedFeatures = it)
-            }
-        }
-        if (result == endpoint) return null
-        appendLog(
-            ">>> [$source] 配对期间 mDNS 刷新端点 → " +
-                "${result.ipAddresses.firstOrNull()}:${result.airPlayPort}",
-        )
-        return result
-    }
+    ): Iap2SenderSession.CarPlayEndpoint? = endpointResolver.enrichEndpointFromBrowser(endpoint, source)
 
     private fun txtValue(
-        info: android.net.nsd.NsdServiceInfo,
+        info: DiscoveredEndpoint,
         key: String,
-    ): String? =
-        info.attributes[key]
-            ?.toString(Charsets.UTF_8)
-            ?.trimEnd { it.code == 0 }
-            ?.takeIf { it.isNotEmpty() }
+    ): String? = EndpointResolver.txtValue(info, key)
 
     /**
      * 晚到端点优先：车机明确告知的端口/公钥优先于 mDNS 合成值，
@@ -4498,35 +4365,7 @@ object SessionController {
     private fun preferEndpoint(
         late: Iap2SenderSession.CarPlayEndpoint,
         fallback: Iap2SenderSession.CarPlayEndpoint,
-    ): Iap2SenderSession.CarPlayEndpoint {
-        fun rank(source: WifiCredentialSource): Int =
-            when (source) {
-                WifiCredentialSource.ACCESSORY -> 3
-                WifiCredentialSource.CURRENT_NETWORK -> 2
-                WifiCredentialSource.KNOWN_SSID -> 1
-                WifiCredentialSource.NONE -> 0
-            }
-        val wifiFromFallback =
-            rank(fallback.wifiCredentialSource) > rank(late.wifiCredentialSource) &&
-                fallback.ssid.isNotBlank()
-        return late.copy(
-            ssid = if (wifiFromFallback) fallback.ssid else late.ssid,
-            passphrase = if (wifiFromFallback) fallback.passphrase else late.passphrase,
-            channel = if (wifiFromFallback) fallback.channel else late.channel,
-            securityType = if (wifiFromFallback) fallback.securityType else late.securityType,
-            airPlayPort = if (late.airPlayPort > 0) late.airPlayPort else fallback.airPlayPort,
-            portIsFallback = late.airPlayPort <= 0 && fallback.portIsFallback,
-            ipAddresses = (late.ipAddresses + fallback.ipAddresses).distinct(),
-            publicKey = late.publicKey ?: fallback.publicKey,
-            deviceIdentifier = late.deviceIdentifier ?: fallback.deviceIdentifier,
-            sourceVersion = late.sourceVersion ?: fallback.sourceVersion,
-            advertisedFeatures = late.advertisedFeatures ?: fallback.advertisedFeatures,
-            wifiCredentialSource =
-                if (wifiFromFallback) fallback.wifiCredentialSource else late.wifiCredentialSource,
-            receiverSignals =
-                if (late.receiverSignals == ReceiverProfile.Signals()) fallback.receiverSignals else late.receiverSignals,
-        )
-    }
+    ): Iap2SenderSession.CarPlayEndpoint = EndpointResolver.preferEndpoint(late, fallback)
 
     /**
      * 初始 SETUP（带重连重试）。
