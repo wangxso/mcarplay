@@ -1,9 +1,12 @@
 package com.mcarplay.app.bt
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.Closeable
+import java.net.SocketTimeoutException
 
 class BtSessionGateTest {
     @Test
@@ -16,11 +19,35 @@ class BtSessionGateTest {
     }
 
     @Test
-    fun inboundAcceptedWhileDialingDiscardsOnlyTheLateOutboundSocket() {
+    fun samePeerInboundIsRejectedDuringDialAndAcceptedAfterFailure() {
+        assertNull(
+            BtSessionGate.dial<Unit>("AA:BB:CC:DD:EE:FF") {
+                assertNull(BtSessionGate.admitInbound("aa:bb:cc:dd:ee:ff"))
+                null
+            },
+        )
+        checkNotNull(BtSessionGate.admitInbound("AA:BB:CC:DD:EE:FF"))
+        BtSessionGate.inboundFinished()
+    }
+
+    @Test
+    fun timedOutDialReleasesSamePeer() {
+        assertThrows(SocketTimeoutException::class.java) {
+            BtSessionGate.dial<Unit>("AA") { throw SocketTimeoutException() }
+        }
+        checkNotNull(BtSessionGate.admitInbound("AA"))
+        BtSessionGate.inboundFinished()
+    }
+
+    @Test
+    fun differentPeerCanStillClaimInboundDuringDial() {
         var closed = false
         val outbound = Closeable { closed = true }
         assertFalse(BtSessionGate.outboundPaused)
-        BtSessionGate.inboundAccepted()
+        BtSessionGate.dial<Unit>("AA") {
+            checkNotNull(BtSessionGate.admitInbound("BB"))
+            Unit
+        }
         try {
             assertFalse(BtSessionGate.runOutbound(outbound) { error("unexpected admission") })
             assertTrue(closed)
@@ -41,7 +68,7 @@ class BtSessionGateTest {
         try {
             assertTrue(
                 BtSessionGate.runOutbound(Closeable { closed = true }) {
-                    finished = checkNotNull(BtSessionGate.inboundAccepted())
+                    finished = checkNotNull(BtSessionGate.admitInbound("AA")).outboundFinished
                     assertTrue(closed)
                     assertTrue(finished?.count == 1L)
                 },
@@ -54,8 +81,8 @@ class BtSessionGateTest {
 
     @Test
     fun olderInboundFinishingKeepsTheNewerInboundInControl() {
-        BtSessionGate.inboundAccepted()
-        BtSessionGate.inboundAccepted()
+        checkNotNull(BtSessionGate.admitInbound("AA"))
+        checkNotNull(BtSessionGate.admitInbound("AA"))
         BtSessionGate.inboundFinished()
         try {
             assertTrue(BtSessionGate.outboundPaused)

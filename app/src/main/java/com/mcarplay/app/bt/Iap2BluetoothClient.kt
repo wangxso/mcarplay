@@ -600,7 +600,10 @@ class Iap2BluetoothClient(
                     }
                 }
                 // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起（connect() 可阻塞数十秒）
-                val socket = selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch) }
+                val socket =
+                    BtSessionGate.dial(device.address, wifiHandoffDetached()) {
+                        selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch) }
+                    }
                 if (socket != null) {
                     log("BT-C: ✓ 已连入 $name 的无线 iAP2 服务（RFCOMM 建立）")
                     Iap2ReceiverMemory.remember(context, device.address)
@@ -866,6 +869,7 @@ object BtSessionGate {
     // 从监听线程接受回连起计数，直到该连接的工作线程退出。
     private val lock = Any()
     private var inboundConnections = 0
+    private var dialingAddress: String? = null
     private var outbound: Outbound? = null
 
     private class Outbound(
@@ -875,15 +879,38 @@ object BtSessionGate {
 
     internal val outboundPaused: Boolean get() = synchronized(lock) { inboundConnections > 0 || sessionActive }
 
-    /** 车机回连优先。关闭出站 socket，入站工作线程等出站退出后再发送 iAP2。 */
-    internal fun inboundAccepted(): CountDownLatch? {
+    internal class Inbound(
+        val outboundFinished: CountDownLatch?,
+    )
+
+    /** 同一车机已在拨号时拒绝回连。接受回连后，等活跃的出站会话退出再开始 iAP2。 */
+    internal fun admitInbound(address: String?): Inbound? {
         val previous =
             synchronized(lock) {
+                if (dialingAddress?.equals(address, ignoreCase = true) == true) return null
                 inboundConnections++
                 outbound
             }
         previous?.let { runCatching { it.socket.close() } }
-        return previous?.finished
+        return Inbound(previous?.finished)
+    }
+
+    internal fun <T> dial(
+        address: String,
+        wifiHandoffDetached: Boolean = false,
+        connect: () -> T?,
+    ): T? {
+        synchronized(lock) {
+            if (dialingAddress != null || outbound != null || inboundConnections > 0 || sessionActive || wifiHandoffDetached) {
+                return null
+            }
+            dialingAddress = address
+        }
+        try {
+            return connect()
+        } finally {
+            synchronized(lock) { dialingAddress = null }
+        }
     }
 
     internal fun inboundFinished() {
