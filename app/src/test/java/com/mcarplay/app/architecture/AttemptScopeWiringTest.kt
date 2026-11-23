@@ -14,6 +14,12 @@ class AttemptScopeWiringTest {
 
     private val controllerCode: String by lazy { KotlinSource.scan(controller).code }
 
+    private val router: String by lazy {
+        SourceTree.mainKotlinFiles.getValue("session/EventCommandRouter.kt").readText()
+    }
+
+    private val routerCode: String by lazy { KotlinSource.scan(router).code }
+
     private val helper: String by lazy {
         SourceTree.mainKotlinFiles.getValue("session/AttemptScope.kt").readText()
     }
@@ -54,7 +60,6 @@ class AttemptScopeWiringTest {
             MigrationSite("wasCancelled()", "if (!scope.isActive) {"),
             MigrationSite("ownsConnection()", "if (scope.isCurrent) retireSession()"),
             MigrationSite("wasCancelled()", "if (!scope.isActive) {"),
-            MigrationSite("wasCancelled()", "if (currentClient !== client || !scope.isActive) return@onEvent"),
             MigrationSite(
                 "wasCancelled()",
                 "if (!scope.isActive || client.cancelled || currentClient !== client) {",
@@ -181,13 +186,19 @@ class AttemptScopeWiringTest {
         val negatedActive = Regex("""!scope\.isActive\b""").findAll(controllerCode).count()
         val plainActive = Regex("""(?<![!A-Za-z0-9_.])scope\.isActive\b""").findAll(controllerCode).count()
         assertEquals("SessionController 的 isCurrent 迁移点", 6, current)
-        assertEquals("SessionController 的取反 isActive 迁移点", 21, negatedActive)
+        assertEquals("SessionController 的取反 isActive 迁移点", 20, negatedActive)
         assertEquals("SessionController 的直查 isActive 迁移点", 5, plainActive)
-        assertEquals("SessionController 活跃判断合计", 26, negatedActive + plainActive)
+        assertEquals("SessionController 活跃判断合计", 25, negatedActive + plainActive)
 
         val helperActive = Regex("""!scope\.isActive\b""").findAll(helperCode).count()
         assertEquals("第33处真实 helper 的活跃判断", 1, helperActive)
-        assertEquals("33 处总计 = 6 current + 27 active", 33, current + negatedActive + plainActive + helperActive)
+        val routerActive = Regex("""!scope\.isActive\b""").findAll(routerCode).count()
+        assertEquals("事件 router 的活跃判断", 1, routerActive)
+        assertEquals(
+            "33 处总计 = 6 current + 25 Controller active + router active + helper active",
+            33,
+            current + negatedActive + plainActive + routerActive + helperActive,
+        )
 
         assertEquals(
             "scope 构造前入口直查必须保留且只有一处",
@@ -202,9 +213,9 @@ class AttemptScopeWiringTest {
 
     @Test
     fun everyControllerCallSiteKeepsItsLegacyPredicateMapping() {
-        assertEquals("控制器迁移点", 32, migrationSites.size)
+        assertEquals("控制器迁移点（事件守卫已迁入 router）", 31, migrationSites.size)
         assertEquals("current 点", 6, migrationSites.count { it.legacy == "ownsConnection()" })
-        assertEquals("取消点", 21, migrationSites.count { it.legacy == "wasCancelled()" })
+        assertEquals("取消点", 20, migrationSites.count { it.legacy == "wasCancelled()" })
         assertEquals("活跃点", 5, migrationSites.count { it.legacy == "!wasCancelled()" })
         var cursor = 0
         migrationSites.forEach { site ->
@@ -234,8 +245,15 @@ class AttemptScopeWiringTest {
     @Test
     fun independentClientAndVideoGuardsRemainOutsideTheScope() {
         val code = normalizeWhitespace(controllerCode)
+        val eventRouterCode = normalizeWhitespace(routerCode)
         assertTrue(code.contains("if (!scope.isActive || client.cancelled || currentClient !== client)"))
-        assertTrue(code.contains("if (currentClient !== client || !scope.isActive) return@onEvent"))
+        assertEquals(
+            "事件通道 guard 必须留在 router，且只保留一处",
+            1,
+            Regex("""if \(isStaleClient\(\) \|\| !scope\.isActive\) return""")
+                .findAll(eventRouterCode)
+                .count(),
+        )
         assertTrue(
             code.contains(
                 "if (!scope.isActive || currentClient !== client) return@recover ScreenRecoveryResult.ABORTED",

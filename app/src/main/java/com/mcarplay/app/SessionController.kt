@@ -35,7 +35,6 @@ import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeProtocol
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
-import com.mcarplay.app.carlife.mapCarLifeTouch
 import com.mcarplay.app.compat.CompatibilityPrefs
 import com.mcarplay.app.compat.PassatReturnPolicy
 import com.mcarplay.app.compat.PassatReturnStrategy
@@ -61,10 +60,7 @@ import com.mcarplay.app.iap2.WifiCredentialSource
 import com.mcarplay.app.iap2.WifiHandoffAction
 import com.mcarplay.app.iap2.WifiHandoffPolicy
 import com.mcarplay.app.iap2.rememberEndpoint
-import com.mcarplay.app.input.ConsumerKeys
 import com.mcarplay.app.input.HidNavigation
-import com.mcarplay.app.input.MediaKeyEdge
-import com.mcarplay.app.input.TouchReports
 import com.mcarplay.app.media.AutoPlaySuppressor
 import com.mcarplay.app.media.MediaSessionsState
 import com.mcarplay.app.net.AirPlayFeatures
@@ -80,6 +76,7 @@ import com.mcarplay.app.net.WifiSavedNetworks
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
+import com.mcarplay.app.session.EventCommandRouter
 import com.mcarplay.app.session.LegacyAttemptScope
 import com.mcarplay.app.session.LegacySessionUiPort
 import com.mcarplay.app.session.SessionUiPort
@@ -4877,226 +4874,129 @@ object SessionController {
                             currentSharedSecret = sessionKey
                             currentAudioHost =
                                 client.activeHost ?: EndpointHosts.candidates(client.currentEndpoint.ipAddresses).firstOrNull()
-                            // 每台媒体键 HID 设备一个边沿判定器；随本条 event 通道重建，旧轮按住状态不残留
-                            val mediaKeyEdges = HashMap<String, MediaKeyEdge>()
-                            client.connectEventChannel(sessionKey, setup) onEvent@{ command ->
-                                if (currentClient !== client || !scope.isActive) return@onEvent
-                                when (command["type"]) {
-                                    "hidSendReport" -> {
-                                        val uuid = command["uuid"]?.toString()
-                                        val report = command["hidReport"] as? ByteArray
-                                        // 车机媒体键（Consumer Control）走 hidSendReport 通路，
-                                        // 判定**以设备描述符为准**（不按 uuid、不按车机型号写死）：
-                                        // 描述符声明了 Consumer 页(0x0C)的设备才当媒体键，报告字节是
-                                        // Usage 数组下标（HID Array 语义）。触摸/旋钮/电话设备的描述符
-                                        // 分别是 Digitizer/GenericDesktop/Telephony 页，一律不走这里——
-                                        // DiPlay 的 knob(4B) 与 telephony(1B) 报告长度与媒体键重叠，
-                                        // 只靠长度会误判（如 telephony usage 0xB3 会误发「快进」）。
-                                        val descriptor = uuid?.let { setup.hidDescriptors[it] }
-                                        val keyMap =
-                                            descriptor?.let(ConsumerKeys::parseDescriptor)
-                                        // 本帧处于按下状态的 Consumer Usage；null = 不是媒体键设备。
-                                        // 位图（Variable，`81 02`）与 Array（`81 00`）都按描述符展开——
-                                        // 只读首字节当下标会让位图车机的「下一首 0x04」解码成无键。
-                                        val consumerUsages =
-                                            when {
-                                                report == null -> null
-                                                // 有描述符：只有 Consumer 设备才解析（非 Consumer → null）
-                                                descriptor != null -> keyMap?.usagesFor(report)
-                                                // 描述符缺失（未知车机）：保守回退——仅 1 字节报告，
-                                                // 值当 Usage ID 直读
-                                                report.size == 1 -> listOf(report[0].toInt() and 0xFF).filter { it != 0 }
-                                                else -> null
-                                            }
-                                        // 旋钮/四向拨杆（Generic Desktop 页的 Wheel/Hat）：
-                                        // 不是 Consumer 设备才走这里；输出 DPAD_* 注入虚拟屏。
-                                        val navKeys =
-                                            if (consumerUsages == null && report != null) {
-                                                if (HidNavigation.rawLogEnabled) {
-                                                    appendLog(
-                                                        "HID-RAW: uuid=$uuid bytes=" +
-                                                            report.joinToString(" ") { "%02X".format(it) } +
-                                                            " desc=${descriptor?.size ?: 0}B",
-                                                    )
+                            // 每通道一个 router；媒体键边沿与旧轮隔离。
+                            val eventCommandRouter =
+                                EventCommandRouter(
+                                    scope = scope,
+                                    setup = setup,
+                                    isStaleClient = { currentClient !== client },
+                                    client =
+                                        object : EventCommandRouter.EventClient {
+                                            override val modes = client.modes
+
+                                            override fun onIapEventBytes(data: ByteArray) = client.onIapEventBytes(data)
+                                        },
+                                    counters =
+                                        object : EventCommandRouter.EventCounters {
+                                            override var touchLogCount: Int
+                                                get() = this@SessionController.touchLogCount
+                                                set(value) {
+                                                    this@SessionController.touchLogCount = value
                                                 }
-                                                HidNavigation.handle(uuid.orEmpty(), descriptor, report)
-                                            } else {
-                                                emptyList()
-                                            }
-                                        val contacts =
-                                            if (consumerUsages == null && navKeys.isEmpty() && report != null) {
-                                                // 触摸格式按设备描述符判定（Digitizer 页 + 单指/多槽），
-                                                // 描述符不可用时按报文长度回退——不依赖车机型号或 uuid
-                                                val touchFormat =
-                                                    descriptor?.let(TouchReports::formatFromDescriptor)
-                                                TouchReports.parse(report, touchFormat)
-                                            } else {
-                                                null
-                                            }
-                                        if (navKeys.isNotEmpty()) {
-                                            navKeys.forEach(::injectNavigationKey)
-                                            appendLog(
-                                                "EVENT: 旋钮/导航键 " +
-                                                    navKeys.joinToString("+") { HidNavigation.nameOf(it) } +
-                                                    "（uuid=$uuid）",
-                                            )
-                                        } else if (consumerUsages != null) {
-                                            // Consumer 设备的「无按键」/释放报文（值为 0 或下标越界）：
-                                            // 静默计数，避免释放事件刷屏
-                                            if (consumerUsages.isEmpty()) consumerReleaseCount++
-                                            val edge = mediaKeyEdges.getOrPut(uuid.orEmpty()) { MediaKeyEdge() }
-                                            for (usage in edge.onReport(consumerUsages, android.os.SystemClock.uptimeMillis())) {
-                                                val label = "${ConsumerKeys.nameOf(usage)} uuid=$uuid usage=0x%02x".format(usage)
-                                                val keyCode = ConsumerKeys.keyCodeFor(usage)
-                                                if (keyCode != 0) {
-                                                    routeCarMediaKey(keyCode, label)
-                                                } else {
-                                                    appendLog("EVENT: 车机媒体键 $label 无对应 Android 键，忽略")
+
+                                            override var consumerReleaseCount: Int
+                                                get() = this@SessionController.consumerReleaseCount
+                                                set(value) {
+                                                    this@SessionController.consumerReleaseCount = value
                                                 }
-                                            }
-                                        } else if (!contacts.isNullOrEmpty()) {
-                                            if (touchLogCount <= 30 || touchLogCount % 50 == 0) {
-                                                appendLog(
-                                                    "EVENT: 触摸 " +
-                                                        contacts.joinToString {
-                                                            "#${it.slot}(${it.xPixels},${it.yPixels})${if (it.down) "↓" else "↑"}"
-                                                        },
+
+                                            override var iapEventMessageCount: Int
+                                                get() = this@SessionController.iapEventMessageCount
+                                                set(value) {
+                                                    this@SessionController.iapEventMessageCount = value
+                                                }
+
+                                            override var forceKeyFrameCount: Int
+                                                get() = this@SessionController.forceKeyFrameCount
+                                                set(value) {
+                                                    this@SessionController.forceKeyFrameCount = value
+                                                }
+
+                                            override var requestUiCount: Int
+                                                get() = this@SessionController.requestUiCount
+                                                set(value) {
+                                                    this@SessionController.requestUiCount = value
+                                                }
+                                        },
+                                    nowUptimeMillis = { SystemClock.uptimeMillis() },
+                                    output =
+                                        object : EventCommandRouter.EventOutput {
+                                            override fun appendLog(line: String) = this@SessionController.appendLog(line)
+
+                                            override fun routeCarMediaKey(
+                                                keyCode: Int,
+                                                label: String,
+                                            ) = this@SessionController.routeCarMediaKey(keyCode, label)
+
+                                            override fun injectNavigationKey(keyCode: Int) =
+                                                this@SessionController.injectNavigationKey(keyCode)
+
+                                            override fun enqueueModesAssert(
+                                                reason: String,
+                                                requestKeyFrame: Boolean,
+                                                retakeScreen: Boolean,
+                                                rebuildStream: Boolean,
+                                            ) {
+                                                this@SessionController.enqueueModesAssert(
+                                                    client,
+                                                    reason,
+                                                    requestKeyFrame = requestKeyFrame,
+                                                    retakeScreen = retakeScreen,
+                                                    rebuildStream = rebuildStream,
                                                 )
                                             }
-                                            touchLogCount++
-                                            val carLife = currentCarLifeSession
-                                            if (carLife != null) {
-                                                val contact =
-                                                    contacts.firstOrNull { it.slot == 0 }
-                                                        ?: contacts.first()
-                                                val point =
-                                                    mapCarLifeTouch(
-                                                        x = contact.xPixels,
-                                                        y = contact.yPixels,
-                                                        sourceWidth = setup.displayWidth,
-                                                        sourceHeight = setup.displayHeight,
-                                                        targetWidth = carLife.videoWidth,
-                                                        targetHeight = carLife.videoHeight,
-                                                    )
-                                                if (point != null) {
-                                                    if (carLife.sendTouch(point.first, point.second, contact.down)) {
-                                                        ReceiverDetectionRuntime.touch(client.currentEndpoint.observation)
-                                                    }
-                                                }
+
+                                            override fun runBackground(
+                                                name: String,
+                                                task: () -> Unit,
+                                            ) = Bg.run(name, task)
+
+                                            override fun retryAudioAfterClaimReturned() =
+                                                this@SessionController.retryAudioAfterClaimReturned(client)
+
+                                            override fun onTouchSent() = ReceiverDetectionRuntime.touch(client.currentEndpoint.observation)
+                                        },
+                                    currentVideoSender = {
+                                        videoSender?.let { sender ->
+                                            object : EventCommandRouter.KeyFrameSender {
+                                                override fun requestKeyFrame(): Boolean = sender.requestKeyFrame()
+
+                                                override val lastReceiverRequestIdrGapMs: Long?
+                                                    get() = sender.lastReceiverRequestIdrGapMs
+
+                                                override val isExternalPassthrough: Boolean
+                                                    get() = sender.isExternalPassthrough
+
+                                                override val isTranscoding: Boolean
+                                                    get() = sender.isTranscoding
                                             }
-                                        } else if (report != null) {
-                                            appendLog(
-                                                "EVENT: 其他 HID 报告 uuid=$uuid bytes=${report.size}" +
-                                                    " hex=${report.joinToString(" ") { "%02x".format(it) }}",
-                                            )
                                         }
-                                    }
+                                    },
+                                    currentTouchTarget = {
+                                        currentCarLifeSession?.let { carLife ->
+                                            object : EventCommandRouter.TouchTarget {
+                                                override val videoWidth: Int
+                                                    get() = carLife.videoWidth
 
-                                    "iAPSendMessage" -> {
-                                        // 事件通道上的 iAP2 虚拟链路字节（车机先发 marker 开场）。
-                                        // 喂给链路引擎：握手 → EA 会话 → 触摸 HID。
-                                        val params = command["params"] as? Map<*, *>
-                                        val data = params?.get("data") as? ByteArray
-                                        if (data == null) {
-                                            appendLog("EVENT: iAPSendMessage 无 data（params=$params）")
-                                        } else {
-                                            iapEventMessageCount++
-                                            client.onIapEventBytes(data)
-                                        }
-                                    }
+                                                override val videoHeight: Int
+                                                    get() = carLife.videoHeight
 
-                                    "forceKeyFrame" -> {
-                                        // 车机解不出画面时会要 I 帧。必须立即响应：
-                                        // 拖到下一个周期 I 帧（1s）车机可能一直卡在等帧状态。
-                                        // 帕萨特 2025 解不了透传流时每 ~300ms 要一次，一轮几百条——限流记录。
-                                        val sender = videoSender
-                                        val forced = sender?.requestKeyFrame() == true
-                                        forceKeyFrameCount++
-                                        if (forceKeyFrameCount <= 3 || forceKeyFrameCount % 20 == 0) {
-                                            val gap = sender?.lastReceiverRequestIdrGapMs
-                                            appendLog(
-                                                "EVENT: 车机请求关键帧（forceKeyFrame，第 $forceKeyFrameCount 次" +
-                                                    (if (gap != null) "，距上个已发 IDR ${gap}ms" else "") + "）→ " +
-                                                    when {
-                                                        !forced -> "源未就绪，等周期 I 帧"
-                                                        sender?.isExternalPassthrough == true ->
-                                                            "已向 CarWith 请求（透传源不保证立即出 I 帧）"
-                                                        sender?.isTranscoding == true -> "已强制编码 I 帧（转码输出）"
-                                                        else -> "已强制编码 I 帧"
-                                                    },
-                                            )
-                                        }
-                                    }
-
-                                    "changeModes" -> {
-                                        // 车机请求资源（如用户回原车主界面时 take 主屏）：按请求更新归属后如实回 modesChanged。
-                                        // 旧实现一律回「手机持有」，帕萨特回主界面后再点图标就切不回 CarPlay（2026-11-01 22:47）
-                                        val note = client.modes.onChangeModes(command["params"] as? Map<*, *>)
-                                        enqueueModesAssert(client, "车机请求 changeModes（→ $note）", requestKeyFrame = false)
-                                        if (client.modes.consumeAudioClaimRetry()) {
-                                            appendLog("AUDIO: 车机已归还主音频——后台重试建立音频流")
-                                            Bg.run("audio-claim-retry") { retryAudioAfterClaimReturned(client) }
-                                        }
-                                    }
-
-                                    "requestUI" -> {
-                                        // 用户在原生菜单点 CarPlay 图标（帕萨特 2025 / VW4211 实测：每点一次一条，
-                                        // 无 params）。事件层已回 RTSP 200，但旧实现不做业务处理（不回 modesChanged），
-                                        // 车机始终停在原生界面。与 changeModes 同样回 modesChanged 接管主屏，
-                                        // 并补一个 I 帧，让车机切屏后马上有可解码的画面。
-                                        requestUiCount++
-                                        // 只有本轮音频流真的在跑才把主音频声明给手机：audioEnabledForSession
-                                        // 只是用户的选择，无共享密钥、无投屏授权或全部档位 SETUP 失败时
-                                        // startAudioChannel 返回 false，此时声明 resourceID=2 会让车机停掉
-                                        // 自己的音频而 CarPlay 没有发送端接替（重进后静音/抢走车机本地音频）。
-                                        val audio =
-                                            requestUiAudioDecision(
-                                                audioEnabled = audioEnabledForSession,
-                                                audioStreamRunning = audioSender?.isRunning == true,
-                                                audioClaimAwaitingReturn = client.modes.audioClaimAwaitingReturn,
-                                            )
-                                        val request = client.modes.onUserRequestedUi(takeAudio = audio.takeMainAudio)
-                                        val audioSuffix =
-                                            if (audioEnabledForSession && !audio.takeMainAudio) {
-                                                "；音频流未建立，暂不声明主音频"
-                                            } else {
-                                                ""
+                                                override fun sendTouch(
+                                                    x: Int,
+                                                    y: Int,
+                                                    down: Boolean,
+                                                ): Boolean = carLife.sendTouch(x, y, down)
                                             }
-                                        enqueueModesAssert(
-                                            client,
-                                            "车机 requestUI（用户点了 CarPlay 图标，第 $requestUiCount 次；" +
-                                                "${request.note}$audioSuffix）",
-                                            requestKeyFrame = request.allowed,
-                                            retakeScreen = request.retake,
-                                            rebuildStream = PassatReturnPolicy.rebuildStream(passatReturnStrategy(), request.rebuildStream),
-                                        )
-                                        if (audio.retryAfterPendingClaim && client.modes.consumeAudioClaimRetry()) {
-                                            // 音频 SETUP 此前因车机以高约束持有/借用主音频而推迟：用户重进
-                                            // CarPlay 是用户发起动作，后台按正常路径重试一次；归属仍由
-                                            // onAudioStreamStarting 按当时的约束判断决定（倒车提示音等不抢）。
-                                            // 先原子消费 pending claim，避免 requestUI 与 changeModes 各跑一遍；
-                                            // startAudioChannel 的单飞闸门再兜住 SETUP 窗口内的并发。
-                                            appendLog("AUDIO: requestUI 重进——主音频此前未接管，后台重试建立音频流")
-                                            Bg.run("audio-request-ui-retry") { retryAudioAfterClaimReturned(client) }
                                         }
-                                    }
-
-                                    else ->
-                                        appendLog(
-                                            // 未识别的命令必须带参数：车机的私有命令（如 requestUI）
-                                            // 到底要什么，全在 params 里——只打 type 等于没打。
-                                            "EVENT: 命令 type=${command["type"]} " +
-                                                command.entries
-                                                    .filter { it.key?.toString() != "type" }
-                                                    .joinToString(" ") { (key, value) ->
-                                                        "$key=" +
-                                                            when (value) {
-                                                                is ByteArray -> value.joinToString("") { "%02x".format(it) }
-                                                                else -> value.toString().take(240)
-                                                            }
-                                                    }.take(600),
-                                        )
-                                }
+                                    },
+                                    audioEnabled = { audioEnabledForSession },
+                                    audioStreamRunning = { audioSender?.isRunning == true },
+                                    resolveScreenReturnRebuild = { requested ->
+                                        PassatReturnPolicy.rebuildStream(passatReturnStrategy(), requested)
+                                    },
+                                )
+                            client.connectEventChannel(sessionKey, setup) { command ->
+                                eventCommandRouter.onCommand(command)
                             }
                             // 像 iPhone 一样请车机关蓝牙（真 iPhone 会话开始约 0.1 s 即发，早于屏幕流）
                             if (client.receiverCompatibility().releaseBluetoothAfterSetup) client.releaseReceiverBluetooth()
