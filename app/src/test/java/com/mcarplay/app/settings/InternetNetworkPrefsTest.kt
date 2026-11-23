@@ -20,6 +20,13 @@ class InternetNetworkPrefsTest {
     }
 
     @Test
+    fun dashboardDefaultsToPhoneNetworkAndHonorsExplicitChoice() {
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.parse(null, VideoSource.DASHBOARD))
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.parse("unexpected", VideoSource.DASHBOARD))
+        assertEquals(InternetNetwork.CAR, InternetNetworkPrefs.parse("car", VideoSource.DASHBOARD))
+    }
+
+    @Test
     fun systemWifiRequiresCarModeAndShizuku() {
         assertTrue(InternetNetworkPolicy.useSystemWifi(InternetNetwork.CAR, shizukuReady = true))
         assertFalse(InternetNetworkPolicy.useSystemWifi(InternetNetwork.CAR, shizukuReady = false))

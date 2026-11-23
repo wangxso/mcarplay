@@ -229,6 +229,23 @@ object ReceiverCompatibility {
         sourceVersion: String?,
     ): Boolean = normalize(model) == "ora es11" && normalize(firmware) == "n220346.2" && sourceVersion == "365.10.2"
 
+    internal enum class Ora03Identity { NORMAL, GENERIC, OTHER }
+
+    internal fun ora03Identity(
+        manufacturer: String?,
+        model: String?,
+        firmware: String?,
+        sourceVersion: String?,
+    ): Ora03Identity =
+        when {
+            normalize(manufacturer) == "gwm" && isOra03Receiver(model, firmware, sourceVersion) -> Ora03Identity.NORMAL
+            normalize(manufacturer) == "oem" &&
+                normalize(model) == "oem model" &&
+                normalize(firmware) == "0.0.1" &&
+                sourceVersion == "365.10.2" -> Ora03Identity.GENERIC
+            else -> Ora03Identity.OTHER
+        }
+
     private fun resolveDetected(
         signals: ReceiverProfile.Signals,
         mediaCapabilities: String,

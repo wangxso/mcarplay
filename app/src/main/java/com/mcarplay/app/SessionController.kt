@@ -1,6 +1,7 @@
 package com.mcarplay.app
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.net.Network
 import android.os.SystemClock
 import android.view.KeyEvent
@@ -20,6 +21,7 @@ import com.mcarplay.app.bt.AutoReconnectGuard
 import com.mcarplay.app.bt.BluetoothDiagnostics
 import com.mcarplay.app.bt.BtProfiles
 import com.mcarplay.app.bt.BtSessionGate
+import com.mcarplay.app.bt.DashboardA2dpGuard
 import com.mcarplay.app.bt.Iap2BluetoothClient
 import com.mcarplay.app.bt.Iap2BluetoothServer
 import com.mcarplay.app.bt.TargetDevicePrefs
@@ -77,15 +79,19 @@ import com.mcarplay.app.net.WifiSavedNetworks
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
+import com.mcarplay.app.settings.DashboardMaps
 import com.mcarplay.app.settings.DisplayPrefs
 import com.mcarplay.app.settings.InternetNetwork
 import com.mcarplay.app.settings.InternetNetworkPolicy
 import com.mcarplay.app.settings.InternetNetworkPrefs
 import com.mcarplay.app.settings.MediaPrefs
+import com.mcarplay.app.settings.VideoSource
+import com.mcarplay.app.settings.VideoSourcePrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.ui.ScreenDimmer
+import com.mcarplay.app.ui.car.DashboardProjection
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 import com.mcarplay.app.video.ExternalVideoSource
@@ -142,6 +148,9 @@ object SessionController {
      */
     @Volatile
     private var activePeerAddress: String? = null
+
+    @Volatile
+    private var ora03WarningPeer: String? = null
 
     /**
      * [address] 是否属于本轮车机；任一方地址未知时按兼容处理（true）。
@@ -467,6 +476,7 @@ object SessionController {
      * 这里只记日志，便于看到车机确实发来了导航类 HID。
      */
     private fun injectNavigationKey(keyCode: Int) {
+        if (dashboardProjection.get()?.key(keyCode) == true) return
         appendLog("HID: 导航键 ${HidNavigation.nameOf(keyCode)} 无处注入（CarWith 流不承载方向键）——忽略")
     }
 
@@ -1127,6 +1137,64 @@ object SessionController {
             bluetoothServer?.isRunning == true ||
             bluetoothClient?.isRunning == true
 
+    internal fun hasOra03IdentityWarning(selectedPeer: String?): Boolean =
+        (selectedPeer ?: activePeerAddress)?.equals(ora03WarningPeer, ignoreCase = true) == true
+
+    private fun updateOra03IdentityWarning(
+        context: Context,
+        client: AirPlayClient,
+        peerAddress: String?,
+    ) {
+        val identity = client.ora03Identity() ?: return
+        val binding = ReceiverDetectionRuntime.binding(peerAddress) ?: return
+        val knownOra03 = CompatibilityPrefs.isKnownOra03(context, binding)
+        if (identity == ReceiverCompatibility.Ora03Identity.NORMAL && !knownOra03) {
+            CompatibilityPrefs.rememberOra03(context, binding)
+        }
+        ora03WarningPeer =
+            if (identity == ReceiverCompatibility.Ora03Identity.GENERIC && knownOra03) {
+                appendLog("AIRPLAY: 已识别的欧拉 03 返回 OEM MODEL / 0.0.1（车机界面可能无法切入）")
+                peerAddress
+            } else {
+                null
+            }
+    }
+
+    @Volatile
+    private var sessionVideoSource = VideoSource.CAR_WITH
+
+    private val dashboardProjection = AtomicReference<DashboardProjection?>()
+
+    internal fun dashboardFor(displayId: Int): DashboardProjection? = dashboardProjection.get()?.takeIf { it.ownsDisplay(displayId) }
+
+    internal fun dashboardDisplayIds(): Set<Int> = dashboardProjection.get()?.displayIds().orEmpty()
+
+    @Synchronized
+    internal fun returnDashboardToCar(source: DashboardProjection): Boolean {
+        val client = currentClient ?: return false
+        if (dashboardProjection.get() !== source || connectCancelled || !client.sessionActive) return false
+        returnToCar(client, "自绘 UI")
+        return true
+    }
+
+    private fun returnToCar(
+        client: AirPlayClient,
+        source: String,
+    ) {
+        val note = client.modes.onUserReturnedToCar()
+        enqueueModesAssert(client, "$source 返回车机（→ $note）", requestKeyFrame = false)
+    }
+
+    @Synchronized
+    internal fun selectVideoSource(
+        context: Context,
+        source: VideoSource,
+    ): Boolean {
+        if (isSessionRunning() || sessionStarting.get() || isDisconnecting()) return false
+        VideoSourcePrefs.set(context, source)
+        return true
+    }
+
     /** ACL 广播与 RFCOMM 关闭共用策略，避免两条路径对网络交接做出相反判断。 */
     fun bluetoothDisconnectAction(): ReceiverCompatibility.BluetoothLossAction {
         if (ReceiverDetectionRuntime.awaitingProfileTrial) return ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION
@@ -1251,8 +1319,7 @@ object SessionController {
                 onReturnToCar = onReturnToCar@{
                     if (currentCarLifeSession !== session) return@onReturnToCar
                     val client = currentClient ?: return@onReturnToCar
-                    val note = client.modes.onUserReturnedToCar()
-                    enqueueModesAssert(client, "CarWith 返回车机（→ $note）", requestKeyFrame = false)
+                    returnToCar(client, "CarWith")
                 },
             )
         return session
@@ -1304,6 +1371,16 @@ object SessionController {
         }
         val alreadyRunning = isSessionRunning()
         if (!alreadyRunning) {
+            val source = VideoSourcePrefs.get(context)
+            if (source == VideoSource.DASHBOARD) {
+                if (ShizukuGate.state(context) != ShizukuGate.State.READY) {
+                    appendLog("DASHBOARD: Shizuku 尚未就绪")
+                    uiHintSink?.invoke(t(R.string.car_dashboard_unavailable))
+                    return
+                }
+                CarInputClient.ensure(context)
+            }
+            sessionVideoSource = source
             // 新一轮从已知对端起步；手动连接不沿用上一台车机的地址，避免失败记到别人头上。
             val selected = TargetDevicePrefs.get(context)?.address
             activePeerAddress = if (automatic) automaticPeerAddress ?: selected else selected
@@ -1685,9 +1762,16 @@ object SessionController {
         }
     }
 
-    /** 「导航时音乐音量」在会话中调整：交给正在运行的 CarWith 原生音频桥（没有则下次连接生效）。 */
+    /** 「导航时音乐音量」在会话中调整。有导航独立音轨时，在下一音频周期生效。 */
     fun applyDuckDb(duckDb: Int) {
         nativeAudioBridge?.setDuckDb(duckDb.toFloat())
+        audioSender?.setNavigationDuckDb(duckDb.toFloat())
+    }
+
+    @Synchronized
+    fun applyMusicAttenuationDb(db: Int) {
+        nativeAudioBridge?.setMusicAttenuationDb(db.toFloat())
+        audioSender?.setMusicAttenuationDb(db.toFloat())
     }
 
     /**
@@ -1738,6 +1822,7 @@ object SessionController {
         stopAutoPlayWatch()
         val retiringSender = videoSender
         videoSender = null
+        dashboardProjection.getAndSet(null)?.close()
         if (preserveScreenSocket) retiringSender?.quiesceForOrderlyStop() else retiringSender?.stop()
         StreamingWifiLock.release()
         appContext?.let(ScreenLockMonitor::stop)
@@ -1971,7 +2056,8 @@ object SessionController {
         return joinCarWifiSpecifier(wifi)
     }
 
-    private fun preferredInternetNetwork(): InternetNetwork = appContext?.let(InternetNetworkPrefs::get) ?: InternetNetworkPrefs.DEFAULT
+    private fun preferredInternetNetwork(): InternetNetwork =
+        appContext?.let { InternetNetworkPrefs.get(it, sessionVideoSource) } ?: InternetNetworkPrefs.defaultFor(sessionVideoSource)
 
     /**
      * 静默加入车机热点（**两步式，全程 0 弹窗**）。
@@ -2149,10 +2235,12 @@ object SessionController {
         appendLog(
             ">>> 以应用专属网络加入 \"${wifi.ssid}\"（不保存为系统 WiFi，其它应用继续走 4G/5G）",
         )
+        val systemDefaultNetwork =
+            if (allowExistingSystemWifi) null else appContext?.getSystemService(ConnectivityManager::class.java)?.activeNetwork
         val result =
             synchronized(wifiBindLock) {
                 val existing = connector.currentNetwork
-                if (boundCarSsid == wifi.ssid && existing != null) {
+                if (boundCarSsid == wifi.ssid && existing != null && existing != systemDefaultNetwork) {
                     appendLog("WIFI: 应用专属网络已在位——跳过重复加入")
                     WifiCarPlayConnector.JoinResult.Joined(existing)
                 } else {
@@ -3041,7 +3129,7 @@ object SessionController {
             return false
         }
         val projection = CarPlayService.mediaProjection
-        val useNativeCarLifeAudio = CarLifeLauncher.isAvailable(context)
+        val useNativeCarLifeAudio = sessionVideoSource == VideoSource.CAR_WITH && CarLifeLauncher.isAvailable(context)
         if (projection == null && !useNativeCarLifeAudio) {
             appendLog(
                 "AUDIO: 缺少投屏权限（播放捕获依赖 MediaProjection）——音频通道未启动。" +
@@ -3141,6 +3229,14 @@ object SessionController {
                 appendLog("AUDIO: 全部候选档位协商失败（共 ${ordered.size} 档）——本次仅推视频")
                 return false
             }
+            val dashboardAudio = sessionVideoSource == VideoSource.DASHBOARD
+            val audioLevels = AudioDuckingPrefs.config(context.applicationContext)
+            val a2dpGuard =
+                if (dashboardAudio) {
+                    (client.currentEndpoint.peerAddress ?: activePeerAddress)?.let { DashboardA2dpGuard(context, it, ::appendLog) }
+                } else {
+                    null
+                }
             val sender =
                 AudioSender(
                     host = host,
@@ -3156,6 +3252,9 @@ object SessionController {
                     // 接收端只能「按到达时刻猜」，严格的实现干脆不排播（2026-10-20 实测）。
                     controlPort = audio.controlPort,
                     onPacketSent = { diagnosticAttempt?.let { ConnectionDiagnostics.timeline.audioPacket(it) } },
+                    mapAudioUids = if (dashboardAudio) DashboardMaps.installedUids(context) else intArrayOf(),
+                    navigationDucking = audioLevels,
+                    onStopped = a2dpGuard?.let { it::close },
                 )
             startingSender = sender
             val bridge =
@@ -3163,7 +3262,7 @@ object SessionController {
                     CarLifeAudioBridge(
                         sender,
                         audio.sampleRate,
-                        AudioDuckingPrefs.config(context.applicationContext),
+                        audioLevels,
                     ) { line -> appendLog(line) }
                 } else {
                     null
@@ -3173,6 +3272,7 @@ object SessionController {
                 if (!client.isConnectionCurrent(connectionGeneration) || currentClient !== client) return false
                 audioSender = sender
                 nativeAudioBridge = bridge
+                applyMusicAttenuationDb(AudioDuckingPrefs.musicAttenuationDb(context.applicationContext))
                 activeAudioProfile = profile
                 activeAudioReceiverKey = identity
                 activeAudioStartedAt = android.os.SystemClock.uptimeMillis()
@@ -3185,7 +3285,11 @@ object SessionController {
                 if (bridge != null) {
                     sender.startExternalSource().also { if (it) bridge.start() }
                 } else {
-                    projection != null && sender.start(projection)
+                    a2dpGuard?.start()
+                    projection != null &&
+                        client.isConnectionCurrent(connectionGeneration) &&
+                        currentClient === client &&
+                        sender.start(projection)
                 }
             if (!started || !client.isConnectionCurrent(connectionGeneration) || currentClient !== client) {
                 bridge?.stop()
@@ -4203,6 +4307,7 @@ object SessionController {
             rejectPreAcquired()
             return
         }
+        val useDashboard = sessionVideoSource == VideoSource.DASHBOARD
 
         fun ownsConnection(): Boolean = ReceiverDetectionRuntime.isCurrent(endpoint.observation)
 
@@ -4622,6 +4727,7 @@ object SessionController {
                             client.close()
                             return@run
                         }
+                        updateOra03IdentityWarning(context, client, peerAddress)
                         if (setup != null && client.controlChannelClosed) {
                             // 帕萨特 2025（VW4211）：没等到新鲜 ctrl 邀请就连入时，初始 SETUP 照回 200
                             // 但随即关控制通道；继续往下走只会得到假会话（/info、事件通道、屏幕流全失败）。
@@ -4730,7 +4836,24 @@ object SessionController {
                                             }
                                             touchLogCount++
                                             val carLife = currentCarLifeSession
-                                            if (carLife != null) {
+                                            if (useDashboard && currentClient === client && client.modes.phoneOwnsScreen) {
+                                                val dashboard = dashboardProjection.get()
+                                                if (dashboard != null) {
+                                                    val contact = contacts.firstOrNull { it.slot == 0 } ?: contacts.first()
+                                                    val point =
+                                                        mapCarLifeTouch(
+                                                            contact.xPixels,
+                                                            contact.yPixels,
+                                                            setup.displayWidth,
+                                                            setup.displayHeight,
+                                                            dashboard.width,
+                                                            dashboard.height,
+                                                        )
+                                                    if (point != null && dashboard.touch(point.first, point.second, contact.down)) {
+                                                        ReceiverDetectionRuntime.touch(client.currentEndpoint.observation)
+                                                    }
+                                                }
+                                            } else if (carLife != null) {
                                                 val contact =
                                                     contacts.firstOrNull { it.slot == 0 }
                                                         ?: contacts.first()
@@ -4910,6 +5033,7 @@ object SessionController {
                                 var pendingVideoW = 0
                                 var pendingVideoH = 0
                                 var carLife: CarLifeSession? = null
+                                var dashboard: DashboardProjection? = null
                                 lateinit var sessionVideoSender: VideoSender
                                 if (host != null) {
                                     // 「显示」偏好：流画布/虚拟屏按车机分辨率百分比生成。
@@ -4988,14 +5112,14 @@ object SessionController {
                                                 targetFps = fps,
                                                 log = { line -> appendLog(line) },
                                                 keepAliveWithStats = setup.keepAliveSendStatsAsBody,
-                                                externalVideoSource = carLifeSource,
+                                                externalVideoSource = carLifeSource.takeUnless { useDashboard },
                                                 receiverMaxFps = setup.maxFps,
                                                 // 车机拿走主屏（原车界面、倒车影像等）时暂停屏幕视频，归还后从新的 IDR 恢复
                                                 phoneOwnsScreen = { client.modes.phoneOwnsScreen },
                                                 onScreenOutputSuspended = { suspended ->
                                                     ConnectionDiagnostics.timeline.screenOutput(diagnosticAttempt, suspended)
                                                 },
-                                                onExternalFrameSent = { bytes ->
+                                                onVideoFrameSent = { bytes ->
                                                     ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
                                                     if (firstFrameSent.compareAndSet(false, true)) {
                                                         // 真出画了：清空自动重连熔断计数（本轮已是健康会话）
@@ -5037,6 +5161,9 @@ object SessionController {
                                                         releaseCarLifeSession(it)
                                                     }
                                                     if (carLifeOutput?.sender === sender) carLifeOutput = null
+                                                    dashboard?.let { source ->
+                                                        if (dashboardProjection.compareAndSet(source, null)) source.close()
+                                                    }
                                                     StreamingWifiLock.release()
                                                     // 先于其余收尾：「息屏后多久结束」以推流终止时刻为准
                                                     appContext?.let(ScreenLockMonitor::stop)
@@ -5098,12 +5225,16 @@ object SessionController {
                                             }
                                         val previousSender =
                                             synchronized(this) {
-                                                val previousOutput = carLifeOutput ?: return@recover ScreenRecoveryResult.ABORTED
                                                 val previous = videoSender ?: return@recover ScreenRecoveryResult.ABORTED
+                                                val ownsSource =
+                                                    if (useDashboard) {
+                                                        dashboard != null && dashboardProjection.get() === dashboard
+                                                    } else {
+                                                        carLifeOutput?.sender === previous && currentCarLifeSession === carLife
+                                                    }
                                                 if (wasCancelled() ||
                                                     currentClient !== client ||
-                                                    previousOutput.sender !== previous ||
-                                                    currentCarLifeSession !== carLife ||
+                                                    !ownsSource ||
                                                     !client.modes.phoneOwnsScreen
                                                 ) {
                                                     return@recover ScreenRecoveryResult.ABORTED
@@ -5112,7 +5243,9 @@ object SessionController {
                                                 videoSender = null
                                                 previous
                                             }
-                                        appendLog("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频")
+                                        val sourceName = if (useDashboard) "自绘 UI" else "CarWith"
+                                        appendLog("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 $sourceName 与音频")
+                                        dashboard?.detachEncoder()
                                         previousSender.stop()
                                         if (wasCancelled() || !client.teardownScreenStream()) return@recover failure()
                                         if (wasCancelled()) return@recover ScreenRecoveryResult.ABORTED
@@ -5131,7 +5264,7 @@ object SessionController {
                                                 // 否则新流没有激活（艾瑞泽 8 重进后触控/按键失效）。
                                                 !client.record(force = true) ||
                                                 wasCancelled() ||
-                                                !replacement.start {} ||
+                                                !replacement.start { dashboard?.attach(it) } ||
                                                 wasCancelled()
                                             ) {
                                                 return@recover failure()
@@ -5140,7 +5273,7 @@ object SessionController {
                                                 if (wasCancelled() || currentClient !== client || videoSender !== replacement) {
                                                     return@recover ScreenRecoveryResult.ABORTED
                                                 }
-                                                carLifeOutput = CarLifeOutput(diagnosticAttempt, replacement)
+                                                if (!useDashboard) carLifeOutput = CarLifeOutput(diagnosticAttempt, replacement)
                                             }
                                             client.modes.onScreenStreamRestored()
                                             replacement.requestKeyFrame(fromReceiver = false)
@@ -5185,8 +5318,31 @@ object SessionController {
                                     }
                                     return@run
                                 }
-                                ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.CARWITH)
-                                if (host != null) {
+                                if (!useDashboard) ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.CARWITH)
+                                if (host != null && useDashboard) {
+                                    val source = DashboardProjection(context, pendingVideoW, pendingVideoH, ::appendLog)
+                                    dashboard = source
+                                    synchronized(this) {
+                                        if (wasCancelled() || currentClient !== client || videoSender !== sessionVideoSender) {
+                                            source.close()
+                                            return@run
+                                        }
+                                        dashboardProjection.getAndSet(source)?.close()
+                                    }
+                                    if (!sessionVideoSender.start(source::attach)) {
+                                        if (dashboardProjection.compareAndSet(source, null)) source.close()
+                                        uiHintSink?.invoke(t(R.string.car_dashboard_unavailable))
+                                        if (currentClient === client) retireSession()
+                                        return@run
+                                    }
+                                    StreamingWifiLock.acquire(context)
+                                    streamingDiagnosticAttempt = diagnosticAttempt
+                                    ScreenLockMonitor.start(
+                                        context,
+                                        log = ::appendLog,
+                                        note = { ConnectionDiagnostics.timeline.note(diagnosticAttempt, it) },
+                                    )
+                                } else if (host != null) {
                                     val videoW = pendingVideoW
                                     val videoH = pendingVideoH
                                     val output = CarLifeOutput(diagnosticAttempt, sessionVideoSender)

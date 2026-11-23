@@ -1,11 +1,13 @@
 package com.mcarplay.app.media
 
 import android.content.ComponentName
+import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.view.KeyEvent
 import com.mcarplay.app.carlife.CarWithNotificationProbe
 
 /**
@@ -163,10 +165,10 @@ class MediaListenerService : NotificationListenerService() {
                     playing = playing,
                     art = artFor(controller, meta, title),
                     pkg = controller.packageName,
-                    positionMs = state?.position ?: 0L,
+                    positionMs = state?.position ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN,
                     playbackSpeed = if (playing) (state?.playbackSpeed ?: 1f) else 0f,
                     durationMs = meta?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
-                    anchoredAtMs = android.os.SystemClock.elapsedRealtime(),
+                    anchoredAtMs = state?.lastPositionUpdateTime ?: 0L,
                 )
             }
         MediaSessionsState.publish(now)
@@ -258,10 +260,10 @@ object MediaSessionsState {
     ) {
         /** 渲染时刻的推算播放位置（播放中按速度外推，钳制在时长内）。 */
         fun displayPositionAt(elapsedRealtimeMs: Long): Long {
-            if (durationMs <= 0) return 0
+            if (durationMs <= 0 || positionMs < 0) return 0
             val base =
                 if (playing && anchoredAtMs > 0) {
-                    positionMs + ((elapsedRealtimeMs - anchoredAtMs) * playbackSpeed).toLong()
+                    positionMs + ((elapsedRealtimeMs - anchoredAtMs).coerceAtLeast(0) * playbackSpeed).toLong()
                 } else {
                     positionMs
                 }
@@ -296,8 +298,7 @@ object MediaSessionsState {
     fun publish(value: NowPlaying?) {
         val old = nowPlaying
         nowPlaying = value
-        // 位置每秒都在变（1s 兜底轮询）——日志只看内容键，避免刷屏；
-        // listeners 仍每次通知（UI 据此刷新进度文本）
+        // 位置由界面定时刷新；只有曲目或播放状态变化时才通知监听者。
         val contentChanged =
             old?.title != value?.title ||
                 old?.artist != value?.artist ||
@@ -323,5 +324,46 @@ object MediaSessionsState {
 
     fun requestResync() {
         resyncHook?.invoke()
+    }
+
+    /** Send controls to the session whose track is shown in the dashboard card. */
+    internal fun controlCurrentPlayer(
+        context: Context,
+        keyCode: Int,
+    ): Boolean {
+        val playerPackage = nowPlaying?.pkg ?: return false
+        return runCatching {
+            val sessions = context.getSystemService(MediaSessionManager::class.java) ?: return false
+            val controller =
+                sessions.getActiveSessions(MediaListenerService.componentName(context)).firstOrNull { it.packageName == playerPackage }
+                    ?: return false
+            val actions = controller.playbackState?.actions ?: return false
+            val controls = controller.transportControls
+            when (keyCode) {
+                KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                    if (actions and PlaybackState.ACTION_PLAY == 0L) return false
+                    controls.play()
+                }
+
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    if (actions and PlaybackState.ACTION_PAUSE == 0L) return false
+                    controls.pause()
+                }
+
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    if (actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS == 0L) return false
+                    controls.skipToPrevious()
+                }
+
+                KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                    if (actions and PlaybackState.ACTION_SKIP_TO_NEXT == 0L) return false
+                    controls.skipToNext()
+                }
+
+                else -> return false
+            }
+            logSink?.invoke("MEDIA: 车机音乐卡片指令 key=$keyCode → $playerPackage")
+            true
+        }.getOrDefault(false)
     }
 }
