@@ -61,6 +61,7 @@ class Iap2BluetoothClient(
     private val onAdapterStateChanged: (Int) -> Unit = {},
     /** 车机拒绝主动连入、改为等它回连时调用一次（参数为设备名），界面据此提示「在车机上点本机」。 */
     private val onAwaitingReceiverTap: (String) -> Unit = {},
+    private val wifiHandoffDetached: () -> Boolean = { false },
 ) {
     /** 自动模式 SDP 闸门结论。 */
     enum class SdpGate {
@@ -364,11 +365,15 @@ class Iap2BluetoothClient(
         probePolicy.arm(SystemClock.elapsedRealtime(), OutboundProbePolicy.SESSION_END_GRACE_MILLIS)
     }
 
+    internal fun retryAfterWifiHandoff(address: String) {
+        probePolicy.arm(SystemClock.elapsedRealtime(), OutboundProbePolicy.SESSION_END_GRACE_MILLIS, peer = address)
+    }
+
     fun hasProbeWindow(): Boolean = running && probePolicy.hasOpenWindow(SystemClock.elapsedRealtime())
 
     fun canRetryAfterAclLoss(address: String?): Boolean {
         val acl = address?.let(BtAclTracker::observe) ?: return false
-        return running && probePolicy.shouldProbe(acl, SystemClock.elapsedRealtime())
+        return running && probePolicy.shouldProbe(acl, SystemClock.elapsedRealtime(), peer = address)
     }
 
     /**
@@ -380,7 +385,7 @@ class Iap2BluetoothClient(
         nowMillis: Long,
     ): Boolean {
         val acl = BtAclTracker.observe(device.address)
-        if (probePolicy.shouldProbe(acl, nowMillis)) return true
+        if (probePolicy.shouldProbe(acl, nowMillis, peer = device.address)) return true
         if (acl != null) return false
         val cached = profileOnlineCache[device.address]
         if (cached != null && nowMillis - cached.second < PROFILE_ONLINE_RECHECK_MILLIS) return cached.first
@@ -485,7 +490,7 @@ class Iap2BluetoothClient(
             //  - sessionActive：CarPlay 会话已建立（已拿到端点）——与其它接收端的连接尝试全部暂停
             //    典型场景：连着 Redmi/DiPlay 时不再无脑探测车机 Audi（消除日志噪音与蓝牙churn）；
             //    会话结束（任一端 BT 会话终结 / 手动断开）时自动恢复。
-            if (BtSessionGate.outboundPaused) {
+            if (BtSessionGate.outboundPaused || wifiHandoffDetached()) {
                 sleepQuietly(2_000)
                 continue
             }
@@ -619,7 +624,7 @@ class Iap2BluetoothClient(
                 runCatching { connected.close() }
                 return
             }
-            if (BtSessionGate.discardLateOutbound(connected)) {
+            if (BtSessionGate.discardLateOutbound(connected, wifiHandoffDetached())) {
                 currentSocket.compareAndSet(connected, null)
                 log("BT-C: 拨通时已有入站连接或 CarPlay 会话，已关闭本次出站连接，跳过 iAP2 握手")
                 continue
@@ -863,8 +868,11 @@ object BtSessionGate {
     }
 
     /** connect() 阻塞期间车机可能已经回连；在发送第一个 iAP2 包前交还出站 socket。 */
-    internal fun discardLateOutbound(socket: Closeable): Boolean {
-        if (!outboundPaused) return false
+    internal fun discardLateOutbound(
+        socket: Closeable,
+        wifiHandoffDetached: Boolean = false,
+    ): Boolean {
+        if (!outboundPaused && !wifiHandoffDetached) return false
         runCatching { socket.close() }
         return true
     }

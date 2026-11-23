@@ -18,6 +18,22 @@ class ConnectionTimelineTest {
     private val timeline = ConnectionTimeline({ 1_000_000 + now }, { now }, { "attempt-${++ids}" }, { records.add(it) })
 
     @Test
+    fun wifiTimeoutStartsANewBluetoothAttemptAndKeepsTheFailureInHistory() {
+        val first = timeline.bluetoothStarted("auto_start", transportRunning = false)
+        timeline.stage(first, ConnectionStage.WIFI)
+        timeline.abandon(first, cancelled = false, fallback = DiagnosticCode.WIFI_JOIN_FAILED)
+        timeline.retryBluetooth(first)
+
+        val retry = timeline.snapshot()!!
+        assertFalse(first == retry.id)
+        assertEquals(ConnectionStage.BLUETOOTH, retry.stage)
+        assertEquals("waiting", retry.status)
+        assertTrue(records.map(::JSONObject).any { it.optString("event") == "END" && it.optString("code") == "WIFI_JOIN_FAILED" })
+        timeline.retryBluetooth(first)
+        assertEquals(retry, timeline.snapshot())
+    }
+
+    @Test
     fun returningCarStartsBluetoothAttemptWithTheListenerStillRunning() {
         val first = timeline.bluetoothStarted("auto_start", transportRunning = false)
         timeline.media(first, video = true, bytes = 100)

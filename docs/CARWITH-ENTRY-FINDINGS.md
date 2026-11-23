@@ -2332,3 +2332,59 @@ WiAP 的服务位是 `0x80`，profile 已启动且可继续本轮连接时，`0x
 在 `0x100052d00` 调用 `BTDeviceConnectServices`。这条路径属于带外配对。
 已保存配对的普通上车场景中，现有二进制证据仍未确定哪个上层事件会给该车安排 WiAP 出站请求。
 已启用 CarPlay 且保存 Wi-Fi 凭据的快速重连检查属于另一条路径。
+
+## 2026-11-23：HeadUnit-1 回车时蓝牙在热点接通前断开
+
+Xiaomi 15（24129PN74C），HyperOS OS4.0.4.0.XOCCNXM，CarWith 4.0.23-20261016，小米 CarLife 8.8.5，
+mcarplay 0.1.7-rd-debug。接收端为 HeadUnit-1，固件 1.0.0，AirPlay 450.14.1。
+车主报告熄火离开一段时间后再次上车无法连接，到目的地重新熄火再连接，经一次重试恢复。
+
+| 手机时间 | 连接结果 |
+| --- | --- |
+| 14:22–14:34 | 首次车机回连已交付热点凭据，271 ms 后 RFCOMM 断开。应用停止监听。下一轮于 14:22:50 发出首帧，14:34:04 热点掉线时累计发送 12,679 帧。 |
+| 14:45:42–14:45:44 | 车机回连。手机使用响应方模式完成 iAP2 建链、身份识别和 MFi 消息交换，并收到 `0x5703`。375 ms 后 RFCOMM 读到 EOF，随后 ACL 断开。应用取消入网并按下车事件停止监听。 |
+| 14:45:59–14:59:14 | 自动启动后的车机回连建立了 RFCOMM，双方交换探测标记。手机在用户首次重置前未收到车机 SYN。此后四轮手动重置共记录 32 次出站 `BluetoothSocket.connect()` 读失败，无车机回连记录。 |
+| 14:59:52–15:00:14 | 重新熄火后的首轮回连再次交付热点凭据，636 ms 后 RFCOMM 断开，应用取消入网并停止监听。下一轮由手机拨通 RFCOMM，收到车机 SYN 后完成协商。约 586 ms 加入热点，15:00:14 发出首帧。15:01:19 热点掉线前累计发送 1,284 帧。 |
+
+14:45 和 14:59 两次失败均发生在已取得凭据、尚未加入热点的交接窗口。蓝牙 socket 关闭会释放交接所有权并取消入网，
+随后 ACL 断开的处理只在蓝牙握手阶段保留重试，因而在 Wi-Fi 阶段将剩余监听一并停止。14:45 的出站仲裁按预期只关闭
+后来拨通的出站 socket，入站链路仍交付了热点凭据。15:00 成功轮的蓝牙断开发生在首帧之后，推流持续到热点掉线。
+
+手机端已验证沿用配对时，响应方模式在入站和出站 RFCOMM 上均可完成蓝牙握手。此次最先中断的环节是蓝牙到热点的交接。
+手机系统蓝牙历史将 14:22:24、14:45:43 和 14:59:54 的三次 ACL 断开均记为远端终止（`0x13`）。
+14:45:58 建立的 ACL 上出现只交换探测标记的 RFCOMM 会话，该 ACL 到 14:59:14 才以连接超时（`0x08`）结束。
+成功轮的 ACL 在 15:00:19、首帧发送后也以远端终止结束。车机提前断开和后续回连未收到 SYN 的内部原因仍未确认。
+音频与触控未单独确认。
+
+### iOS 24A446 的无线回连与交接
+
+Apple 的[无线回连流程](https://developer.apple.com/videos/play/wwdc2017/717/?time=1601)区分两种场景。点火后，车机等蓝牙和热点就绪，
+选中已保存的 CarPlay 设备，并在无活动会话时建立蓝牙 iAP2。已建立的 CarPlay 会话意外断开时，车机先用 CarPlay Control
+尝试快速重连同一设备，失败后回到蓝牙。传统交接在手机入网后由车机通过 Bonjour 发起 Control 邀请。支持
+[2023 年简化流程](https://developer.apple.com/videos/play/wwdc2023/10150/)的车机可通过现有 iAP2 交换 IP 地址与端口。
+
+静态证据来自同一份 [24A446 提取物](https://github.com/iamr0s/carvex-ios-firmware/tree/b7867867c140a4c7eec4cea827cbbfefa8641568/extracted/24A446)。
+以下地址是各 Mach-O 的静态虚拟地址。
+
+| 路径 | iOS 的处理 |
+| --- | --- |
+| 已配对车机的蓝牙连接 | `carkitd` 的 `handleDidConnectBluetoothAddress:reply:`（`0x100064dcc`）按蓝牙地址找车机，检查已配对记录、CarPlay Wi-Fi UUID 和已有凭据，通过后在 `0x100065120` 调用 `postInCarNotificationForVehicle:`。后者调用 `WiFiManagerClientSetInCarState`（`0x100084e48`），按 `requiresBonjour` 决定是否开放 CarPlay Control 广播（`0x1000717fc`）。这条路径可使用已有凭据开始 Wi-Fi 流程。 |
+| 通过蓝牙取得传统热点信息 | `accessoryd` 在 `0x100170c10` 调用发送函数发出 `0x5702`。`0x5703` 的凭据经 `0x100098a38` 交给 `WiFiSharing`（`0x2431186ac`），再经 CarKit 和 XPC 交给 `carkitd` 按车辆保存。保存路径在 `0x1000721fc` 请求保存 CarPlay 网络，有符合条件的车辆连接时在 `0x1000722c4` 通知已上车。 |
+| 蓝牙断开 | `carkitd` 的 `handleDidDisconnectBluetoothAddress:reply:`（`0x1000653a4`）取消重新启用 Wi-Fi 的提示并清理蓝牙服务计数。`serviceConnector:didDisconnectVehicle:`（`0x100070b94`）通知当前配对提示流程。这两条回调均未取消 Wi-Fi 入网、退出网络或拆 CarPlay 会话。 |
+| CarPlay 会话结束 | `carkitd` 的 `sessionDidDisconnect:`（`0x100079720`）在 `shouldDisconnectOnSessionDisconnect` 成立时才调用退出网络（`0x100079af4`），且网络必须匹配该车的 CarPlay Wi-Fi UUID。 |
+| 已有无线端点失联 | `AirPlaySender` 的 `carManager_attemptQuickReconnect` 在无线 Bonjour 端点失活且被判定为信号干扰时调度等待；回调（`0x251a9a08c`）检查端点仍失活、距上次车机命令的时间、发现标识和信号，再向已有发现记录提交连接。这条恢复路径要求已有网络端点。 |
+
+`MobileWiFi` 在 `0x291a16790` 将上车状态和车辆 UUID 提交给 Wi-Fi 守护进程。传统 Control 路径由 `APTransport` 在
+`0x24fe01f70` 注册 `_carplay-ctrl._tcp`，在 `0x24fe387fc` 处理车机传入的 `connect`。已有无线端点恢复时，
+`AirPlaySender` 则调用 `APTransport` 的本地连接调度（`0x24fdd3544`）。
+
+11 月 2 日奇瑞车机的 iPhone 日志记录了传统路径：iAP2 交付凭据、iPhone 入网、车机发 Control 邀请、AirPlay 建立，
+随后车机在收到 `disableBluetooth` 后关闭蓝牙。11 月 23 日 HeadUnit-1 的成功轮同样在入网后收到 Control 邀请。
+HeadUnit-1 失败轮没有等到这一阶段：收到完整的 `0x5703` 后，车机提前关闭蓝牙。应用同时终止了当前入网和下一轮监听。
+
+适合修正的状态转换是：完整凭据已交付且具备该接收端所需的发现路径时，蓝牙断开只结束该蓝牙链路，Wi-Fi 交接继续使用
+已有时限。等到热点和本轮 Control 邀请，或取得完整的直连端点，再建立 AirPlay。本轮网络交接失败后回到同目标的蓝牙等待，
+仍缺少必需凭据或端点的链路按失败处理。车机保持 RFCOMM 但不送 SYN，以及出站拨号失败，是后续需独立验证的路径。
+
+静态分析覆盖了手机侧已配对回连、凭据交付、断链回调和 AirPlay 恢复入口。MobileWiFi 内部的选网与取消条件、
+HeadUnit-1 提前结束 ACL 的原因，以及 iPhone 对这台车相同故障的实测表现，仍缺少证据。

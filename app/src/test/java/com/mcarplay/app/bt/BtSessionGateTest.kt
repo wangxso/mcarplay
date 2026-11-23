@@ -7,6 +7,15 @@ import java.io.Closeable
 
 class BtSessionGateTest {
     @Test
+    fun outgoingSocketThatCompletesDuringIndependentWifiHandoffIsClosed() {
+        var closed = false
+        val outbound = Closeable { closed = true }
+        assertTrue(BtSessionGate.discardLateOutbound(outbound, wifiHandoffDetached = true))
+        assertTrue(closed)
+        assertFalse(BtSessionGate.outboundPaused)
+    }
+
+    @Test
     fun inboundAcceptedWhileDialingDiscardsOnlyTheLateOutboundSocket() {
         var closed = false
         val outbound = Closeable { closed = true }

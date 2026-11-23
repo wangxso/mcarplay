@@ -14,6 +14,8 @@ internal class SessionHandoffOwnership(
 ) {
     private val lock = Any()
     private var owner: ReceiverObservation? = null
+    private var wifiPeer: String? = null
+    private var wifiDetached = false
     private var accepting = true
     private var pendingRetry: (() -> Unit)? = null
 
@@ -25,6 +27,7 @@ internal class SessionHandoffOwnership(
     fun begin(
         observation: ReceiverObservation?,
         retryWhenReleased: (() -> Unit)? = null,
+        wifiPeer: String? = null,
         onAcquired: () -> Unit = {},
     ): Boolean =
         synchronized(lock) {
@@ -34,6 +37,7 @@ internal class SessionHandoffOwnership(
                 return@synchronized false
             }
             owner = observation
+            this.wifiPeer = wifiPeer
             onAcquired()
             true
         }
@@ -43,7 +47,7 @@ internal class SessionHandoffOwnership(
             synchronized(lock) {
                 if (observation != owner) return false
                 if (!active.compareAndSet(true, false)) return false
-                owner = null
+                clearOwner()
                 pendingRetry.also { pendingRetry = null }
             }
         retry?.invoke()
@@ -55,6 +59,36 @@ internal class SessionHandoffOwnership(
             active.get() && owner == observation
         }
 
+    fun setWifiPeer(
+        observation: ReceiverObservation?,
+        address: String,
+    ) {
+        synchronized(lock) {
+            if (active.get() && owner == observation) wifiPeer = address
+        }
+    }
+
+    fun keepWifiAfterLinkLoss(observation: ReceiverObservation?): Boolean =
+        synchronized(lock) {
+            if (wifiPeer == null || owner != observation) return@synchronized false
+            wifiDetached = true
+            true
+        }
+
+    fun keepWifiAfterAclLoss(address: String?): Boolean =
+        synchronized(lock) {
+            if (address == null || !address.equals(wifiPeer, ignoreCase = true)) return@synchronized false
+            wifiDetached = true
+            true
+        }
+
+    fun wifiDetached(): Boolean = synchronized(lock) { wifiDetached }
+
+    fun wifiDetached(observation: ReceiverObservation?): Boolean = detachedWifiPeer(observation) != null
+
+    fun detachedWifiPeer(observation: ReceiverObservation?): String? =
+        synchronized(lock) { wifiPeer.takeIf { wifiDetached && owner == observation } }
+
     /** 只有归属链路能取消交接；状态变更与回调在同一锁内完成。 */
     fun cancelIfOwnedBy(
         observation: ReceiverObservation?,
@@ -64,7 +98,7 @@ internal class SessionHandoffOwnership(
         synchronized(lock) {
             if (!active.get() || owner != observation) return@synchronized false
             active.set(false)
-            owner = null
+            clearOwner()
             pendingRetry = null
             if (isAlreadyCancelled()) return@synchronized false
             onCancel()
@@ -74,7 +108,7 @@ internal class SessionHandoffOwnership(
     /** 取消/终止路径无条件释放，不依赖链路关闭通知或接收轮次是否仍为 current。 */
     fun release() {
         synchronized(lock) {
-            owner = null
+            clearOwner()
             pendingRetry = null
             active.set(false)
         }
@@ -84,7 +118,7 @@ internal class SessionHandoffOwnership(
     fun blockNewHandoffs() {
         synchronized(lock) {
             accepting = false
-            owner = null
+            clearOwner()
             pendingRetry = null
             active.set(false)
         }
@@ -95,5 +129,11 @@ internal class SessionHandoffOwnership(
         synchronized(lock) {
             accepting = true
         }
+    }
+
+    private fun clearOwner() {
+        owner = null
+        wifiPeer = null
+        wifiDetached = false
     }
 }

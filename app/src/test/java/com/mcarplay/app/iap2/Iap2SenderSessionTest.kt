@@ -140,6 +140,40 @@ class Iap2SenderSessionTest {
         assertFalse(milestones.contains(ConnectionMilestone.FIRST_VIDEO))
     }
 
+    @Test
+    fun completeCredentialsStillReachHandoffWhenBluetoothClosesBeforeStartSession() {
+        val pair = InMemoryStreamPair()
+        val phone = Iap2LinkChannel(pair.sideA, name = "phone-wifi-handoff")
+        val peer = Iap2LinkChannel(pair.sideB, name = "car-wifi-handoff")
+        val wifi = Iap2SenderSession.WifiConfiguration("Synthetic-Car-AP", "synthetic-password", 48, 2)
+        val accessory = MockAccessory(peer, shape = MockAccessory.Shape.CHERY, wifiConfiguration = wifi)
+        val worker =
+            Thread({ runCatching(accessory::run) }, "accessory-wifi-handoff").apply {
+                isDaemon = true
+                start()
+            }
+        try {
+            val endpoint =
+                Iap2SenderSession(
+                    phone,
+                    log = {},
+                    onWifiCredentials = {
+                        assertEquals(wifi, it)
+                        peer.close()
+                        assertTrue(phone.awaitTerminated(2_000))
+                    },
+                ).run(timeoutMillis = 5_000)
+
+            assertEquals(wifi, endpoint.accessoryWifiOrNull())
+            assertEquals(0, endpoint.airPlayPort)
+            assertFalse(phone.isAlive)
+        } finally {
+            phone.close()
+            peer.close()
+            worker.join(2_000)
+        }
+    }
+
     /** TCP 7000 是该车日志的观测值，发送端仍须保留 0x4301 声明的地址和动态端口。 */
     @Test
     fun cheryAdvertisedEndpointKeepsItsPortAndLegacyWifiParameters() {

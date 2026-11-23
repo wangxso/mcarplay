@@ -578,8 +578,6 @@ class Iap2SenderSession(
         // ---- 设备状态问候（0x4E0D/0x4E0A/0x4E09/0x4E0B → 0x4300）----
         // Audi MIB3 实测：缺这批消息时，车机对 0x4300 只回链路 ACK、不出 0x4301。
         // 幂等：0x5703 等待期间可能已提前发过（见 wifiRescueDeadline 处）。
-        sendDeviceStateGreetings()
-
         // ---- CarPlay 会话启动 ----
         // 两种对端形态：
         //  - 测试台 DiPlay/部分车厂：收 0x4300 后回 0x4301（含 AirPlay 端口/IP/公钥）
@@ -589,7 +587,11 @@ class Iap2SenderSession(
         // 0x4300 同样发后不管：2026-10-11 12:52 轮实测车机曾对它停止 ACK
         // （事件通道 SYN 洪水把它打懵的时段），链路看门狗险些再次自杀。
         // 幂等：车机声明可收 0x4300 时，凭据窗口内已提前发过（见 #69 分支）。
-        sendCarPlayAvailability()
+        sendBeforeHandoff(wifiFromExchange != null) {
+            sendDeviceStateGreetings()
+            sendCarPlayAvailability()
+        }
+
         // 车机声明里没有 0x4301 就直接跳过等待（Audi 实测每轮白等 10s）：
         // 真 iPhone 对这类车机也不等——AirPlay 端点经 mDNS/网关合成。
         val declaresStartSession = declaresSendStartSession
@@ -721,10 +723,12 @@ class Iap2SenderSession(
         // 真机顺序：0x4301 之后回 0x4E0E（传输标识确认）。
         // Audi 实测：车机对该消息**接受但从不 ACK**（其余包毫秒级 ACK）——必须发后不管，
         // 否则重传看门狗在 +20s 把整条蓝牙链路杀掉（EA 会话/触摸载体随之丢失）。
-        sendFireAndForget(
-            Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER,
-            Iap2Csm.string(0, bluetoothMac),
-        )
+        sendBeforeHandoff(endpoint.hasCompleteWifiCredentials) {
+            sendFireAndForget(
+                Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER,
+                Iap2Csm.string(0, bluetoothMac),
+            )
+        }
         log("iap2 0x4e0d/0x4e0e/0x4300 —— Phase 1 完成：拿到热点凭据与（可能的）AirPlay 端点")
 
         // 后续（Phase 2）：加入热点 → mDNS 解析 _airplay._tcp → AirPlay 主会话。
@@ -739,6 +743,18 @@ class Iap2SenderSession(
         }
         knownSessionSsid = endpoint.ssid.takeIf { it.isNotBlank() }
         return endpoint.copy(receiverSignals = receiverSignals)
+    }
+
+    /** 完整凭据已到时，RFCOMM 提前关闭不影响交付可通过 Wi-Fi 使用的端点。 */
+    private fun sendBeforeHandoff(
+        hasWifi: Boolean,
+        send: () -> Unit,
+    ) {
+        try {
+            send()
+        } catch (error: IOException) {
+            if (!hasWifi || channel.isAlive) throw error
+        }
     }
 
     /**

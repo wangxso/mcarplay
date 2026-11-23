@@ -49,6 +49,16 @@ class OutboundProbePolicyTest {
     }
 
     @Test
+    fun handoffTimeoutOnlyOpensAnOfflineProbeWindowForTheSameReceiver() {
+        val policy = OutboundProbePolicy()
+        policy.arm(5_000L, grace, peer = "AA:BB:CC:DD:EE:FF")
+        val acl = down(4_000L)
+        assertTrue(policy.shouldProbe(acl, 5_001L, peer = "aa:bb:cc:dd:ee:ff"))
+        assertFalse(policy.shouldProbe(acl, 5_001L, peer = "AA:BB:CC:DD:EE:00"))
+        assertFalse(policy.shouldProbe(acl, 5_000L + grace, peer = "AA:BB:CC:DD:EE:FF"))
+    }
+
+    @Test
     fun aclDisconnectInsideWindowStopsProbingImmediately() {
         val policy = OutboundProbePolicy()
         policy.arm(5_000L, user)

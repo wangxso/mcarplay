@@ -175,6 +175,15 @@ class ConnectionTimeline(
             }
         }
 
+    /** Wi-Fi 交接失败后，保持监听并开启同一接收端的下一次蓝牙尝试。 */
+    fun retryBluetooth(previousAttempt: String) =
+        mutate {
+            if (id == previousAttempt && status == "failed") {
+                beginAttempt("bt_retry")
+                enterBluetooth()
+            }
+        }
+
     private fun awaitingBluetoothRetry(): Boolean =
         status == "failed" && stage == ConnectionStage.BLUETOOTH && code == DiagnosticCode.BT_LINK_CLOSED
 
