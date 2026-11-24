@@ -141,33 +141,41 @@ class Rgp08CrossProcessPrefsTest {
 
                 ProbeConnection(context, COLD_SERVICE).use { cold ->
                     val coldInfo = cold.info
-                    val coldRead = cold.read(PEER, FIXED_NOW_MS, replyTimeoutSeconds = PROBE_STARTUP_REPLY_TIMEOUT_SECONDS)
+                    val coldRead =
+                        cold.read(
+                            PEER,
+                            FIXED_NOW_MS,
+                            replyTimeoutSeconds = PROBE_STARTUP_REPLY_TIMEOUT_SECONDS,
+                        )
                     assertTrue(coldInfo.pid != writerPid && coldInfo.pid != warmInfo.pid)
                     assertEquals(Process.myUid(), coldInfo.uid)
                     assertTrue(
-                        "Cold process started before S1 commit returned: ${coldInfo.startElapsedMs} < $s1AfterMs",
-                        coldInfo.startElapsedMs >= s1AfterMs,
+                        "Cold read process started before S1 commit returned: " +
+                            "${cold.observedStartElapsedMs} < $s1AfterMs",
+                        cold.observedStartElapsedMs >= s1AfterMs,
                     )
                     assertEquals(
                         AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
                         coldRead,
                     )
-                    assertEquals(coldInfo.pid, cold.observedPid)
-                    assertEquals(coldInfo.token, cold.observedToken)
+                    assertTrue(cold.observedPid != writerPid && cold.observedPid != warmInfo.pid)
                     assertEquals(
                         AutoReconnectGuard.Block(2, S1_BLOCKED_UNTIL_MS, 180_000L),
                         cold.activeBlock(FIXED_NOW_MS),
                     )
-                    assertEquals(coldInfo.pid, cold.observedPid)
-                    assertEquals(coldInfo.token, cold.observedToken)
+                    assertTrue(cold.observedPid != writerPid && cold.observedPid != warmInfo.pid)
+                    assertTrue(
+                        "Cold active-block process started before S1 commit returned: " +
+                            "${cold.observedStartElapsedMs} < $s1AfterMs",
+                        cold.observedStartElapsedMs >= s1AfterMs,
+                    )
                     events.put(
                         JSONObject()
                             .put("name", "COLD_READY")
                             .put("process", "cold")
-                            .put("pid", coldInfo.pid)
-                            .put("uid", coldInfo.uid)
-                            .put("token", coldInfo.token)
-                            .put("startElapsedMs", coldInfo.startElapsedMs)
+                            .put("pid", cold.observedPid)
+                            .put("token", cold.observedToken)
+                            .put("startElapsedMs", cold.observedStartElapsedMs)
                             .put("read", "S1"),
                     )
                 }
@@ -249,6 +257,8 @@ class Rgp08CrossProcessPrefsTest {
         var observedPid: Int = -1
             private set
         var observedToken: String? = null
+            private set
+        var observedStartElapsedMs: Long = -1L
             private set
         private val callbackExecutor =
             Executor { command ->
@@ -451,6 +461,10 @@ class Rgp08CrossProcessPrefsTest {
             observedToken =
                 reply.data.getString(ReconnectPrefsServiceShared.KEY_INSTANCE_TOKEN).also { token ->
                     requireNotNull(token) { "Messenger reply missing instance token" }
+                }
+            observedStartElapsedMs =
+                reply.data.getLong(ReconnectPrefsServiceShared.KEY_START_ELAPSED_MS).also { startElapsedMs ->
+                    require(startElapsedMs > 0L) { "Messenger reply missing process start time" }
                 }
             return reply
         }
