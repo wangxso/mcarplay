@@ -45,6 +45,12 @@ class SessionUiPortSourceContractTest {
             "ensurePhoneModeSystemWifiSafe",
             "manualJoinCarWifi",
             "legacyJoinCarWifi",
+            "joinAccessoryWifi",
+            "bindHandoffWifi",
+            "confirmCurrentWifiThenContinue",
+            "joinKnownWifiManually",
+            "waitForKnownWifiThenContinue",
+            "waitForManualWifiThenContinue",
         )
 
     /** 去注释/字符串后的指定函数体，避免日志文案或注释里的关键词污染断言。 */
@@ -370,12 +376,12 @@ class SessionUiPortSourceContractTest {
 
     @Test
     fun waitingJoinHintsArePinnedWithThrottleAndTimeout() {
-        val known = KotlinSource.scan(controller.substringAfter("private fun waitForKnownWifiThenContinue(")).code
+        val known = code("waitForKnownWifiThenContinue")
         val manual = code("waitForManualWifiThenContinue")
         requireContains(known, "ui.phase(t(R.string.sc_waiting_join, target))", "已知 SSID 等待必须写 phaseHint")
         requireContains(known, "now - lastHintAt >= 5_000L", "已知 SSID 等待提示必须按 5 秒节流")
         requireContains(manual, "ui.phase(t(R.string.sc_waiting_join, wifi.ssid))", " specifier 手动等待必须写 phaseHint")
-        requireContains(manual, "android.os.SystemClock.uptimeMillis() - lastHintAt > 5_000", " specifier 手动等待提示必须按 5 秒节流")
+        requireContains(manual, "uptimeMillis() - lastHintAt > 5_000", " specifier 手动等待提示必须按 5 秒节流")
         requireContains(manual, "ui.phase(t(R.string.sc_not_on_hotspot, wifi.ssid))", " specifier 手动等待超时必须写 phaseHint")
         requireContains(manual, "ui.hint { t(R.string.sc_not_joined_hint, wifi.ssid) }", " specifier 手动等待超时必须弹 uiHint")
     }

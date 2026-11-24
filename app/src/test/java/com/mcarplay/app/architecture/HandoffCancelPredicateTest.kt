@@ -198,16 +198,22 @@ class HandoffCancelPredicateTest {
     /** 现状快照：配件交接路径必须真正使用 handoffCancelled 判据。 */
     @Test
     fun accessoryHandoffPassesTheHandoffPredicate() {
-        val root = controller.substringBefore("private fun joinAccessoryWifi(")
-        val code = KotlinSource.scan(root).code
+        val controllerCode = KotlinSource.scan(controller).code
+        val joinerCode = KotlinSource.scan(joiner).code
         val directLambda =
             Regex(
-                """joinAccessoryWifi\(.*?handoffCancelled\(\)\s*\}\s*\)\s*\{""",
+                """joinAccessoryWifi\([^)]*request\.handoffCancelled\)\s*\{""",
                 RegexOption.DOT_MATCHES_ALL,
-            ).findAll(code).count()
-        val namedParams = Regex("""isCancelled\s*=\s*\{\s*handoffCancelled\(\)\s*\}""").findAll(code).count()
+            ).findAll(joinerCode).count()
+        val namedParams =
+            Regex("""isCancelled\s*=\s*request\.handoffCancelled""").findAll(joinerCode).count()
         assertTrue("joinAccessoryWifi 两处直接调用必须传 handoffCancelled", directLambda == 2)
-        assertTrue("交接绑定/确认/手动路径必须至少四处显式传 handoffCancelled", namedParams >= 4)
+        assertTrue("交接绑定/确认/手动路径必须至少三处显式传 handoffCancelled", namedParams >= 3)
+        assertTrue(
+            "SessionController 必须把 scope/handoff 判据接到握手请求",
+            controllerCode.contains("handoffCancelled = { handoffCancelled() }") &&
+                controllerCode.contains("scopeActive = { scope.isActive }"),
+        )
     }
 
     /** 现状快照：handoffCancelled 必须同时看全局取消与交接归属。 */
