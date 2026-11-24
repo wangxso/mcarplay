@@ -770,6 +770,25 @@ class AirPlayClient(
     }
 
     /**
+     * 手机侧发起 CarPlay UI 请求（`requestUI`）。R14G17 语义里这是“请车机把 CarPlay 界面带到前台”，
+     * 与用户点 CarPlay 图标后车机发出的 `requestUI` 是同一套资源接管路径的两个方向。
+     * 当前只用于 Bicv MICA3A01：它声明主屏初始永久归属为车机，但整轮屏幕 SETUP/RECORD 都已接受，
+     * 且不会主动送出 `requestUI`，需要控制器侧主动补这个请求。
+     */
+    fun requestCarplayUi(expectedEpoch: Long = connectionEpoch): Boolean {
+        val sent =
+            postEventCommand(
+                linkedMapOf(
+                    "type" to "requestUI",
+                    "params" to linkedMapOf<String, Any?>(),
+                ),
+                expectedEpoch = expectedEpoch,
+            )
+        log("AIRPLAY: requestUI（手机→车机）ok=$sent")
+        return sent
+    }
+
+    /**
      * 声明资源归属（modesChanged）：手机持有主屏 + 主音频（对照 catplay assert_modes）。
      * 真车验证的顺序：modesChanged → 屏幕流 SETUP。跳过此声明时 Audi MIB3 对
      * 屏幕流 SETUP 直接 400（资源仲裁未通过）。appStates：话机/导航归 None（0）、

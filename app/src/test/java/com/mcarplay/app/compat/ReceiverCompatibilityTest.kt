@@ -530,4 +530,32 @@ class ReceiverCompatibilityTest {
             }
         }
     }
+
+    @Test
+    fun autoRequestCarplayUiIsLimitedToObservedBicvMicaReceiver() {
+        val bicv =
+            ReceiverProfile.Signals(
+                manufacturer = "Bicv",
+                model = "GSE,EV3,SUV",
+                srcvers = "475.8.3",
+                firmwareVersion = "MICA3A01",
+            )
+        val policy = ReceiverCompatibility.resolve(bicv)
+
+        assertTrue(policy.autoRequestCarplayUi)
+        assertTrue(policy.rules.contains("bicv.gse-ev3.475.8.3.auto-request-ui"))
+
+        for (signals in listOf(
+            bicv.copy(srcvers = "475.8.4"),
+            bicv.copy(model = "GSE,EV3"),
+            bicv.copy(manufacturer = "other"),
+            bicv.copy(firmwareVersion = "MICA3A02"),
+            winPlay,
+        )) {
+            val other = ReceiverCompatibility.resolve(signals)
+            assertFalse(other.autoRequestCarplayUi)
+            assertFalse(other.rules.contains("bicv.gse-ev3.475.8.3.auto-request-ui"))
+        }
+        assertFalse(ReceiverCompatibility.resolve(bicv, preset = VehiclePreset.GENERIC).autoRequestCarplayUi)
+    }
 }

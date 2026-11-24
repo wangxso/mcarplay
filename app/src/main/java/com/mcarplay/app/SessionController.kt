@@ -4417,6 +4417,14 @@ object SessionController {
                             }
                             // 像 iPhone 一样请车机关蓝牙（真 iPhone 会话开始约 0.1 s 即发，早于屏幕流）
                             if (client.receiverCompatibility().releaseBluetoothAfterSetup) client.releaseReceiverBluetooth()
+                            if (client.receiverCompatibility().autoRequestCarplayUi && !client.modes.phoneOwnsScreen) {
+                                if (client.requestCarplayUi()) {
+                                    val request = client.modes.onUserRequestedUi(takeAudio = false)
+                                    if (request.allowed) {
+                                        appendLog("MODE: Bicv 主屏初始归车机——自动 requestUI 并接管主屏")
+                                    }
+                                }
+                            }
                             // 资源声明（must）：真车对未声明资源的屏幕流 SETUP 直接 400
                             client.assertModes(acknowledgeInitialScreenClaim = true)
                             // HID 输入模式武装：/info hidDevices（奥迪字符串 "0"/"1"，触摸="1"）。

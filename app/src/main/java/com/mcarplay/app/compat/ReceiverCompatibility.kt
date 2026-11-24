@@ -122,6 +122,15 @@ object ReceiverCompatibility {
          * 自动重连、CarWith 主动返回车机和 501/1000 约束保持原行为。
          */
         val claimScreenOnExplicitStart: Boolean = false,
+        /**
+         * 会话建立后主动请求车机切到 CarPlay UI。
+         *
+         * Bicv MICA3A01 的 `/info` 把主屏的 `initialPermanentEntity` 固定报为车机（resourceID=1），
+         * 且不主动发 `requestUI`。按 VW 的“车机 userInitiated 持有”处理会让屏幕门控一直暂停；
+         * 这份证据链路全通、主屏 SETUP/RECORD 都成功，因此只对该已登记身份先发 requestUI，
+         * 再按用户点图标的同一条资源拿回路径声明主屏归手机。未实车回归前不影响其他车机。
+         */
+        val autoRequestCarplayUi: Boolean = false,
     )
 
     data class PairingFallback(
@@ -184,6 +193,7 @@ object ReceiverCompatibility {
                     waitForIap2PeerMarker = false,
                     keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = false,
                     claimScreenOnExplicitStart = false,
+                    autoRequestCarplayUi = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -379,6 +389,11 @@ object ReceiverCompatibility {
         val cheryReleasesBluetooth = chery && cheryDisableBluetooth
         val arrizo8ConnectWindowHint =
             chery && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
+        val bicvGseEv3 =
+            normalize(signals.manufacturer) == "bicv" &&
+                normalize(signals.model) == "gse,ev3,suv" &&
+                normalize(signals.srcvers) == "475.8.3" &&
+                normalize(signals.firmwareVersion) == "mica3a01"
         // 大众车机型号自报 VWxxxx（ID7 VW4131、帕萨特 2025 VW4211），厂商字段并不统一（帕萨特报 Toppower）
         val vwStreamingInvite = VW_MODEL.matches(normalize(signals.model))
         val rules =
@@ -397,6 +412,7 @@ object ReceiverCompatibility {
                 if (chery) add("chery.mfi-32-only")
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
                 if (winPlay) add("winplay.vehicle-resolution")
+                if (bicvGseEv3) add("bicv.gse-ev3.475.8.3.auto-request-ui")
             }
         return Policy(
             family = family,
@@ -419,6 +435,7 @@ object ReceiverCompatibility {
             // 超出默认 1920 长边上限（2560x1200 等），统一打开策略；实际是否声明由流程按
             // 本轮 /info displays[0] 的合法几何门控（CarWithVideoNegotiation）。
             preferVehicleResolution = true,
+            autoRequestCarplayUi = bicvGseEv3,
         )
     }
 

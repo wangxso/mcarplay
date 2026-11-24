@@ -2533,3 +2533,26 @@ Xiaomi 15（24129PN74C），HyperOS OS4.0.4.0.XOCCNXM，CarWith 4.0.23-20261016�
 
 新版实车覆盖首帧视频发送。测试 APK 与最后一次本地构建字节不同，日志确认了单通道仲裁。
 Android `connect()` 在 socket 关闭后仍未返回的超时路径由并发单测验证。音频、触控及该超时路径未单独做实车验证。
+
+## 2026 款江铃易至 EV3 Bicv MICA3A01：初始主屏归属为车机（2026-11-24，手机报告，未实车复测）
+
+- 来源：用户提供 `mcarplay-log-20261124-191911-8e828cb7-diagnostics.txt`（不入库）。手机 Xiaomi 25113PN0EC，
+  Android 17；CarWith `4.0.23-20261016 (104000023)`；小米 CarLife `8.8.5 (274)`；应用 `0.1.7 (1070000)`。
+- 接收端：`Bicv / GSE,EV3,SUV`，`firmwareRevision=MICA3A01`，`OSInfo=Android 13`，AirPlay `srcvers=475.8.3`。
+  用户确认为 2026 款江铃易至 EV3。
+- `/info modes` 固定为：主屏 `resourceID=1, transferType=1, transferPriority=500, takeConstraint=500,
+  borrowConstraint=100`，`initialPermanentEntity=permanentEntity=2`；主音频初始永久归属为手机。
+  因此 `ModeArbiter.applyInitial()` 记录“主屏=车机(约束 500)”符合该报文。
+- 多轮链路全通：0x4301 下发 AP、应用专属网络入网、pair-setup/verify、`/info`、SETUP、主屏流 SETUP
+  （`dataPort=6030`）、RECORD、CarWith 七路握手、`VIDEO_INIT_DONE` 与首帧。但 CarWith 帧到达后立即被
+  `ScreenOutputGate` 拦下，`sourceVideoFrames` 增长而 `videoFramesSent` 为 0。
+- 历史上一次成功会话推流到 247s 后收到 `changeModes(BORROW)` 才暂停；其后重连不再出画。最新几轮未见
+  车机主动 `requestUI`。`modesChanged` 均为 42B `NO_APP_STATES`，不能确认切换。
+- **对应修改（未实车验证）：** 仅对上述身份登记 `bicv.gse-ev3.475.8.3.auto-request-ui`。事件通道建立后、
+  初始 `modesChanged` 前，若主屏仍归车机，先发控制器侧 `requestUI`，再复用现有用户点 CarPlay 图标的
+  `ModeArbiter.onUserRequestedUi(takeAudio=false)` + `modesChanged` 路径声明主屏归手机。不发送
+  `changeModes`（Accessory→Controller 方向），也不改动 VW/ORA 等已验证行为。
+- **验证边界：** 本报告只证明链路协商成功和初始报文形状，不证明自动 `requestUI` 在车上生效。下一轮需要
+  看 `requestUI（手机→车机）ok=true`、`modesChanged` 是否回显归属、`sourceVideoFrames/videoFramesSent`
+  是否同步增长、触摸是否到达，以及音频 `6011` 是否仍 `ECONNREFUSED`。SETUP 隧道应答 `streams=null`
+  与音频 controlPort 拒绝暂不改代码。
