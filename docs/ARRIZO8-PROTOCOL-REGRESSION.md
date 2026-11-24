@@ -23,7 +23,7 @@ MCU 为 `M1E_IC2172_18_01_41.11_250609_R`，与仓库已有艾瑞泽 8 证据的
 | 会话后 Idle / SIGSEGV（正常结束和 `kConnectionErr` 均有样本） | 历史分析已定位周期回调读取空 server 的直接崩溃机制；重复 RECORD / 多次 SessionStart 仍是触发候选。按下节独立验收，不能把约 20 s 崩溃与建链 30 s 超时混算。 |
 
 当前 CHERY 策略已包含固定 32B MFi 挑战、`X-Apple-HKP: 0`、会话内 `auth-setup`、真实 Wi-Fi MAC、
-`disableBluetooth`、跳过 type-130 隧道；只有 `CHERY + Tiggo + 320.17.7` 自动命中单次 RECORD。
+跳过 type-130 隧道；`disableBluetooth` 默认关闭（避免直接熄火下车时车机未及恢复蓝牙导致下次上车蓝牙保持关闭），仅在设置中手动打开时发送；只有 `CHERY + Tiggo + 320.17.7` 自动命中单次 RECORD。
 另有 issue #55 车主报告中的 `Mercedes-Benz / MB_D-PP-3/4 / 320.17.7` 也登记为单次 RECORD，尚未实车复测；
 本轮不扩大策略匹配范围。`AirPlayRecordLifecycleTest` 继续保护其他接收端原有的重复 RECORD 行为。
 
