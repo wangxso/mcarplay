@@ -1,4 +1,4 @@
-package com.mcarplay.app
+package com.mcarplay.app.audio
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,30 +18,32 @@ class AudioStartGateTest {
     @Test
     fun concurrentRequestUiAndChangeModesRetriesStartOnlyOneAudioChannel() {
         val gate = AudioStartGate()
-        val ready = CountDownLatch(1)
-        val done = CountDownLatch(2)
-        val starts = AtomicInteger()
+        val acquired = CountDownLatch(1)
+        val release = CountDownLatch(1)
         val pool = Executors.newFixedThreadPool(2)
+        val starts = AtomicInteger()
         try {
-            repeat(2) {
-                pool.execute {
-                    ready.await()
-                    if (gate.tryAcquire()) {
-                        starts.incrementAndGet()
-                        try {
-                            // 模拟 SETUP/协商窗口：此时 audioSender 仍未赋值。
-                            Thread.sleep(100)
-                        } finally {
-                            gate.release()
-                        }
+            val first =
+                pool.submit {
+                    assertTrue(gate.tryAcquire())
+                    starts.incrementAndGet()
+                    acquired.countDown()
+                    try {
+                        assertTrue(release.await(5, TimeUnit.SECONDS))
+                    } finally {
+                        gate.release()
                     }
-                    done.countDown()
                 }
-            }
-            ready.countDown()
-            assertTrue("both entry points must finish", done.await(5, TimeUnit.SECONDS))
-            assertEquals("only one entry point may establish an audio channel", 1, starts.get())
+            assertTrue(acquired.await(5, TimeUnit.SECONDS))
+            val second = pool.submit<Boolean> { gate.tryAcquire() }
+            assertFalse("the second entry must finish while SETUP is paused", second.get(5, TimeUnit.SECONDS))
+            assertEquals(1, starts.get())
+            release.countDown()
+            first.get(5, TimeUnit.SECONDS)
+            assertTrue(gate.tryAcquire())
+            gate.release()
         } finally {
+            release.countDown()
             pool.shutdownNow()
         }
     }

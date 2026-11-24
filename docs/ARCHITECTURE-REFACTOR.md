@@ -6,7 +6,11 @@ Phase 1a 进行中：`AttemptScope`/`LegacyAttemptScope` 与 `SessionUiPort` 已
 本 PR 的 S1 已接入后台断连尾段，S2 已接入完成发布与延后 start（未抽 USER_STOP 记账），S3 已接入视频结束处理（未抽
 `attributeAudioTeardown`）；统一 `endAttempt` 待做，尚无实车证据。
 Phase 2c 的 `CarWifiLink`/`CarWifiState`、四条凭据入网路径与端点交接网络分派已在 `agy/phase2c*-car-wifi-joiner-20261124`
-PR 栈迁入 `net/CarWifiJoiner`；端点归属、配对/推流续体与收尾仍在上层，PR #116 的两条 P3 清理已在该栈处理。**
+PR 栈迁入 `net/CarWifiJoiner`；端点归属、配对/推流续体与收尾仍在上层，PR #116 的两条 P3 清理已在该栈处理。
+Phase 2d（本 PR，2026-11-24）在 `dev` @ `be895d8`（已合入 2c-3 / #118）上合并完成 2d-A 启动/重试控制流与
+2d-B 三个独立 volatile 归因槽抽取：`audio/AudioChannelStarter` 通过窄端口共用原控制器 monitor，`AudioChannelState`
+供启动和既有 `AudioTeardown` 活读/清理。RECORD 仍在 gate 外，初始 skip 策略、日志、20 秒/看门狗与 UI 提示保持；
+未实现统一 `endAttempt`，未做设备或实车验证。**
 2026-11-10 对照代码复查后修订过一次，改动见文末
 「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 

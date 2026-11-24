@@ -6,6 +6,14 @@
 
 ## 当前基线与结论
 
+- **11 月 24 日会话编排层重构 Phase 2d（本 PR，基线 `dev` @ `be895d8`，无设备或实车验证）：**
+  合并实现 2d-A `audio/AudioChannelStarter` 启动、候选、动态补启与归还重试控制流，及 2d-B `AudioChannelState` 三个独立
+  volatile 槽。原控制器同步门面、同一 monitor、单例 CAS gate、gate 外 RECORD、初始 `skipRecordAfterInitialAudioSetup`、
+  真实客户端引用判断及 sender/bridge 清理边界均保留；共享状态发布/读取/清理顺序不变，清理不清 receiverKey。
+  归因继续委托既有 `AudioTeardown`，提示留原 UI 装配；新增 J01–J26、S01–S03 及 I01/I03 JVM 组合回归。
+  JDK 21 完整门禁通过：standard 1,644 项 + remote bridge 25 项，均 0 失败/0 错误/0 跳过；独立评审见本 PR。
+  不以离线测试宣称车型兼容性，设备报告对比仍待验证。
+
 - **11 月 24 日会话编排层重构 Phase 2c（`agy/phase2c*-car-wifi-joiner-20261124`，仅离线验证，无实车验证）：**
   按 `docs/ARCHITECTURE-REFACTOR.md` 的 2c 拆分完成 `net/CarWifiJoiner`：`CarWifiLink`/`CarWifiState`、四条凭据入网路径和端点交接的
   八个网络动作/等待已迁入，`SessionController` 保留端点归属、配对/推流续体与收尾。PR #116 的两条 P3（删除无调用点的
