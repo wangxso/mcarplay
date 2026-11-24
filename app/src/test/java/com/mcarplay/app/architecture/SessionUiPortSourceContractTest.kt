@@ -5,10 +5,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * SessionController 五通道 UI 写入的现状契约：`SessionUiPort` 的 `phase` / `hint` / `ssidChanged` /
- * `ask` / `dismiss`，由 `LegacySessionUiPort` 转发到 `phaseHint` / `uiHintSink` / `ssidSink` /
- * `dialogSink` / `dialogDismissSink`。断言「哪个函数、哪个分支、写什么内容、按什么顺序」，
- * 不用 allowlist 汇总数量，避免后续把 Wi-Fi 入网、端点解析或事件路由抽走时悄悄丢通道。
+ * SessionController 与 CarWifiJoiner 五通道 UI 写入的现状契约：`SessionUiPort` 的 `phase` / `hint` /
+ * `ssidChanged` / `ask` / `dismiss`，由 `LegacySessionUiPort` 转发到 `phaseHint` / `uiHintSink` /
+ * `ssidSink` / `dialogSink` / `dialogDismissSink`。断言「哪个文件、哪个函数、哪个分支、写什么内容、按什么顺序」，
+ * 不用 allowlist 汇总数量，避免把 Wi-Fi 入网、端点解析或事件路由抽走时悄悄丢通道。
  *
  * 这只钉住源码接线与门控；界面在设备上的真实时序仍需台架/实车验证（源码快照不等于设备运行证据）。
  */
@@ -17,16 +17,50 @@ class SessionUiPortSourceContractTest {
         SourceTree.mainKotlinFiles.getValue("SessionController.kt").readText()
     }
 
+    private val joiner: String by lazy {
+        SourceTree.mainKotlinFiles.getValue("net/CarWifiJoiner.kt").readText()
+    }
+
     private val port: String by lazy {
         SourceTree.mainKotlinFiles.getValue("session/SessionUiPort.kt").readText()
     }
+
+    /** Phase 2c-2 迁入 `net/CarWifiJoiner.kt` 的凭据入网函数集合。 */
+    private val joinerFunctions =
+        setOf(
+            "autoJoinCarWifi",
+            "joinCarWifi",
+            "joinCarWifiSilently",
+            "joinCarWifiSilentlyLocked",
+            "ensureWifiEnabledSilently",
+            "waitForCarSsid",
+            "joinCarWifiSpecifier",
+            "specifierQuickFallback",
+            "specifierDeepFallback",
+            "bindExistingCarWifi",
+            "promptForgetSavedNetworkIfAny",
+            "savedNetworkIds",
+            "waitForWifiEnabled",
+            "promptSpecifierFailed",
+            "ensurePhoneModeSystemWifiSafe",
+            "manualJoinCarWifi",
+            "legacyJoinCarWifi",
+        )
 
     /** 去注释/字符串后的指定函数体，避免日志文案或注释里的关键词污染断言。 */
     private fun code(name: String): String = KotlinSource.scan(producerBody(name)).code
 
     /** 从去注释/字符串后的代码里配平指定函数的参数表与函数体。 */
     private fun producerBody(name: String): String {
-        val code = KotlinSource.scan(controller).code
+        val rawSource = if (name in joinerFunctions) joiner else controller
+        return extractFunctionBody(rawSource, name)
+    }
+
+    private fun extractFunctionBody(
+        rawSource: String,
+        name: String,
+    ): String {
+        val code = KotlinSource.scan(rawSource).code
         val marker = "fun $name("
         val start = if (name == "attributeAudioTeardown") code.lastIndexOf(marker) else code.indexOf(marker)
         check(start >= 0) { "找不到函数 $name" }
@@ -60,12 +94,33 @@ class SessionUiPortSourceContractTest {
         error("$name 的函数体没有闭合")
     }
 
-    private fun audioTeardownWiring(): String {
-        val code = KotlinSource.scan(controller).code
-        val start = code.indexOf("private val audioTeardown =")
-        check(start >= 0) { "找不到 AudioTeardown 构造块" }
-        val constructorAt = code.indexOf("AudioTeardown(", start)
-        check(constructorAt >= 0) { "找不到 AudioTeardown 构造调用" }
+    private fun audioTeardownWiring(): String =
+        extractConstructorWiring(
+            rawSource = controller,
+            propertyMarker = "private val audioTeardown =",
+            constructorMarker = "AudioTeardown(",
+            label = "AudioTeardown",
+        )
+
+    private fun carWifiJoinerWiring(): String =
+        extractConstructorWiring(
+            rawSource = controller,
+            propertyMarker = "private val carWifiJoiner =",
+            constructorMarker = "CarWifiJoiner<",
+            label = "CarWifiJoiner",
+        )
+
+    private fun extractConstructorWiring(
+        rawSource: String,
+        propertyMarker: String,
+        constructorMarker: String,
+        label: String,
+    ): String {
+        val code = KotlinSource.scan(rawSource).code
+        val start = code.indexOf(propertyMarker)
+        check(start >= 0) { "找不到 $label 构造块" }
+        val constructorAt = code.indexOf(constructorMarker, start)
+        check(constructorAt >= 0) { "找不到 $label 构造调用" }
         var parens = 0
         var index = code.indexOf('(', constructorAt)
         while (index < code.length) {
@@ -78,7 +133,7 @@ class SessionUiPortSourceContractTest {
             }
             index++
         }
-        error("AudioTeardown 构造块没有闭合")
+        error("$label 构造块没有闭合")
     }
 
     private fun requireOrder(
@@ -201,6 +256,24 @@ class SessionUiPortSourceContractTest {
         requireContains(code, "t(R.string.sc_join_failed_body, wifi.ssid)", "specifier 失败弹窗正文")
         requireContains(code, "t(R.string.sc_retry)", "specifier 失败弹窗必须提供重试按钮")
         requireContains(code, "t(R.string.sc_open_wifi_settings)", "specifier 失败弹窗必须提供跳 WLAN 按钮")
+    }
+
+    @Test
+    fun phoneModeBlockedWritesPhaseThenHint() {
+        val code = code("ensurePhoneModeSystemWifiSafe")
+        requireContains(code, "t(R.string.sc_phone_mode_wifi_title)", "PHONE 已知冲突弹窗标题")
+        requireContains(code, "t(R.string.sc_phone_mode_wifi_body, wifi.ssid)", "PHONE 已知冲突弹窗正文")
+        requireContains(code, "t(R.string.sc_phone_mode_wifi_unknown_title)", "PHONE 未知状态确认弹窗标题")
+        requireContains(code, "t(R.string.sc_phone_mode_wifi_unknown_body, wifi.ssid)", "PHONE 未知状态确认弹窗正文")
+        requireContains(code, "t(R.string.sc_phone_mode_wifi_confirm)", "PHONE 未知状态确认按钮")
+        requireContains(code, "ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))", "PHONE 阻断必须写 phaseHint")
+        requireContains(code, "ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }", "PHONE 阻断必须弹惰性 uiHint")
+        requireOrder(
+            code,
+            "ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))",
+            "ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }",
+            "PHONE 阻断必须先写 phaseHint 后写 uiHint",
+        )
     }
 
     @Test
@@ -329,6 +402,22 @@ class SessionUiPortSourceContractTest {
     }
 
     @Test
+    fun controllerBridgesCarWifiJoinerUiTextAndDialogToSessionUiPort() {
+        val wiring = carWifiJoinerWiring()
+        requireContains(wiring, "ui.phase(hint)", "CarWifiJoiner phase 桥接必须直接转发到 SessionUiPort.phase")
+        requireContains(wiring, "ui.hint(message)", "CarWifiJoiner hint 桥接必须惰性直传 message 引用到 SessionUiPort.hint")
+        assertFalse("CarWifiJoiner hint 桥接不得提前求值 message()", wiring.contains("message()"))
+        requireContains(wiring, "text = { id, args -> t(id, *args) }", "CarWifiJoiner 本地化必须转发到 SessionController.t")
+        requireContains(wiring, "askWifiJoinChoice(", "CarWifiJoiner 弹窗必须转发到 SessionController.askWifiJoinChoice")
+        requireContains(wiring, "title = prompt.title", "弹窗桥接必须保留 title")
+        requireContains(wiring, "message = prompt.message", "弹窗桥接必须保留 message")
+        requireContains(wiring, "positive = prompt.positive", "弹窗桥接必须保留 positive")
+        requireContains(wiring, "negative = prompt.negative", "弹窗桥接必须保留 negative")
+        requireContains(wiring, "shownNetwork = shownToken", "弹窗桥接必须保留 shownNetwork 令牌")
+        requireContains(wiring, "isCancelled = isCancelled", "弹窗桥接必须保留调用方 isCancelled 判据")
+    }
+
+    @Test
     fun phaseHintIsDeclaredOnTheControllerOnly() {
         assertTrue("phaseHint 声明必须在 SessionController.kt", controller.contains("@Volatile\n    var phaseHint: String? = null"))
         val otherMainKotlinFiles = SourceTree.mainKotlinFiles.entries.filter { it.key != "SessionController.kt" }
@@ -340,6 +429,6 @@ class SessionUiPortSourceContractTest {
     @Test
     fun silentJoinDoesNotOpenTheJoinDialog() {
         val code = code("joinCarWifiSilentlyLocked")
-        assertFalse("静默入网路径不应弹确认框（单场景负断言）", code.contains("askWifiJoinChoice"))
+        assertFalse("静默入网路径不应弹确认框（单场景负断言）", code.contains("askWifiJoinChoice") || code.contains("askChoice"))
     }
 }

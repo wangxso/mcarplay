@@ -17,27 +17,36 @@ import org.junit.Test
  * 危害是实际存在的：交接被另一条链路接手后 `connectCancelled` 仍为 false，旧任务因此
  * 继续跑完 90 秒弹窗或 120 秒轮询，并在新一轮里重绑定/重注册旧热点的 ctrl 广播。
  *
- * 这些路径依赖 Android UI（`Handler`/`Looper`）与会话单例状态，JVM 单测无法直接驱动，
- * 因此按仓库既有做法（`ArchitectureRulesTest`、`LogContractTest`）用源码契约钉住。
+ * Phase 2c-2 将四条凭据入网路径迁入 `net/CarWifiJoiner.kt` 后，本契约同时守住
+ * `CarWifiJoiner` 内的取消分层与 `SessionController` 上层转发接线。
  */
 class HandoffCancelPredicateTest {
     private val controller: String by lazy {
         SourceTree.mainKotlinFiles.getValue("SessionController.kt").readText()
     }
 
+    private val joiner: String by lazy {
+        SourceTree.mainKotlinFiles.getValue("net/CarWifiJoiner.kt").readText()
+    }
+
     private val scopeSource: String by lazy {
         SourceTree.mainKotlinFiles.getValue("session/AttemptScope.kt").readText()
     }
 
-    /** 取 [name] 的函数体：先配平参数表的圆括号，再配平函数体的花括号。 */
-    private fun body(name: String): String {
-        val start = controller.indexOf("private fun $name(")
-        check(start >= 0) { "找不到函数 $name" }
+    /** 取 `net/CarWifiJoiner.kt` 中 [name] 的函数体：先配平参数表的圆括号，再配平函数体的花括号。 */
+    private fun body(name: String): String = extractBody(joiner, "fun $name(")
+
+    private fun extractBody(
+        source: String,
+        marker: String,
+    ): String {
+        val start = source.indexOf(marker)
+        check(start >= 0) { "找不到函数 $marker" }
         // 参数表可能跨行，默认参数里还含 `{ connectCancelled }`：只按圆括号配平。
         var parens = 0
-        var i = controller.indexOf('(', start)
-        while (i < controller.length) {
-            when (controller[i]) {
+        var i = source.indexOf('(', start)
+        while (i < source.length) {
+            when (source[i]) {
                 '(' -> parens++
                 ')' -> {
                     parens--
@@ -46,22 +55,22 @@ class HandoffCancelPredicateTest {
             }
             i++
         }
-        check(parens == 0) { "$name 的参数表没有闭合" }
-        val open = controller.indexOf('{', i)
-        check(open > i) { "找不到 $name 的函数体" }
+        check(parens == 0) { "$marker 的参数表没有闭合" }
+        val open = source.indexOf('{', i)
+        check(open > i) { "找不到 $marker 的函数体" }
         var depth = 0
         var j = open
-        while (j < controller.length) {
-            when (controller[j]) {
+        while (j < source.length) {
+            when (source[j]) {
                 '{' -> depth++
                 '}' -> {
                     depth--
-                    if (depth == 0) return controller.substring(open, j + 1)
+                    if (depth == 0) return source.substring(open, j + 1)
                 }
             }
             j++
         }
-        error("$name 的函数体没有闭合")
+        error("$marker 的函数体没有闭合")
     }
 
     /**
@@ -110,6 +119,11 @@ class HandoffCancelPredicateTest {
     @Test
     fun specifierFailurePromptUsesTheCallersPredicate() {
         assertNoBareGlobalCheck("promptSpecifierFailed", body("promptSpecifierFailed"))
+        val controllerWrapper = extractBody(controller, "private fun promptSpecifierFailed(")
+        assertTrue(
+            "SessionController.promptSpecifierFailed 转发时必须透传 isCancelled",
+            controllerWrapper.contains("carWifiJoiner.promptSpecifierFailed(wifi, shellReady, isCancelled)"),
+        )
     }
 
     /** 同类缺陷：WiFi 关闭时的等待循环也必须跟随调用方判据。 */
@@ -126,6 +140,7 @@ class HandoffCancelPredicateTest {
             "manualJoinCarWifi",
             "promptSpecifierFailed",
             "waitForWifiEnabled",
+            "ensurePhoneModeSystemWifiSafe",
         ).forEach { name ->
             val source = body(name)
             assertTrue("$name 根本没有引用 isCancelled", source.contains("isCancelled"))
@@ -141,6 +156,16 @@ class HandoffCancelPredicateTest {
             Regex("""(?<![A-Za-z0-9_.])connectCancelled(?![A-Za-z0-9_])""").findAll(code).count()
         assertTrue("autoJoinCarWifi 应保留两处裸 connectCancelled 现状（快照钉住，不代表修复）", bareChecks == 2)
         assertTrue("autoJoinCarWifi 没有 isCancelled 参数", !source.contains("isCancelled"))
+        val joinerCode = KotlinSource.scan(joiner).code
+        assertTrue(
+            "CarWifiJoiner.connectCancelled 必须动态转发注入的 globalCancelled()",
+            joinerCode.contains("private val connectCancelled: Boolean\n        get() = globalCancelled()"),
+        )
+        val controllerCode = KotlinSource.scan(controller).code
+        assertTrue(
+            "SessionController 必须把 globalCancelled 接到 connectCancelled",
+            controllerCode.contains("globalCancelled = { connectCancelled }"),
+        )
     }
 
     /** 现状快照：autoJoin 兜底不传谓词，自动入网链路不查交接归属。 */
