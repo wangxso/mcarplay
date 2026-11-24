@@ -11,6 +11,8 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.SystemClock
 import androidx.annotation.WorkerThread
+import com.mcarplay.app.net.CarWifiLink.JoinResult
+import com.mcarplay.app.net.CarWifiLink.SystemWifiState
 import com.mcarplay.app.util.Bg
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -33,31 +35,10 @@ import java.util.concurrent.atomic.AtomicReference
  *    (`NsdManager.registerService`) 没有 Network 参数，只能跟随进程默认网络；
  *  - SSID 必须精确匹配（热点名可能带空格/中文）：静默路径用 `cmd wifi status` 核对。
  */
-class WifiCarPlayConnector(
+internal class WifiCarPlayConnector(
     private val context: Context,
     private val log: (String) -> Unit,
-) {
-    /** 应用专属网络的连接结果。 */
-    sealed interface JoinResult {
-        /** 已连接并绑定到本进程；[network] 可用于 NSD/端点判断。 */
-        data class Joined(
-            val network: Network,
-        ) : JoinResult
-
-        /** 系统未允许（用户拒绝/热点不在范围/超时）。可重试。 */
-        data object Unavailable : JoinResult
-
-        /** 该安全类型无法用 WifiNetworkSpecifier 表达（WEP）——调用方走旧路径。 */
-        data object Unsupported : JoinResult
-    }
-
-    enum class SystemWifiState {
-        NONE,
-        TARGET,
-        OTHER,
-        UNKNOWN,
-    }
-
+) : CarWifiLink<Network> {
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
@@ -74,10 +55,10 @@ class WifiCarPlayConnector(
             },
         )
 
-    val currentNetwork: Network? get() = binding.current()
+    override val currentNetwork: Network? get() = binding.current()
 
     /** 已核验 SSID 对应的 Network 句柄；只接受绑定网络或系统 active Wi-Fi。 */
-    fun currentWifiNetwork(): Network? {
+    override fun currentWifiNetwork(): Network? {
         fun isWifi(network: Network): Boolean =
             runCatching {
                 connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
@@ -90,7 +71,7 @@ class WifiCarPlayConnector(
      * network is the system default even after bindProcessToNetwork, while the process
      * binding is exposed separately by boundNetworkForProcess.
      */
-    fun systemActiveWifiState(ssid: String): SystemWifiState {
+    override fun systemActiveWifiState(ssid: String): SystemWifiState {
         val target = connectivityManager.activeNetwork ?: return SystemWifiState.NONE
         val capabilities =
             runCatching { connectivityManager.getNetworkCapabilities(target) }.getOrNull()
@@ -137,7 +118,7 @@ class WifiCarPlayConnector(
      * 在同一次网络回调中同时取得目标 Network 与其 SSID；无定位权限时宁可失败也不猜网络。
      * 不能先 isConnectedTo(A) 再重新 currentWifiNetwork() 选到 B。
      */
-    fun verifiedWifiNetwork(ssid: String): Network? {
+    override fun verifiedWifiNetwork(ssid: String): Network? {
         if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return null
         val target = currentWifiNetwork() ?: return null
         val result = AtomicReference<String?>(null)
@@ -244,7 +225,7 @@ class WifiCarPlayConnector(
      * location permission plus FLAG_INCLUDE_LOCATION_INFO are required here.
      */
     @WorkerThread
-    fun currentWifiSsid(): String? {
+    override fun currentWifiSsid(): String? {
         if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return null
 
         fun isWifi(network: Network): Boolean =
@@ -295,7 +276,7 @@ class WifiCarPlayConnector(
     fun isConnectedTo(ssid: String): Boolean = WifiIdentity.matches(ssid, currentWifiSsid())
 
     /** Availability only; does not infer the identity of a Wi-Fi whose SSID is redacted. */
-    fun hasExistingWifi(): Boolean =
+    override fun hasExistingWifi(): Boolean =
         runCatching {
             connectivityManager.allNetworks.any {
                 connectivityManager.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
@@ -309,7 +290,7 @@ class WifiCarPlayConnector(
      * Shizuku 读到的站端 SSID 与目标一致，而系统只有这一张 Wi-Fi，该句柄只能是目标。
      * 多张并存时手机热点/P2P 都可能混进来，仍必须由用户确认，不做猜测。
      */
-    fun singleWifiNetwork(): Network? =
+    override fun singleWifiNetwork(): Network? =
         runCatching {
             connectivityManager.allNetworks
                 .filter {
@@ -349,19 +330,19 @@ class WifiCarPlayConnector(
      * 0=NONE 1=WEP 2=WPA/WPA2 3=WPA3 过渡 4=WPA3 仅。
      * WEP 无对应 API（返回 [JoinResult.Unsupported]，调用方走旧路径）。
      */
-    fun joinCarPlayNetwork(
+    override fun joinCarPlayNetwork(
         ssid: String,
         passphrase: String,
         securityType: Int,
-        timeoutMillis: Long = 120_000L,
-        isCancelled: () -> Boolean = { false },
+        timeoutMillis: Long,
+        isCancelled: () -> Boolean,
         /** 首窗无回调时的快速探测（毫秒级 shell 往返 + ≤3s 绑定，必须不阻塞重发）。 */
-        quickFallback: (() -> Network?)? = null,
+        quickFallback: (() -> Network?)?,
         /** 重发窗也无回调后的深度兜底（connect-network，10s 量级——本轮窗口已过，为下一轮省时间）。 */
-        deepFallback: (() -> Network?)? = null,
+        deepFallback: (() -> Network?)?,
         /** 参数为请求发出时刻（uptimeMillis）；返回 true 表示系统选择框正等用户选择。 */
-        userChoicePending: ((Long) -> Boolean)? = null,
-    ): JoinResult {
+        userChoicePending: ((Long) -> Boolean)?,
+    ): JoinResult<Network> {
         val specifier =
             buildSpecifier(ssid, passphrase, securityType)
                 ?: return JoinResult.Unsupported
@@ -555,12 +536,12 @@ class WifiCarPlayConnector(
      * 带看门狗：WiFi 未连接时 requestNetwork 会无限静默挂起——5 秒无果给出明确指引
      * （请求保持挂起，用户加入热点后仍会自动完成绑定并回调）。
      */
-    fun bindCurrentWifi(
+    override fun bindCurrentWifi(
         /** 绑定目标热点的 SSID——断开通知（[onNetworkLost]）需要它；未知则传 null（不断开通知）。 */
-        ssidHint: String? = null,
+        ssidHint: String?,
         /** 指定时必须核对 live SSID，避免把另一张 Wi-Fi 当成同一局域网目标。 */
-        expectedSsid: String? = null,
-        onResult: (Boolean) -> Unit = {},
+        expectedSsid: String?,
+        onResult: (Boolean) -> Unit,
     ) {
         release()
         val request =
@@ -653,9 +634,9 @@ class WifiCarPlayConnector(
      * 直接绑定已由调用方核验过的 [network]，不再发通配 requestNetwork。
      * 两张 Wi-Fi 并存或核验后切网时，避免回调把进程绑到另一张网络。
      */
-    fun bindVerifiedNetwork(
+    override fun bindVerifiedNetwork(
         network: Network,
-        ssidHint: String? = null,
+        ssidHint: String?,
     ): Boolean {
         if (!runCatching {
                 connectivityManager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
@@ -706,7 +687,7 @@ class WifiCarPlayConnector(
         return true
     }
 
-    fun release() {
+    override fun release() {
         binding.replaceRequest(null)?.let {
             runCatching { connectivityManager.unregisterNetworkCallback(it) }
         }
