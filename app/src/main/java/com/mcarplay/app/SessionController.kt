@@ -66,6 +66,8 @@ import com.mcarplay.app.media.MediaSessionsState
 import com.mcarplay.app.net.AirPlayFeatures
 import com.mcarplay.app.net.CarPlayCtrlAdvertiser
 import com.mcarplay.app.net.CarPlayServiceBrowser
+import com.mcarplay.app.net.CarWifiLink
+import com.mcarplay.app.net.CarWifiState
 import com.mcarplay.app.net.CtrlInviteGate
 import com.mcarplay.app.net.DiscoveredEndpoint
 import com.mcarplay.app.net.EndpointHosts
@@ -492,21 +494,28 @@ object SessionController {
 
     private var wifiConnector: WifiCarPlayConnector? = null
 
+    internal val carWifiState = CarWifiState()
+
     /**
      * 当前已绑定到哪个车机热点（bindCarWifiAndRegister 成功后写入）。
      * 端点交接时若已绑定到同一 SSID，跳过二次 bindCurrentWifi——它内部先
      * release() 解绑，会打断刚注册好的 ctrl mDNS 广播并白等系统重连。
      */
-    @Volatile
-    private var boundCarSsid: String? = null
+    private var boundCarSsid: String?
+        get() = carWifiState.boundCarSsid
+        set(value) {
+            carWifiState.boundCarSsid = value
+        }
 
     /** 本次进程内已就「是否清除系统保存热点」询问过的 SSID（避免重试时重复弹窗）。 */
-    private val forgetPromptHandled =
-        java.util.concurrent.ConcurrentHashMap
-            .newKeySet<String>()
+    private val forgetPromptHandled: MutableSet<String>
+        get() = carWifiState.forgetPromptHandled
 
-    @Volatile
-    private var phoneModeBlockedSsid: String? = null
+    private var phoneModeBlockedSsid: String?
+        get() = carWifiState.phoneModeBlockedSsid
+        set(value) {
+            carWifiState.phoneModeBlockedSsid = value
+        }
 
     /** WiFi 绑定互斥：auto-join 与端点交接两条路径可能同时绑定同一热点。 */
     private val wifiHandoffGuard = HandoffWifiGuard()
@@ -1062,7 +1071,7 @@ object SessionController {
         // SSID 与密码成对替换：仅 SSID（KNOWN_SSID）时密码为 null，必须清掉上一轮，
         // 否则手动 WLAN 兜底按钮会把上一台车的密码复制给用户。
         val wifi = endpoint.accessoryWifiOrNull()
-        carWifiCredential.remember(endpoint.ssid, wifi?.passphrase)
+        carWifiState.remember(endpoint.ssid, wifi?.passphrase)
         if (wifi == null) return
         if (!wifiCredentialCache.rememberEndpoint(
                 wifiCacheBinding(endpoint.observation),
@@ -1085,14 +1094,11 @@ object SessionController {
     /** 仅艾瑞泽 8 指纹显示 30s 车机窗口提示；其它车型只显示通用说明。 */
     fun currentReceiverUsesArrizo8Hint(): Boolean = currentReceiverMatchesArrizo8
 
-    /** 车机热点 SSID 与密码成对维护：只带 SSID 的端点必须清掉上一轮密码。 */
-    private val carWifiCredential = CarWifiCredentialHint()
-
     /**
      * 最近一次 0x5703 的热点密码（仅内存，不落盘）。
      * 「车机热点 → 去连接」按钮复制到剪贴板用（手动加入兜底场景）。
      */
-    val lastWifiPsk: String? get() = carWifiCredential.passphrase
+    val lastWifiPsk: String? get() = carWifiState.passphrase
 
     /**
      * 最近一次从车机拿到的热点 SSID（0x5703 或 0x4301，两条路径都写）。
@@ -1101,7 +1107,7 @@ object SessionController {
      * 「拿到凭据」时就写——用于无新凭据时判断「这台车机应该连哪个热点」。
      * 与密码是同一份原子快照，`KNOWN_SSID`（只有名称）不会沿用上一台车的密码。
      */
-    val lastCarWifiSsid: String? get() = carWifiCredential.ssid
+    val lastCarWifiSsid: String? get() = carWifiState.ssid
 
     /** 挂屏 UI 钩子：SSID 变化时通知当前 Activity 回填输入框（可空）。 */
     @Volatile
@@ -2163,7 +2169,7 @@ object SessionController {
         // mDNS（DiPlay 视为手机重新上线、再拉一轮 RFCOMM）。只刷新密码缓存。
         if (videoSender?.isRunning == true) {
             if (wifi.ssid.isNotBlank()) {
-                carWifiCredential.remember(wifi.ssid, wifi.passphrase)
+                carWifiState.remember(wifi.ssid, wifi.passphrase)
                 rememberAccessoryWifi(wifi, wifiCacheBinding(wifi.observation))
             }
             appendLog("0x5703 冗余凭据（会话推流中）——保持现有 WiFi 绑定与 ctrl 广播不变")
@@ -2171,7 +2177,7 @@ object SessionController {
         }
         ui.ssidChanged { wifi.ssid }
         if (wifi.ssid.isNotBlank()) {
-            carWifiCredential.remember(wifi.ssid, wifi.passphrase)
+            carWifiState.remember(wifi.ssid, wifi.passphrase)
             rememberAccessoryWifi(wifi, wifiCacheBinding(wifi.observation))
         }
         ConnectionDiagnostics.milestoneCurrent(ConnectionMilestone.WIFI_CREDENTIALS, "source=0x5703")
@@ -2213,7 +2219,7 @@ object SessionController {
             )
             // 1) 首选静默路径：Shizuku 命令行连网（0 弹窗）
             if (InternetNetworkPolicy.useSystemWifi(internetNetwork, shellReady)) {
-                if (joinCarWifiSilently(wifi) is WifiCarPlayConnector.JoinResult.Joined) return@run
+                if (joinCarWifiSilently(wifi) is CarWifiLink.JoinResult.Joined) return@run
                 if (connectCancelled) return@run
                 // 热点已连上、只是 Network 通道没绑成：绝不能退回 specifier——那会重新
                 // 关联热点并弹系统确认框（用户看到「连上了又弹窗」）。
@@ -2249,9 +2255,9 @@ object SessionController {
                     allowSystemFallback = InternetNetworkPolicy.allowSystemFallback(internetNetwork),
                 )
             when (result) {
-                is WifiCarPlayConnector.JoinResult.Joined -> Unit
+                is CarWifiLink.JoinResult.Joined -> Unit
 
-                WifiCarPlayConnector.JoinResult.Unsupported -> {
+                CarWifiLink.JoinResult.Unsupported -> {
                     if (internetNetwork == InternetNetwork.CAR) {
                         appendLog("WIFI: 热点安全类型 ${wifi.securityType} 无法用应用专属网络表达——退回系统级加入")
                         legacyJoinCarWifi(wifi, shellReady)
@@ -2261,7 +2267,7 @@ object SessionController {
                     }
                 }
 
-                WifiCarPlayConnector.JoinResult.Unavailable -> promptSpecifierFailed(wifi, shellReady)
+                CarWifiLink.JoinResult.Unavailable -> promptSpecifierFailed(wifi, shellReady)
             }
         }
     }
@@ -2270,11 +2276,11 @@ object SessionController {
     private fun joinCarWifi(
         wifi: Iap2SenderSession.WifiConfiguration,
         shellReady: Boolean,
-    ): WifiCarPlayConnector.JoinResult {
+    ): CarWifiLink.JoinResult<Network> {
         val internetNetwork = preferredInternetNetwork()
         if (!InternetNetworkPolicy.useSystemWifi(internetNetwork, shellReady)) {
             if (!ensurePhoneModeSystemWifiSafe(wifi, shellReady)) {
-                return WifiCarPlayConnector.JoinResult.Unavailable
+                return CarWifiLink.JoinResult.Unavailable
             }
             return joinCarWifiSpecifier(
                 wifi,
@@ -2283,14 +2289,14 @@ object SessionController {
             )
         }
         val silent = joinCarWifiSilently(wifi)
-        if (silent is WifiCarPlayConnector.JoinResult.Joined) return silent
+        if (silent is CarWifiLink.JoinResult.Joined) return silent
         // 热点已连上但通道没绑成：不再走会弹窗的 specifier（见 autoJoinCarWifi 同款判断）；
         // 只接受核验过的 Network 句柄，拿不到时请用户确认当前网络。
         if (!connectCancelled && liveWifiSsid() == wifi.ssid) {
             var bound = false
             bindVerifiedCarWifi(wifi.ssid, "静默入网") { bound = it }
             val boundNetwork = wifiConnector?.currentNetwork
-            return if (bound && boundNetwork != null) WifiCarPlayConnector.JoinResult.Joined(boundNetwork) else silent
+            return if (bound && boundNetwork != null) CarWifiLink.JoinResult.Joined(boundNetwork) else silent
         }
         return joinCarWifiSpecifier(wifi)
     }
@@ -2312,8 +2318,8 @@ object SessionController {
         val saved = if (shellReady) savedNetworkIds(wifi.ssid)?.isNotEmpty() else null
         return InternetNetworkPolicy.phoneModeSystemWifiDecision(
             network = network,
-            activeTarget = systemWifi == WifiCarPlayConnector.SystemWifiState.TARGET,
-            activeIdentityUnknown = systemWifi == WifiCarPlayConnector.SystemWifiState.UNKNOWN,
+            activeTarget = systemWifi == CarWifiLink.SystemWifiState.TARGET,
+            activeIdentityUnknown = systemWifi == CarWifiLink.SystemWifiState.UNKNOWN,
             saved = saved,
         )
     }
@@ -2337,23 +2343,23 @@ object SessionController {
      *  - 绑定只作用于**本进程的 socket**：虚拟屏里的导航/音乐是独立进程，不受影响
      *    （`bindProcessToNetwork` 不是全局/系统级操作）。
      */
-    private fun joinCarWifiSilently(wifi: Iap2SenderSession.WifiConfiguration): WifiCarPlayConnector.JoinResult {
+    private fun joinCarWifiSilently(wifi: Iap2SenderSession.WifiConfiguration): CarWifiLink.JoinResult<Network> {
         // 与 specifier 兜底路径共用同一把锁：两条路径都会 release + 重绑进程网络。
         // 持锁实现见 [joinCarWifiSilentlyLocked]。
         return synchronized(wifiBindLock) { joinCarWifiSilentlyLocked(wifi) }
     }
 
     /** [joinCarWifiSilently] 的持锁实现（调用方必须持有 [wifiBindLock]）。 */
-    private fun joinCarWifiSilentlyLocked(wifi: Iap2SenderSession.WifiConfiguration): WifiCarPlayConnector.JoinResult {
-        val connector = wifiConnector ?: return WifiCarPlayConnector.JoinResult.Unavailable
-        if (connectCancelled) return WifiCarPlayConnector.JoinResult.Unavailable
+    private fun joinCarWifiSilentlyLocked(wifi: Iap2SenderSession.WifiConfiguration): CarWifiLink.JoinResult<Network> {
+        val connector = wifiConnector ?: return CarWifiLink.JoinResult.Unavailable
+        if (connectCancelled) return CarWifiLink.JoinResult.Unavailable
         val existing = connector.currentNetwork
         if (boundCarSsid == wifi.ssid && existing != null) {
             appendLog("WIFI: 车机热点已就绪且网络通道已绑定——跳过重复加入")
-            return WifiCarPlayConnector.JoinResult.Joined(existing)
+            return CarWifiLink.JoinResult.Joined(existing)
         }
-        if (!ensureWifiEnabledSilently()) return WifiCarPlayConnector.JoinResult.Unavailable
-        if (connectCancelled) return WifiCarPlayConnector.JoinResult.Unavailable
+        if (!ensureWifiEnabledSilently()) return CarWifiLink.JoinResult.Unavailable
+        if (connectCancelled) return CarWifiLink.JoinResult.Unavailable
         val current = liveWifiSsid()
         if (current == wifi.ssid) {
             appendLog("WIFI: 手机已连在车机热点 \"${wifi.ssid}\"——直接建立网络通道并绑定")
@@ -2374,26 +2380,26 @@ object SessionController {
                     "WIFI: connect-network 失败（exit=${result.exitCode} " +
                         "${result.output.take(80)}）",
                 )
-                return WifiCarPlayConnector.JoinResult.Unavailable
+                return CarWifiLink.JoinResult.Unavailable
             }
             if (!waitForCarSsid(wifi.ssid, CAR_WIFI_JOIN_WAIT_MS)) {
-                return WifiCarPlayConnector.JoinResult.Unavailable
+                return CarWifiLink.JoinResult.Unavailable
             }
         }
-        if (connectCancelled) return WifiCarPlayConnector.JoinResult.Unavailable
+        if (connectCancelled) return CarWifiLink.JoinResult.Unavailable
         // SSID 已核对，但必须拿到同一张 Wi-Fi 的 Network 句柄再绑：通配 requestNetwork
         // 在两张 Wi-Fi 并存时可能先返回另一张（句柄交给用户确认路径去取）。
         val verified = verifiedWifiNetworkFor(wifi.ssid)
         if (verified == null) {
             appendLog("WIFI: 已连在车机热点但拿不到核验过的 Network 句柄——转用户确认，不发起通配绑定")
-            return WifiCarPlayConnector.JoinResult.Unavailable
+            return CarWifiLink.JoinResult.Unavailable
         }
         val bound = bindCarWifiAndRegister(wifi.ssid, verified)
         val network = connector.currentNetwork
         return if (bound && network != null) {
-            WifiCarPlayConnector.JoinResult.Joined(network)
+            CarWifiLink.JoinResult.Joined(network)
         } else {
-            WifiCarPlayConnector.JoinResult.Unavailable
+            CarWifiLink.JoinResult.Unavailable
         }
     }
 
@@ -2476,8 +2482,8 @@ object SessionController {
         wifi: Iap2SenderSession.WifiConfiguration,
         allowExistingSystemWifi: Boolean = true,
         allowSystemFallback: Boolean = true,
-    ): WifiCarPlayConnector.JoinResult {
-        val connector = wifiConnector ?: return WifiCarPlayConnector.JoinResult.Unavailable
+    ): CarWifiLink.JoinResult<Network> {
+        val connector = wifiConnector ?: return CarWifiLink.JoinResult.Unavailable
         if (allowExistingSystemWifi && liveWifiMatches(wifi.ssid) == true) {
             appendLog("WIFI: 系统已连接同一局域网 \"${wifi.ssid}\"——直接绑定现有 Wi-Fi，跳过加入请求")
             val existing = bindExistingCarWifi(connector, wifi.ssid)
@@ -2486,7 +2492,7 @@ object SessionController {
                 ui.phase(t(R.string.sc_bound_existing))
                 ctrlAdvertiser?.ensureForNetwork(wifi.ssid, force = true, network = existing)
                 appendLog(">>> 现有 Wi-Fi 已绑定，ctrl 广播已重新注册，等待车机邀请")
-                return WifiCarPlayConnector.JoinResult.Joined(existing)
+                return CarWifiLink.JoinResult.Joined(existing)
             }
             appendLog("WIFI: 检测到同一局域网，但现有 Wi-Fi 网络通道绑定失败——继续尝试专用网络")
         }
@@ -2499,7 +2505,7 @@ object SessionController {
                 val existing = connector.currentNetwork
                 if (boundCarSsid == wifi.ssid && existing != null) {
                     appendLog("WIFI: 应用专属网络已在位——跳过重复加入")
-                    WifiCarPlayConnector.JoinResult.Joined(existing)
+                    CarWifiLink.JoinResult.Joined(existing)
                 } else {
                     connector.joinCarPlayNetwork(
                         ssid = wifi.ssid,
@@ -2515,7 +2521,7 @@ object SessionController {
                     )
                 }
             }
-        if (result is WifiCarPlayConnector.JoinResult.Joined) {
+        if (result is CarWifiLink.JoinResult.Joined) {
             boundCarSsid = wifi.ssid
             ui.phase(t(R.string.sc_joined))
             // 关键时机：bindProcessToNetwork 完成后再注册，车机才能看到 ctrl 广播
@@ -2535,7 +2541,7 @@ object SessionController {
                     ui.phase(t(R.string.sc_joined))
                     ctrlAdvertiser?.ensureForNetwork(wifi.ssid, force = true, network = connector.currentNetwork)
                     appendLog(">>> WiFi 已绑定现有 \"$currentSsid\" 连接，ctrl 广播已重新注册")
-                    return WifiCarPlayConnector.JoinResult.Joined(connector.currentNetwork!!)
+                    return CarWifiLink.JoinResult.Joined(connector.currentNetwork!!)
                 }
                 appendLog("WIFI: 绑定现有连接未成功——按失败处理")
             }
@@ -2548,8 +2554,11 @@ object SessionController {
      * 推流 onEnded）自动 `forget` 还原。系统级保存无互联网热点会被当成默认网、
      * 部分 ROM 连带挤掉移动数据。
      */
-    @Volatile
-    private var shellFallbackCleanupSsid: String? = null
+    private var shellFallbackCleanupSsid: String?
+        get() = carWifiState.shellFallbackCleanupSsid
+        set(value) {
+            carWifiState.shellFallbackCleanupSsid = value
+        }
 
     /**
      * specifier 挂起时的快速兜底（首窗 5s 零回调后调用，运行于连接流程线程）。
@@ -2633,7 +2642,7 @@ object SessionController {
 
     /** 绑定当前已连接的 WiFi 并短等绑定完成（兜底路径共用）。返回绑定的网络或 null。 */
     private fun bindExistingCarWifi(
-        connector: WifiCarPlayConnector,
+        connector: CarWifiLink<Network>,
         ssid: String,
         verifySsid: Boolean = true,
     ): Network? {
@@ -2811,15 +2820,15 @@ object SessionController {
         when (choice) {
             true -> {
                 when (val retry = joinCarWifi(wifi, shellReady)) {
-                    is WifiCarPlayConnector.JoinResult.Joined -> Unit
-                    WifiCarPlayConnector.JoinResult.Unsupported ->
+                    is CarWifiLink.JoinResult.Joined -> Unit
+                    CarWifiLink.JoinResult.Unsupported ->
                         if (preferredInternetNetwork() == InternetNetwork.CAR) {
                             legacyJoinCarWifi(wifi, shellReady, isCancelled)
                         } else {
                             appendLog("NETWORK: 手机流量优先——无法使用应用专属网络，转手动 WLAN 指引")
                             manualJoinCarWifi(wifi, isCancelled)
                         }
-                    WifiCarPlayConnector.JoinResult.Unavailable -> {
+                    CarWifiLink.JoinResult.Unavailable -> {
                         if (preferredInternetNetwork() == InternetNetwork.PHONE && phoneModeBlockedSsid == wifi.ssid) {
                             phoneModeBlockedSsid = null
                             return
@@ -5618,13 +5627,13 @@ object SessionController {
                 while (!isCancelled()) {
                     val shellReady = shellWifiReady()
                     when (val result = joinCarWifi(wifi, shellReady)) {
-                        is WifiCarPlayConnector.JoinResult.Joined -> {
+                        is CarWifiLink.JoinResult.Joined -> {
                             settled = true
                             onResult(true)
                             return@run
                         }
 
-                        WifiCarPlayConnector.JoinResult.Unsupported -> {
+                        CarWifiLink.JoinResult.Unsupported -> {
                             // WEP 等无法用 specifier 表达：等用户在系统 WLAN 里连上后绑定
                             waitForManualWifiThenContinue(wifi, isCancelled) { bound ->
                                 settled = true
@@ -5633,7 +5642,7 @@ object SessionController {
                             return@run
                         }
 
-                        WifiCarPlayConnector.JoinResult.Unavailable -> {
+                        CarWifiLink.JoinResult.Unavailable -> {
                             promptSpecifierFailed(wifi, shellReady, isCancelled)
                             settled = true
                             val bound = boundCarSsid == wifi.ssid && wifiConnector?.currentNetwork != null
