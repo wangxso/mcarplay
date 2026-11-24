@@ -91,9 +91,9 @@ class AttemptScopeWiringTest {
             ),
             MigrationSite("!wasCancelled()", "if (scope.isActive) {"),
             MigrationSite("!wasCancelled()", "if (pending != null && scope.isActive) {"),
-            MigrationSite("ownsConnection()", "targetCurrent = scope.isCurrent,"),
-            MigrationSite("!wasCancelled()", "if (!success && scope.isActive) {"),
-            MigrationSite("wasCancelled()", "if (!scope.isActive) {"),
+            MigrationSite("ownsConnection()", "targetCurrent = { scope.isCurrent },"),
+            MigrationSite("!wasCancelled()", "scopeActive = { scope.isActive },"),
+            MigrationSite("wasCancelled()", "cachedRetryCancelled = { !scope.isActive },"),
         )
 
     /** 在已去注释/字符串的源码中取块体或表达式体函数。 */

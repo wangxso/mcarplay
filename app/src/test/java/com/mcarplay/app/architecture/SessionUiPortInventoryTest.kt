@@ -68,9 +68,9 @@ private object SourceUiPortInventory {
             ),
             UiWriteSite(CONTROLLER, "onCarPlayEndpoint", "ui.phase(t(R.string.sc_record_unconfirmed))"),
             UiWriteSite(CONTROLLER, "onCarPlayEndpoint", "ui.phase(t(R.string.sc_setup_rejected))"),
-            UiWriteSite(CONTROLLER, "waitForKnownWifiThenContinue", "ui.phase(t(R.string.sc_waiting_join, target))"),
-            UiWriteSite(CONTROLLER, "waitForManualWifiThenContinue", "ui.phase(t(R.string.sc_waiting_join, wifi.ssid))"),
-            UiWriteSite(CONTROLLER, "waitForManualWifiThenContinue", "ui.phase(t(R.string.sc_not_on_hotspot, wifi.ssid))"),
+            UiWriteSite(JOINER, "waitForKnownWifiThenContinue", "ui.phase(t(R.string.sc_waiting_join, target))"),
+            UiWriteSite(JOINER, "waitForManualWifiThenContinue", "ui.phase(t(R.string.sc_waiting_join, wifi.ssid))"),
+            UiWriteSite(JOINER, "waitForManualWifiThenContinue", "ui.phase(t(R.string.sc_not_on_hotspot, wifi.ssid))"),
         )
 
     val HINT_WRITES =
@@ -88,7 +88,7 @@ private object SourceUiPortInventory {
             ),
             UiWriteSite(CONTROLLER, "onCarPlayEndpoint", "ui.hint { t(R.string.sc_record_unconfirmed) }"),
             UiWriteSite(CONTROLLER, "onCarPlayEndpoint", "ui.hint { t(R.string.sc_setup_rejected_hint) }"),
-            UiWriteSite(CONTROLLER, "waitForManualWifiThenContinue", "ui.hint { t(R.string.sc_not_joined_hint, wifi.ssid) }"),
+            UiWriteSite(JOINER, "waitForManualWifiThenContinue", "ui.hint { t(R.string.sc_not_joined_hint, wifi.ssid) }"),
             UiWriteSite(JOINER, "ensurePhoneModeSystemWifiSafe", "ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }"),
         )
 
@@ -347,7 +347,7 @@ class SessionUiPortInventoryTest {
             "ui.hint { t(R.string.sc_setup_rejected_hint) }",
         )
         requireOrder(
-            SourceUiPortInventory.CONTROLLER,
+            SourceUiPortInventory.JOINER,
             "waitForManualWifiThenContinue",
             "ui.phase(t(R.string.sc_not_on_hotspot, wifi.ssid))",
             "ui.hint { t(R.string.sc_not_joined_hint, wifi.ssid) }",
@@ -427,14 +427,14 @@ class SessionUiPortInventoryTest {
         val controllerDismissCount = Regex("""\bui\.dismiss\(""").findAll(normalizedController).count()
         val joinerDismissCount = Regex("""\bui\.dismiss\(""").findAll(normalizedJoiner).count()
 
-        assertEquals(21, controllerProductionPhase)
-        assertEquals(24, joinerProductionPhase)
+        assertEquals(18, controllerProductionPhase)
+        assertEquals(27, joinerProductionPhase)
         assertEquals(1, controllerBridgePhase)
         assertEquals(45, SourceUiPortInventory.PHASE_WRITES.size)
         assertEquals(45, controllerProductionPhase + joinerProductionPhase)
 
-        assertEquals(7, controllerProductionHint)
-        assertEquals(3, joinerProductionHint)
+        assertEquals(6, controllerProductionHint)
+        assertEquals(4, joinerProductionHint)
         assertEquals(1, controllerBridgeHint)
         assertEquals(0, joinerParenHint)
         assertEquals(10, SourceUiPortInventory.HINT_WRITES.size)
