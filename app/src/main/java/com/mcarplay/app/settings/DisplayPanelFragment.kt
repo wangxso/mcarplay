@@ -138,6 +138,14 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             CompatibilityPrefs.setAudioBaseline(ctx, enabled)
             hostToast(getString(if (enabled) R.string.sf_audio_fallback_on else R.string.sf_audio_fallback_off))
         }
+        bindToggle(
+            view.findViewById(R.id.btnCheryDisableBtOn),
+            view.findViewById(R.id.btnCheryDisableBtOff),
+            CompatibilityPrefs.cheryDisableBluetooth(ctx),
+        ) { enabled ->
+            CompatibilityPrefs.setCheryDisableBluetooth(ctx, enabled)
+            hostToast(getString(if (enabled) R.string.sf_chery_disable_bt_on else R.string.sf_chery_disable_bt_off))
+        }
 
         // 帕萨特「回主界面再进」实验策略：四选一，默认关；仅主页「车型适配」选了大众时才执行
         val passatButtons =

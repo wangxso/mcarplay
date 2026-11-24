@@ -23,7 +23,7 @@ MCU 为 `M1E_IC2172_18_01_41.11_250609_R`，与仓库已有艾瑞泽 8 证据的
 | 会话后 Idle / SIGSEGV（正常结束和 `kConnectionErr` 均有样本） | 历史分析已定位周期回调读取空 server 的直接崩溃机制；重复 RECORD / 多次 SessionStart 仍是触发候选。按下节独立验收，不能把约 20 s 崩溃与建链 30 s 超时混算。 |
 
 当前 CHERY 策略已包含固定 32B MFi 挑战、`X-Apple-HKP: 0`、会话内 `auth-setup`、真实 Wi-Fi MAC、
-`disableBluetooth`、跳过 type-130 隧道；只有 `CHERY + Tiggo + 320.17.7` 自动命中单次 RECORD。
+跳过 type-130 隧道；`disableBluetooth` 默认关闭（避免直接熄火下车时车机未及恢复蓝牙导致下次上车蓝牙保持关闭），仅在设置中手动打开时发送；只有 `CHERY + Tiggo + 320.17.7` 自动命中单次 RECORD。
 另有 issue #55 车主报告中的 `Mercedes-Benz / MB_D-PP-3/4 / 320.17.7` 也登记为单次 RECORD，尚未实车复测；
 本轮不扩大策略匹配范围。`AirPlayRecordLifecycleTest` 继续保护其他接收端原有的重复 RECORD 行为。
 
@@ -131,11 +131,11 @@ A8-07 / A8-08 / A8-09 的断开稳定性记录补充以下判据：
 | A8-04 / 35–48 | 分别记录 Start、TimerThread begin、iAP2 PASS 和凭据下发；固定 32B 挑战不轮换至 20/16B；首次连接至少三次。 | 双端脱敏对时、挑战长度/应答耗时、凭据“已收到”标记；无材料时不声称签名验证成功。 |
 | A8-05 / 49–57 | 检查 `_airplay._tcp`、手机 `_carplay-ctrl._tcp` 的动态监听口、车机 GET 及手机 HTTP 200；再连车机 AirPlay。首次入网、切换回热点和缓存命中各复测。 | 当前解析端口、ctrl 请求/应答、CTRL_INVITED 与 AIRPLAY_CONNECTED；HTTP 可达不等同 pair 成功。 |
 | A8-06 / 58–62 | 首次 pair-setup / pair-verify / 会话 MFi auth-setup；再次连接检查保存的信任优先 pair-verify。自然遇到 bad setup code / unknown peer 时独立记录，不以 iAP2 PASS 掩盖。 | 配对结果、`X-Apple-HKP: 0`、auth-setup 状态与耗时；不导出密钥、证书或签名原文。 |
-| A8-07 / 63–70 | 核对 SETUP、RECORD、Modes/HID、`disableBluetooth`；确认蓝牙释放后画面/声音/触摸仍工作。CHERY 精确画像每条控制连接只发一次 RECORD。 | 同一控制连接的 RECORD 数、模式变化与蓝牙释放前后发送计数、用户三项确认。 |
+| A8-07 / 63–70 | 核对 SETUP、RECORD、Modes/HID；默认不发 `disableBluetooth`（车机蓝牙保持开启，确认画面/声音/触摸与音频路由正常）；如在设置中手动打开「奇瑞：连接后请车机关蓝牙」，另核对 `disableBluetooth` 与蓝牙释放后音画触控仍工作。CHERY 精确画像每条控制连接只发一次 RECORD。 | 同一控制连接的 RECORD 数、模式变化、蓝牙开关状态与发送计数、用户三项确认。 |
 | A8-08 / 71–74 | 视频出画、实际尺寸/帧率、全屏角点点击与拖动；音乐、导航混音、暂停/恢复、换曲和动态开声音；记录主/辅音频各自格式。 | RECORD / 首视频写出 / 实车首画 / 首音频包 / 实车首声各自时间；音画触控确认。type-130 不支持单独归档。 |
 | A8-09 / 75 | 按“断开后约 20 秒崩溃”一节验收：手动断开、动态开声音后断开、自然掉网结束各记录；可复现场景至少三轮，每轮核对屏幕 TEARDOWN → 会话 TEARDOWN 并独立观察至少 60 s 后再重连。 | RECORD/SessionStart 与 timer 关联（如可见）、断开原因、TEARDOWN/Finalize、Idle、PID/重启、tombstone、下次新 attempt；未自然出现的场景或缺失证据标记未验证。 |
 | A8-10 / 76–84 | 合成接收端注入 pair 拒绝、EOF、超时；实车自然失败时按 TimerThread begin 算约 30 s，核对 `0 → 6 → 5`、Stop、Bonjour 注销，再看上层是否有新 Start。 | 每次尝试单独时间轴，失败原因及完整清理；不能只见随后成功就记“同一轮无缝恢复”。 |
-| A8-11 / 会话后补充 | 一次连续至少 30 min，覆盖导航/音乐/触控及返回原生车机后再进 CarPlay；测试锁屏、ACC OFF/ON。结果按动作分别记录，不沿用旧会话通过结论。 | 媒体计数、听感/同步、返回后触摸、退出原因；断开后另观察至少 60 s。 |
+| A8-11 / 会话后补充 | 一次连续至少 30 min，覆盖导航/音乐/触控及返回原生车机后再进 CarPlay；测试锁屏、未主动断开直接 ACC OFF/ON（核对下次上车车机蓝牙保持开启）。结果按动作分别记录，不沿用旧会话通过结论。 | 媒体计数、听感/同步、返回后触摸、退出原因、ACC ON 后车机蓝牙状态；断开后另观察至少 60 s。 |
 | A8-W / 14、86–88 | 有线 CarPlay 单列选测：只有用户实际插 iPhone 并观察 USB 枚举、iAP 会话、画面/声音/触控后才能改“未验证”。不算 mcarplay 无线回归的通过条件。 | USB 物理口、枚举与有线会话；`iPodDeviceIO=2`、`usb0`、函数名含 USB 均不能单独证明。 |
 
 报告给出的 9.690 / 11.347 / 13.864 s 是参考样本，不是硬性通过阈值；从 AP READY、Wireless Start、Timer begin、手机按键开始的计时必须各自标明。
