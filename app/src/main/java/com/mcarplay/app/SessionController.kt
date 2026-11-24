@@ -239,6 +239,7 @@ object SessionController {
         appContext = app
         ReceiverDetectionRuntime.initialize(app)
         VehiclePresetRuntime.load(app)
+        CompatibilityPrefs.loadRuntime(app)
         ReceiverDetectionRuntime.onBudgetExpired = { epoch ->
             Bg.run("detection-budget") {
                 synchronized(this) {
