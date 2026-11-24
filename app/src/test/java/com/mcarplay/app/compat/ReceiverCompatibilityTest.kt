@@ -400,4 +400,31 @@ class ReceiverCompatibilityTest {
         assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals(model = "VW41310")).reconnectOnStreamingInvite)
         assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals()).reconnectOnStreamingInvite)
     }
+
+    @Test
+    fun autoRequestCarplayUiIsLimitedToObservedBicvMicaReceiver() {
+        val bicv =
+            ReceiverProfile.Signals(
+                manufacturer = "Bicv",
+                model = "GSE,EV3,SUV",
+                srcvers = "475.8.3",
+            )
+        val policy = ReceiverCompatibility.resolve(bicv, airPlayFirmware = "MICA3A01")
+
+        assertTrue(policy.autoRequestCarplayUi)
+        assertTrue(policy.rules.contains("bicv.gse-ev3.475.8.3.auto-request-ui"))
+
+        for (signals in listOf(
+            bicv.copy(srcvers = "475.8.4"),
+            bicv.copy(model = "GSE,EV3"),
+            bicv.copy(manufacturer = "other"),
+            winPlay,
+        )) {
+            val other = ReceiverCompatibility.resolve(signals, airPlayFirmware = "MICA3A01")
+            assertFalse(other.autoRequestCarplayUi)
+            assertFalse(other.rules.contains("bicv.gse-ev3.475.8.3.auto-request-ui"))
+        }
+        assertFalse(ReceiverCompatibility.resolve(bicv, airPlayFirmware = "MICA3A02").autoRequestCarplayUi)
+        assertFalse(ReceiverCompatibility.resolve(bicv, preset = VehiclePreset.GENERIC).autoRequestCarplayUi)
+    }
 }

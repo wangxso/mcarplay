@@ -95,6 +95,15 @@ object ReceiverCompatibility {
          * 其它接收端保持关闭，避免一次改动同时影响所有车型。
          */
         val preferVehicleResolution: Boolean = false,
+        /**
+         * 会话建立后主动请求车机切到 CarPlay UI。
+         *
+         * Bicv MICA3A01 的 `/info` 把主屏的 `initialPermanentEntity` 固定报为车机（resourceID=1），
+         * 且不主动发 `requestUI`。按 VW 的“车机 userInitiated 持有”处理会让屏幕门控一直暂停；
+         * 这份证据链路全通、主屏 SETUP/RECORD 都成功，因此只对该已登记身份先发 requestUI，
+         * 再按用户点图标的同一条资源拿回路径声明主屏归手机。未实车回归前不影响其他车机。
+         */
+        val autoRequestCarplayUi: Boolean = false,
     )
 
     data class PairingFallback(
@@ -284,6 +293,11 @@ object ReceiverCompatibility {
         // 但直接熄火下车时车机可能来不及 setBtEnable，导致下次上车蓝牙保持关闭；默认不发，仅开关打开时启用。
         val chery = normalize(signals.manufacturer) == "chery"
         val cheryReleasesBluetooth = chery && cheryDisableBluetooth
+        val bicvGseEv3 =
+            normalize(signals.manufacturer) == "bicv" &&
+                normalize(signals.model) == "gse,ev3,suv" &&
+                normalize(signals.srcvers) == "475.8.3" &&
+                normalize(airPlayFirmware) == "mica3a01"
         // 只登记已取得原厂库和崩溃证据的协议身份；srcvers 是 AirPlay 栈版本，不等于整车固件。
         val cherySingleRecord =
             chery && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
@@ -320,6 +334,7 @@ object ReceiverCompatibility {
                 if (oraSkipInitialAudioRecord) add("ora.n220346.2.no-initial-audio-record")
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
                 if (winPlay) add("winplay.vehicle-resolution")
+                if (bicvGseEv3) add("bicv.gse-ev3.475.8.3.auto-request-ui")
             }
         return Policy(
             family = family,
@@ -341,6 +356,7 @@ object ReceiverCompatibility {
             arrizo8ConnectWindowHint = cherySingleRecord,
             reconnectOnStreamingInvite = vwStreamingInvite,
             preferVehicleResolution = winPlay,
+            autoRequestCarplayUi = bicvGseEv3,
         )
     }
 
