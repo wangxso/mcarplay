@@ -1824,6 +1824,10 @@ object SessionController {
         nativeAudioBridge?.setDuckDb(duckDb.toFloat())
     }
 
+    fun applyMusicAttenuationDb(db: Int) {
+        nativeAudioBridge?.setMusicAttenuationDb(db.toFloat())
+    }
+
     /**
      * 设置面板切「连接时真息屏」：会话中立即收放（没有会话时什么都不做）。
      *
@@ -2828,6 +2832,7 @@ object SessionController {
                 activeAudioReceiverKey = identity
                 activeAudioStartedAt = android.os.SystemClock.uptimeMillis()
             }
+            bridge?.initializeMusicAttenuationDb(AudioDuckingPrefs.musicAttenuationDb(context.applicationContext).toFloat())
             ReceiverDetectionRuntime.audioSelected(client.currentEndpoint.observation, profile.key)
             diagnosticAttempt?.let {
                 ConnectionDiagnostics.timeline.note(it, "AUDIO_SELECTED ${profile.label} sampleRate=${audio.sampleRate}")

@@ -68,6 +68,15 @@ class CarLifeAudioBridge(
         pendingDuckDb.set(duckDb)
     }
 
+    fun setMusicAttenuationDb(db: Float) {
+        pendingMusicAttenuationDb.set(db)
+    }
+
+    /** Called after publication and before [start]. Preserve any newer slider update already queued. */
+    internal fun initializeMusicAttenuationDb(db: Float) {
+        pendingMusicAttenuationDb.compareAndSet(null, db)
+    }
+
     fun submit(
         channel: CarLifeChannel,
         event: CarLifeAudioEvent,
@@ -85,6 +94,7 @@ class CarLifeAudioBridge(
     private var duckingLogged = false
 
     private val pendingDuckDb = AtomicReference<Float?>()
+    private val pendingMusicAttenuationDb = AtomicReference<Float?>()
 
     /**
      * 9240 音乐直接混音输出；9241 导航 TTS、9242 语音提示进入提示缓存，由 [AudioDuckingMixer]
@@ -95,7 +105,7 @@ class CarLifeAudioBridge(
         channel: CarLifeChannel,
         event: CarLifeAudioEvent,
     ) {
-        applyPendingDuckDb()
+        applyPendingLevels()
         if (channel == CarLifeChannel.MEDIA && event is CarLifeAudioEvent.Pcm) {
             lastMediaPcmAtMs = android.os.SystemClock.uptimeMillis()
         }
@@ -131,12 +141,13 @@ class CarLifeAudioBridge(
 
     /** 音乐未在播放时把缓存的提示单独发出；同时记录压低状态的切换。 */
     private fun flushPrompts() {
-        applyPendingDuckDb()
+        applyPendingLevels()
         emit(mixer.drain())
         logDuckingChange()
     }
 
-    private fun applyPendingDuckDb() {
+    private fun applyPendingLevels() {
+        pendingMusicAttenuationDb.getAndSet(null)?.let(mixer::setMusicAttenuationDb)
         val duckDb = pendingDuckDb.getAndSet(null) ?: return
         if (duckDb == mixer.config.duckDb) return
         mixer.setDuckDb(duckDb)

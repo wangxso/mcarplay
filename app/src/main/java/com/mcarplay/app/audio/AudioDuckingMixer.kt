@@ -11,7 +11,7 @@ import kotlin.math.roundToInt
  * 与 CarWith 送数据的节奏无关。
  */
 data class AudioDuckingConfig(
-    /** 提示期间音乐的目标增益（dB）；0 = 不压低，-60 ≈ 静音。 */
+    /** 提示期间额外施加到音乐的增益（dB）；0 = 不压低，-60 ≈ 静音。 */
     val duckDb: Float = -15f,
     /** 音乐从原音量淡到 [duckDb] 的时长；提示在淡完之后才混入，避免首字被音乐盖住。 */
     val attackMs: Int = 250,
@@ -23,9 +23,12 @@ data class AudioDuckingConfig(
     val mediaIdleMs: Int = 300,
     /** 每路提示最多缓存的时长；超出时丢最旧的样本。 */
     val maxPromptMs: Int = 8_000,
+    /** 持续施加到音乐音轨的衰减，提示音保持自己的电平。 */
+    val musicAttenuationDb: Float = 0f,
 ) {
     init {
         require(duckDb in MIN_DUCK_DB..0f) { "duckDb must be within $MIN_DUCK_DB..0 dB" }
+        require(musicAttenuationDb in AudioDuckingPrefs.MUSIC_ATTENUATION_MIN_DB.toFloat()..0f) { "Music attenuation is out of range" }
         require(attackMs in 0..MAX_RAMP_MS && releaseMs in 0..MAX_RAMP_MS) { "ramp must be within 0..$MAX_RAMP_MS ms" }
         require(holdMs in 0..MAX_RAMP_MS) { "holdMs must be within 0..$MAX_RAMP_MS ms" }
         require(mediaIdleMs in 20..MAX_RAMP_MS) { "mediaIdleMs must be within 20..$MAX_RAMP_MS ms" }
@@ -34,6 +37,8 @@ data class AudioDuckingConfig(
 
     /** [duckDb] 对应的线性幅度增益。 */
     val duckGain: Float get() = 10.0.pow(duckDb / 20.0).toFloat()
+
+    val musicGain: Float get() = 10.0.pow(musicAttenuationDb / 20.0).toFloat()
 
     private companion object {
         const val MIN_DUCK_DB = -60f
@@ -67,6 +72,9 @@ class AudioDuckingMixer<K : Any>(
     private var duckGain = config.duckGain
     private var attackStep = rampStep(sampleRate, config.attackMs, duckGain)
     private var releaseStep = rampStep(sampleRate, config.releaseMs, duckGain)
+    private var musicGain = config.musicGain
+    private var targetMusicGain = musicGain
+    private val musicGainStep = rampStep(sampleRate, MUSIC_GAIN_RAMP_MS, 0f)
     private val holdNanos = config.holdMs * NANOS_PER_MILLI
     private val mediaIdleNanos = config.mediaIdleMs * NANOS_PER_MILLI
     private val promptCapacityFrames = (sampleRate.toLong() * config.maxPromptMs / 1_000L).toInt()
@@ -78,7 +86,7 @@ class AudioDuckingMixer<K : Any>(
     /** 提示已开始混入：一直混到缓存清空，中途调整压低幅度也不会把提示截成两段。 */
     private var promptFlowing = false
 
-    /** 当前施加在音乐上的线性增益（1 = 原音量）。 */
+    /** 当前导航压低的线性增益（1 = 无额外衰减）。 */
     var gain = 1f
         private set
 
@@ -106,6 +114,12 @@ class AudioDuckingMixer<K : Any>(
         releaseStep = rampStep(sampleRate, config.releaseMs, duckGain)
     }
 
+    fun setMusicAttenuationDb(db: Float) {
+        if (db == config.musicAttenuationDb) return
+        config = config.copy(musicAttenuationDb = db)
+        targetMusicGain = config.musicGain
+    }
+
     /** 一段导航/语音提示 PCM（立体声 s16 LE）进入缓存；由 [media] 或 [drain] 输出。 */
     fun prompt(
         source: K,
@@ -125,7 +139,10 @@ class AudioDuckingMixer<K : Any>(
         val now = clockNanos()
         val target = if (hasPromptBuffered() || withinHold(now)) duckGain else 1f
         // 音乐刚从静止恢复：此前听不到音乐，增益可直接落到目标值，不必再淡入淡出。
-        if (!mediaActive(now)) gain = target
+        if (!mediaActive(now)) {
+            gain = target
+            musicGain = targetMusicGain
+        }
         lastMediaAt = now
         val frames = pcm.size / FRAME_BYTES
         val output = ByteArray(pcm.size)
@@ -138,8 +155,10 @@ class AudioDuckingMixer<K : Any>(
                     else -> gain
                 }
             val offset = frame * FRAME_BYTES
-            var left = readSample(pcm, offset) * gain
-            var right = readSample(pcm, offset + 2) * gain
+            musicGain = targetMusicGain.coerceIn(musicGain - musicGainStep, musicGain + musicGainStep)
+            val combinedGain = musicGain * gain
+            var left = readSample(pcm, offset) * combinedGain
+            var right = readSample(pcm, offset + 2) * combinedGain
             // 等音乐淡到位后才叠加提示，保证提示的首个音节不被音乐盖住。
             if (promptFlowing || gain <= duckGain) {
                 promptFlowing = true
@@ -201,6 +220,7 @@ class AudioDuckingMixer<K : Any>(
         lastPromptAt = NEVER
         promptFlowing = false
         gain = 1f
+        musicGain = targetMusicGain
     }
 
     private fun hasPromptBuffered(): Boolean = prompts.values.any { !it.isEmpty }
@@ -266,6 +286,7 @@ class AudioDuckingMixer<K : Any>(
         const val NANOS_PER_MILLI = 1_000_000L
         const val NEVER = Long.MIN_VALUE
         const val MIN_RAMP_SPAN = 0.01f
+        const val MUSIC_GAIN_RAMP_MS = 20
         val EMPTY = ByteArray(0)
 
         /**
