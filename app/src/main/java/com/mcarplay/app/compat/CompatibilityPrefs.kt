@@ -13,9 +13,25 @@ object CompatibilityPrefs {
     private const val KEY_AUDIO_BASELINE = "compat_audio_baseline"
 
     private const val KEY_PASSAT_RETURN = "compat_passat_return_strategy"
+    private const val KEY_KNOWN_ORA03 = "compat_known_ora03_"
 
     const val PLAIN_FALLBACK_DEFAULT = false
     const val AUDIO_BASELINE_DEFAULT = false
+
+    /** Recognize a generic identity only for a receiver previously confirmed by its normal identity. */
+    internal fun genericReceiverIdentityWarning(
+        context: Context,
+        binding: String,
+        identity: ReceiverCompatibility.ReceiverIdentity,
+    ): Boolean {
+        if (identity == ReceiverCompatibility.ReceiverIdentity.OTHER) return false
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val key = KEY_KNOWN_ORA03 + binding
+        val known = prefs.getBoolean(key, false)
+        if (identity == ReceiverCompatibility.ReceiverIdentity.GENERIC) return known
+        if (!known) prefs.edit().putBoolean(key, true).apply()
+        return false
+    }
 
     /** 配对失败（非 403）但 RTSP 连上过时，再试一次 et=NONE 明文会话。 */
     fun plainFallback(context: Context): Boolean =

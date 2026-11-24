@@ -108,6 +108,19 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
+    fun ora03IdentityRecognizesOnlyTheObservedVehicleAndGenericSignatures() {
+        val expected = ReceiverCompatibility.ReceiverIdentity.EXPECTED
+        val generic = ReceiverCompatibility.ReceiverIdentity.GENERIC
+        val other = ReceiverCompatibility.ReceiverIdentity.OTHER
+        assertEquals(expected, ReceiverCompatibility.classifyReceiverIdentity("GWM", "ORA ES11", "N220346.2", "365.10.2"))
+        assertEquals(generic, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", "0.0.1", "365.10.2"))
+        assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", "0.0.1", "365.10.3"))
+        assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", null, "365.10.2"))
+        assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity("OEM", "Other", "0.0.1", "365.10.2"))
+        assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity(null, "OEM MODEL", "0.0.1", "365.10.2"))
+    }
+
+    @Test
     fun ora03SkipsOnlyTheRecordAfterInitialAudioSetupOnTheObservedFirmware() {
         val ora =
             ReceiverProfile.Signals(

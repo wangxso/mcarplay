@@ -157,6 +157,9 @@ object SessionController {
     @Volatile
     private var activePeerAddress: String? = null
 
+    @Volatile
+    private var genericReceiverIdentityWarningPeer: String? = null
+
     /**
      * [address] 是否属于本轮车机；任一方地址未知时按兼容处理（true）。
      * 自动收摊、迟到链路断开用它避免把另一台车机的动作算到当前会话上。
@@ -1299,6 +1302,20 @@ object SessionController {
         videoSender?.isRunning == true ||
             bluetoothServer?.isRunning == true ||
             bluetoothClient?.isRunning == true
+
+    internal fun hasGenericReceiverIdentityWarning(selectedPeer: String?): Boolean =
+        (selectedPeer ?: activePeerAddress)?.equals(genericReceiverIdentityWarningPeer, ignoreCase = true) == true
+
+    private fun updateGenericReceiverIdentityWarning(
+        context: Context,
+        client: AirPlayClient,
+        peerAddress: String?,
+    ) {
+        val binding = ReceiverDetectionRuntime.binding(peerAddress) ?: return
+        val warning = client.genericReceiverIdentityWarning(context, binding) ?: return
+        genericReceiverIdentityWarningPeer = peerAddress.takeIf { warning }
+        if (warning) appendLog("AIRPLAY: 已识别的欧拉 03 返回 OEM MODEL / 0.0.1（车机界面可能无法切入）")
+    }
 
     /** ACL 广播与 RFCOMM 关闭共用策略，避免两条路径对网络交接做出相反判断。 */
     fun bluetoothDisconnectAction(): ReceiverCompatibility.BluetoothLossAction {
@@ -4157,6 +4174,7 @@ object SessionController {
                             client.close()
                             return@run
                         }
+                        updateGenericReceiverIdentityWarning(context, client, peerAddress)
                         if (setup != null && client.controlChannelClosed) {
                             // 帕萨特 2025（VW4211）：没等到新鲜 ctrl 邀请就连入时，初始 SETUP 照回 200
                             // 但随即关控制通道；继续往下走只会得到假会话（/info、事件通道、屏幕流全失败）。
