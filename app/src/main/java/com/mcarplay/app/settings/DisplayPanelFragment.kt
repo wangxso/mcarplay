@@ -208,6 +208,32 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             },
         )
 
+        val musicSeek = view.findViewById<SeekBar>(R.id.musicAttenuationSeek)
+        val musicValue = view.findViewById<TextView>(R.id.musicAttenuationValue)
+        val savedMusicDb = AudioDuckingPrefs.musicAttenuationDb(ctx)
+        musicSeek.max = -AudioDuckingPrefs.MUSIC_ATTENUATION_MIN_DB
+        musicSeek.progress = -savedMusicDb
+        musicValue.text = getString(R.string.lay_duck_level_value, savedMusicDb)
+        musicSeek.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    seekBar: SeekBar?,
+                    progress: Int,
+                    fromUser: Boolean,
+                ) {
+                    if (!fromUser) return
+                    val db = -progress
+                    musicValue.text = getString(R.string.lay_duck_level_value, db)
+                    AudioDuckingPrefs.setMusicAttenuationDb(ctx, db)
+                    SessionController.applyMusicAttenuationDb(db)
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            },
+        )
+
         // 滑条 progress（0..26）→ 百分比（30..160，步进 5）
         fun progressOf(percent: Int) = (percent - DisplayPrefs.SCALE_MIN) / DisplayPrefs.SCALE_STEP
 

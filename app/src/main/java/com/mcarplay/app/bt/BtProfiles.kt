@@ -157,6 +157,37 @@ object BtProfiles {
         address: String,
     ): List<String> = connectedNames(context, address)
 
+    enum class MediaDisconnect { ALREADY_DISCONNECTED, DISCONNECTED, FAILED, CANCELLED }
+
+    /** 暂时断开单台车机的 A2DP，不改连接策略，也不碰设备级连接。须在后台线程调用。 */
+    fun disconnectMedia(
+        context: Context,
+        address: String,
+        isActive: () -> Boolean,
+    ): MediaDisconnect {
+        return try {
+            if (!isActive()) return MediaDisconnect.CANCELLED
+            val media = proxy(context, BluetoothProfile.A2DP) ?: return MediaDisconnect.FAILED
+            val device =
+                media.connectedDevices.firstOrNull { it.address.equals(address, ignoreCase = true) }
+                    ?: return MediaDisconnect.ALREADY_DISCONNECTED
+            if (!isActive()) return MediaDisconnect.CANCELLED
+            if (!disconnectProfile(media, device)) return MediaDisconnect.FAILED
+            val deadline = SystemClock.elapsedRealtime() + 1_000L
+            while (isActive()) {
+                if (media.getConnectionState(device) == BluetoothProfile.STATE_DISCONNECTED) return MediaDisconnect.DISCONNECTED
+                if (SystemClock.elapsedRealtime() >= deadline) return MediaDisconnect.FAILED
+                Thread.sleep(60L)
+            }
+            MediaDisconnect.CANCELLED
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            MediaDisconnect.CANCELLED
+        } catch (_: RuntimeException) {
+            MediaDisconnect.FAILED
+        }
+    }
+
     private fun awaitDisconnected(
         context: Context,
         address: String,

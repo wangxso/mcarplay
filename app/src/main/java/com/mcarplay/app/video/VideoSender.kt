@@ -59,7 +59,7 @@ class VideoSender(
      * frames from the local Surface path.
      */
     private val externalVideoSource: ExternalVideoSource? = null,
-    private val onExternalFrameSent: ((Int) -> Unit)? = null,
+    private val onVideoFrameSent: ((Int) -> Unit)? = null,
     /** 车机 /info displays[0].maxFPS（0 = 未知）；只约束转码时的编码帧率。 */
     private val receiverMaxFps: Int = 0,
     /**
@@ -1288,7 +1288,7 @@ class VideoSender(
                     lastStreamStatsLogAt = now
                     log("VIDEO: 透传码流统计（第 $framesSent 帧）${streamStats.summary()}")
                 }
-                runCatching { onExternalFrameSent?.invoke(packed.size) }
+                runCatching { onVideoFrameSent?.invoke(packed.size) }
                 maybeSendKeepAlive(output)
             }
         } catch (error: Exception) {
@@ -1454,8 +1454,8 @@ class VideoSender(
                                 }
                             // 转码输出顶替了 CarWith 透传：诊断时间线的帧数 / 字节 / 时间戳照常更新，
                             // 否则 5 s 后会误报视频停滞（2026-11-01 审查）
+                            if (sent > 0) runCatching { onVideoFrameSent?.invoke(sent) }
                             if (sent > 0 && externalVideoSource != null) {
-                                runCatching { onExternalFrameSent?.invoke(sent) }
                                 val now = android.os.SystemClock.uptimeMillis()
                                 streamStats.onTranscodedFrameSent(keyFrame, now)
                                 if (now - lastStreamStatsLogAt >= STREAM_STATS_INTERVAL_MS) {

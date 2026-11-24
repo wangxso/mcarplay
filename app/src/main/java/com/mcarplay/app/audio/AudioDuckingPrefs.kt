@@ -12,9 +12,11 @@ object AudioDuckingPrefs {
     const val DUCK_DB_MIN = -30
     const val DUCK_DB_MAX = 0
     const val DUCK_DB_DEFAULT = -15
+    const val MUSIC_ATTENUATION_MIN_DB = -20
 
     private const val PREFS_NAME = "settings"
     private const val KEY_DUCK_DB = "audio_duck_db"
+    private const val KEY_MUSIC_ATTENUATION_DB = "audio_music_attenuation_db"
 
     fun duckDb(context: Context): Int =
         clamp(
@@ -34,8 +36,29 @@ object AudioDuckingPrefs {
             .apply()
     }
 
+    fun musicAttenuationDb(context: Context): Int =
+        context
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(KEY_MUSIC_ATTENUATION_DB, 0)
+            .coerceIn(MUSIC_ATTENUATION_MIN_DB, 0)
+
+    fun setMusicAttenuationDb(
+        context: Context,
+        db: Int,
+    ) {
+        context
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_MUSIC_ATTENUATION_DB, db.coerceIn(MUSIC_ATTENUATION_MIN_DB, 0))
+            .apply()
+    }
+
     /** 本次会话使用的参数（其余时长保持默认）。 */
-    fun config(context: Context): AudioDuckingConfig = AudioDuckingConfig(duckDb = duckDb(context).toFloat())
+    fun config(context: Context): AudioDuckingConfig =
+        AudioDuckingConfig(
+            duckDb = duckDb(context).toFloat(),
+            musicAttenuationDb = musicAttenuationDb(context).toFloat(),
+        )
 
     fun clamp(db: Int): Int = db.coerceIn(DUCK_DB_MIN, DUCK_DB_MAX)
 

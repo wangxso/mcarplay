@@ -13,6 +13,10 @@
         <item name="android:colorBackground">@color/ui_bg</item>
     </style>
 
+    <style name="Theme.CarDashboard" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:forceDarkAllowed">false</item>
+    </style>
+
     <!-- 静默投屏跳板（audio/SilentProjectionActivity）：全透明、无动画、不抢焦点。
          该 Activity 继承 android.app.Activity（不是 AppCompat），所以父主题只能用平台主题。 -->
     <style name="Theme.CarPlaySender.SilentTranslucent" parent="android:Theme.Translucent.NoTitleBar">

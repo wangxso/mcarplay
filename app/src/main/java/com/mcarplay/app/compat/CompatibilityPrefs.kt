@@ -13,9 +13,26 @@ object CompatibilityPrefs {
     private const val KEY_AUDIO_BASELINE = "compat_audio_baseline"
 
     private const val KEY_PASSAT_RETURN = "compat_passat_return_strategy"
+    private const val KEY_KNOWN_ORA03 = "compat_known_ora03_"
 
     const val PLAIN_FALLBACK_DEFAULT = false
     const val AUDIO_BASELINE_DEFAULT = false
+
+    internal fun isKnownOra03(
+        context: Context,
+        binding: String,
+    ): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_KNOWN_ORA03 + binding, false)
+
+    internal fun rememberOra03(
+        context: Context,
+        binding: String,
+    ) {
+        context
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_KNOWN_ORA03 + binding, true)
+            .apply()
+    }
 
     /** 配对失败（非 403）但 RTSP 连上过时，再试一次 et=NONE 明文会话。 */
     fun plainFallback(context: Context): Boolean =

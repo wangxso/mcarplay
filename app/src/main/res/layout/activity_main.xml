@@ -191,6 +191,18 @@
                     android:textSize="11.5sp"
                     android:visibility="gone" />
 
+                <TextView
+                    android:id="@+id/btnVideoSource"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="?attr/selectableItemBackground"
+                    android:gravity="center"
+                    android:minHeight="48dp"
+                    android:padding="8dp"
+                    android:textColor="@color/m3_primary"
+                    android:textSize="15sp" />
+
                 <!-- 主操作（M3 pill：填充→禁用→红色描边断开） -->
                 <LinearLayout
                     android:id="@+id/ctaButton"

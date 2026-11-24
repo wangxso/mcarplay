@@ -25,11 +25,17 @@ object InternetNetworkPrefs {
     private const val PREFS_NAME = "settings"
     private const val KEY_NETWORK = "internet_network"
 
-    fun get(context: Context): InternetNetwork =
+    fun get(context: Context): InternetNetwork = get(context, VideoSourcePrefs.get(context))
+
+    internal fun get(
+        context: Context,
+        source: VideoSource,
+    ): InternetNetwork =
         parse(
             context
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(KEY_NETWORK, null),
+            source,
         )
 
     fun set(
@@ -43,7 +49,12 @@ object InternetNetworkPrefs {
             .apply()
     }
 
-    internal fun parse(value: String?): InternetNetwork = InternetNetwork.entries.firstOrNull { it.storageValue == value } ?: DEFAULT
+    internal fun defaultFor(source: VideoSource): InternetNetwork = if (source == VideoSource.DASHBOARD) InternetNetwork.PHONE else DEFAULT
+
+    internal fun parse(
+        value: String?,
+        source: VideoSource = VideoSource.CAR_WITH,
+    ): InternetNetwork = InternetNetwork.entries.firstOrNull { it.storageValue == value } ?: defaultFor(source)
 }
 
 /** Pure join-path policy, kept separate from Android APIs so it is unit-testable. */

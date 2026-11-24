@@ -113,7 +113,7 @@ class VideoDiagnosticsTransportTest {
                         object : ExternalVideoSource {
                             override fun requestKeyFrame(): Boolean = true
                         },
-                    onExternalFrameSent = {
+                    onVideoFrameSent = {
                         observed.countDown()
                         throw IllegalStateException("telemetry failure")
                     },

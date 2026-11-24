@@ -6,6 +6,8 @@
     <!-- User-confirmed system installation of a verified GitHub release; never silent installation. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Optional, for per-SIM signal and network badges in the custom dashboard. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
@@ -46,6 +48,13 @@
         <package android:name="com.baidu.carlife.xiaomi" />
         <package android:name="com.autonavi.amapauto" />
         <package android:name="com.autonavi.minimap" />
+        <package android:name="com.baidu.BaiduMap" />
+        <package android:name="com.baidu.naviauto" />
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.waze" />
+        <intent>
+            <action android:name="android.media.browse.MediaBrowserService" />
+        </intent>
         <!-- 应用桌面需要枚举全部可启动应用（Android 11+ 包可见性） -->
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -118,6 +127,16 @@
             android:name=".service.ExternalHuService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <activity
+            android:name=".ui.car.CarDashboardActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden|uiMode"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:permission="android.permission.DUMP"
+            android:taskAffinity="${applicationId}.dashboard"
+            android:theme="@style/Theme.CarDashboard" />
 
         <!-- 静默投屏跳板（自动连接时领 MediaProjection 令牌给音频内录用）：
              exported=true 让 Shizuku 的 `am start` 能拉起（shell 只有
