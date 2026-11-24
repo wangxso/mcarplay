@@ -23,7 +23,7 @@ MCU 为 `M1E_IC2172_18_01_41.11_250609_R`，与仓库已有艾瑞泽 8 证据的
 | 会话后 Idle / SIGSEGV（正常结束和 `kConnectionErr` 均有样本） | 历史分析已定位周期回调读取空 server 的直接崩溃机制；重复 RECORD / 多次 SessionStart 仍是触发候选。按下节独立验收，不能把约 20 s 崩溃与建链 30 s 超时混算。 |
 
 当前 CHERY 策略已包含固定 32B MFi 挑战、`X-Apple-HKP: 0`、会话内 `auth-setup`、真实 Wi-Fi MAC、
-`disableBluetooth`、跳过 type-130 隧道。发送端在每条控制连接的初始 SETUP 成功后发送一次 RECORD，
+跳过 type-130 隧道；`disableBluetooth` 默认关闭（避免直接熄火下车时车机未及恢复蓝牙导致下次上车蓝牙保持关闭），仅在设置中手动打开时发送。发送端在每条控制连接的初始 SETUP 成功后发送一次 RECORD，
 确认会话激活后再协商屏幕及音频流。动态加音频或重建主屏流不会重复启动会话。
 
 **源码核对发现的认证边界：** `AirPlayClient.runAuthSetup()` 只记录响应结构，HTTP 200 就记录 `AUTH_SETUP`，

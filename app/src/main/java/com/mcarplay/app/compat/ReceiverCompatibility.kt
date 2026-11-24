@@ -27,8 +27,9 @@ object ReceiverCompatibility {
         val rules: List<String>,
         /**
          * 会话 SETUP 后像 iPhone 一样发 `disableBluetooth`：车机关闭自身蓝牙，会话只走 Wi-Fi。
-         * 2026-11-02 艾瑞泽 8 车机日志：真 iPhone 每次会话开始约 0.1–0.6 s 都发；不发时车机全程保留
-         * 蓝牙 iAP2，mcarplay 断开后 20 s 原厂 `_PerformPeriodTasks` 崩溃。只登记核对过的车机。
+         * 2026-11-02 艾瑞泽 8 车机日志：真 iPhone 每次会话开始约 0.1–0.6 s 都发，但已排除与断开后
+         * 20 s 原厂 `_PerformPeriodTasks` 崩溃的因果关系；且不主动断开直接熄火下车时，车机休眠前
+         * 未走完 `setBtEnable` 会导致下次上车蓝牙保持关闭。奇瑞默认关闭，仅用户显式打开对应开关时发送。
          */
         val releaseBluetoothAfterSetup: Boolean = false,
         /**
@@ -133,8 +134,15 @@ object ReceiverCompatibility {
         mediaCapabilities: String = "",
         receiverInstance: String? = null,
         preset: VehiclePreset = VehiclePresetRuntime.current,
+        cheryDisableBluetooth: Boolean = CompatibilityPrefs.cheryDisableBluetoothRuntime,
     ): Policy {
-        val policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset, signals)
+        val policy =
+            applyPreset(
+                resolveDetected(signals, mediaCapabilities, receiverInstance, cheryDisableBluetooth),
+                preset,
+                signals,
+                cheryDisableBluetooth,
+            )
         val features = signals.features ?: 0L
         val unifiedMfi = features and AirPlayFeatures.UNIFIED_PAIRING_AND_MFI != 0L
         val standaloneMfi = !unifiedMfi && features and AirPlayFeatures.MFI_SAP != 0L
@@ -153,6 +161,7 @@ object ReceiverCompatibility {
         policy: Policy,
         preset: VehiclePreset,
         signals: ReceiverProfile.Signals,
+        cheryDisableBluetooth: Boolean = CompatibilityPrefs.cheryDisableBluetoothRuntime,
     ): Policy =
         when (preset) {
             VehiclePreset.AUTO -> policy
@@ -179,13 +188,20 @@ object ReceiverCompatibility {
                 )
             VehiclePreset.CHERY ->
                 policy.copy(
-                    releaseBluetoothAfterSetup = true,
+                    releaseBluetoothAfterSetup = cheryDisableBluetooth,
                     reportWifiMacInSetup = true,
                     skipIapTunnel = true,
                     sendAppleClientHeaders = true,
                     iphoneAuthSequence = true,
                     pinnedMfiChallengeLength = 32,
-                    rules = policy.rules + "manual.chery",
+                    rules =
+                        policy.rules +
+                            buildList {
+                                if (cheryDisableBluetooth && "chery.disable-bluetooth" !in policy.rules) {
+                                    add("chery.disable-bluetooth")
+                                }
+                                add("manual.chery")
+                            },
                 )
             VehiclePreset.VOLKSWAGEN ->
                 policy.copy(reconnectOnStreamingInvite = true, rules = policy.rules + "manual.volkswagen")
@@ -327,6 +343,7 @@ object ReceiverCompatibility {
         signals: ReceiverProfile.Signals,
         mediaCapabilities: String,
         receiverInstance: String?,
+        cheryDisableBluetooth: Boolean,
     ): Policy {
         val profile = ReceiverProfile.classify(signals)
         val generation = ReceiverProfile.linkGenerationOf(signals)
@@ -356,10 +373,12 @@ object ReceiverCompatibility {
         // DiPlay v0.2.21 自报 firmware=0.1.0（并非应用版本）。同时核对 EA 与名称，
         // 避免把 CARLINKIT 认证证书或单个显示名当成 DiPlay 软件身份。
         val diPlayWire010 = diPlay && normalize(signals.firmwareVersion) == "0.1.0"
-        // 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 会话期间车机蓝牙关闭（2026-11-02 车机日志）
-        val cheryReleasesBluetooth = normalize(signals.manufacturer) == "chery"
+        // 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 会话期间会发 disableBluetooth 关闭车机蓝牙，
+        // 但直接熄火下车时车机可能来不及 setBtEnable，导致下次上车蓝牙保持关闭；默认不发，仅开关打开时启用。
+        val chery = normalize(signals.manufacturer) == "chery"
+        val cheryReleasesBluetooth = chery && cheryDisableBluetooth
         val arrizo8ConnectWindowHint =
-            cheryReleasesBluetooth && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
+            chery && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
         // 大众车机型号自报 VWxxxx（ID7 VW4131、帕萨特 2025 VW4211），厂商字段并不统一（帕萨特报 Toppower）
         val vwStreamingInvite = VW_MODEL.matches(normalize(signals.model))
         val rules =
@@ -371,11 +390,11 @@ object ReceiverCompatibility {
                 if (winPlay && !winPlayHandoff) add("winplay.unverified-firmware")
                 if (diPlay && !diPlayWire010) add("diplay.unverified-firmware")
                 if (cheryReleasesBluetooth) add("chery.disable-bluetooth")
-                if (cheryReleasesBluetooth) add("chery.real-wifi-mac")
-                if (cheryReleasesBluetooth) add("chery.no-iap-tunnel")
-                if (cheryReleasesBluetooth) add("chery.apple-client-headers")
-                if (cheryReleasesBluetooth) add("chery.iphone-auth-sequence")
-                if (cheryReleasesBluetooth) add("chery.mfi-32-only")
+                if (chery) add("chery.real-wifi-mac")
+                if (chery) add("chery.no-iap-tunnel")
+                if (chery) add("chery.apple-client-headers")
+                if (chery) add("chery.iphone-auth-sequence")
+                if (chery) add("chery.mfi-32-only")
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
                 if (winPlay) add("winplay.vehicle-resolution")
             }
@@ -389,11 +408,11 @@ object ReceiverCompatibility {
             memoryKey = memoryKey(signals, mediaCapabilities, receiverInstance),
             rules = rules,
             releaseBluetoothAfterSetup = cheryReleasesBluetooth,
-            reportWifiMacInSetup = cheryReleasesBluetooth,
-            skipIapTunnel = cheryReleasesBluetooth,
-            sendAppleClientHeaders = cheryReleasesBluetooth,
-            iphoneAuthSequence = cheryReleasesBluetooth,
-            pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
+            reportWifiMacInSetup = chery,
+            skipIapTunnel = chery,
+            sendAppleClientHeaders = chery,
+            iphoneAuthSequence = chery,
+            pinnedMfiChallengeLength = if (chery) 32 else null,
             arrizo8ConnectWindowHint = arrizo8ConnectWindowHint,
             reconnectOnStreamingInvite = vwStreamingInvite,
             // issue #127：出画协商不再限定 WinPlay/奔驰例外。任何接收端都可能出现主屏几何

@@ -208,26 +208,32 @@ class ReceiverCompatibilityTest {
         )
     }
 
-    /** 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 每次会话都请车机关蓝牙（2026-11-02）。 */
+    /** 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：奇瑞其余适配默认生效，disableBluetooth 默认关、仅开关打开时启用。 */
     @Test
     fun onlyCheryReleasesBluetoothAfterSetup() {
         val chery = ReceiverProfile.Signals(name = "Cloudrive", model = "Tiggo", manufacturer = "CHERY")
-        val policy = ReceiverCompatibility.resolve(chery)
-        assertTrue(policy.releaseBluetoothAfterSetup)
-        assertTrue("chery.disable-bluetooth" in policy.rules)
-        assertTrue(policy.reportWifiMacInSetup)
-        assertTrue("chery.real-wifi-mac" in policy.rules)
-        assertTrue(policy.skipIapTunnel)
-        assertTrue("chery.no-iap-tunnel" in policy.rules)
-        assertTrue(policy.sendAppleClientHeaders)
-        assertTrue("chery.apple-client-headers" in policy.rules)
-        assertTrue(policy.iphoneAuthSequence)
-        assertTrue("chery.iphone-auth-sequence" in policy.rules)
-        assertEquals(32, policy.pinnedMfiChallengeLength)
-        assertTrue("chery.mfi-32-only" in policy.rules)
+        val defaultPolicy = ReceiverCompatibility.resolve(chery)
+        assertFalse(defaultPolicy.releaseBluetoothAfterSetup)
+        assertFalse("chery.disable-bluetooth" in defaultPolicy.rules)
+        assertTrue(defaultPolicy.reportWifiMacInSetup)
+        assertTrue("chery.real-wifi-mac" in defaultPolicy.rules)
+        assertTrue(defaultPolicy.skipIapTunnel)
+        assertTrue("chery.no-iap-tunnel" in defaultPolicy.rules)
+        assertTrue(defaultPolicy.sendAppleClientHeaders)
+        assertTrue("chery.apple-client-headers" in defaultPolicy.rules)
+        assertTrue(defaultPolicy.iphoneAuthSequence)
+        assertTrue("chery.iphone-auth-sequence" in defaultPolicy.rules)
+        assertEquals(32, defaultPolicy.pinnedMfiChallengeLength)
+        assertTrue("chery.mfi-32-only" in defaultPolicy.rules)
+
+        val optInPolicy = ReceiverCompatibility.resolve(chery, cheryDisableBluetooth = true)
+        assertTrue(optInPolicy.releaseBluetoothAfterSetup)
+        assertTrue("chery.disable-bluetooth" in optInPolicy.rules)
+
         listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals(), ReceiverProfile.Signals(name = "CHERY")).forEach { signals ->
-            val other = ReceiverCompatibility.resolve(signals)
+            val other = ReceiverCompatibility.resolve(signals, cheryDisableBluetooth = true)
             assertFalse(other.releaseBluetoothAfterSetup)
+            assertFalse("chery.disable-bluetooth" in other.rules)
             assertFalse(other.reportWifiMacInSetup)
             assertFalse(other.skipIapTunnel)
             assertFalse(other.sendAppleClientHeaders)

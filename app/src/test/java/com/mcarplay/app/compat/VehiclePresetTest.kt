@@ -28,16 +28,26 @@ class VehiclePresetTest {
     @Test
     fun cheryPresetEnablesCheryRulesOnUnknownReceiver() {
         val policy = resolve(unknown, VehiclePreset.CHERY)
-        assertTrue(policy.releaseBluetoothAfterSetup)
+        assertFalse(policy.releaseBluetoothAfterSetup)
+        assertFalse("chery.disable-bluetooth" in policy.rules)
         assertTrue(policy.skipIapTunnel)
         assertTrue(policy.iphoneAuthSequence)
         assertEquals(32, policy.pinnedMfiChallengeLength)
         assertTrue("manual.chery" in policy.rules)
+
+        val optInUnknown = ReceiverCompatibility.resolve(unknown, preset = VehiclePreset.CHERY, cheryDisableBluetooth = true)
+        assertTrue(optInUnknown.releaseBluetoothAfterSetup)
+        assertEquals(1, optInUnknown.rules.count { it == "chery.disable-bluetooth" })
+        assertTrue("manual.chery" in optInUnknown.rules)
+
+        val optInDetected = ReceiverCompatibility.resolve(chery, preset = VehiclePreset.CHERY, cheryDisableBluetooth = true)
+        assertTrue(optInDetected.releaseBluetoothAfterSetup)
+        assertEquals(1, optInDetected.rules.count { it == "chery.disable-bluetooth" })
     }
 
     @Test
     fun genericPresetDisablesDetectedExceptions() {
-        val policy = resolve(chery, VehiclePreset.GENERIC)
+        val policy = ReceiverCompatibility.resolve(chery, preset = VehiclePreset.GENERIC, cheryDisableBluetooth = true)
         assertFalse(policy.releaseBluetoothAfterSetup)
         assertFalse(policy.sendAppleClientHeaders)
         assertFalse(policy.preferVehicleResolution)

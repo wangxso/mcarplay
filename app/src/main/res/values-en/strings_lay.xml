@@ -18,6 +18,8 @@
     <string name="lay_plain_fallback_desc">Off by default. When pairing fails (except 403) but the receiver is reachable, try one unencrypted session. Turn on only if the receiver always stalls at pairing and you know it supports only unencrypted sessions; applies on the next connection.</string>
     <string name="lay_audio_fallback">Fallback: try audio when no format is declared</string>
     <string name="lay_audio_fallback_desc">Off by default. When the receiver declares no usable media audio format, still try the default PCM 48k. Turn on only if the car can play sound but mcarplay always sends video only; this may cause silence or a disconnect. Applies on the next connection.</string>
+    <string name="lay_chery_disable_bt">Chery: ask head unit to turn off Bluetooth</string>
+    <string name="lay_chery_disable_bt_desc">Off by default. Applies to Chery head units only: sends disableBluetooth after session setup like iPhone. Turning off the ignition without disconnecting first can leave the head unit\'s Bluetooth off on the next start; keep this off unless troubleshooting Bluetooth conflicts. Applies on the next connection.</string>
     <string name="lay_duck_level">Music volume during navigation</string>
     <string name="lay_duck_level_desc">Navigation and voice prompts lower music by this amount from its usual level. Music fades back after the prompt. Drag right to lower it more. Far left means no lowering. Default -15 dB. Changes apply immediately while connected.</string>
     <string name="lay_duck_level_value">%1$d dB</string>

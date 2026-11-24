@@ -15,9 +15,20 @@ object CompatibilityPrefs {
     // 历史持久化键：中性化只改 Kotlin API，不改字符串，老安装的选择继续生效。
     private const val KEY_SCREEN_RETURN = "compat_passat_return_strategy"
     private const val KEY_KNOWN_ORA03 = "compat_known_ora03_"
+    private const val KEY_CHERY_DISABLE_BLUETOOTH = "compat_chery_disable_bluetooth"
 
     const val PLAIN_FALLBACK_DEFAULT = false
     const val AUDIO_BASELINE_DEFAULT = false
+    const val CHERY_DISABLE_BLUETOOTH_DEFAULT = false
+
+    /** 进程内缓存，供 [ReceiverCompatibility.resolve] 在无 Context 调用处读取；启动与设置变更时同步。 */
+    @Volatile
+    var cheryDisableBluetoothRuntime: Boolean = CHERY_DISABLE_BLUETOOTH_DEFAULT
+        private set
+
+    fun loadRuntime(context: Context) {
+        cheryDisableBluetoothRuntime = cheryDisableBluetooth(context)
+    }
 
     /** Recognize a generic identity only for a receiver previously confirmed by its normal identity. */
     internal fun genericReceiverIdentityWarning(
@@ -91,5 +102,24 @@ object CompatibilityPrefs {
             .edit()
             .putString(KEY_SCREEN_RETURN, strategy.key)
             .apply()
+    }
+
+    /**
+     * 奇瑞车机在 SETUP 后发送 `disableBluetooth`（请车机关掉自身蓝牙，iPhone 同款）。
+     * 默认关：艾瑞泽 8 直接熄火下车时车机可能未及 `setBtEnable`，下次上车蓝牙会保持关闭。
+     */
+    fun cheryDisableBluetooth(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_CHERY_DISABLE_BLUETOOTH, CHERY_DISABLE_BLUETOOTH_DEFAULT)
+
+    fun setCheryDisableBluetooth(
+        context: Context,
+        enabled: Boolean,
+    ) {
+        context
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_CHERY_DISABLE_BLUETOOTH, enabled)
+            .apply()
+        cheryDisableBluetoothRuntime = enabled
     }
 }
