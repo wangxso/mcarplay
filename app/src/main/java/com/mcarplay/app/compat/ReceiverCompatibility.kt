@@ -62,6 +62,8 @@ object ReceiverCompatibility {
          * 自动策略覆盖艾瑞泽 8 和奔驰 MB_D-PP-3/4 的 AirPlay 320.17.7，手动 MB_E 预设也启用（issue #62）。
          */
         val singleRecordPerSession: Boolean = false,
+        /** ORA 03 时序验证：初始音频加入时沿用首个 RECORD，手动补启音频仍可激活。 */
+        val skipRecordAfterInitialAudioSetup: Boolean = false,
         /**
          * 连接等待超过 30 s 时显示艾瑞泽 8 专属提示（该车机此时会自行重置并重新发起）。只影响界面文案，
          * 与 [singleRecordPerSession] 同一份 CHERY/Tiggo/320.17.7 身份判定；手动车型不改变它（车还是那台车）。
@@ -151,7 +153,8 @@ object ReceiverCompatibility {
         mediaCapabilities: String = "",
         receiverInstance: String? = null,
         preset: VehiclePreset = VehiclePresetRuntime.current,
-    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance), preset, signals)
+        airPlayFirmware: String? = null,
+    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance, airPlayFirmware), preset, signals)
 
     /**
      * 用户在主页手动选择车型后，在自动判定结果之上叠加该车型的适配开关（[VehiclePreset.AUTO] 不改动）。
@@ -180,6 +183,7 @@ object ReceiverCompatibility {
                     iphoneAuthSequence = false,
                     pinnedMfiChallengeLength = null,
                     singleRecordPerSession = false,
+                    skipRecordAfterInitialAudioSetup = false,
                     reconnectOnStreamingInvite = false,
                     usePanelVideoGeometry = false,
                     preferVehicleResolution = false,
@@ -272,10 +276,35 @@ object ReceiverCompatibility {
         return manufacturer.isEmpty() || manufacturer == "mercedes-benz"
     }
 
+    /**
+     * ORA 03 现场诊断：此固件通过 0x5703 提供热点凭据，未声明 0x4301，
+     * 有时不会及时发出 ctrl 邀请。蓝牙与 mDNS 身份均吻合时只需等待首个邀请窗口。
+     */
+    internal fun prefersOra03DirectDiscovery(
+        signals: ReceiverProfile.Signals,
+        mdnsModel: String?,
+        mdnsFirmware: String?,
+        mdnsSourceVersion: String?,
+        preset: VehiclePreset,
+    ): Boolean =
+        preset == VehiclePreset.AUTO &&
+            normalize(signals.manufacturer) == "gwm" &&
+            normalize(signals.model) == "ora es11" &&
+            signals.sendIds?.let { 0x5703 in it && 0x4301 !in it } == true &&
+            signals.receiveIds?.contains(0x5702) == true &&
+            isOra03Receiver(mdnsModel, mdnsFirmware, mdnsSourceVersion)
+
+    private fun isOra03Receiver(
+        model: String?,
+        firmware: String?,
+        sourceVersion: String?,
+    ): Boolean = normalize(model) == "ora es11" && normalize(firmware) == "n220346.2" && sourceVersion == "365.10.2"
+
     private fun resolveDetected(
         signals: ReceiverProfile.Signals,
         mediaCapabilities: String,
         receiverInstance: String?,
+        airPlayFirmware: String?,
     ): Policy {
         val profile = ReceiverProfile.classify(signals)
         val generation = ReceiverProfile.linkGenerationOf(signals)
@@ -317,6 +346,11 @@ object ReceiverCompatibility {
             normalize(signals.manufacturer) == "mercedes-benz" &&
                 normalize(signals.model) in MERCEDES_D_PP_MODELS &&
                 normalize(signals.srcvers) == "320.17.7"
+        // ORA 03 重连时音频 SETUP 后立即补发 RECORD，约 6 s 后车机拆链。
+        // 同一车机较晚手动开启音频时补发 RECORD 有成功记录，故只调整初始连接。
+        val oraSkipInitialAudioRecord =
+            normalize(signals.manufacturer) == "gwm" &&
+                isOra03Receiver(signals.model, airPlayFirmware, signals.srcvers)
         // 大众车机型号自报 VWxxxx（ID7 VW4131、帕萨特 2025 VW4211），厂商字段并不统一（帕萨特报 Toppower）
         val vwStreamingInvite = VW_MODEL.matches(normalize(signals.model))
         val rules =
@@ -335,6 +369,7 @@ object ReceiverCompatibility {
                 if (cheryReleasesBluetooth) add("chery.mfi-32-only")
                 if (cherySingleRecord) add("chery.tiggo.320.17.7.single-record")
                 if (mercedesSingleRecord) add("mercedes.mb_d-pp.320.17.7.single-record")
+                if (oraSkipInitialAudioRecord) add("ora.n220346.2.no-initial-audio-record")
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
                 if (winPlay) add("winplay.vehicle-resolution")
             }
@@ -354,6 +389,7 @@ object ReceiverCompatibility {
             iphoneAuthSequence = cheryReleasesBluetooth,
             pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
             singleRecordPerSession = cherySingleRecord || mercedesSingleRecord,
+            skipRecordAfterInitialAudioSetup = oraSkipInitialAudioRecord,
             arrizo8ConnectWindowHint = cherySingleRecord,
             reconnectOnStreamingInvite = vwStreamingInvite,
             preferVehicleResolution = winPlay,

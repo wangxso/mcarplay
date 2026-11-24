@@ -125,6 +125,9 @@ with the phone, CarWith version, receiver and vehicle.
 2. Install it on a Xiaomi phone with CarWith and the Xiaomi CarLife component.
 3. Pair the phone with the wireless CarPlay receiver and follow its Wi-Fi/hotspot
    flow. Select the intended receiver in mcarplay and start the connection.
+   The "Prefer car network" switch controls whether the car hotspot may become the
+   system's Internet network on the next connection; when off, the car Wi-Fi is
+   projection-only and other apps keep using mobile data.
 4. Choose whether to enable sound. Native CarWith audio requires no separate
    screen-recording grant in mcarplay.
 5. For bench testing, use a second Android device running [DiPlay](https://github.com/shihabal3amri/DiPlay),
