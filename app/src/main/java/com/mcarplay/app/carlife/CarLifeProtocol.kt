@@ -57,6 +57,7 @@ object CarLifeProtocol {
 
     /** CarlifeCarHardKeyCode{int32 keycode=1}，与触摸同走 9340 通道。 */
     const val TOUCH_CAR_HARD_KEY_CODE = 0x68008
+    const val HARD_KEY_BACK = 14
 
     // 百度 CarLife 车机端（MyMediaButtonReceiver）实际发送的值：媒体上一首 → 15、下一首 → 16。
     // 其他键值各参考资料互相矛盾（旋钮/确认等），未经实机核对前不发送。

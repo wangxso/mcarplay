@@ -18,6 +18,7 @@ class CarLifeHardKeyAndVideoRequestTest {
     @Test
     fun hardKeyIsProtobufFieldOne() {
         assertArrayEquals(byteArrayOf(0x08, 0x10), CarLifeProtocol.hardKeyPayload(16))
+        assertArrayEquals(byteArrayOf(0x08, 0x0e), CarLifeProtocol.hardKeyPayload(CarLifeProtocol.HARD_KEY_BACK))
     }
 
     @Test

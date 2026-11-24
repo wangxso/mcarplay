@@ -59,7 +59,7 @@ object ReceiverCompatibility {
         val pinnedMfiChallengeLength: Int? = null,
         /**
          * 对已取得日志证据的车机栈，同一会话只发送一次 RECORD，避免重复启动遗留定时器或触发拆链。
-         * 当前覆盖艾瑞泽 8（CHERY / Tiggo）与 issue #55 报告中的奔驰 MB_D-PP-3/4，均限定 AirPlay 320.17.7。
+         * 自动策略覆盖艾瑞泽 8 和奔驰 MB_D-PP-3/4 的 AirPlay 320.17.7，手动 MB_E 预设也启用（issue #62）。
          */
         val singleRecordPerSession: Boolean = false,
         /**
@@ -138,6 +138,7 @@ object ReceiverCompatibility {
          * `MERCEDES_MB_E` 跳过；其它接收端（奥迪等）继续靠该命令武装触摸。
          */
         val skipScreenHidArming: Boolean = false,
+        val rebuildScreenOnResourceReturn: Boolean = false,
     )
 
     data class PairingFallback(
@@ -185,6 +186,7 @@ object ReceiverCompatibility {
                     offerHevc = true,
                     repeatScreenModesDeclaration = false,
                     skipScreenHidArming = false,
+                    rebuildScreenOnResourceReturn = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -230,7 +232,6 @@ object ReceiverCompatibility {
             // 隧道挑战被静默 6s，32B 才在约 0.44s 内应答。HyperCar 对同一车机直接发 32B，
             // RECORD 后约 0.5s 完成认证并随后收到 StartHID。固定 32B，避免错过 MBUX 激活窗口。
             // 仍保持 displays[0] 的 1624x1278 与 DISABLE_RESOLUTION_OPTION=1。
-            // 不附带 MB_D-PP 的单次 RECORD（那是另一代际、另一份报告的证据）。
             // 已知是别家车机时拒绝套用，避免把实验开关带到其它接收端上。
             VehiclePreset.MERCEDES_MB_E ->
                 if (manualMercedesAllowed(signals)) {
@@ -239,22 +240,26 @@ object ReceiverCompatibility {
                         preferVehicleResolution = true,
                         pinnedMfiChallengeLength = 32,
                         recordBeforeScreenSetup = true,
+                        singleRecordPerSession = true,
                         absoluteSessionUri = true,
                         offerMainBufferedAudio = false,
                         offerHevc = false,
                         repeatScreenModesDeclaration = true,
                         skipScreenHidArming = true,
+                        rebuildScreenOnResourceReturn = true,
                         skipIapTunnel = true,
                         rules =
                             policy.rules + "manual.mercedes-mb-e.vehicle-resolution" +
                                 "manual.mercedes-mb-e.mfi-32" +
                                 "manual.mercedes-mb-e.record-first" +
+                                "manual.mercedes-mb-e.single-record" +
                                 "manual.mercedes-mb-e.absolute-session-uri" +
                                 "manual.mercedes-mb-e.no-iap-tunnel" +
                                 "manual.mercedes-mb-e.no-main-buffered" +
                                 "manual.mercedes-mb-e.no-hevc" +
                                 "manual.mercedes-mb-e.repeat-modes" +
-                                "manual.mercedes-mb-e.no-hid-arming",
+                                "manual.mercedes-mb-e.no-hid-arming" +
+                                "manual.mercedes-mb-e.screen-rebuild",
                     )
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")
