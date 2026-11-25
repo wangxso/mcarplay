@@ -83,8 +83,8 @@ object ReceiverCompatibility {
          * 在 CarWith 的 `0x18052` 功能清单里声明 `DISABLE_RESOLUTION_OPTION=1`，让随后 `0x18007`
          * 的宽高按车机 `/info` 显示几何生效，而不是被 CarWith 映射回自己的分辨率档位。
          *
-         * WinPlay 台架默认启用（用于验证实际 CarWith 返回尺寸）；奔驰 MB_E-P 手动预设也启用。
-         * 其它接收端保持关闭，避免一次改动同时影响所有车型。
+         * issue #127：自动策略对所有接收端启用。只有本轮 /info 主屏几何合法时才声明，
+         * 其余按原上限请求。手动「通用」预设关闭该选项，WinPlay 和 MB_E 预设显式启用。
          */
         val preferVehicleResolution: Boolean = false,
         /**
@@ -348,7 +348,7 @@ object ReceiverCompatibility {
             pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
             arrizo8ConnectWindowHint = arrizo8ConnectWindowHint,
             reconnectOnStreamingInvite = vwStreamingInvite,
-            preferVehicleResolution = winPlay,
+            preferVehicleResolution = true,
         )
     }
 

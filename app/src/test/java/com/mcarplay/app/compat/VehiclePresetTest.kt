@@ -101,13 +101,13 @@ class VehiclePresetTest {
     }
 
     @Test
-    fun mercedesMbEPresetRefusesOtherManufacturersAndNeverAutoEnables() {
-        // 自动判定永远不开实验开关：没有可靠的正向证据能触发它。
+    fun mercedesMbEPresetRefusesOtherManufacturersButVehicleResolutionIsUniversal() {
+        // 自动策略可请求合法主屏几何，奔驰专用开关仍需手动预设。
         val mbep = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4", srcvers = "480.7.4")
         assertFalse(resolve(mbep, VehiclePreset.AUTO).usePanelVideoGeometry)
         assertFalse(resolve(unknown, VehiclePreset.AUTO).usePanelVideoGeometry)
-        assertFalse(resolve(mbep, VehiclePreset.AUTO).preferVehicleResolution)
-        assertFalse(resolve(unknown, VehiclePreset.AUTO).preferVehicleResolution)
+        assertTrue(resolve(mbep, VehiclePreset.AUTO).preferVehicleResolution)
+        assertTrue(resolve(unknown, VehiclePreset.AUTO).preferVehicleResolution)
         assertFalse(resolve(mbep, VehiclePreset.AUTO).absoluteSessionUri)
         assertFalse(resolve(mbep, VehiclePreset.AUTO).requestWifiConfigAfterTunnelMfi)
         assertTrue(resolve(mbep, VehiclePreset.AUTO).offerMainBufferedAudio)
@@ -115,11 +115,12 @@ class VehiclePresetTest {
         assertFalse(resolve(mbep, VehiclePreset.AUTO).repeatScreenModesDeclaration)
         assertFalse(resolve(mbep, VehiclePreset.AUTO).skipScreenHidArming)
         assertFalse(resolve(mbep, VehiclePreset.AUTO).rebuildScreenOnResourceReturn)
-        // 已知是别家车机：守卫拒绝，只记录 blocked。
+        // 其他厂商保留通用尺寸协商，由厂商守卫拒绝奔驰专用规则。
         listOf(chery, ReceiverProfile.Signals(manufacturer = "Volkswagen", model = "VW4131")).forEach { other ->
             val policy = resolve(other, VehiclePreset.MERCEDES_MB_E)
             assertFalse("${other.manufacturer} 不应套用奔驰实验开关", policy.usePanelVideoGeometry)
-            assertFalse("${other.manufacturer} 不应套用奔驰尺寸协商", policy.preferVehicleResolution)
+            assertTrue("${other.manufacturer} 的尺寸协商来自通用策略", policy.preferVehicleResolution)
+            assertFalse(policy.requestWifiConfigAfterTunnelMfi)
             assertFalse("${other.manufacturer} 不应套用 MBUX 绝对 URI", policy.absoluteSessionUri)
             assertFalse(
                 "${other.manufacturer} 不应套用 MBUX type-130 规则",

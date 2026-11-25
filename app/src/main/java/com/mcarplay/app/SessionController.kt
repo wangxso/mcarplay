@@ -32,6 +32,7 @@ import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeProtocol
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
+import com.mcarplay.app.carlife.CarWithVideoNegotiation
 import com.mcarplay.app.carlife.mapCarLifeTouch
 import com.mcarplay.app.compat.CompatibilityPrefs
 import com.mcarplay.app.compat.PassatReturnPolicy
@@ -5463,40 +5464,38 @@ object SessionController {
                                     } else {
                                         CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE
                                     }
-                                val requestedVideo =
-                                    CarLifeProtocol.videoRequestFor(
-                                        setup.displayWidth,
-                                        setup.displayHeight,
-                                        requestMaxLongSide,
-                                    )
                                 val compatibility = client.receiverCompatibility()
-                                val preferVehicleResolution =
-                                    compatibility.preferVehicleResolution &&
-                                        setup.displayFromInfo &&
-                                        setup.displayWidth >= 2 &&
-                                        setup.displayHeight >= 2
+                                val negotiation =
+                                    CarWithVideoNegotiation.decide(
+                                        preferVehicleResolution = compatibility.preferVehicleResolution,
+                                        displayFromInfo = setup.displayFromInfo,
+                                        displayWidth = setup.displayWidth,
+                                        displayHeight = setup.displayHeight,
+                                        maxLongSide = requestMaxLongSide,
+                                    )
                                 if (setup.experimentalPanelGeometry != null) {
                                     appendLog(
                                         "DISPLAY: 实验面板几何 ${experimentalPanelWidth}x$experimentalPanelHeight" +
-                                            " → 请求 CarWith ${requestedVideo.first}x${requestedVideo.second}" +
+                                            " → 请求 CarWith ${negotiation.width}x${negotiation.height}" +
                                             "（长边上限 $requestMaxLongSide）",
                                     )
                                 }
-                                if (preferVehicleResolution) {
+                                if (negotiation.declareDisableResolutionOption) {
                                     appendLog(
                                         "CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1，请求 CarWith 按车机显示尺寸 " +
-                                            "${requestedVideo.first}x${requestedVideo.second} 编码",
+                                            "${negotiation.width}x${negotiation.height} 编码",
                                     )
                                 } else if (compatibility.preferVehicleResolution) {
                                     appendLog(
-                                        "CARLIFE: 未取得有效 /info 显示几何，暂不声明 DISABLE_RESOLUTION_OPTION",
+                                        "CARLIFE: 未取得有效 /info 显示几何，暂不声明 DISABLE_RESOLUTION_OPTION" +
+                                            "，回退请求 ${negotiation.width}x${negotiation.height}",
                                     )
                                 }
                                 val createdCarLife =
                                     newFormalCarLifeSession(
                                         context,
-                                        requestedVideo,
-                                        preferVehicleResolution = preferVehicleResolution,
+                                        negotiation.width to negotiation.height,
+                                        preferVehicleResolution = negotiation.declareDisableResolutionOption,
                                     )
                                 carLife = createdCarLife
                                 val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)

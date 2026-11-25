@@ -8,7 +8,7 @@ import android.content.Context
  * 不代表该车型已被实车验证，见 docs/CARWITH-ENTRY-FINDINGS.md。
  *
  * [MERCEDES_MB_E] 是 issue #62（`MB_E-P-4 / 480.7.4`）的**实验开关**：保持 `displays[0]` 车机几何，
- * 在 CarWith 功能协商里声明 `DISABLE_RESOLUTION_OPTION=1`，不代表该车型已验证。
+ * 显式启用 CarWith 车辆尺寸协商。issue #127 起合法主屏几何也触发通用自动协商。
  * 宝马没有可开关的品牌例外（现有 BMW 改动都是按协议事实分派的通用路径），因此不设宝马预设。
  */
 enum class VehiclePreset {
