@@ -85,6 +85,39 @@ clear_package() {
   echo "$label pm clear: Success"
 }
 
+# 慢速模拟器（嵌套虚拟化的 macOS runner）上 adb install 偶尔以
+# INSTALL_FAILED_VERIFICATION_FAILURE（Integrity verification timed out）失败；
+# 这不是 APK 或测试的问题。重试安装，第二次改用非流式（push + pm install）路径，
+# 并在重试前再次关闭安装校验。安装是幂等的，重试不改变测试语义。
+install_apk() {
+  local apk="$1"
+  local label="$2"
+  local attempt mode
+  for attempt in 1 2 3; do
+    if [[ "$attempt" -eq 2 ]]; then
+      mode="--no-streaming"
+    else
+      mode="streaming"
+    fi
+    local installed=0
+    if [[ "$mode" == "--no-streaming" ]]; then
+      if adb install -r --no-streaming "$apk"; then installed=1; fi
+    else
+      if adb install -r "$apk"; then installed=1; fi
+    fi
+    if [[ "$installed" -eq 1 ]]; then
+      echo "$label install: Success (attempt $attempt, $mode)"
+      return 0
+    fi
+    echo "$label install attempt $attempt failed ($mode)" >&2
+    adb shell settings put global verifier_verify_adb_installs 0 >/dev/null 2>&1 || true
+    adb shell settings put global package_verifier_enable 0 >/dev/null 2>&1 || true
+    sleep 15
+  done
+  echo "$label install failed after 3 attempts" >&2
+  return 1
+}
+
 cleanup() {
   local original_status="$?"
   trap - EXIT
@@ -102,8 +135,8 @@ trap cleanup EXIT
 
 start_time="$(date +%s)"
 adb devices -l
-adb install -r "$APP_APK"
-adb install -r "$ANDROID_TEST_APK"
+install_apk "$APP_APK" "app"
+install_apk "$ANDROID_TEST_APK" "androidTest"
 adb shell pm list packages "$PACKAGE_ID"
 clear_package "pre-RGP07"
 
