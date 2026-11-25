@@ -118,6 +118,48 @@ install_apk() {
   return 1
 }
 
+# 嵌套虚拟化的 macOS runner 上 am instrument 偶尔在测试真正开始前就崩溃
+# （INSTRUMENTATION_RESULT: shortMsg=Process crashed.），崩溃场景在 normal/legacy/corrupt
+# 之间随机漂移，同一 SHA 的其他运行和本地运行都能通过，属于模拟器进程启动抖动而非断言失败。
+# 判定标准保持不变（必须报告 OK (1 test)）；仅在崩溃且没有任何测试结论时重试一次，
+# 并在每次失败时转储 logcat，便于从 artifact 里确认原因。
+run_phase() {
+  local label="$1"
+  local phase_class="$2"
+  local marker="$3"
+  local scenario="$4"
+  local output="$5"
+  local attempt status
+  for attempt in 1 2; do
+    status=0
+    if ! adb shell am instrument \
+      -e class "$phase_class" \
+      -e marker "$marker" \
+      -e scenario "$scenario" \
+      -w "$INSTRUMENTATION_TARGET" | tee "$output"; then
+      status=1
+    fi
+    if [[ "$status" -eq 0 ]] && grep -q "OK (1 test)" "$output"; then
+      return 0
+    fi
+    adb shell logcat -d -t 3000 >"${output%.txt}-attempt${attempt}.logcat.txt" 2>/dev/null || true
+    if [[ "$attempt" -eq 1 ]] &&
+      grep -q "shortMsg=Process crashed" "$output" &&
+      ! grep -qE "^(OK \(|FAILURES)" "$output"; then
+      echo "$label: instrumentation process crashed before reporting a result; retrying once" >&2
+      sleep 10
+      continue
+    fi
+    if [[ "$status" -ne 0 ]]; then
+      echo "$label failed: $scenario" >&2
+    else
+      echo "$label did not report one passing test: $scenario" >&2
+    fi
+    return 1
+  done
+  return 1
+}
+
 cleanup() {
   local original_status="$?"
   trap - EXIT
@@ -149,29 +191,11 @@ for scenario in normal legacy corrupt partial; do
   phase2_output="$OUTPUT_DIR/$scenario/phase2.txt"
   echo "=== scenario: $scenario; marker: $marker ==="
   adb shell am force-stop "$PACKAGE_ID"
-  if ! adb shell am instrument \
-    -e class "$PHASE1_CLASS" \
-    -e marker "$marker" \
-    -e scenario "$scenario" \
-    -w "$INSTRUMENTATION_TARGET" | tee "$phase1_output"; then
-    echo "RGP07 phase1 failed: $scenario" >&2
-    exit 1
-  fi
-  if ! grep -q "OK (1 test)" "$phase1_output"; then
-    echo "RGP07 phase1 did not report one passing test: $scenario" >&2
+  if ! run_phase "RGP07 phase1" "$PHASE1_CLASS" "$marker" "$scenario" "$phase1_output"; then
     exit 1
   fi
   adb shell am force-stop "$PACKAGE_ID"
-  if ! adb shell am instrument \
-    -e class "$PHASE2_CLASS" \
-    -e marker "$marker" \
-    -e scenario "$scenario" \
-    -w "$INSTRUMENTATION_TARGET" | tee "$phase2_output"; then
-    echo "RGP07 phase2 failed: $scenario" >&2
-    exit 1
-  fi
-  if ! grep -q "OK (1 test)" "$phase2_output"; then
-    echo "RGP07 phase2 did not report one passing test: $scenario" >&2
+  if ! run_phase "RGP07 phase2" "$PHASE2_CLASS" "$marker" "$scenario" "$phase2_output"; then
     exit 1
   fi
   clear_package "post-$scenario"
