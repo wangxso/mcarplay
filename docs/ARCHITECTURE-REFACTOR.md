@@ -30,7 +30,7 @@ Phase 2g-1（2026-11-25，基线 `dev` @ `a5b96d2`，已合入 2f / #128）把�
 `currentCarLifeSession`/`isFormalCarLifeActive`/`runningDiagnosticCarLifeSession`/`claimCarLifeSession`/
 `releaseCarLifeSession`/`stopFormalCarLife` 薄门面与既有 `currentTouchTarget` 读取；`videoSender`、`newScreenSender`、
 `screenStreamRecovery`、尺寸/几何/fps 计算与音频桥仍留在控制器（2g-2）。B-18 旧源迟到 `onEnded` 与日志文案逐点保持。
-Phase 2g-2（本 PR，2026-11-25，基线 `dev` @ `22d2381`，已合入 2g-1 / #130）把发送端槽、`newScreenSender` 工厂与
+Phase 2g-2（2026-11-25，已合入 `dev` @ `ccd474e` / #131）把发送端槽、`newScreenSender` 工厂与
 主屏流重建闭包并入同一 `session/StreamPipeline`：组件持有 `@Volatile sender`、`ScreenSenderPlan`/`ScreenSenderHooks`
 与 `recovery`；恢复闭包原 4 处 `synchronized(this)`（`this` = 控制器单例）改为经注入的
 `CarLifeStreamPorts.withControllerLock`（生产绑定 `synchronized(this@SessionController)`），组件内无裸 `synchronized(this)`。
@@ -38,7 +38,14 @@ Phase 2g-2（本 PR，2026-11-25，基线 `dev` @ `22d2381`，已合入 2g-1 / #
 `RoundRetirement.clearRecovery()` 委托组件；尺寸/几何/fps、`reportPanelExperiment`、`record()` 失败分支（含 `ui.*`）、
 S3 `VideoEndedHandling` 与音频仍留在控制器，`SessionUiPort` 45/10/2/1/1 计数不变。既有
 `EndAttemptTraceTest`/`ScreenOwnershipSourceContractTest` 的扫描目标同步改到组件，断言逐字保留、未删除或放宽。
-未做设备或实车验证。**
+Phase 2h（本 PR，2026-11-25，基线 `dev` @ `ccd474e`，已合入 2g-2 / #131）完成 Phase 2 收官：
+抽取 `session/SessionLog`（接管日志缓冲、NUL 清洗、时间戳格式化、增量监听与快照，控制器保留全部公开门面签名，
+`LogContractTest` 零改动通过）与 `service/ScreenPowerController`（接管物理屏启动恢复、断电、偏好切换与
+`retireSession`/B-13 `VideoSender.onEnded`/`disconnect` 三路径恢复策略，锁与日志逐字保持）；
+同时消除 3.1 节与 `ArchitectureRulesTest` 允许清单中的 4 处引擎→上层反向依赖（`CarLifeDiagnostics` 改为注入
+`CarLifeDiagnosticsHost`、`ExternalHuController` 改为注入 `log`、`BtSnoopActivity` 迁入 `ui/` 并同步清单与入口），
+`ArchitectureRulesTest` 允许清单缩减至 3.1 节明确保留的唯一静态广播入口 `bt/CarBluetoothReceiver.kt -> com.mcarplay.app.service`。
+未提前做 Phase 1c 统一 `endAttempt` 或 Phase 3 `AttemptScope`，`SessionUiPort` 45/10/2/1/1 计数不变；未做设备或实车验证。**
 2026-11-10 对照代码复查后修订过一次，改动见文末
 「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 
@@ -422,8 +429,8 @@ interface SessionEnvironment {
 | 2e（已完成） | 帕萨特回屏改为 `Policy` 上的中性字段（不搬代码）：`ScreenReturnStrategy`/`ScreenReturnPolicy`、`Policy.screenReturn`、`ReceiverCompatibility.withScreenReturnPreference` | S | `ScreenReturnPolicyTest`（原 `PassatReturnPolicyTest` 精确改名）、`ReceiverCompatibilityTest` 资格/叠加矩阵、`CompatibilityPrefsScreenReturnTest` |
 | 2f（已完成） | `airplay/ScreenOwnership`：`ModesAction` 队列、`enqueueModesAssert`、`scheduleModesReclaim`、`scheduleTakeBackCheck`、回屏策略、推流中邀请重连 | M | 合并语义、让出/拿回间隔；附录 B-11、B-17 |
 | 2g-1（已合入 #130） | `session/StreamPipeline` 的 CarLife 半：正式源构造/路由、`CarLifeSessionRegistry` 租约、输出槽（`CarLifeOutput`）与 `stopFormal`；控制器保留 `videoSender`、`newScreenSender`、`screenStreamRecovery` 与尺寸/几何/fps 计算 | M | `StreamPipelineCarLifeTest`/`StreamPipelineCarLifeIntegrationTest`、`StreamPipelineSourceContractTest`；入流门控、旧源迟到回调隔离；附录 B-18 |
-| 2g-2（本 PR） | `session/StreamPipeline` 的发送端半：`sender` 槽、`newScreenSender` 工厂与主屏流重建闭包（`recovery`），恢复闭包内的锁改为注入的 `withControllerLock`（绑定控制器监视器） | M | `StreamPipelineScreenTest`/`StreamPipelineIntegrationTest`；恢复三态/原子发布/回滚；改写 `EndAttemptTraceTest` 2 测与 `ScreenOwnershipSourceContractTest` 1 测的扫描目标 |
-| 2h | `session/SessionLog`、`service/ScreenPowerController`；消除 3.1 列出的反向依赖 | S | 架构测试允许清单删去对应项 |
+| 2g-2（已合入 #131） | `session/StreamPipeline` 的发送端半：`sender` 槽、`newScreenSender` 工厂与主屏流重建闭包（`recovery`），恢复闭包内的锁改为注入的 `withControllerLock`（绑定控制器监视器） | M | `StreamPipelineScreenTest`/`StreamPipelineIntegrationTest`；恢复三态/原子发布/回滚；改写 `EndAttemptTraceTest` 2 测与 `ScreenOwnershipSourceContractTest` 1 测的扫描目标 |
+| 2h（本 PR） | `session/SessionLog`、`service/ScreenPowerController`；消除 3.1 列出的反向依赖（`CarLifeDiagnostics`、`ExternalHuController`、`BtSnoopActivity`） | S | `SessionLogTest`、`ScreenPowerControllerTest`（含 B-13 与三路径恢复）、`Phase2hSourceContractTest`；`ArchitectureRulesTest` 允许清单删去 4 项，仅保留 3.1 注明之 `CarBluetoothReceiver` |
 
 完成标准：`SessionController` 的 `@Volatile` 字段从 46 降到 15 以内；全局单例的直接调用只剩在 `SessionEnvironment` 的生产实现里；T2 回归通过。
 

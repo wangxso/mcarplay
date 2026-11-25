@@ -95,6 +95,7 @@ import com.mcarplay.app.net.InviteView
 import com.mcarplay.app.net.WifiCarPlayConnector
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
+import com.mcarplay.app.service.ScreenPowerController
 import com.mcarplay.app.service.StreamingWifiLock
 import com.mcarplay.app.session.CarLifeStreamPorts
 import com.mcarplay.app.session.EventCommandRouter
@@ -104,6 +105,7 @@ import com.mcarplay.app.session.ScreenRecoveryPort
 import com.mcarplay.app.session.ScreenRecoveryResult
 import com.mcarplay.app.session.ScreenSenderHooks
 import com.mcarplay.app.session.ScreenSenderPlan
+import com.mcarplay.app.session.SessionLog
 import com.mcarplay.app.session.SessionUiPort
 import com.mcarplay.app.session.StreamPipeline
 import com.mcarplay.app.session.attemptHandoffCancelled
@@ -113,7 +115,6 @@ import com.mcarplay.app.settings.InternetNetworkPolicy
 import com.mcarplay.app.settings.InternetNetworkPrefs
 import com.mcarplay.app.settings.MediaPrefs
 import com.mcarplay.app.settings.PhoneModeSystemWifiDecision
-import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.ui.ScreenDimmer
@@ -121,9 +122,6 @@ import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 import com.mcarplay.app.video.ExternalVideoSource
 import com.mcarplay.app.video.VideoSender
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -141,19 +139,32 @@ import java.util.concurrent.atomic.AtomicReference
  * 销毁/重建对其无影响。会话逻辑线程通过 [appContext] 运行，不依赖任何 Activity。
  */
 object SessionController {
-    // ---- 日志缓冲（进程级；Activity 订阅渲染）----
+    // ---- 日志缓冲（Phase 2h 起由 session/SessionLog 持有；门面签名不变）----
 
-    private val logLock = Any()
-    private val logBuilder = StringBuilder()
-    private val timestamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    private val sessionLog =
+        SessionLog(
+            logcat = { clean -> android.util.Log.i("CarPlaySender", clean) },
+            fileSink = { clean ->
+                appContext?.let {
+                    DebugFileLog
+                        .append(it, clean)
+                }
+            },
+        )
 
     /** 当前挂屏 Activity 的渲染回调（收到**本条新增日志行**，含时间戳前缀）；Activity onDestroy 时清空。 */
-    @Volatile
-    var logListener: ((String) -> Unit)? = null
+    var logListener: ((String) -> Unit)?
+        get() = sessionLog.listener
+        set(value) {
+            sessionLog.listener = value
+        }
 
     /** Controls UI buffering/rendering only; bounded private file diagnostics remain enabled. */
-    @Volatile
-    var logEnabled: Boolean = true
+    var logEnabled: Boolean
+        get() = sessionLog.enabled
+        set(value) {
+            sessionLog.enabled = value
+        }
 
     @Volatile
     private var appContext: Context? = null
@@ -267,31 +278,9 @@ object SessionController {
     }
 
     /** 追加一行日志：logcat + 文件 + 进程级缓冲 + 挂屏渲染（增量行直送）。任意线程可调。 */
-    fun appendLog(message: String) {
-        // NUL 会写进日志文件：文本编辑器/文件管理器打不开（Read 工具也会判为二进制），
-        // 用户反馈日志时等于白导。0x4301 的定长地址字段曾原样打印出多个 NUL
-        // （2026-10-18 实测 216 个），这里替换成可见占位符——顺带让「字符串里有脏字节」
-        // 在日志上直接可见，而不是隐形成 InetSocketAddress 的解析失败。
-        val clean = if (message.indexOf('\u0000') >= 0) message.replace("\u0000", "␀") else message
-        android.util.Log.i("CarPlaySender", clean)
-        appContext?.let {
-            DebugFileLog
-                .append(it, clean)
-        }
-        if (!logEnabled) return
-        val line =
-            synchronized(logLock) {
-                val stamped = '[' + timestamp.format(Date()) + "] " + clean + '\n'
-                logBuilder.append(stamped)
-                if (logBuilder.length > 40_000) logBuilder.delete(0, logBuilder.length - 20_000)
-                stamped
-            }
-        // 增量行直送 UI：此前每行 toString 整个缓冲再 setText 全文，
-        // 高频日志（触摸/帧）下是 UI 线程与 GC 的双重放大器
-        logListener?.invoke(line)
-    }
+    fun appendLog(message: String) = sessionLog.append(message)
 
-    fun logText(): String = synchronized(logLock) { logBuilder.toString() }
+    fun logText(): String = sessionLog.snapshot()
 
     /**
      * 派发系统媒体键（AudioManager 全局路由给**当前活跃媒体会话**，无需权限）。
@@ -488,9 +477,7 @@ object SessionController {
      * 语义；改为增量 appendConsole 后空串等于追加空行，UI 原地不动（「清除按钮点了
      * 没反应」根因，2026-10-16）。不要恢复该调用：空串与真实日志行无法区分。
      */
-    fun clearLog() {
-        synchronized(logLock) { logBuilder.setLength(0) }
-    }
+    fun clearLog() = sessionLog.clear()
 
     // ---- 会话对象（进程级所有权；Activity 重建不影响）----
 
@@ -1266,21 +1253,8 @@ object SessionController {
                 )
         }
 
-        // 上次进程若在物理息屏期间崩溃/被杀，面板会停在 OFF（UserService 是常驻 shell 进程，
-        // 它持有的电源状态不随应用进程消失）。新进程启动时恢复一次：此刻还没有会话，
-        // 恢复是安全的——否则用户拿到的是一块按不亮的黑屏（可按电源键两次救回）。
-        Bg.run("screen-power-startup-restore") {
-            if (ShizukuGate.state(context) != ShizukuGate.State.READY) return@run
-            val deadline = android.os.SystemClock.uptimeMillis() + 3_000L
-            while (android.os.SystemClock.uptimeMillis() < deadline && CarInputClient.service == null) {
-                CarInputClient.ensure(context)
-                Thread.sleep(150)
-            }
-            // 只恢复「已绑定服务」的情况：Shizuku 没起来时不必打扰用户（面板也不会是我们关的）
-            if (CarInputClient.service != null && !CarInputClient.setPhysicalScreenPower(true)) {
-                appendLog("SCREEN: 启动恢复物理屏失败（ROM 未授权 shell 电源控制）")
-            }
-        }
+        // 上次进程若在物理息屏期间崩溃/被杀，面板会停在 OFF；新进程启动时恢复一次（委托 ScreenPowerController）。
+        screenPowerController.restoreAtStartup()
     }
 
     /** 状态行文本（Activity 渲染 statusText 用）。 */
@@ -1660,74 +1634,14 @@ object SessionController {
         reconnectAttribution.clear(context)
     }
 
-    // ---- 物理屏真息屏（同 scrcpy -S/--turn-screen-off）----
+    // ---- 物理屏真息屏（Phase 2h 起由 service/ScreenPowerController 持有）----
 
-    /** 物理主屏是否被我们置为断电（只用于「要不要恢复」的判断，避免无谓的 AIDL 调用）。 */
-    @Volatile
-    private var phoneScreenOff = false
-
-    /**
-     * 电源切换串行化。enter/restore 都是 Bg 任务（cached 池不保证顺序），
-     * 不加锁会出现「restore 先跑完、enter 后跑」→ 会话都结束了面板还被关掉。
-     */
-    private val screenPowerLock = Any()
-
-    /**
-     * 会话进入「真息屏」：把**物理主屏**硬件断电，系统仍保持唤醒，虚拟屏照常出帧。
-     *
-     * 与暗幕的区别：暗幕只是一层黑 View，触摸层仍通电（口袋误触、耗电）；
-     * 这里是 SurfaceFlinger 级断电（触摸 IC 同步熄），观感等同锁屏，但**不锁屏**——
-     * 车机侧的高德/QQ 音乐不会被 Keyguard 挂起。
-     *
-     * 失败只记日志：ROM 没给 shell 权限或取不到 display token 时，最坏退回暗幕。
-     */
-    private fun enterPhoneScreenOff() {
-        val ctx = appContext ?: return
-        // 没有在推流就不必关屏（设置面板无会话时切换也会走到这里）
-        if (videoSender?.isRunning != true) return
-        Bg.run("screen-power-off") {
-            synchronized(screenPowerLock) {
-                if (phoneScreenOff) return@synchronized
-                // Bg 任务可能晚于会话结束才被执行：会话没了就绝不能再关屏
-                if (videoSender?.isRunning != true) {
-                    appendLog("SCREEN: 会话已结束——跳过物理息屏")
-                    return@synchronized
-                }
-                // 手机若正在休眠：先唤醒让框架把物理屏置 ON；否则我们设 OFF 之后，框架的
-                // 唤醒流程又会把面板点亮（两者抢同一个 SurfaceFlinger 电源状态）。
-                val interactive =
-                    runCatching {
-                        (ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager).isInteractive
-                    }.getOrDefault(true)
-                if (!interactive) {
-                    appendLog("SCREEN: 手机处于休眠——先唤醒再物理息屏（避免框架把面板重新点亮）")
-                    Shell.exec("input keyevent KEYCODE_WAKEUP", 4_000L)
-                    Thread.sleep(400)
-                    // 无密码 / SmartLock 场景顺手划开锁屏；安全锁会失败，忽略即可
-                    Shell.exec("wm dismiss-keyguard", 3_000L)
-                }
-                // 断电由暗幕承载（2026-10-24 用户实测定谳：面板断电后触摸 IC 仍工作，
-                // 点击暗幕即唤醒；暗幕同时是口袋误触盾——没有它，兜里触摸会点到前台应用）。
-                // enterDimNow = 上暗幕 + 断面板电 + 记账（panelOffByUs），与手动假息屏同路。
-                if (ScreenDimmer.isAttached()) {
-                    ScreenDimmer.enterDimNow()
-                    phoneScreenOff = true
-                    appendLog("SCREEN: 真息屏已进入（暗幕承载触摸检测——点暗幕唤醒，无需按电源键）")
-                } else {
-                    // 暗幕不可用（缺悬浮窗权限）降级裸断电：无触摸唤醒手段，只能按电源键
-                    val ok = CarInputClient.setPhysicalScreenPower(false)
-                    phoneScreenOff = ok
-                    appendLog(
-                        if (ok) {
-                            "SCREEN: 物理屏已断电（暗幕不可用——无触摸唤醒手段，按电源键两次可恢复）"
-                        } else {
-                            "SCREEN: 物理屏断电失败（ROM 未给 shell 权限 / 取不到 display token）"
-                        },
-                    )
-                }
-            }
-        }
-    }
+    private val screenPowerController =
+        ScreenPowerController.create(
+            context = { appContext },
+            isStreaming = { videoSender?.isRunning == true },
+            log = ::appendLog,
+        )
 
     /** 「导航时音乐音量」在会话中调整：交给正在运行的 CarWith 原生音频桥（没有则下次连接生效）。 */
     fun applyDuckDb(duckDb: Int) {
@@ -1739,13 +1653,7 @@ object SessionController {
      *
      * 车机屏上就能操作，所以手机面板黑着也不影响切换；关掉会立刻把面板点亮。
      */
-    fun applyScreenOffPreference(enabled: Boolean) {
-        if (enabled) {
-            enterPhoneScreenOff()
-        } else {
-            restorePhoneScreen(sleepIfCarSide = false)
-        }
-    }
+    fun applyScreenOffPreference(enabled: Boolean) = screenPowerController.applyPreference(enabled)
 
     /**
      * 恢复物理屏点亮。幂等：没关过就什么都不做。
@@ -1753,24 +1661,7 @@ object SessionController {
      * @param sleepIfCarSide 车机侧断开（人在车外、手机在口袋）为 true：直接让手机休眠，
      *   不先点亮面板（否则口袋里的手机会先亮一下再熄）；用户手动断开走 false。
      */
-    private fun restorePhoneScreen(sleepIfCarSide: Boolean) {
-        Bg.run("screen-power-restore") {
-            synchronized(screenPowerLock) {
-                if (!phoneScreenOff) return@synchronized
-                phoneScreenOff = false
-                if (sleepIfCarSide) {
-                    // 保持 SurfaceFlinger 的 OFF 状态，让框架正常休眠；下次唤醒时框架会把面板置 ON
-                    Shell.exec("input keyevent KEYCODE_SLEEP", 4_000L)
-                    appendLog("SCREEN: 车机侧断开——已让手机休眠（面板保持黑）")
-                } else {
-                    // 暗幕承载的断电态在这里收口：撤暗幕 + 恢复面板电（幂等）
-                    ScreenDimmer.exitPanelOff()
-                    val ok = CarInputClient.setPhysicalScreenPower(true)
-                    appendLog("SCREEN: 物理屏已恢复点亮 ok=$ok")
-                }
-            }
-        }
-    }
+    private fun restorePhoneScreen(sleepIfCarSide: Boolean) = screenPowerController.restore(sleepIfCarSide)
 
     private val roundRetirement =
         RoundRetirement(

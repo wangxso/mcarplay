@@ -6,7 +6,18 @@
 
 ## 当前基线与结论
 
-- **11 月 25 日会话编排层重构 Phase 2g-2（本 PR，基线 `dev` @ `22d2381`，已合入 2g-1 / #130，无设备或实车验证）：**
+- **11 月 25 日会话编排层重构 Phase 2h（本 PR，基线 `dev` @ `ccd474e`，已合入 2g-2 / #131，无设备或实车验证）：**
+  完成 Phase 2 收官：抽取 `session/SessionLog`（接管日志缓冲、NUL 清洗、时间戳格式化、40k→20k 截断、增量监听与快照，
+  控制器保留 `logListener`/`logEnabled`/`appendLog`/`logText`/`clearLog` 薄门面，`LogContractTest` 零改动通过）与
+  `service/ScreenPowerController`（接管物理屏启动恢复、推流中断电、偏好切换与 `retireSession`/B-13 `VideoSender.onEnded`/
+  `disconnect` 三路径恢复策略，私有锁串行化与日志文案逐字保持）；消除 3.1 节与 `ArchitectureRulesTest` 允许清单中的
+  4 处引擎→上层反向依赖（`CarLifeDiagnostics` 改为注入 `CarLifeDiagnosticsHost`、`ExternalHuController` 改为注入 `log`、
+  `BtSnoopActivity` 迁入 `ui/` 并同步 Manifest 与 `MainActivity` 入口），允许清单缩减至 3.1 节明确保留的唯一静态广播入口
+  `bt/CarBluetoothReceiver.kt -> com.mcarplay.app.service`。未提前做 Phase 1c 统一 `endAttempt` 或 Phase 3 `AttemptScope`，
+  `SessionUiPort` 45/10/2/1/1 计数不变；新增 `SessionLogTest`、`ScreenPowerControllerTest`（含 B-13 与三路径恢复）及
+  `Phase2hSourceContractTest`。完整门禁与测试计数见 PR，不以离线测试宣称任何车型兼容性。
+
+- **11 月 25 日会话编排层重构 Phase 2g-2（已合入 `dev` @ `ccd474e` / #131，无设备或实车验证）：**
   在已合入的 2g-1 之上把发送端槽、`newScreenSender` 工厂与主屏流重建闭包并入 `session/StreamPipeline`；组件持有
   `@Volatile sender`、`ScreenSenderPlan`/`ScreenSenderHooks` 与 `recovery`。恢复闭包原 4 处 `synchronized(this)`
   （`this` = 控制器单例）改经注入的 `CarLifeStreamPorts.withControllerLock`（生产绑定

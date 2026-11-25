@@ -47,13 +47,7 @@ class ArchitectureRulesTest {
     /** 基线（`ab0cb93`）已有的反向依赖：`文件 -> 被引用的全名前缀`。只减不增。 */
     private val allowedUpwardReferences =
         setOf(
-            // CarWith 自检与外部车机控制直接写日志、认领 CarLife 会话；Phase 2h 改为注入 log 与注册表
-            "carlife/CarLifeDiagnostics.kt -> com.mcarplay.app.SessionController",
-            "carlife/CarLifeDiagnostics.kt -> com.mcarplay.app.service",
-            "carlife/ExternalHuController.kt -> com.mcarplay.app.SessionController",
-            // btsnoop 查看页本身是 Activity，复用界面组件
-            "diagnostics/btsnoop/BtSnoopActivity.kt -> com.mcarplay.app.ui",
-            // 系统蓝牙广播入口负责拉起前台服务
+            // 3.1 允许保留的唯一例外：清单静态注册的系统蓝牙广播入口，冷启动后负责拉起前台服务
             "bt/CarBluetoothReceiver.kt -> com.mcarplay.app.service",
         )
 

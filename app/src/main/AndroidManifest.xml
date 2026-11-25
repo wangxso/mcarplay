@@ -85,7 +85,7 @@
         <!-- 蓝牙抓包分析：exported 只为接收系统错误报告的分享（SEND_MULTIPLE，zip + 截图）；
              收到的文件只在本机流式解析，结果脱敏后写进诊断日志。 -->
         <activity
-            android:name=".diagnostics.btsnoop.BtSnoopActivity"
+            android:name=".ui.BtSnoopActivity"
             android:exported="true"
             android:launchMode="singleTop">
             <intent-filter>
