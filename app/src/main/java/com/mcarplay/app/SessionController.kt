@@ -8,10 +8,21 @@ import androidx.annotation.StringRes
 import com.mcarplay.app.airplay.AirPlayClient
 import com.mcarplay.app.airplay.DisplaySurfaceReport
 import com.mcarplay.app.airplay.PairVerifyClient
+import com.mcarplay.app.audio.AudioChannelStarter
+import com.mcarplay.app.audio.AudioChannelState
+import com.mcarplay.app.audio.AudioClaim
+import com.mcarplay.app.audio.AudioClientPort
+import com.mcarplay.app.audio.AudioDetectionPort
 import com.mcarplay.app.audio.AudioDuckingPrefs
 import com.mcarplay.app.audio.AudioProfile
 import com.mcarplay.app.audio.AudioProfileMemory
 import com.mcarplay.app.audio.AudioSender
+import com.mcarplay.app.audio.AudioSenderSpec
+import com.mcarplay.app.audio.AudioSessionPort
+import com.mcarplay.app.audio.AudioSetup
+import com.mcarplay.app.audio.AudioSourcePort
+import com.mcarplay.app.audio.AudioStartDiagnostics
+import com.mcarplay.app.audio.AudioStartMemory
 import com.mcarplay.app.audio.AudioTeardown
 import com.mcarplay.app.audio.AudioTeardownOutput
 import com.mcarplay.app.audio.AudioTeardownState
@@ -41,7 +52,6 @@ import com.mcarplay.app.compat.PassatReturnStrategy
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverObservation
-import com.mcarplay.app.compat.ReceiverProbePlan
 import com.mcarplay.app.compat.VehiclePreset
 import com.mcarplay.app.compat.VehiclePresetRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
@@ -551,17 +561,19 @@ object SessionController {
     @Volatile
     var audioSender: AudioSender? = null
 
-    /** 音频通道启动 single-flight 闸门（见 [startAudioChannel]）。 */
-    private val audioStartGate = AudioStartGate()
+    private val audioChannelState = AudioChannelState()
+
+    // 启动器与拆链归因共享同一个状态容器；真实叶子保持在编排层装配。
+    private val audioChannelStarter = createAudioChannelStarter()
 
     private val audioTeardown =
         AudioTeardown(
             probeMillis = AUDIO_PROFILE_PROBE_MS,
             state = {
                 AudioTeardownState(
-                    profile = activeAudioProfile,
-                    startedAtMs = activeAudioStartedAt,
-                    receiverKey = activeAudioReceiverKey,
+                    profile = audioChannelState.profile,
+                    startedAtMs = audioChannelState.startedAtMs,
+                    receiverKey = audioChannelState.receiverKey,
                 )
             },
             clearState = { clearActiveAudioState() },
@@ -785,18 +797,6 @@ object SessionController {
      */
     @Volatile
     var audioPreferCompat: Boolean = false
-
-    /** 本轮真正用上的音频档位（拆链归因与记忆回写用；null = 本次没有音频）。 */
-    @Volatile
-    private var activeAudioProfile: AudioProfile? = null
-
-    /** 音频档位记忆的作用域摘要（见 [AirPlayClient.receiverIdentity]）。 */
-    @Volatile
-    private var activeAudioReceiverKey: String = ""
-
-    /** 音频通道真正开始推流的时刻（uptimeMillis）；0 = 未开始。 */
-    @Volatile
-    private var activeAudioStartedAt: Long = 0L
 
     /** Active bridge from CarWith's native media/TTS channels into CarPlay. */
     @Volatile
@@ -2088,23 +2088,7 @@ object SessionController {
     /** 会话已建立且投影就绪、但音频尚未启动时，动态补启（投影授权晚于连接的场景）。 */
     @Synchronized
     fun maybeStartAudioNow(context: Context) {
-        val client =
-            currentClient ?: run {
-                appendLog("MODE: 已启用声音（当前无会话，下次连接时接入）")
-                return
-            }
-        if (client.sessionStopping) {
-            appendLog("AUDIO: 会话正在结束——跳过动态开启声音")
-            return
-        }
-        val secret = currentSharedSecret
-        if (secret == null) {
-            appendLog("MODE: 明文会话（未配对）无共享密钥——不补启音频")
-            return
-        }
-        if (audioSender?.isRunning == true) return
-        appendLog("MODE: 会话进行中，动态补启音频通道…")
-        startAudioAndRecord(context, client, secret, currentAudioHost, "AUDIO: 动态加入音频流——检查会话激活")
+        audioChannelStarter.maybeStartAudioNow(context)
     }
 
     /** 启动音频并在成功后补 RECORD；连接、动态补启和仲裁重试三条入口共用。 */
@@ -2115,36 +2099,10 @@ object SessionController {
         host: String?,
         logLine: String,
         recordAfterSetup: Boolean = true,
-    ): Boolean {
-        val started = startAudioChannel(context, client, secret, host)
-        if (started) {
-            if (recordAfterSetup) {
-                appendLog(logLine)
-                client.record()
-            } else {
-                appendLog("AUDIO: 初始音频流已加入——沿用已激活会话的 RECORD")
-            }
-        }
-        return started
-    }
+    ): Boolean = audioChannelStarter.startAudioAndRecord(context, client, secret, host, logLine, recordAfterSetup)
 
-    /**
-     * claim 因车机约束被拒后重试一次音频通道。
-     * 由 [ModeArbiter.consumeAudioClaimRetry] 原子消费 pending claim 后触发（changeModes 归还
-     * 与 requestUI 重进两条入口共用）；仍受音频开关、会话代次和发送器状态约束。
-     */
     private fun retryAudioAfterClaimReturned(client: AirPlayClient) {
-        // 只把状态检查放在短临界区里；SETUP 最长数秒，不能占着会话锁（disconnect 是
-        // @Synchronized，UI 线程点“断开”会跟着卡住）。
-        val ready =
-            synchronized(this) {
-                if (client !== currentClient || client.sessionStopping || !audioEnabledForSession) return
-                if (audioSender?.isRunning == true) return
-                val context = appContext ?: return
-                val secret = currentSharedSecret ?: return
-                Triple(context, secret, currentAudioHost)
-            }
-        startAudioAndRecord(ready.first, client, ready.second, ready.third, "AUDIO: 车机归还主音频后音频流已建立——检查会话激活")
+        audioChannelStarter.retryAudioAfterClaimReturned(client)
     }
 
     /**
@@ -2600,6 +2558,171 @@ object SessionController {
 
     // ---- 以下方法体自 MainActivity 原样迁入（会话逻辑不依赖 Activity）----
 
+    private fun createAudioChannelStarter() =
+        AudioChannelStarter(
+            session =
+                object : AudioSessionPort<AirPlayClient, Context, AudioSender, CarLifeAudioBridge> {
+                    override val currentClient get() = this@SessionController.currentClient
+                    override val context get() = appContext
+                    override val secret get() = currentSharedSecret
+                    override val host get() = currentAudioHost
+                    override val enabled get() = audioEnabledForSession
+                    override val preferCompat get() = audioPreferCompat
+                    override var sender: AudioSender?
+                        get() = audioSender
+                        set(value) {
+                            audioSender = value
+                        }
+                    override var bridge: CarLifeAudioBridge?
+                        get() = nativeAudioBridge
+                        set(value) {
+                            nativeAudioBridge = value
+                        }
+
+                    override fun baselineAllowed() = audioBaselineAllowed()
+
+                    override fun <T> withControllerLock(block: () -> T): T = synchronized(this@SessionController) { block() }
+                },
+            clients =
+                object : AudioClientPort<AirPlayClient> {
+                    override fun generation(client: AirPlayClient) = client.connectionGeneration
+
+                    override fun isConnectionCurrent(
+                        client: AirPlayClient,
+                        generation: Long,
+                    ) = client.isConnectionCurrent(generation)
+
+                    override fun isStopping(client: AirPlayClient) = client.sessionStopping
+
+                    override fun receiverIdentity(client: AirPlayClient) = client.receiverIdentity()
+
+                    override fun candidates(
+                        client: AirPlayClient,
+                        preferCompat: Boolean,
+                        allowBaseline: Boolean,
+                    ) = client.audioCandidates(preferCompat = preferCompat, allowBaseline = allowBaseline)
+
+                    override fun claim(
+                        client: AirPlayClient,
+                        generation: Long,
+                    ): AudioClaim {
+                        val claim = client.claimMainAudioForStreaming(generation)
+                        return AudioClaim(claim.note, claim.claimed, claim.announced)
+                    }
+
+                    override fun phoneOwnsAudio(client: AirPlayClient) = client.modes.phoneOwnsAudio
+
+                    override fun setup(
+                        client: AirPlayClient,
+                        secret: ByteArray,
+                        profile: AudioProfile,
+                        tuning: AudioTuning,
+                        expectedEpoch: Long,
+                    ): AudioSetup? =
+                        client.runAudioStream(secret, profile, tuning, expectedEpoch = expectedEpoch)?.let {
+                            AudioSetup(it.streamConnectionId, it.dataPort, it.controlPort, it.streamKey, it.sampleRate)
+                        }
+
+                    override fun record(client: AirPlayClient) = client.record()
+                },
+            source =
+                object : AudioSourcePort<Context, android.media.projection.MediaProjection, AudioSender, CarLifeAudioBridge> {
+                    override fun projection() = CarPlayService.mediaProjection
+
+                    override fun nativeAvailable(context: Context) = CarLifeLauncher.isAvailable(context)
+
+                    override fun applicationContext(context: Context): Context = context.applicationContext
+
+                    override fun isRunning(sender: AudioSender) = sender.isRunning
+
+                    override fun createSender(
+                        spec: AudioSenderSpec,
+                        context: Context,
+                        log: (String) -> Unit,
+                        onPacketSent: () -> Unit,
+                    ): AudioSender =
+                        AudioSender(
+                            host = spec.host,
+                            dataPort = spec.dataPort,
+                            streamKey = spec.streamKey,
+                            log = log,
+                            context = context,
+                            sampleRate = spec.sampleRate,
+                            codec = spec.codec,
+                            streamType = spec.streamType,
+                            adtsFrames = spec.adtsFrames,
+                            controlPort = spec.controlPort,
+                            onPacketSent = onPacketSent,
+                        )
+
+                    override fun createBridge(
+                        sender: AudioSender,
+                        sampleRate: Int,
+                        context: Context,
+                        log: (String) -> Unit,
+                    ): CarLifeAudioBridge = CarLifeAudioBridge(sender, sampleRate, AudioDuckingPrefs.config(context), log)
+
+                    override fun startCapture(
+                        sender: AudioSender,
+                        projection: android.media.projection.MediaProjection,
+                    ) = sender.start(projection)
+
+                    override fun startExternal(sender: AudioSender) = sender.startExternalSource()
+
+                    override fun startBridge(bridge: CarLifeAudioBridge) = bridge.start()
+
+                    override fun stopSender(sender: AudioSender) = sender.stop()
+
+                    override fun stopBridge(bridge: CarLifeAudioBridge) = bridge.stop()
+                },
+            memory =
+                object : AudioStartMemory<Context> {
+                    override fun load(
+                        context: Context,
+                        identity: String,
+                    ) = AudioProfileMemory.load(context, identity)
+
+                    override fun reset(
+                        context: Context,
+                        identity: String,
+                    ) = AudioProfileMemory.reset(context, identity)
+
+                    override fun recordRejected(
+                        context: Context,
+                        identity: String,
+                        key: String,
+                        allCandidates: Set<String>,
+                        markExhausted: Boolean,
+                    ) = AudioProfileMemory.recordRejected(context, identity, key, allCandidates, markExhausted)
+                },
+            detection =
+                object : AudioDetectionPort<AirPlayClient> {
+                    override fun collecting(client: AirPlayClient) = ReceiverDetectionRuntime.collecting(client.currentEndpoint.observation)
+
+                    override fun preferredAudio(client: AirPlayClient) =
+                        ReceiverDetectionRuntime.preferredAudio(client.currentEndpoint.observation, client.capabilityDigest)
+
+                    override fun audioSelected(
+                        client: AirPlayClient,
+                        key: String,
+                    ) = ReceiverDetectionRuntime.audioSelected(client.currentEndpoint.observation, key)
+                },
+            diagnostics =
+                object : AudioStartDiagnostics {
+                    override fun currentAttemptId() = ConnectionDiagnostics.timeline.snapshot()?.id
+
+                    override fun note(
+                        attempt: String,
+                        line: String,
+                    ) = ConnectionDiagnostics.timeline.note(attempt, line)
+
+                    override fun audioPacket(attempt: String) = ConnectionDiagnostics.timeline.audioPacket(attempt)
+                },
+            active = audioChannelState,
+            nowMs = { SystemClock.uptimeMillis() },
+            log = ::appendLog,
+        )
+
     /**
      * 音频通道（手机 → 车机，RTP over UDP）：SETUP type=100 协商 → 播放捕获 → ChaCha 封包推流。
      *
@@ -2613,226 +2736,7 @@ object SessionController {
         client: AirPlayClient,
         sharedSecret: ByteArray?,
         host: String?,
-    ): Boolean {
-        // SETUP 协商可持续数秒，期间 audioSender 尚未赋值：连接建立、动态补启、requestUI
-        // 重进和 changeModes 归还重试都可能在赋值前通过状态检查。没有闸门时会并发建立
-        // 多条流，后写入的 audioSender 覆盖先前的，另一条流仍启动却失去引用（双流 + 泄漏）。
-        if (!audioStartGate.tryAcquire()) {
-            appendLog("AUDIO: 已有音频通道正在建立——跳过本次重复启动")
-            return false
-        }
-        return try {
-            startAudioChannelLocked(context, client, sharedSecret, host)
-        } finally {
-            audioStartGate.release()
-        }
-    }
-
-    /** [startAudioChannel] 的单飞临界区；进入前已持有 [audioStartGate]。 */
-    private fun startAudioChannelLocked(
-        context: Context,
-        client: AirPlayClient,
-        sharedSecret: ByteArray?,
-        host: String?,
-    ): Boolean {
-        if (audioSender?.isRunning == true) {
-            appendLog("AUDIO: 已有音频发送器在运行——跳过重复启动")
-            return false
-        }
-        val connectionGeneration = client.connectionGeneration
-        if (!client.isConnectionCurrent(connectionGeneration)) return false
-        val diagnosticAttempt = ConnectionDiagnostics.timeline.snapshot()?.id
-        if (!audioEnabledForSession) {
-            appendLog("AUDIO: 本次连接未开启车机侧声音（「启动连接」弹窗选择）——仅推视频")
-            return false
-        }
-        if (sharedSecret == null) {
-            // 明文会话（et=NONE）没有共享密钥可派生 DataStream 输出密钥：
-            // 推出去的 RTP 车机无法解密。宁可不推，也不要制造「有包无声」的假象。
-            appendLog("AUDIO: 明文会话（未配对）无共享密钥——跳过音频通道")
-            return false
-        }
-        if (host == null) {
-            appendLog("AUDIO: 无接收端可用地址，跳过音频通道")
-            return false
-        }
-        val projection = CarPlayService.mediaProjection
-        val useNativeCarLifeAudio = CarLifeLauncher.isAvailable(context)
-        if (projection == null && !useNativeCarLifeAudio) {
-            appendLog(
-                "AUDIO: 缺少投屏权限（播放捕获依赖 MediaProjection）——音频通道未启动。" +
-                    "现在点「申请投屏权限」也可即时补启（无需重连）；注意「断开连接」会停服务并连带失效投屏授权",
-            )
-            return false
-        }
-        var startingSender: AudioSender? = null
-        var startingBridge: CarLifeAudioBridge? = null
-        return try {
-            // 车机身份 → 只用于「本车机哪些音频档位踩过雷」的持久化记忆。
-            val detecting = ReceiverDetectionRuntime.collecting(client.currentEndpoint.observation)
-            val identity = if (detecting) "" else client.receiverIdentity()
-            // 音频封装参数已定案（见 AudioTuning），不再提供切换
-            val tuning = AudioTuning.RAW_SPF
-            var entry =
-                if (identity.isBlank()) {
-                    AudioProfileMemory.Entry()
-                } else {
-                    AudioProfileMemory.load(
-                        context.applicationContext,
-                        identity,
-                    )
-                }
-            if (entry.disabled) {
-                // 以前「全部档位都导致拆链」会自动退成只推视频，并要用户去弹窗里手点
-                // 「清除记忆」。现在音频通路已换成 AAC-LC 且实测能稳定跑满 147s，
-                // 旧结论不再可信：用户既然主动选了「开启声音」，就直接清记忆重试。
-                AudioProfileMemory.reset(context.applicationContext, identity)
-                entry = AudioProfileMemory.Entry()
-                appendLog("AUDIO: 本车机（$identity）有「全部档位拆链」的旧记忆，已自动清除并重试")
-            }
-            val candidates = client.audioCandidates(preferCompat = audioPreferCompat, allowBaseline = audioBaselineAllowed())
-            val baseline = AudioProfileMemory.order(candidates, entry)
-            val preferred = ReceiverDetectionRuntime.preferredAudio(client.currentEndpoint.observation, client.capabilityDigest)
-            val ordered = ReceiverProbePlan.audio(baseline, preferred)
-            if (ordered.isEmpty()) {
-                appendLog("AUDIO: 没有可用音频档位（候选=${candidates.map { it.label }}）——仅推视频")
-                return false
-            }
-            appendLog(
-                "AUDIO: 音频档位候选=${ordered.map { it.label }}" +
-                    "（本车机记忆：${AudioProfileMemory.describe(entry)}；" +
-                    "封装=${tuning.detail}）",
-            )
-            // 真 iPhone 在 Main audio setting up 之前先报 mainAudio controller；车机持有
-            // 或借用主音频时直接 SETUP 会被 VW4131 以 400 拒绝，不能误判成三档格式都不兼容。
-            val audioClaim = client.claimMainAudioForStreaming(connectionGeneration)
-            if (!audioClaim.claimed) {
-                // 车机以高于 userInitiated 的约束持有/借用主音频（如倒车提示音）：不抢、不发 SETUP，
-                // 否则三档 400 会被写成格式失败记忆；等 changeModes 归还后再重试。
-                appendLog("AUDIO: 主音频资源未接管（${audioClaim.note}）——本次不发送 SETUP，等车机归还主音频后重试")
-                return false
-            }
-            appendLog(
-                "AUDIO: 音频流建立前主音频资源" +
-                    if (audioClaim.announced) "已报归手机" else "切换未确认（继续尝试 SETUP）",
-            )
-            // SETUP 失败不会扰动会话（车机只是不接这条流的请求），所以本会话内就把候选
-            // 试完，不必等下一次连接。这一点对当前场景很关键：102/AAC-LC 与 100/PCM 是
-            // 两条完全不同的通路，前者不被接受时应当立刻退到后者，而不是让用户白连一次。
-            var chosen: AudioProfile? = null
-            var streamInfo: AirPlayClient.AudioStreamInfo? = null
-            for (candidate in ordered) {
-                if (!client.isConnectionCurrent(connectionGeneration)) return false
-                if (!client.modes.phoneOwnsAudio) {
-                    appendLog("AUDIO: 主音频资源在协商期间转为车机占用——停止候选轮换，不记为格式失败")
-                    return false
-                }
-                val result = client.runAudioStream(sharedSecret, candidate, tuning, expectedEpoch = connectionGeneration)
-                if (result != null) {
-                    chosen = candidate
-                    streamInfo = result
-                    break
-                }
-                if (!client.modes.phoneOwnsAudio) {
-                    appendLog("AUDIO: 主音频 SETUP 被拒时资源已归车机——不记为格式失败")
-                    return false
-                }
-                // SETUP 被拒不等于「车机不兼容」：可能只是资源仲裁/网络抖动，
-                // 不能据此把整台车机的音频判死（置 disabled 只认「拆链」证据）。
-                // 只有 modesChanged 已确认手机持有主音频时，失败才可作为格式证据。
-                if (audioClaim.announced && identity.isNotBlank()) {
-                    AudioProfileMemory.recordRejected(
-                        context.applicationContext,
-                        identity,
-                        candidate.key,
-                        ordered.map { it.key }.toSet(),
-                        markExhausted = false,
-                    )
-                }
-                appendLog("AUDIO: 档位 ${candidate.label} 协商失败——本会话继续试下一档")
-            }
-            val profile = chosen
-            val audio = streamInfo
-            if (profile == null || audio == null) {
-                appendLog("AUDIO: 全部候选档位协商失败（共 ${ordered.size} 档）——本次仅推视频")
-                return false
-            }
-            val sender =
-                AudioSender(
-                    host = host,
-                    dataPort = audio.dataPort,
-                    streamKey = audio.streamKey,
-                    log = { line -> appendLog(line) },
-                    context = context.applicationContext,
-                    sampleRate = audio.sampleRate,
-                    codec = profile.codec,
-                    streamType = profile.streamType,
-                    adtsFrames = tuning.adts,
-                    // 同步包目标端口：车机在 SETUP 应答里下发。缺了它就没有 RTP↔NTP 锚点，
-                    // 接收端只能「按到达时刻猜」，严格的实现干脆不排播（2026-10-20 实测）。
-                    controlPort = audio.controlPort,
-                    onPacketSent = { diagnosticAttempt?.let { ConnectionDiagnostics.timeline.audioPacket(it) } },
-                )
-            startingSender = sender
-            val bridge =
-                if (useNativeCarLifeAudio) {
-                    CarLifeAudioBridge(
-                        sender,
-                        audio.sampleRate,
-                        AudioDuckingPrefs.config(context.applicationContext),
-                    ) { line -> appendLog(line) }
-                } else {
-                    null
-                }
-            startingBridge = bridge
-            synchronized(this) {
-                if (!client.isConnectionCurrent(connectionGeneration) || currentClient !== client) return false
-                audioSender = sender
-                nativeAudioBridge = bridge
-                activeAudioProfile = profile
-                activeAudioReceiverKey = identity
-                activeAudioStartedAt = android.os.SystemClock.uptimeMillis()
-            }
-            ReceiverDetectionRuntime.audioSelected(client.currentEndpoint.observation, profile.key)
-            diagnosticAttempt?.let {
-                ConnectionDiagnostics.timeline.note(it, "AUDIO_SELECTED ${profile.label} sampleRate=${audio.sampleRate}")
-            }
-            val started =
-                if (bridge != null) {
-                    sender.startExternalSource().also { if (it) bridge.start() }
-                } else {
-                    projection != null && sender.start(projection)
-                }
-            if (!started || !client.isConnectionCurrent(connectionGeneration) || currentClient !== client) {
-                bridge?.stop()
-                sender.stop()
-                synchronized(this) {
-                    if (audioSender === sender) {
-                        audioSender = null
-                        activeAudioProfile = null
-                        activeAudioStartedAt = 0L
-                    }
-                    if (nativeAudioBridge === bridge && bridge != null) nativeAudioBridge = null
-                }
-                false
-            } else {
-                true
-            }
-        } catch (error: Exception) {
-            appendLog("AUDIO: 通道启动异常 - ${error.javaClass.simpleName}: ${error.message}")
-            startingBridge?.stop()
-            startingSender?.stop()
-            synchronized(this) {
-                if (startingSender != null && audioSender === startingSender) {
-                    audioSender = null
-                    activeAudioProfile = null
-                    activeAudioStartedAt = 0L
-                }
-                if (startingBridge != null && nativeAudioBridge === startingBridge) nativeAudioBridge = null
-            }
-            false
-        }
-    }
+    ): Boolean = audioChannelStarter.startAudioChannel(context, client, sharedSecret, host)
 
     /**
      * 会话结束时的**音频拆链归因**（2026-10-19 Honda HFT / Alpine 实测新增）。
@@ -2851,8 +2755,7 @@ object SessionController {
     }
 
     private fun clearActiveAudioState() {
-        activeAudioProfile = null
-        activeAudioStartedAt = 0L
+        audioChannelState.clear()
     }
 
     /** 界面提示文案（阶段提示、Snackbar、确认弹窗；随界面语言）。日志仍写中文。 */
@@ -2872,13 +2775,7 @@ object SessionController {
     private fun audioBaselineAllowed(): Boolean = appContext?.let(CompatibilityPrefs::audioBaseline) == true
 
     /** 该车机上「所有可能用到的档位键」——用于判断是否已全部试穿。 */
-    private fun audioCandidateKeys(identity: String): Set<String> =
-        runCatching {
-            val client = currentClient ?: return@runCatching emptySet()
-            val preferred = client.audioCandidates(preferCompat = audioPreferCompat, allowBaseline = audioBaselineAllowed()).map { it.key }
-            val alternate = client.audioCandidates(preferCompat = !audioPreferCompat, allowBaseline = audioBaselineAllowed()).map { it.key }
-            (preferred + alternate).toSet()
-        }.getOrDefault(emptySet())
+    private fun audioCandidateKeys(identity: String): Set<String> = audioChannelStarter.audioCandidateKeys(identity)
 
     /**
      * modesChanged 资源重申调度（MIB3 控制会话完成事件驱动）。
@@ -4888,23 +4785,6 @@ internal fun requestUiAudioDecision(
         takeMainAudio = audioStreamRunning,
         retryAfterPendingClaim = audioEnabled && !audioStreamRunning && audioClaimAwaitingReturn,
     )
-
-/**
- * 音频通道启动的 single-flight 闸门。
- *
- * 音频 SETUP 协商可持续数秒，期间 `audioSender` 尚未赋值；连接建立、动态补启、
- * requestUI 重进和 changeModes 归还重试等多个入口若并发进入，会各自建立一条流，
- * 后写入的 `audioSender` 覆盖先前的，另一条流仍启动却失去引用（双流 + 持续泄漏）。
- */
-internal class AudioStartGate {
-    private val inFlight = AtomicBoolean(false)
-
-    /** 获得启动权返回 true；已有启动在进行中返回 false。 */
-    fun tryAcquire(): Boolean = inFlight.compareAndSet(false, true)
-
-    /** 释放启动权；必须放在 finally 里。 */
-    fun release() = inFlight.set(false)
-}
 
 /** 占位标签只能作为本次绑定键，不能伪装成后续轮次可复用的真实 SSID。 */
 internal fun usableKnownCarSsid(

@@ -11,6 +11,40 @@ import org.junit.Test
  */
 class AudioTeardownDiagnosticTest {
     @Test
+    fun j24ExactLivedLabelsAndShapesAtEveryDesignBoundary() {
+        val expected =
+            linkedMapOf(
+                -1L to "未知间隔",
+                0L to "0ms",
+                7_999L to "7999ms",
+                8_000L to "8000ms",
+                9_999L to "9999ms",
+                10_000L to "10.0s",
+                12_000L to "12.0s",
+                12_001L to "12.0s",
+                19_999L to "20.0s",
+                20_000L to "20.0s",
+            )
+        val previous = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.GERMANY)
+            expected.forEach { (lived, label) ->
+                assertEquals(label, audioLivedLabel(lived))
+                val shape =
+                    when {
+                        lived < 0 -> "间隔未知"
+                        lived < 8_000 -> "$label，短于 ~10s 看门狗"
+                        lived <= 12_000 -> "$label，符合 ~10s 看门狗形态"
+                        else -> "$label，长于 ~10s 看门狗"
+                    }
+                assertEquals("AUDIO: 音频加入后会话被车机拆掉（链路协商未完成，$shape）——不记音频档位", audioLinkTeardownNote(lived))
+            }
+        } finally {
+            java.util.Locale.setDefault(previous)
+        }
+    }
+
+    @Test
     fun shortTeardownKeepsTheRealIntervalInsteadOfAWatchdogLabel() {
         listOf(16L, 559L, 7_999L).forEach { lived ->
             val note = audioLinkTeardownNote(lived)
