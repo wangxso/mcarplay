@@ -35,13 +35,19 @@ internal class Iap2Pairings(
     }
 
     @Synchronized
+    fun canRespond(
+        address: String?,
+        bond: Int?,
+    ): Boolean = address != null && bond == BluetoothDevice.BOND_BONDED && completed(address)
+
+    @Synchronized
     fun attempt(
         address: String?,
         bond: Int?,
     ): Attempt {
         val pairing = address?.let { pending.getOrPut(it) { Any() } }
         val role =
-            if (address != null && bond == BluetoothDevice.BOND_BONDED && completed(address)) {
+            if (canRespond(address, bond)) {
                 Iap2LinkChannel.Role.RESPONDER
             } else {
                 Iap2LinkChannel.Role.INITIATOR

@@ -18,8 +18,13 @@ import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.transport.StreamDuplexStream
 import java.io.Closeable
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -84,6 +89,11 @@ class Iap2BluetoothClient(
 
         private const val SESSION_TIMEOUT_MILLIS = 90_000L
         private const val RETRY_DELAY_MILLIS = 3_000L
+        private const val DIAL_TIMEOUT_MILLIS = 11_000L
+        private val dialTimer =
+            Executors.newSingleThreadScheduledExecutor { task ->
+                Thread(task, "iap2-dial-timeout").apply { isDaemon = true }
+            }
         private const val FAILURE_LOG_THROTTLE_MILLIS = 15_000L
 
         /** 「蓝牙已连接→已断开」日志节流（车机可能反复自动重连，避免刷屏）。 */
@@ -333,22 +343,20 @@ class Iap2BluetoothClient(
         return completed to uuids
     }
 
-    /**
-     * 指定目标时连接不经 SDP 闸门；这里只做一次诊断，记下车机声明了哪些服务，
-     * 用来区分「车机不提供无线 CarPlay」与「提供但未进配对窗口」（2026-10-28 小米 SU7 实测无法区分）。
-     */
+    /** 指定目标的服务摘要只读缓存，实际的 SDP 查询由 RFCOMM 拨号发起。 */
     private fun reportTargetServices(
         device: BluetoothDevice,
         name: String,
-        diagnosticEpoch: Long,
     ) {
-        val (completed, uuids) = probeServices(device, diagnosticEpoch)
+        val uuids = cachedUuids(device)
         if (uuids.contains(ACCESSORY_IAP2_UUID)) iap2ServiceCache[device.address] = true
-        log("BT-C: 目标「$name」SDP ${describeServices(uuids, completed)}")
+        log("BT-C: 目标「$name」SDP 缓存：${describeServices(uuids, completed = true)}")
     }
 
     /** 出站探测窗口（车机 ACL 离线且无会话时停止探测，见 [OutboundProbePolicy]）。 */
     private val probePolicy = OutboundProbePolicy()
+
+    private val probeWake = AtomicReference(CountDownLatch(1))
 
     /** 当前是否处于「暂停探测」状态（只用于暂停/恢复日志去重）。 */
     @Volatile
@@ -416,7 +424,10 @@ class Iap2BluetoothClient(
     fun start(): Boolean {
         // 用户点连接 / ACL 自动拉起：都打开一次探测窗口（客户端可能正处于暂停探测状态）
         probePolicy.arm(SystemClock.elapsedRealtime(), OutboundProbePolicy.USER_WINDOW_MILLIS)
-        if (running) return true
+        if (running) {
+            probeWake.getAndSet(CountDownLatch(1)).countDown()
+            return true
+        }
         if (!hasPermission()) {
             log("BT-C: 缺少 BLUETOOTH_CONNECT 权限")
             return false
@@ -485,6 +496,8 @@ class Iap2BluetoothClient(
         var lastFailureLogAt = 0L
         val profileTrials = HashSet<String>()
         while (running && generation.get() == myGeneration) {
+            // 检查候选前取得信号，避免上车事件落在检查后、开始等待前。
+            val wake = probeWake.get()
             // 静默降噪（2026-10-10 用户实测后启用）——会话期间完全静默，不产生任何连接尝试/日志：
             //  - 有入站连接：接收端正在连我们（两条 RFCOMM 会互相踩；Audi 实测双会话混乱）
             //  - sessionActive：CarPlay 会话已建立（已拿到端点）——与其它接收端的连接尝试全部暂停
@@ -498,7 +511,7 @@ class Iap2BluetoothClient(
             if (bonded.isEmpty()) {
                 // 指定目标但未配对时 candidateDevices 已给出节流提示；此时其它已配对设备仍在，不能说「没有」
                 if (targetProvider() == null) log("BT-C: 没有已配对的蓝牙设备——请先在系统设置里与车机完成蓝牙配对")
-                sleepQuietly(RETRY_DELAY_MILLIS * 3)
+                awaitProbe(wake, RETRY_DELAY_MILLIS * 3)
                 continue
             }
             // 车机 ACL 已断开且没有会话时不再主动连（2026-11-03/04 奇瑞整夜每分钟探测一次）。
@@ -510,14 +523,13 @@ class Iap2BluetoothClient(
                     probePaused = true
                     log("BT-C: 车机蓝牙未连接且无会话——暂停主动探测（车机蓝牙连上或再次点「连接」后恢复）")
                 }
-                sleepQuietly(PROBE_IDLE_POLL_MILLIS)
+                awaitProbe(wake, PROBE_IDLE_POLL_MILLIS)
                 continue
             }
             if (probePaused) {
                 probePaused = false
                 log("BT-C: 恢复主动探测")
             }
-            var connected: BluetoothSocket? = null
             for (device in candidates) {
                 if (!running || generation.get() != myGeneration) return
                 val name =
@@ -529,12 +541,10 @@ class Iap2BluetoothClient(
                 runCatching { adapter.cancelDiscovery() }
                 // 自动模式（未选目标）先过 SDP 闸门：候选=全部已配对设备，耳机/手表
                 // 没有 iAP2 服务，连不上还白白被断 HFP/A2DP（设备级断开兜底更会波及
-                // 其它在线设备）——确认提供 …caff 才进入「断开+连接」流程。选定目标
-                // 的设备不过闸（用户显式指定，保持原路径与时序）。
-                if (targetProvider() != null && targetServicesReported.add(device.address)) {
-                    reportTargetServices(device, name, diagnosticEpoch)
-                }
-                if (targetProvider() == null && !awaitIap2Service(device, diagnosticEpoch)) {
+                // 其它在线设备）——确认提供 …caff 才进入「断开+连接」流程。选定目标直接拨号。
+                val selectedTarget = targetProvider() != null
+                val boundedDial = selectedTarget && Iap2Pairings.current(context).canRespond(device.address, device.bondState)
+                if (!selectedTarget && !awaitIap2Service(device, diagnosticEpoch)) {
                     val deviceClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull()
                     val remembered = Iap2ReceiverMemory.contains(context, device.address)
                     val services = cachedUuids(device)
@@ -573,7 +583,7 @@ class Iap2BluetoothClient(
                 // SDP 等待期间用户可能已停止或重启；旧轮不能再创建一个无法被 stop() 关闭的新 socket。
                 if (!running || generation.get() != myGeneration) return
                 // 已确认只接受车机回连：不再每 3 秒连一次（也不做下面的断开配置文件对照），只按间隔探测
-                if (inboundWait.skipOutbound(device.address)) continue
+                if (!boundedDial && inboundWait.skipOutbound(device.address)) continue
                 // 未知设备先保留 HFP/A2DP；只有已保存的本地策略或用户发起的一次对照才断开。
                 // 每次 start 对同一目标最多执行一次，失败后恢复保留连接的基线，避免 ACL 反复震荡。
                 if (ReceiverDetectionRuntime.bluetooth(device.address) == BluetoothBringup.DISCONNECT_PROFILES &&
@@ -600,49 +610,33 @@ class Iap2BluetoothClient(
                     }
                 }
                 // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起（connect() 可阻塞数十秒）
-                val socket =
-                    BtSessionGate.dial(device.address, wifiHandoffDetached()) {
-                        selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch) }
+                val socket = selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch, boundedDial) }
+                try {
+                    if (selectedTarget && running && generation.get() == myGeneration && targetServicesReported.add(device.address)) {
+                        reportTargetServices(device, name)
                     }
-                if (socket != null) {
-                    log("BT-C: ✓ 已连入 $name 的无线 iAP2 服务（RFCOMM 建立）")
-                    Iap2ReceiverMemory.remember(context, device.address)
-                    connected = socket
-                    break
-                } else {
+                    if (socket != null) {
+                        if (!running || generation.get() != myGeneration) return
+                        if (BtSessionGate.sessionActive || wifiHandoffDetached()) break
+                        log("BT-C: ✓ 已连入 $name 的无线 iAP2 服务（RFCOMM 建立）")
+                        Iap2ReceiverMemory.remember(context, device.address)
+                        selfLinkChange { runSession(socket) }
+                        break
+                    }
+                    if (BtSessionGate.outboundPaused || wifiHandoffDetached()) break
                     val now = android.os.SystemClock.uptimeMillis()
                     if (!inboundWait.isWaiting(device.address) && now - lastFailureLogAt > FAILURE_LOG_THROTTLE_MILLIS) {
                         lastFailureLogAt = now
                         log("BT-C: 连接 $name 失败（具体阶段与系统异常见 BT-DIAG），3 秒后重试…")
                     }
+                } catch (error: IOException) {
+                    log("BT-C: RFCOMM 初始化失败 - ${error.message}")
+                    break
+                } finally {
+                    if (socket != null) closeOutbound(socket)
                 }
             }
-            if (connected == null) {
-                sleepQuietly(RETRY_DELAY_MILLIS)
-                continue
-            }
-            if (generation.get() != myGeneration) {
-                // stop() 与 connect() 成功竞争：本线程已过期，不建会话
-                currentSocket.compareAndSet(connected, null)
-                runCatching { connected.close() }
-                return
-            }
-            val ran =
-                BtSessionGate.runOutbound(connected, wifiHandoffDetached()) {
-                    try {
-                        selfLinkChange { runSession(connected) }
-                    } catch (error: IOException) {
-                        currentSocket.compareAndSet(connected, null)
-                        runCatching { connected.close() }
-                        log("BT-C: RFCOMM 初始化失败 - ${error.message}")
-                    }
-                }
-            if (!ran) {
-                currentSocket.compareAndSet(connected, null)
-                log("BT-C: 拨通时已有入站连接或 CarPlay 会话，已关闭本次出站连接，跳过 iAP2 握手")
-                continue
-            }
-            sleepQuietly(RETRY_DELAY_MILLIS)
+            awaitProbe(wake, RETRY_DELAY_MILLIS)
         }
         log("BT-C: 客户端已停止")
     }
@@ -694,6 +688,7 @@ class Iap2BluetoothClient(
         name: String,
         myGeneration: Long,
         diagnosticEpoch: Long,
+        boundedDial: Boolean,
     ): BluetoothSocket? {
         val target = targetProvider()
         val trace =
@@ -729,34 +724,67 @@ class Iap2BluetoothClient(
                 )
                 return null
             }
-        // 连接前就登记：connect() 是阻塞调用（SDP 查询 + 建链最长可达数十秒），
-        // stop() 只有能拿到 socket 引用才能 close() 打断它，否则线程会滞留。
+        // stop() 需要先拿到 socket；仲裁等到真正调用 connect() 前才登记。
         currentSocket.set(socket)
-        if (!running || generation.get() != myGeneration) {
-            currentSocket.compareAndSet(socket, null)
-            runCatching { socket.close() }
-            diagnostics.connectFinished(trace, cancelled = true)
-            return null
-        }
         val connectStartedAt = SystemClock.elapsedRealtime()
-        return try {
-            socket.connect()
-            diagnostics.connectFinished(trace, cancelled = !running || generation.get() != myGeneration)
-            inboundWait.connected(device.address)
-            socket
+        val pending = AtomicBoolean(true)
+        var timeout: ScheduledFuture<*>? = null
+        var connected = false
+        var failure: Exception? = null
+        try {
+            if (running && generation.get() == myGeneration && BtSessionGate.beginOutbound(socket, wifiHandoffDetached())) {
+                if (boundedDial) {
+                    timeout =
+                        dialTimer.schedule(
+                            { expireDial(socket, pending) },
+                            DIAL_TIMEOUT_MILLIS,
+                            TimeUnit.MILLISECONDS,
+                        )
+                }
+                BtSessionGate.connectOutbound(pending) { socket.connect() }
+                if (running && generation.get() == myGeneration) {
+                    diagnostics.connectFinished(trace)
+                    inboundWait.connected(device.address)
+                    connected = true
+                    return socket
+                }
+            }
         } catch (error: IOException) {
-            currentSocket.compareAndSet(socket, null)
-            runCatching { socket.close() }
-            val cancelled = !running || generation.get() != myGeneration
-            diagnostics.connectFinished(trace, error = error, cancelled = cancelled)
-            if (!cancelled) noteConnectFailure(device, name, error, SystemClock.elapsedRealtime() - connectStartedAt)
-            null
+            failure = if (pending.getAndSet(false)) error else SocketTimeoutException("RFCOMM dial timeout")
         } catch (error: SecurityException) {
-            currentSocket.compareAndSet(socket, null)
-            runCatching { socket.close() }
-            diagnostics.connectFinished(trace, error = error, cancelled = !running || generation.get() != myGeneration)
-            null
+            failure = error
+        } finally {
+            pending.set(false)
+            if (!connected) closeOutbound(socket)
+            timeout?.cancel(false)
         }
+        val cancelled = failure == null || !running || generation.get() != myGeneration
+        diagnostics.connectFinished(trace, error = failure, cancelled = cancelled)
+        if (!cancelled && !boundedDial && failure is IOException) {
+            noteConnectFailure(device, name, failure, SystemClock.elapsedRealtime() - connectStartedAt)
+        }
+        return null
+    }
+
+    private fun expireDial(
+        socket: BluetoothSocket,
+        pending: AtomicBoolean,
+    ) {
+        runCatching { BtSessionGate.expireOutbound(socket, pending) }
+            .onSuccess { expired ->
+                if (expired) {
+                    currentSocket.compareAndSet(socket, null)
+                    log("BT-C: ${DIAL_TIMEOUT_MILLIS}ms 内未拨通，已关闭出站 socket 并释放登记")
+                }
+            }.onFailure { error ->
+                log("BT-C: 拨号超时后关闭出站 socket 失败：${error.message}")
+            }
+    }
+
+    private fun closeOutbound(socket: BluetoothSocket) {
+        currentSocket.compareAndSet(socket, null)
+        runCatching { socket.close() }
+        BtSessionGate.outboundFinished(socket)
     }
 
     private fun noteConnectFailure(
@@ -806,13 +834,13 @@ class Iap2BluetoothClient(
                 unverifiedInvitePending = unverifiedInvitePending,
                 onSession = { session -> if (activeChannel.get() === channel) activeSession.set(channel to session) },
             )
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         } catch (error: IOException) {
             log("BT-C: SESSION 失败 - ${error.message}")
         } finally {
             activeChannel.compareAndSet(channel, null)
             activeSession.get()?.takeIf { it.first === channel }?.let { activeSession.compareAndSet(it, null) }
-            currentSocket.compareAndSet(socket, null)
-            runCatching { socket.close() }
             channel.close()
             log("BT-C: 本轮会话结束（客户端仍在运行，将自动重连）")
         }
@@ -853,6 +881,16 @@ class Iap2BluetoothClient(
         log("BT-C: 已停止")
     }
 
+    private fun awaitProbe(
+        wake: CountDownLatch,
+        millis: Long,
+    ) {
+        try {
+            wake.await(millis, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+        }
+    }
+
     private fun sleepQuietly(millis: Long) {
         try {
             Thread.sleep(millis)
@@ -861,87 +899,57 @@ class Iap2BluetoothClient(
     }
 }
 
-/**
- * 入站会话门闸：车机主动连入的 iAP2 会话活跃期间，出站客户端暂停连接尝试。
- * 目的：车机通常只有单条无线 iAP2 上下文，双向同时建链会让双方互相干扰。
- */
+/** 只有一条 RFCOMM 通道进入 iAP2。出站从调用 connect() 前持有登记，入站从 accept() 拿到 socket 后登记。 */
 object BtSessionGate {
-    // 从监听线程接受回连起计数，直到该连接的工作线程退出。
     private val lock = Any()
-    private var inboundConnections = 0
-    private var dialingAddress: String? = null
-    private var outbound: Outbound? = null
+    private var inbound = false
+    private var outbound: Closeable? = null
 
-    private class Outbound(
-        val socket: Closeable,
-        val finished: CountDownLatch = CountDownLatch(1),
-    )
+    internal val outboundPaused: Boolean get() = synchronized(lock) { inbound || outbound != null || sessionActive }
 
-    internal val outboundPaused: Boolean get() = synchronized(lock) { inboundConnections > 0 || sessionActive }
-
-    internal class Inbound(
-        val outboundFinished: CountDownLatch?,
-    )
-
-    /** 同一车机已在拨号时拒绝回连。接受回连后，等活跃的出站会话退出再开始 iAP2。 */
-    internal fun admitInbound(address: String?): Inbound? {
-        val previous =
-            synchronized(lock) {
-                if (dialingAddress?.equals(address, ignoreCase = true) == true) return null
-                inboundConnections++
-                outbound
-            }
-        previous?.let { runCatching { it.socket.close() } }
-        return Inbound(previous?.finished)
-    }
-
-    internal fun <T> dial(
-        address: String,
-        wifiHandoffDetached: Boolean = false,
-        connect: () -> T?,
-    ): T? {
+    internal fun admitInbound(): Boolean =
         synchronized(lock) {
-            if (dialingAddress != null || outbound != null || inboundConnections > 0 || sessionActive || wifiHandoffDetached) {
-                return null
-            }
-            dialingAddress = address
+            if (inbound || outbound != null) return false
+            inbound = true
+            true
         }
-        try {
-            return connect()
-        } finally {
-            synchronized(lock) { dialingAddress = null }
-        }
-    }
 
     internal fun inboundFinished() {
-        synchronized(lock) { inboundConnections-- }
+        synchronized(lock) { inbound = false }
     }
 
-    internal fun runOutbound(
+    internal fun beginOutbound(
         socket: Closeable,
         wifiHandoffDetached: Boolean = false,
-        run: () -> Unit,
+    ): Boolean =
+        synchronized(lock) {
+            if (inbound || outbound != null || sessionActive || wifiHandoffDetached) return false
+            outbound = socket
+            true
+        }
+
+    internal fun outboundFinished(socket: Closeable) {
+        synchronized(lock) {
+            if (outbound === socket) outbound = null
+        }
+    }
+
+    internal fun connectOutbound(
+        pending: AtomicBoolean,
+        connect: () -> Unit,
+    ) {
+        connect()
+        if (!pending.getAndSet(false)) throw SocketTimeoutException("RFCOMM dial timeout")
+    }
+
+    /** 超时先让迟到的 connect() 结果失效，确认 socket 关闭后才允许下一条通道。 */
+    internal fun expireOutbound(
+        socket: Closeable,
+        pending: AtomicBoolean,
     ): Boolean {
-        val lease =
-            synchronized(lock) {
-                if (outbound != null || inboundConnections > 0 || sessionActive || wifiHandoffDetached) {
-                    null
-                } else {
-                    Outbound(socket).also { outbound = it }
-                }
-            }
-        if (lease == null) {
-            runCatching { socket.close() }
-            return false
-        }
-        try {
-            run()
-        } finally {
-            synchronized(lock) {
-                outbound = null
-                lease.finished.countDown()
-            }
-        }
+        if (!pending.getAndSet(false)) return false
+        socket.close()
+        outboundFinished(socket)
         return true
     }
 
