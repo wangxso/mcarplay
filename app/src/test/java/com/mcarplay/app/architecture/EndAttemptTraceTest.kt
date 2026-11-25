@@ -678,14 +678,19 @@ class EndAttemptTraceTest {
             "adapter 必须挂接 actions",
         )
         requireOrder(adapter, "override val currentSender: VideoSender?", "get() = videoSender", "sender 身份必须动态转发")
-        requireOrder(adapter, "override val outputSender: VideoSender?", "get() = carLifeOutput?.sender", "输出身份必须动态转发")
+        requireOrder(
+            adapter,
+            "override val outputSender: VideoSender?",
+            "get() = streamPipeline.outputSender()",
+            "输出身份必须动态转发",
+        )
         requireOrder(adapter, "override val nativeBridge: CarLifeAudioBridge?", "get() = nativeAudioBridge", "音频桥必须动态转发")
         requireOrder(adapter, "override val btClient: Iap2BluetoothClient?", "get() = bluetoothClient", "蓝牙客户端必须动态转发")
         requireOrder(adapter, "override val context: Context?", "get() = appContext", "Context 必须动态转发")
         requireOrder(adapter, "override fun log(message: String)", "appendLog(message)", "日志委托 SC")
         requireOrder(adapter, "override fun stopCarLife(carLife: CarLifeSession)", "carLife.stop()", "CarLife stop 委托叶子")
         requireOrder(adapter, "override fun releaseCarLife(carLife: CarLifeSession)", "releaseCarLifeSession(carLife)", "CarLife 释放委托叶子")
-        requireOrder(adapter, "override fun clearCarLifeOutput()", "carLifeOutput = null", "输出清理委托 SC")
+        requireOrder(adapter, "override fun clearCarLifeOutput()", "streamPipeline.clearOutput()", "输出清理委托组件")
         requireOrder(adapter, "override fun recordAutoReconnectOutcome(", "DiagnosticCode.VIDEO_CLOSED", "记账必须透传 VIDEO_CLOSED")
         requireOrder(adapter, "override fun disconnect(context: Context)", "DiagnosticCode.VIDEO_CLOSED", "终态收尾必须透传 VIDEO_CLOSED")
         val helper = videoEndedFunction("handle")

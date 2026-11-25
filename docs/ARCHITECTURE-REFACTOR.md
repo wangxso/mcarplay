@@ -23,7 +23,14 @@ Phase 2f（2026-11-25，基线 `dev` @ `15397d2`，已合入 2e / #125）把 mod
 恢复失败/策略断开出口、`screenStreamRecovery` 闭包与 `reconnectOnStreamingInvite` 本体；新连接仍只在 `!alreadyRunning`
 分支做两个精确 reset（`resetInviteReconnectAt`/`resetTakeBackFailures`），不合并成 `resetAll`。三布尔 OR、首条 reason/
 generation/takeBackRetried、让出 200ms、3 秒检查、恢复三态、邀请 15s 防抖与绝对时刻重申逐点保持；恢复闭包与视频管线
-未搬移（留待 2g）。未做设备或实车验证。**
+未搬移（留待 2g）。未做设备或实车验证。
+Phase 2g-1（本 PR，2026-11-25，基线 `dev` @ `a5b96d2`，已合入 2f / #128）把正式 CarLife 源的构造/路由、
+`CarLifeSessionRegistry` 租约与输出槽抽到 `session/StreamPipeline`：组件持有 `registry`/`formal`/`diagnostic`/`output`，
+租约仍用 `synchronized(registry)`（同一监视器），事件经中性 `CarLifeStreamPorts` 注入。控制器保留
+`currentCarLifeSession`/`isFormalCarLifeActive`/`runningDiagnosticCarLifeSession`/`claimCarLifeSession`/
+`releaseCarLifeSession`/`stopFormalCarLife` 薄门面与既有 `currentTouchTarget` 读取；`videoSender`、`newScreenSender`、
+`screenStreamRecovery`、尺寸/几何/fps 计算与音频桥仍留在控制器（2g-2）。B-18 旧源迟到 `onEnded` 与日志文案逐点保持。
+未做设备或实车验证。**
 2026-11-10 对照代码复查后修订过一次，改动见文末
 「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 
@@ -406,7 +413,8 @@ interface SessionEnvironment {
 | 2d | `audio/AudioChannelStarter`：`startAudioChannel`、`attributeAudioTeardown`、`audioCandidateKeys`、`maybeStartAudioNow`、`retryAudioAfterClaimReturned` 及 `activeAudio*` 状态 | M | 档位候选顺序、20 s 存活窗口归因、看门狗守卫；附录 B-15 |
 | 2e（已完成） | 帕萨特回屏改为 `Policy` 上的中性字段（不搬代码）：`ScreenReturnStrategy`/`ScreenReturnPolicy`、`Policy.screenReturn`、`ReceiverCompatibility.withScreenReturnPreference` | S | `ScreenReturnPolicyTest`（原 `PassatReturnPolicyTest` 精确改名）、`ReceiverCompatibilityTest` 资格/叠加矩阵、`CompatibilityPrefsScreenReturnTest` |
 | 2f（已完成） | `airplay/ScreenOwnership`：`ModesAction` 队列、`enqueueModesAssert`、`scheduleModesReclaim`、`scheduleTakeBackCheck`、回屏策略、推流中邀请重连 | M | 合并语义、让出/拿回间隔；附录 B-11、B-17 |
-| 2g | `session/StreamPipeline`：正式 CarLife 源与路由、`newScreenSender`、主屏流重建（779–869、3717–3955） | L | 入流门控、旧源迟到回调隔离；附录 B-18 |
+| 2g-1（本 PR） | `session/StreamPipeline` 的 CarLife 半：正式源构造/路由、`CarLifeSessionRegistry` 租约、输出槽（`CarLifeOutput`）与 `stopFormal`；控制器保留 `videoSender`、`newScreenSender`、`screenStreamRecovery` 与尺寸/几何/fps 计算 | M | `StreamPipelineCarLifeTest`/`StreamPipelineCarLifeIntegrationTest`、`StreamPipelineSourceContractTest`；入流门控、旧源迟到回调隔离；附录 B-18 |
+| 2g-2（待做） | `session/StreamPipeline` 的发送端半：`newScreenSender` 工厂与主屏流重建闭包（`screenStreamRecovery`），恢复闭包内的锁改为注入的控制器锁端口 | M | 恢复三态/原子发布；改写 2 个既有源码契约测试 |
 | 2h | `session/SessionLog`、`service/ScreenPowerController`；消除 3.1 列出的反向依赖 | S | 架构测试允许清单删去对应项 |
 
 完成标准：`SessionController` 的 `@Volatile` 字段从 46 降到 15 以内；全局单例的直接调用只剩在 `SessionEnvironment` 的生产实现里；T2 回归通过。
