@@ -8,7 +8,10 @@ import java.util.concurrent.CountDownLatch
 /**
  * Phase 3a 并行双判包装器：权威返回值始终取自 [legacy]，同步对照 [real] 并在出现分歧时去重记录诊断日志。
  *
- * 零行为变化保证：[isCurrent] 与 [isActive] 永远返回 [legacy] 的求值结果；其余生命周期动作委托给 [real]。
+ * 零行为变化保证：[isCurrent] 与 [isActive] 永远返回 [legacy] 的求值结果；生命周期动作由 [real] 执行。
+ *
+ * 双判覆盖全部入口：`checkActive`、`own`、`await`、`sleep` 在执行前同样比较两侧 `isActive`，
+ * 因此 Phase 3b 把 `isActive` 守卫换成这些成员时，分歧仍会被记录而不是悄悄跟随 [real]。
  */
 internal class DualCheckAttemptScope(
     private val legacy: AttemptScope,
@@ -51,17 +54,36 @@ internal class DualCheckAttemptScope(
     }
 
     override fun checkActive() {
+        reportActivityGuard("checkActive")
         real.checkActive()
     }
 
-    override fun <T : AutoCloseable> own(resource: T): T = real.own(resource)
+    override fun <T : AutoCloseable> own(resource: T): T {
+        reportActivityGuard("own")
+        return real.own(resource)
+    }
 
     override fun await(
         latch: CountDownLatch,
         timeoutMs: Long,
-    ): Boolean = real.await(latch, timeoutMs)
+    ): Boolean {
+        reportActivityGuard("await")
+        return real.await(latch, timeoutMs)
+    }
 
-    override fun sleep(ms: Long): Boolean = real.sleep(ms)
+    override fun sleep(ms: Long): Boolean {
+        reportActivityGuard("sleep")
+        return real.sleep(ms)
+    }
+
+    /** 四个活动性守卫入口共用的双判：只比较不改变返回值，执行侧仍是 [real]。 */
+    private fun reportActivityGuard(member: String) {
+        val legacyValue = legacy.isActive
+        val realValue = real.isActive
+        if (legacyValue != realValue) {
+            report(member, legacyValue, realValue)
+        }
+    }
 
     private fun report(
         prop: String,

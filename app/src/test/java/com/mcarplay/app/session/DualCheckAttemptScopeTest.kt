@@ -174,6 +174,72 @@ class DualCheckAttemptScopeTest {
     }
 
     @Test
+    fun activityGuardMembersReportBothDivergenceDirections() {
+        data class Case(
+            val name: String,
+            val legacyActive: Boolean,
+            val realActive: Boolean,
+        )
+
+        val cases =
+            listOf(
+                Case("legacyActive-realInactive", legacyActive = true, realActive = false),
+                Case("legacyInactive-realActive", legacyActive = false, realActive = true),
+            )
+        for (case in cases) {
+            for (member in listOf("checkActive", "own", "await", "sleep")) {
+                val legacy =
+                    StubLegacyScope(
+                        id = "attempt-guard-${case.name}-$member",
+                        observation = obs,
+                        currentValue = true,
+                        activeValue = case.legacyActive,
+                    )
+                val real = RealAttemptScope(id = legacy.id, observation = obs)
+                if (!case.realActive) {
+                    real.cancel(DiagnosticCode.BT_LINK_CLOSED)
+                }
+                val logs = mutableListOf<String>()
+                val dual = DualCheckAttemptScope(legacy = legacy, real = real, onMismatch = logs::add)
+
+                try {
+                    when (member) {
+                        "checkActive" -> dual.checkActive()
+                        "own" -> dual.own(AutoCloseable {})
+                        "await" -> dual.await(CountDownLatch(0), 10L)
+                        "sleep" -> dual.sleep(0L)
+                    }
+                } catch (_: AttemptCancelled) {
+                    // 执行侧仍是 real：real 不活跃时 checkActive 抛异常，但分歧必须先被记录。
+                }
+
+                val label = "${case.name} / $member"
+                assertEquals("$label 必须记录 1 条分歧日志", 1, logs.size)
+                assertTrue("$label 日志前缀错误：${logs[0]}", logs[0].startsWith("SESSION: SCOPE_MISMATCH "))
+                assertTrue("$label 必须带成员名：${logs[0]}", logs[0].contains("prop=$member "))
+                assertTrue(
+                    "$label 两侧取值错误：${logs[0]}",
+                    logs[0].contains("legacy=${case.legacyActive} real=${case.realActive}"),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun activityGuardMembersStaySilentWhenBothSidesAgree() {
+        val legacy = StubLegacyScope(id = "attempt-guard-match", observation = obs, currentValue = true, activeValue = true)
+        val real = RealAttemptScope(id = "attempt-guard-match", observation = obs)
+        val logs = mutableListOf<String>()
+        val dual = DualCheckAttemptScope(legacy = legacy, real = real, onMismatch = logs::add)
+
+        dual.checkActive()
+        dual.own(AutoCloseable {})
+        assertTrue(dual.await(CountDownLatch(0), 10L))
+        assertTrue(dual.sleep(0L))
+        assertTrue("新旧一致时四个守卫入口都不得记日志", logs.isEmpty())
+    }
+
+    @Test
     fun delegatesCancelOwnCheckActiveSleepAwaitAndCancelReasonToReal() {
         val legacy = StubLegacyScope(id = "attempt-del", observation = obs, currentValue = true, activeValue = true)
         val real = RealAttemptScope(id = "attempt-del", observation = obs)
