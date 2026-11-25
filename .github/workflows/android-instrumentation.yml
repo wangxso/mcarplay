@@ -100,11 +100,16 @@ jobs:
           # x86_64, a bare-metal Apple Silicon Mac uses arm64-v8a. Both stay on HVF/KVM.
           arch: ${{ runner.arch == 'ARM64' && 'arm64-v8a' || 'x86_64' }}
           profile: pixel_5
+          # macos-15-intel has 4 vCPUs; the default of 2 made the cold boot take ~10 minutes.
+          cores: 4
           avd-name: rgp07-rgp08-emulator
           emulator-boot-timeout: 1200
           disable-linux-hw-accel: 'false'
           emulator-options: -accel on -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -no-snapshot-save
           script: >-
+            "$ANDROID_HOME/emulator/emulator" -accel-check || true;
+            adb -s "$EXPECTED_SERIAL" shell settings put global verifier_verify_adb_installs 0;
+            adb -s "$EXPECTED_SERIAL" shell settings put global package_verifier_enable 0;
             RGP08_RUN_ATTEMPT="$RGP08_RUN_ATTEMPT" APP_APK="$GITHUB_WORKSPACE/app/build/outputs/apk/standard/debug/app-standard-debug.apk"
             ANDROID_TEST_APK="$GITHUB_WORKSPACE/app/build/outputs/apk/androidTest/standard/debug/app-standard-debug-androidTest.apk"
             OUTPUT_DIR="$RUNNER_TEMP/instrumentation" bash "$GITHUB_WORKSPACE/.github/scripts/run-rgp07-rgp08.sh"

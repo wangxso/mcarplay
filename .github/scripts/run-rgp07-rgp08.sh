@@ -38,7 +38,7 @@ run_with_timeout() {
     kill -TERM "$child" 2>/dev/null || true
     sleep 2
     kill -KILL "$child" 2>/dev/null || true
-  ) &
+  ) >/dev/null 2>&1 &
   watchdog=$!
   wait "$child" 2>/dev/null
   status=$?
