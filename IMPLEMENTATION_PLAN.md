@@ -6,6 +6,16 @@
 
 ## 当前基线与结论
 
+- **11 月 25 日会话编排层重构 Phase 2f（本 PR，基线 `dev` @ `15397d2`，无设备或实车验证）：**
+  在已合入的 2e（#125）之上把 `ModesAction` 合并队列、`scheduleModesReclaim` 绝对时刻重申、拿回主屏 3 秒检查、
+  回屏策略动作与推流中邀请防抖抽取到 `airplay/ScreenOwnership`；组件与控制器同寿命，客户端身份仍用 `===`，
+  窄端口以中性名定义在 `airplay/` 侧，不反向依赖 `SessionController`/`session/`/`service/`/UI/settings。控制器保留
+  `enqueueModesAssert`/`scheduleModesReclaim` 薄委托、显式 `synchronized(this@SessionController)` 的恢复失败与策略断开
+  出口，以及 `screenStreamRecovery` 闭包和 `reconnectOnStreamingInvite` 本体（视频管线留待 2g）；新连接只在
+  `!alreadyRunning` 分支做两个精确 reset。三布尔 OR、首条 reason/generation/takeBackRetried、让出 200ms、恢复三态、
+  3 秒检查、邀请 15s 防抖与 burst 绝对时刻均逐点保持。新增 J/S/I JVM 测试覆盖队列轨迹、策略动作、邀请防抖与
+  B-11/B-17；完整门禁与测试计数见 PR，不以离线测试宣称任何车型兼容性。
+
 - **11 月 25 日会话编排层重构 Phase 2e（本 PR，基线 `dev` @ `d61096f`，无设备或实车验证）：**
   回屏策略中性化、不改行为：`PassatReturnStrategy`/`PassatReturnPolicy` 改名为 `ScreenReturnStrategy`/`ScreenReturnPolicy`
   （枚举顺序、key、默认值与失败判据不变），有效策略收敛到 `ReceiverCompatibility.Policy.screenReturn`（默认 OFF），

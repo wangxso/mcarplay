@@ -15,7 +15,15 @@ Phase 2e（本 PR，2026-11-25）在 `dev` @ `d61096f`（已合入 2d / #122、R
 `PassatReturnStrategy`/`PassatReturnPolicy` 改名为 `ScreenReturnStrategy`/`ScreenReturnPolicy`（枚举顺序、key、默认值、
 失败判据不变），有效策略收敛到 `ReceiverCompatibility.Policy.screenReturn`（默认 OFF），手动大众资格与惰性偏好读取由
 `ReceiverCompatibility.withScreenReturnPreference` 承担；`SessionController` 保留原读取时点、锁、PASSAT 日志与副作用，
-队列/重申/恢复/3 秒检查/邀请代码未搬移。未做设备或实车验证。**
+队列/重申/恢复/3 秒检查/邀请代码未搬移。未做设备或实车验证。
+Phase 2f（2026-11-25，基线 `dev` @ `15397d2`，已合入 2e / #125）把 modesChanged 队列、资源重申、拿回主屏检查、
+回屏策略与推流中邀请防抖抽取到 `airplay/ScreenOwnership`：组件与控制器同寿命，客户端对象本体作身份（仍用 `===`），
+窄端口全部以中性名定义在 `airplay/` 侧，组件不引用 `SessionController`、`session/`、`service/`、UI 或 settings。
+控制器保留 `enqueueModesAssert`/`scheduleModesReclaim` 薄委托、显式 `synchronized(this@SessionController)` 的
+恢复失败/策略断开出口、`screenStreamRecovery` 闭包与 `reconnectOnStreamingInvite` 本体；新连接仍只在 `!alreadyRunning`
+分支做两个精确 reset（`resetInviteReconnectAt`/`resetTakeBackFailures`），不合并成 `resetAll`。三布尔 OR、首条 reason/
+generation/takeBackRetried、让出 200ms、3 秒检查、恢复三态、邀请 15s 防抖与绝对时刻重申逐点保持；恢复闭包与视频管线
+未搬移（留待 2g）。未做设备或实车验证。**
 2026-11-10 对照代码复查后修订过一次，改动见文末
 「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 
@@ -397,7 +405,7 @@ interface SessionEnvironment {
 | 2c | `net/CarWifiJoiner`：1271–2100、4130–4181 与 4078–4128 的分派；先提取 `CarWifiLink` 接口；状态 `boundCarSsid`/`lastCarWifiSsid`/`lastWifiPsk` 归入 `CarWifiState`；这段代码里 58 处对会话标志和 UI 钩子的引用改走 1a 的接口 | L | 四条入网路径的回退顺序、取消、超时；附录 B-2 |
 | 2d | `audio/AudioChannelStarter`：`startAudioChannel`、`attributeAudioTeardown`、`audioCandidateKeys`、`maybeStartAudioNow`、`retryAudioAfterClaimReturned` 及 `activeAudio*` 状态 | M | 档位候选顺序、20 s 存活窗口归因、看门狗守卫；附录 B-15 |
 | 2e（已完成） | 帕萨特回屏改为 `Policy` 上的中性字段（不搬代码）：`ScreenReturnStrategy`/`ScreenReturnPolicy`、`Policy.screenReturn`、`ReceiverCompatibility.withScreenReturnPreference` | S | `ScreenReturnPolicyTest`（原 `PassatReturnPolicyTest` 精确改名）、`ReceiverCompatibilityTest` 资格/叠加矩阵、`CompatibilityPrefsScreenReturnTest` |
-| 2f | `airplay/ScreenOwnership`：`ModesAction` 队列、`enqueueModesAssert`、`scheduleModesReclaim`、`scheduleTakeBackCheck`、回屏策略、推流中邀请重连 | M | 合并语义、让出/拿回间隔；附录 B-11、B-17 |
+| 2f（已完成） | `airplay/ScreenOwnership`：`ModesAction` 队列、`enqueueModesAssert`、`scheduleModesReclaim`、`scheduleTakeBackCheck`、回屏策略、推流中邀请重连 | M | 合并语义、让出/拿回间隔；附录 B-11、B-17 |
 | 2g | `session/StreamPipeline`：正式 CarLife 源与路由、`newScreenSender`、主屏流重建（779–869、3717–3955） | L | 入流门控、旧源迟到回调隔离；附录 B-18 |
 | 2h | `session/SessionLog`、`service/ScreenPowerController`；消除 3.1 列出的反向依赖 | S | 架构测试允许清单删去对应项 |
 

@@ -8,6 +8,11 @@ import androidx.annotation.StringRes
 import com.mcarplay.app.airplay.AirPlayClient
 import com.mcarplay.app.airplay.DisplaySurfaceReport
 import com.mcarplay.app.airplay.PairVerifyClient
+import com.mcarplay.app.airplay.RecoveryOutcome
+import com.mcarplay.app.airplay.ScreenOwnership
+import com.mcarplay.app.airplay.ScreenOwnershipClient
+import com.mcarplay.app.airplay.ScreenOwnershipRuntime
+import com.mcarplay.app.airplay.ScreenOwnershipScheduling
 import com.mcarplay.app.audio.AudioChannelStarter
 import com.mcarplay.app.audio.AudioChannelState
 import com.mcarplay.app.audio.AudioClaim
@@ -89,7 +94,6 @@ import com.mcarplay.app.net.DiscoveredEndpoint
 import com.mcarplay.app.net.EndpointHosts
 import com.mcarplay.app.net.EndpointResolver
 import com.mcarplay.app.net.InviteView
-import com.mcarplay.app.net.StreamingInviteReconnect
 import com.mcarplay.app.net.WifiCarPlayConnector
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
@@ -194,12 +198,6 @@ object SessionController {
 
     /** ctrl 邀请用于“当前网络归属”判定的新鲜度；旧邀请不得复活上一轮。 */
     private const val CTRL_INVITE_FRESH_MS = 30_000L
-
-    /** 让出与拿回两条 modesChanged 的间隔：给车机 HMI 处理一次归属切换的时间。 */
-    private const val SCREEN_RETAKE_GAP_MS = 200L
-
-    /** 拿回主屏后多久检查车机是否有触控/要帧。 */
-    private const val TAKE_BACK_CHECK_MS = 3_000L
 
     /** 端点不完整时等 mDNS 缓存命中：绑网时已开始发现，通常几百毫秒内命中。 */
     private const val ENDPOINT_RESOLVE_WAIT_MS = 3_000L
@@ -1511,10 +1509,10 @@ object SessionController {
             pendingStartSessionEndpoint.set(null)
             currentReceiverMatchesArrizo8 = false
             inviteRetryCount = 0
-            lastInviteReconnectAtMillis = 0L
+            screenOwnership.resetInviteReconnectAt()
             forceKeyFrameCount = 0
             requestUiCount = 0
-            takeBackFailures = 0
+            screenOwnership.resetTakeBackFailures()
             touchLogCount = 0
         } else {
             appendLog("SESSION: 会话已在运行——沿用当前会话，不清零邀请与要帧计数")
@@ -2779,45 +2777,9 @@ object SessionController {
     /**
      * modesChanged 资源重申调度（MIB3 控制会话完成事件驱动）。
      *
-     * AADisplay r17 在奥迪上长播验证的时序：auth+burst 之后 **+1.5s 首发、+4s/+12s/
-     * +30s 各重申一次**（绝对时刻）。声明若落在 0xAA00/0xAA05 进行中，会与 iAP POST
-     * 抢控制通道、奥迪 ~12s 后死（AADisplay 注释原话）——所以只能由 burst 完成事件
-     * 触发，不能在会话建立时一次性发完。082446 定谳：第二控制会话会重置车机的资源
-     * 仲裁，早先那份 200 OK 的声明到订阅簇完成时已经失效，车机在等一份新的。
+     * 绝对时刻、burst 后等待与取消门禁都在 [ScreenOwnership] 内；AADisplay r17 时序证据随实现保留。
      */
-    @Volatile
-    private var modesReclaimEpoch = 0L
-
-    private fun scheduleModesReclaim(client: AirPlayClient) {
-        val epoch = ++modesReclaimEpoch
-        val connectionGeneration = client.connectionGeneration
-        Bg.run("modes-reclaim") {
-            val start = android.os.SystemClock.uptimeMillis()
-            for (atMs in longArrayOf(1_500, 4_000, 12_000, 30_000)) {
-                while (true) {
-                    if (epoch != modesReclaimEpoch ||
-                        client.cancelled ||
-                        connectCancelled ||
-                        !client.isConnectionCurrent(connectionGeneration)
-                    ) {
-                        return@run
-                    }
-                    val remain = atMs - (android.os.SystemClock.uptimeMillis() - start)
-                    if (remain <= 0) break
-                    Thread.sleep(minOf(remain, 200L))
-                }
-                if (epoch != modesReclaimEpoch ||
-                    client.cancelled ||
-                    connectCancelled ||
-                    !client.isConnectionCurrent(connectionGeneration)
-                ) {
-                    return@run
-                }
-                if (!client.assertModes(expectedEpoch = connectionGeneration)) return@run
-                appendLog("AIRPLAY: modesChanged 资源重申（burst 后 +${atMs / 1000}s，AADisplay r17 时序）")
-            }
-        }
-    }
+    private fun scheduleModesReclaim(client: AirPlayClient) = screenOwnership.scheduleModesReclaim(client)
 
     private fun discoveredEndpoint(info: android.net.nsd.NsdServiceInfo): DiscoveredEndpoint =
         object : DiscoveredEndpoint {
@@ -3219,46 +3181,96 @@ object SessionController {
             Thread(runnable, "carplay-control-actions").apply { isDaemon = true }
         }
 
-    private data class ModesAction(
-        val client: AirPlayClient,
-        val reason: String,
-        var requestKeyFrame: Boolean,
-        var retakeScreen: Boolean,
-        var rebuildStream: Boolean,
-    )
+    /** 屏幕归属组件：模式队列、资源重申、拿回检查、回屏策略与推流邀请防抖；与控制器同寿命。 */
+    private val screenOwnership = createScreenOwnership()
 
-    private val modesActionLock = Any()
-    private var pendingModesAction: ModesAction? = null
+    private fun createScreenOwnership() =
+        ScreenOwnership(
+            clients =
+                object : ScreenOwnershipClient<AirPlayClient> {
+                    override fun generation(client: AirPlayClient) = client.connectionGeneration
 
-    /**
-     * 拿回主屏 3 s 后记一笔车机反应：有触控 = 已切到 CarPlay；无触控也无要帧 = 车机没理这次归属变化。
-     * 帕萨特回原车主界面后再点图标属于后者（2026-11-01 23:22），需要据此区分是仲裁还是解码问题。
-     */
-    private fun scheduleTakeBackCheck(
-        client: AirPlayClient,
-        reason: String,
-        alreadyRetried: Boolean,
-    ) {
-        val touchesBefore = touchLogCount
-        val keyFramesBefore = forceKeyFrameCount
-        Bg.run("takeback-check") {
-            try {
-                Thread.sleep(TAKE_BACK_CHECK_MS)
-            } catch (_: InterruptedException) {
-                return@run
-            }
-            if (currentClient !== client) return@run
-            appendLog(
-                "SESSION: 拿回主屏 ${TAKE_BACK_CHECK_MS}ms 后：车机触控 +${touchLogCount - touchesBefore} 条、" +
-                    "要关键帧 +${forceKeyFrameCount - keyFramesBefore} 次（${client.modes.describe()}；起因 $reason）",
-            )
-            applyScreenReturnStrategy(
-                client,
-                ScreenReturnPolicy.takeBackFailed(touchLogCount - touchesBefore, forceKeyFrameCount - keyFramesBefore),
-                alreadyRetried,
-            )
-        }
-    }
+                    override fun isConnectionCurrent(
+                        client: AirPlayClient,
+                        generation: Long,
+                    ) = client.isConnectionCurrent(generation)
+
+                    override fun isCancelled(client: AirPlayClient) = client.cancelled
+
+                    override fun phoneOwnsScreen(client: AirPlayClient) = client.modes.phoneOwnsScreen
+
+                    override fun modesDescription(client: AirPlayClient) = client.modes.describe()
+
+                    override fun assertModes(
+                        client: AirPlayClient,
+                        releaseScreen: Boolean,
+                        expectedEpoch: Long,
+                    ) = client.assertModes(releaseScreen = releaseScreen, expectedEpoch = expectedEpoch)
+                },
+            runtime =
+                object : ScreenOwnershipRuntime<AirPlayClient> {
+                    override val currentClient get() = this@SessionController.currentClient
+                    override val connectCancelled get() = this@SessionController.connectCancelled
+                    override val sessionStarting get() = this@SessionController.sessionStarting.get()
+                    override val videoRunning get() = videoSender?.isRunning == true
+                    override val touchCount get() = this@SessionController.touchLogCount
+                    override val forceKeyFrameCount get() = this@SessionController.forceKeyFrameCount
+
+                    override fun readRecovery(): (() -> RecoveryOutcome)? =
+                        screenStreamRecovery?.let { recover ->
+                            {
+                                when (recover()) {
+                                    ScreenRecoveryResult.RESTORED -> RecoveryOutcome.RESTORED
+                                    ScreenRecoveryResult.ABORTED -> RecoveryOutcome.ABORTED
+                                    ScreenRecoveryResult.FAILED -> RecoveryOutcome.FAILED
+                                }
+                            }
+                        }
+
+                    override fun reprime() {
+                        videoSender?.reprimeOnNextKeyFrame()
+                    }
+
+                    override fun requestLocalKeyFrame(): Boolean = videoSender?.requestKeyFrame(fromReceiver = false) == true
+
+                    override fun onRecoveryFailed(client: AirPlayClient) {
+                        synchronized(this@SessionController) {
+                            if (!connectCancelled && !client.cancelled && currentClient === client) {
+                                appendLog("SCREEN: 主屏流恢复失败——结束本轮，等待用户重新连接")
+                                appContext?.let { disconnect(it, DiagnosticCode.VIDEO_CLOSED) }
+                            }
+                        }
+                    }
+
+                    override fun onTakeBackDisconnect(client: AirPlayClient) {
+                        synchronized(this@SessionController) {
+                            if (!connectCancelled && !client.cancelled && currentClient === client) {
+                                appContext?.let { disconnect(it, DiagnosticCode.VIDEO_CLOSED) }
+                            }
+                        }
+                    }
+
+                    override fun reconnectStreaming(client: AirPlayClient) = reconnectOnStreamingInvite(client)
+
+                    override fun receiverPolicy(client: AirPlayClient): ReceiverCompatibility.Policy = client.receiverCompatibility()
+
+                    override fun screenReturnPolicy(client: AirPlayClient): ReceiverCompatibility.Policy = currentScreenReturnPolicy(client)
+                },
+            scheduling =
+                object : ScreenOwnershipScheduling {
+                    override fun executeControl(task: () -> Unit) = controlActions.execute(task)
+
+                    override fun runBackground(
+                        name: String,
+                        task: () -> Unit,
+                    ) = Bg.run(name, task)
+
+                    override fun uptimeMillis(): Long = SystemClock.uptimeMillis()
+
+                    override fun sleep(millis: Long) = Thread.sleep(millis)
+                },
+            log = ::appendLog,
+        )
 
     /**
      * 回屏策略在当前时点的有效值：只有主页「车型适配」手动选了大众，兼容层才在这里读取用户偏好；
@@ -3272,45 +3284,6 @@ object SessionController {
             VehiclePresetRuntime.current,
         ) { appContext?.let(CompatibilityPrefs::screenReturnStrategy) ?: ScreenReturnStrategy.OFF }
 
-    /** 连续「拿回主屏车机没反应」次数；车机有反应或新一轮连接时清零。 */
-    @Volatile
-    private var takeBackFailures = 0
-
-    /** 回屏策略的失败后续动作；用户未选择策略（OFF）时什么都不做。 */
-    private fun applyScreenReturnStrategy(
-        client: AirPlayClient,
-        failed: Boolean,
-        alreadyRetried: Boolean,
-    ) {
-        val strategy = currentScreenReturnPolicy(client).screenReturn
-        if (strategy == ScreenReturnStrategy.OFF) return
-        if (!failed) {
-            takeBackFailures = 0
-            return
-        }
-        val failures = ++takeBackFailures
-        if (ScreenReturnPolicy.retryRebuild(strategy, failed, alreadyRetried)) {
-            appendLog("PASSAT: 策略「失败后重建一次」——拿回主屏车机没反应，重建主屏流重试")
-            enqueueModesAssert(
-                client,
-                "帕萨特策略：拿回主屏无反应，重建重试",
-                requestKeyFrame = true,
-                retakeScreen = true,
-                rebuildStream = true,
-                takeBackRetried = true,
-            )
-        } else if (ScreenReturnPolicy.disconnect(strategy, failures)) {
-            appendLog("PASSAT: 策略「连续失败后断开」——连续 $failures 次拿回主屏车机没反应，结束本轮，请重新连接")
-            synchronized(this) {
-                if (!connectCancelled && !client.cancelled && currentClient === client) {
-                    appContext?.let { disconnect(it, DiagnosticCode.VIDEO_CLOSED) }
-                }
-            }
-        } else {
-            appendLog("PASSAT: 策略 ${strategy.key}：拿回主屏车机没反应（连续 $failures 次）")
-        }
-    }
-
     private fun enqueueModesAssert(
         client: AirPlayClient,
         reason: String,
@@ -3318,84 +3291,7 @@ object SessionController {
         retakeScreen: Boolean = false,
         rebuildStream: Boolean = false,
         takeBackRetried: Boolean = false,
-    ) {
-        val connectionGeneration = client.connectionGeneration
-        val action =
-            synchronized(modesActionLock) {
-                val pending = pendingModesAction
-                if (pending?.client === client) {
-                    pending.requestKeyFrame = pending.requestKeyFrame || requestKeyFrame
-                    pending.retakeScreen = pending.retakeScreen || retakeScreen
-                    pending.rebuildStream = pending.rebuildStream || rebuildStream
-                    appendLog("EVENT: $reason → 与待执行的 modesChanged 合并")
-                    return
-                }
-                ModesAction(client, reason, requestKeyFrame, retakeScreen, rebuildStream).also { pendingModesAction = it }
-            }
-        controlActions.execute {
-            val request =
-                synchronized(modesActionLock) {
-                    if (pendingModesAction === action) pendingModesAction = null
-                    action.copy()
-                }
-            // 执行时会话可能已取消或换了 client：迟到任务不得对新会话发 modesChanged
-            if (connectCancelled || currentClient !== client || !client.isConnectionCurrent(connectionGeneration)) {
-                appendLog("EVENT: $reason → 会话已结束或更替，丢弃迟到的 modesChanged")
-                return@execute
-            }
-            // 用户点图标时主屏本就归手机：车机停在原车界面却不认这个归属，先报让出、再报拿回
-            if (request.retakeScreen && client.modes.phoneOwnsScreen) {
-                if (client.assertModes(releaseScreen = true, expectedEpoch = connectionGeneration)) {
-                    try {
-                        Thread.sleep(SCREEN_RETAKE_GAP_MS)
-                    } catch (_: InterruptedException) {
-                        return@execute
-                    }
-                }
-            }
-            if (connectCancelled || currentClient !== client || !client.isConnectionCurrent(connectionGeneration)) return@execute
-            val asserted = client.assertModes(expectedEpoch = connectionGeneration)
-            if (connectCancelled || currentClient !== client || !client.isConnectionCurrent(connectionGeneration)) return@execute
-            val restoreScreen = request.requestKeyFrame && asserted && client.modes.phoneOwnsScreen
-            val recovery = screenStreamRecovery
-            if (restoreScreen && request.rebuildStream && recovery != null) {
-                when (recovery()) {
-                    ScreenRecoveryResult.ABORTED -> return@execute
-                    ScreenRecoveryResult.FAILED -> {
-                        synchronized(this) {
-                            if (!connectCancelled && !client.cancelled && currentClient === client) {
-                                appendLog("SCREEN: 主屏流恢复失败——结束本轮，等待用户重新连接")
-                                appContext?.let { disconnect(it, DiagnosticCode.VIDEO_CLOSED) }
-                            }
-                        }
-                        return@execute
-                    }
-                    ScreenRecoveryResult.RESTORED -> Unit
-                }
-            }
-            if (connectCancelled ||
-                client.cancelled ||
-                currentClient !== client ||
-                !client.isConnectionCurrent(connectionGeneration)
-            ) {
-                return@execute
-            }
-            if (restoreScreen && client.modes.phoneOwnsScreen) {
-                videoSender?.reprimeOnNextKeyFrame()
-                scheduleTakeBackCheck(client, reason, takeBackRetried)
-            }
-            // 自己补的 I 帧不计入车机要帧风暴（用户连点图标不能被当成解码失败）
-            val keyFrame = restoreScreen && client.modes.phoneOwnsScreen && videoSender?.requestKeyFrame(fromReceiver = false) == true
-            appendLog(
-                "EVENT: $reason → modesChanged " + (if (asserted) "已应答" else "失败") +
-                    if (request.requestKeyFrame) "，关键帧" + (if (keyFrame) "已请求" else "未就绪") else "",
-            )
-        }
-    }
-
-    /** 上次「推流中车机邀请 → 重建会话」的 uptime 时刻（0 = 本次连接尚无；startConnection 清零）。 */
-    @Volatile
-    private var lastInviteReconnectAtMillis = 0L
+    ) = screenOwnership.enqueueModesAssert(client, reason, requestKeyFrame, retakeScreen, rebuildStream, takeBackRetried)
 
     /** 当前推流会话的诊断轮次（邀请重连时在时间线上收口本轮）。 */
     @Volatile
@@ -3405,8 +3301,8 @@ object SessionController {
      * 车机 ctrl 邀请回调（应答线程）。
      *
      * - 连接阶段：已有本轮空端点时立即触发“绑定当前网络”的交接，不再等下一次 1s 轮询；
-     * - 推流阶段：已登记的车机（[ReceiverCompatibility.Policy.reconnectOnStreamingInvite]）
-     *   退役当前会话并按邀请重连，带 [StreamingInviteReconnect.DEBOUNCE_MS] 防抖。
+     * - 推流阶段：委托 [ScreenOwnership.onStreamingInvite]，由组件按登记策略与防抖决定是否重建，
+     *   真正的退役与端点重交付仍由 [reconnectOnStreamingInvite] 执行。
      */
     private fun onCtrlInvite(localAddress: String? = null) {
         val local = localAddress?.substringBefore('%')?.takeIf { it.isNotBlank() }
@@ -3427,34 +3323,8 @@ object SessionController {
             }
             return
         }
-        val streaming = !connectCancelled && !sessionStarting.get() && videoSender?.isRunning == true
-        if (!streaming) return
-        val now = android.os.SystemClock.uptimeMillis()
-        val decision =
-            synchronized(inviteReconnectLock) {
-                StreamingInviteReconnect
-                    .decide(
-                        streaming = true,
-                        enabled = client.receiverCompatibility().reconnectOnStreamingInvite,
-                        nowMillis = now,
-                        lastReconnectAtMillis = lastInviteReconnectAtMillis,
-                    ).also { if (it == StreamingInviteReconnect.Decision.RECONNECT) lastInviteReconnectAtMillis = now }
-            }
-        when (decision) {
-            StreamingInviteReconnect.Decision.NOT_STREAMING -> Unit
-            StreamingInviteReconnect.Decision.NOT_ENABLED ->
-                appendLog("CTRL: 推流中收到车机邀请——该车机未登记邀请重连，保持当前会话")
-            StreamingInviteReconnect.Decision.DEBOUNCED ->
-                appendLog(
-                    "CTRL: 推流中收到车机邀请——距上次邀请重连 ${now - lastInviteReconnectAtMillis}ms，" +
-                        "不足 ${StreamingInviteReconnect.DEBOUNCE_MS / 1000}s，忽略",
-                )
-            StreamingInviteReconnect.Decision.RECONNECT ->
-                Bg.run("streaming-invite-reconnect") { reconnectOnStreamingInvite(client) }
-        }
+        screenOwnership.onStreamingInvite(client)
     }
-
-    private val inviteReconnectLock = Any()
 
     private fun reconnectOnStreamingInvite(client: AirPlayClient) {
         val endpoint = client.currentEndpoint
