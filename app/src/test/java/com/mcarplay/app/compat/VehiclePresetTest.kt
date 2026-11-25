@@ -114,21 +114,23 @@ class VehiclePresetTest {
     }
 
     @Test
-    fun mercedesMbEPresetRefusesOtherManufacturersAndNeverAutoEnables() {
-        // 自动判定永远不开实验开关：没有可靠的正向证据能触发它。
+    fun mercedesMbEPresetRefusesOtherManufacturersButVehicleResolutionIsUniversal() {
+        // 自动判定永远不开 displayPanels 实验开关：没有可靠的正向证据能触发它。
         val mbep = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4", srcvers = "480.7.4")
         assertFalse(resolve(mbep, VehiclePreset.AUTO).usePanelVideoGeometry)
         assertFalse(resolve(unknown, VehiclePreset.AUTO).usePanelVideoGeometry)
-        assertFalse(resolve(mbep, VehiclePreset.AUTO).preferVehicleResolution)
-        assertFalse(resolve(unknown, VehiclePreset.AUTO).preferVehicleResolution)
-        // 已知是别家车机：守卫拒绝，只记录 blocked。
+        // issue #127：DISABLE_RESOLUTION_OPTION=1 已是通用自动策略；是否真正声明由本轮
+        // /info displays[0] 的合法几何门控（不是这里按车型决定）。
+        assertTrue(resolve(mbep, VehiclePreset.AUTO).preferVehicleResolution)
+        assertTrue(resolve(unknown, VehiclePreset.AUTO).preferVehicleResolution)
+        // 已知是别家车机：奔驰实验开关被拒绝，但通用尺寸协商策略保留。
         listOf(chery, ReceiverProfile.Signals(manufacturer = "Volkswagen", model = "VW4131")).forEach { other ->
             val policy = resolve(other, VehiclePreset.MERCEDES_MB_E)
             assertFalse("${other.manufacturer} 不应套用奔驰实验开关", policy.usePanelVideoGeometry)
-            assertFalse("${other.manufacturer} 不应套用奔驰尺寸协商", policy.preferVehicleResolution)
+            assertTrue("${other.manufacturer} 的尺寸协商来自通用策略", policy.preferVehicleResolution)
             assertTrue("manual.mercedes-mb-e-blocked" in policy.rules)
         }
-        // 通用预设关闭实验开关。
+        // 通用预设关闭实验开关与尺寸协商策略。
         assertFalse(resolve(unknown, VehiclePreset.GENERIC).usePanelVideoGeometry)
         assertFalse(resolve(unknown, VehiclePreset.GENERIC).preferVehicleResolution)
     }

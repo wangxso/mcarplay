@@ -57,6 +57,28 @@ class ReceiverCompatibilityTest {
         assertFalse(ReceiverCompatibility.resolve(mib3).allowBluetoothRetireRetry)
     }
 
+    /** issue #127：出画协商对所有接收端自动启用，只有手动「通用」预设关闭。 */
+    @Test
+    fun vehicleResolutionIsAutomaticForEveryReceiverExceptTheGenericPreset() {
+        listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals(), ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo"))
+            .forEach { signals ->
+                assertTrue(
+                    "${signals.model}/${signals.manufacturer} 应走通用出画协商",
+                    ReceiverCompatibility.resolve(signals).preferVehicleResolution,
+                )
+                assertFalse(
+                    "手动通用应关闭出画协商",
+                    ReceiverCompatibility.resolve(signals, preset = VehiclePreset.GENERIC).preferVehicleResolution,
+                )
+            }
+        assertTrue(
+            ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.MERCEDES_MB_E).preferVehicleResolution,
+        )
+        assertTrue(
+            ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.WINPLAY).preferVehicleResolution,
+        )
+    }
+
     @Test
     fun namesAndUnverifiedVersionsCannotEnableDestructiveExceptions() {
         val spoofed = ReceiverCompatibility.resolve(diPlay.copy(externalAccessoryProtocols = emptySet()))
@@ -350,6 +372,8 @@ class ReceiverCompatibilityTest {
         assertFalse(text.contains("private-hotspot"))
         assertFalse(text.contains("AA:BB:CC:DD:EE:FF"))
         assertTrue(text.contains("protocol.pair_and_encrypt"))
+        // issue #127：支持报告里应能直接看到出画协商策略是否开启。
+        assertTrue("诊断行应包含 vehicleResolution=true", text.contains("vehicleResolution=true"))
     }
 
     private fun failedPairing(

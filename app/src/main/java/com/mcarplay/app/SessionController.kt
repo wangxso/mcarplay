@@ -48,6 +48,7 @@ import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeProtocol
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
+import com.mcarplay.app.carlife.CarWithVideoNegotiation
 import com.mcarplay.app.compat.CompatibilityPrefs
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
@@ -4260,40 +4261,42 @@ object SessionController {
                                         } else {
                                             CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE
                                         }
-                                    val requestedVideo =
-                                        CarLifeProtocol.videoRequestFor(
-                                            setup.displayWidth,
-                                            setup.displayHeight,
-                                            requestMaxLongSide,
-                                        )
                                     val compatibility = client.receiverCompatibility()
-                                    val preferVehicleResolution =
-                                        compatibility.preferVehicleResolution &&
-                                            setup.displayFromInfo &&
-                                            setup.displayWidth >= 2 &&
-                                            setup.displayHeight >= 2
+                                    // issue #127：是否声明 DISABLE_RESOLUTION_OPTION=1 与请求尺寸统一由
+                                    // CarWithVideoNegotiation 决定；有合法 displays[0] 几何时按车机尺寸精确
+                                    // 请求（不再被 1920 长边压缩），否则回退 1920 请求且不声明该 key。
+                                    val negotiation =
+                                        CarWithVideoNegotiation.decide(
+                                            preferVehicleResolution = compatibility.preferVehicleResolution,
+                                            displayFromInfo = setup.displayFromInfo,
+                                            displayWidth = setup.displayWidth,
+                                            displayHeight = setup.displayHeight,
+                                            maxLongSide = requestMaxLongSide,
+                                        )
                                     if (setup.experimentalPanelGeometry != null) {
                                         appendLog(
                                             "DISPLAY: 实验面板几何 ${experimentalPanelWidth}x$experimentalPanelHeight" +
-                                                " → 请求 CarWith ${requestedVideo.first}x${requestedVideo.second}" +
+                                                " → 请求 CarWith ${negotiation.width}x${negotiation.height}" +
                                                 "（长边上限 $requestMaxLongSide）",
                                         )
                                     }
-                                    if (preferVehicleResolution) {
+                                    if (negotiation.declareDisableResolutionOption) {
+                                        val exactNote = if (negotiation.exactVehicleGeometry) "（精确几何）" else ""
                                         appendLog(
                                             "CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1，请求 CarWith 按车机显示尺寸 " +
-                                                "${requestedVideo.first}x${requestedVideo.second} 编码",
+                                                "${negotiation.width}x${negotiation.height} 编码$exactNote",
                                         )
                                     } else if (compatibility.preferVehicleResolution) {
                                         appendLog(
-                                            "CARLIFE: 未取得有效 /info 显示几何，暂不声明 DISABLE_RESOLUTION_OPTION",
+                                            "CARLIFE: 未取得合法的 /info displays[0] 几何，不声明 DISABLE_RESOLUTION_OPTION，" +
+                                                "回退 1920 长边请求 ${negotiation.width}x${negotiation.height}",
                                         )
                                     }
                                     val createdCarLife =
                                         streamPipeline.newFormalSession(
                                             context.applicationContext as android.app.Application,
-                                            requestedVideo,
-                                            preferVehicleResolution = preferVehicleResolution,
+                                            negotiation.width to negotiation.height,
+                                            preferVehicleResolution = negotiation.declareDisableResolutionOption,
                                         )
                                     carLife = createdCarLife
                                     val claimed = streamPipeline.claim(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)

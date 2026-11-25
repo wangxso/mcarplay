@@ -87,11 +87,16 @@ object ReceiverCompatibility {
          */
         val usePanelVideoGeometry: Boolean = false,
         /**
-         * 在 CarWith 的 `0x18052` 功能清单里声明 `DISABLE_RESOLUTION_OPTION=1`，让随后 `0x18007`
-         * 的宽高按车机 `/info` 显示几何生效，而不是被 CarWith 映射回自己的分辨率档位。
+         * 出画协商策略：声明 `DISABLE_RESOLUTION_OPTION=1` 时，CarWith 的 `0x18007` 宽高按车机
+         * `/info displays[0]` 几何生效，而不是被映射回 CarWith 自己的分辨率档位。
          *
-         * WinPlay 台架默认启用（用于验证实际 CarWith 返回尺寸）；奔驰 MB_E-P 手动预设也启用。
-         * 其它接收端保持关闭，避免一次改动同时影响所有车型。
+         * issue #127：车机主屏几何超过默认 1920 长边上限（如 2560x1200）时，压小后的请求
+         * 可能不被采纳，CarWith 回退到自己的档位后车机不出画。因此自动判定对**所有接收端**
+         * 都打开本策略，但**是否真的声明**由流程按本轮 `/info` 几何再门控（见
+         * `CarWithVideoNegotiation`）：只有 displays[0] 给出合法几何时才声明并精确请求，
+         * 几何缺失/非法时回退 1920 长边请求且不声明该 key。手动「通用」预设会显式关闭。
+         *
+         * 本字段只表达策略，不直接决定帧尺寸；不要按车型名在流程代码里分支。
          */
         val preferVehicleResolution: Boolean = false,
         /**
@@ -191,6 +196,8 @@ object ReceiverCompatibility {
             // HyperCar 日志已给出同车机的 A/B：请求 1624x1278 时，未声明 DISABLE_RESOLUTION_OPTION
             // 会被 CarWith 回成 1280x720，声明后才返回 1624x1278。因此当前预设不再使用 1728 面板，
             // 保持 displays[0] 的 1624x1278，并只打开功能协商这一条改动。
+            // issue #127 起该策略已是所有接收端的自动策略；这里保留显式置位，确保手动选此预设
+            // 在自动判定未打开时仍然生效。
             // 不附带 MB_D-PP 的单次 RECORD（那是另一代际、另一份报告的证据）。
             // 已知是别家车机时拒绝套用，避免把实验开关带到其它接收端上。
             VehiclePreset.MERCEDES_MB_E ->
@@ -349,7 +356,10 @@ object ReceiverCompatibility {
             skipRecordAfterInitialAudioSetup = oraSkipInitialAudioRecord,
             arrizo8ConnectWindowHint = cherySingleRecord,
             reconnectOnStreamingInvite = vwStreamingInvite,
-            preferVehicleResolution = winPlay,
+            // issue #127：出画协商不再限定 WinPlay/奔驰例外。任何接收端都可能出现主屏几何
+            // 超出默认 1920 长边上限（2560x1200 等），统一打开策略；实际是否声明由流程按
+            // 本轮 /info displays[0] 的合法几何门控（CarWithVideoNegotiation）。
+            preferVehicleResolution = true,
         )
     }
 
