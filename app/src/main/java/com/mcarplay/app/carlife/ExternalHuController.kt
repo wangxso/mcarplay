@@ -1,7 +1,6 @@
 package com.mcarplay.app.carlife
 
 import android.content.Context
-import com.mcarplay.app.SessionController
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
@@ -29,7 +28,9 @@ object ExternalHuController {
         val accepted: Boolean,
     )
 
-    private class Run {
+    private class Run(
+        val log: (String) -> Unit,
+    ) {
         val revision = AtomicLong()
         var bridge: ExternalHuSdpBridge? = null
         var p2p: ExternalHuP2pCoordinator? = null
@@ -58,21 +59,24 @@ object ExternalHuController {
 
     private var lastError: String? = null
 
-    fun start(context: Context): Boolean =
+    fun start(
+        context: Context,
+        log: (String) -> Unit,
+    ): Boolean =
         synchronized(lock) {
             if (current != null) return@synchronized true
             val app = context.applicationContext
-            val run = Run()
+            val run = Run(log)
             current = run
             lastError = null
-            log("HU-SIM: 启动亿连发现诊断，等待对端请求")
+            run.log("HU-SIM: 启动亿连发现诊断，等待对端请求")
             try {
-                val bridge = ExternalHuSdpBridge(app, ::log)
+                val bridge = ExternalHuSdpBridge(app, run.log)
                 run.bridge = bridge
                 val p2p =
                     ExternalHuP2pCoordinator(
                         context = app,
-                        log = ::log,
+                        log = run.log,
                         onReady = { ready -> networkReady(app, run, ready) },
                         onGroupLost = { networkLost(run) },
                     )
@@ -83,7 +87,7 @@ object ExternalHuController {
             } catch (error: Exception) {
                 lastError = error.message ?: error.javaClass.simpleName
                 stopRunLocked(run)
-                log("HU-SIM: 启动失败 $lastError")
+                run.log("HU-SIM: 启动失败 $lastError")
                 false
             }
         }
@@ -173,14 +177,14 @@ object ExternalHuController {
             Discovery(
                 revision,
                 CarWithDiscoveryResponder(
-                    log = ::log,
+                    log = run.log,
                     onAccepted = {
                         worker.execute {
-                            if (isCurrent(run, revision)) log("HU-SIM: 10930 已接受探测，媒体出流仍待单独验证")
+                            if (isCurrent(run, revision)) run.log("HU-SIM: 10930 已接受探测，媒体出流仍待单独验证")
                         }
                     },
                 ),
-                EasyConnMdnsPublisher(context, ::log),
+                EasyConnMdnsPublisher(context, run.log),
             )
         run.discovery = active
         try {
@@ -194,7 +198,7 @@ object ExternalHuController {
         } catch (error: Exception) {
             if (isCurrent(run, revision)) {
                 run.error = error.message ?: error.javaClass.simpleName
-                log("HU-SIM: 发现服务启动失败 ${run.error}")
+                run.log("HU-SIM: 发现服务启动失败 ${run.error}")
             }
             closeDiscovery(run)
         }
@@ -212,7 +216,7 @@ object ExternalHuController {
         runCatching { run.bridge?.stop() }
         runCatching { run.p2p?.stop() }
         worker.execute { closeDiscovery(run) }
-        log("HU-SIM: 已停止；发现服务与本轮 P2P 组正在回收")
+        run.log("HU-SIM: 已停止；发现服务与本轮 P2P 组正在回收")
     }
 
     private fun closeDiscovery(run: Run) {
@@ -221,6 +225,4 @@ object ExternalHuController {
         runCatching { active.responder.stop() }
         runCatching { active.mdns.stop() }
     }
-
-    private fun log(message: String) = SessionController.appendLog(message)
 }

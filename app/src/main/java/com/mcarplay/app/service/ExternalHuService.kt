@@ -44,7 +44,7 @@ class ExternalHuService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        val started = ExternalHuController.start(applicationContext)
+        val started = ExternalHuController.start(applicationContext, SessionController::appendLog)
         if (!started) {
             SessionController.appendLog("HU-SIM: 启动失败：${ExternalHuController.snapshot().detail}")
             stopForeground(STOP_FOREGROUND_REMOVE)
