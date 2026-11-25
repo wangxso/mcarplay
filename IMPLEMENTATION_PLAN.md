@@ -6,6 +6,17 @@
 
 ## 当前基线与结论
 
+- **11 月 25 日会话编排层重构 Phase 2g-1（本 PR，基线 `dev` @ `a5b96d2`，已合入 2f / #128，无设备或实车验证）：**
+  把正式 CarLife 源的构造与事件路由（`onAccessUnit`/`onEnded`/`onAudioEvent`/`onReturnToCar`）、
+  `CarLifeSessionRegistry` 租约与输出槽（`CarLifeOutput`）抽到 `session/StreamPipeline`；组件持有
+  `registry`/`formal`/`diagnostic`/`output`，租约仍用同一 `synchronized(registry)` 监视器，日志、诊断时间线、当前 client、
+  音频桥与模式重申经中性 `CarLifeStreamPorts` 注入，组件不反向依赖编排层/界面层。控制器保留
+  `currentCarLifeSession`/`isFormalCarLifeActive`/`runningDiagnosticCarLifeSession`/`claimCarLifeSession`/
+  `releaseCarLifeSession`/`stopFormalCarLife` 薄门面及既有 `currentTouchTarget` 读取；`videoSender`、`newScreenSender`、
+  `screenStreamRecovery`、尺寸/几何/fps 计算与音频桥仍留在控制器（2g-2）。B-18 旧源迟到 `onEnded` 只记旧会话结束并
+  释放自身租约，绝不停止新一轮发送端；入流门控、日志文案与时间线模板逐字保持。新增 J/I/S JVM 测试覆盖租约精确性、
+  输出发布/清理、门控重置和旧源隔离；完整门禁与测试计数见 PR，不以离线测试宣称任何车型兼容性。
+
 - **11 月 25 日会话编排层重构 Phase 2f（本 PR，基线 `dev` @ `15397d2`，无设备或实车验证）：**
   在已合入的 2e（#125）之上把 `ModesAction` 合并队列、`scheduleModesReclaim` 绝对时刻重申、拿回主屏 3 秒检查、
   回屏策略动作与推流中邀请防抖抽取到 `airplay/ScreenOwnership`；组件与控制器同寿命，客户端身份仍用 `===`，

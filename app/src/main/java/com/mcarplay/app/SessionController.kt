@@ -44,9 +44,6 @@ import com.mcarplay.app.bt.Iap2BluetoothServer
 import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.bt.countsAsAutoReconnectFailure
 import com.mcarplay.app.bt.peerUnknownOrMatches
-import com.mcarplay.app.carlife.CarLifeAudioEvent
-import com.mcarplay.app.carlife.CarLifeJoinGate
-import com.mcarplay.app.carlife.CarLifeLaunchStrategy
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeProtocol
 import com.mcarplay.app.carlife.CarLifeSession
@@ -98,10 +95,12 @@ import com.mcarplay.app.net.WifiCarPlayConnector
 import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
+import com.mcarplay.app.session.CarLifeStreamPorts
 import com.mcarplay.app.session.EventCommandRouter
 import com.mcarplay.app.session.LegacyAttemptScope
 import com.mcarplay.app.session.LegacySessionUiPort
 import com.mcarplay.app.session.SessionUiPort
+import com.mcarplay.app.session.StreamPipeline
 import com.mcarplay.app.session.attemptHandoffCancelled
 import com.mcarplay.app.settings.DisplayPrefs
 import com.mcarplay.app.settings.InternetNetwork
@@ -631,34 +630,53 @@ object SessionController {
     @Volatile
     var currentClient: AirPlayClient? = null
 
-    private val carLifeSessions = CarLifeSessionRegistry()
-
-    /** Formal CarPlay session currently bridging Xiaomi CarWith. */
-    @Volatile
-    private var formalCarLifeSession: CarLifeSession? = null
-
-    /** Standalone CarWith self-test session (never submitted to CarPlay). */
-    @Volatile
-    private var diagnosticCarLifeSession: CarLifeSession? = null
+    /** Phase 2g-1：正式 CarLife 源、会话租约与输出去向的编排组件（发送端工厂/恢复闭包仍在控制器）。 */
+    private val streamPipeline = createStreamPipeline()
 
     private val currentCarLifeSession: CarLifeSession?
-        get() = formalCarLifeSession
-
-    /** 正式 CarLife 源本轮的输出去向；null = 发送端尚未启动，帧直接丢弃。 */
-    private class CarLifeOutput(
-        val attempt: String,
-        val sender: VideoSender,
-    ) {
-        val gate = CarLifeJoinGate()
-    }
-
-    @Volatile
-    private var carLifeOutput: CarLifeOutput? = null
+        get() = streamPipeline.currentFormalSession()
 
     @Volatile
     private var screenStreamRecovery: (() -> ScreenRecoveryResult)? = null
 
     private enum class ScreenRecoveryResult { RESTORED, ABORTED, FAILED }
+
+    private fun createStreamPipeline(): StreamPipeline =
+        StreamPipeline(
+            object : CarLifeStreamPorts {
+                override fun log(line: String) = appendLog(line)
+
+                override fun timelineSourceFrame(attempt: String) = ConnectionDiagnostics.timeline.sourceFrame(attempt)
+
+                override fun timelineNote(
+                    attempt: String,
+                    note: String,
+                ) = ConnectionDiagnostics.timeline.note(attempt, note)
+
+                override fun timelineMedia(
+                    attempt: String,
+                    video: Boolean,
+                    bytes: Int,
+                ) = ConnectionDiagnostics.timeline.media(attempt, video, bytes)
+
+                override fun timelineFinish(
+                    attempt: String,
+                    code: DiagnosticCode,
+                    failed: Boolean,
+                    detail: String,
+                ) = ConnectionDiagnostics.timeline.finish(attempt, code, failed, detail)
+
+                override fun currentClient(): AirPlayClient? = this@SessionController.currentClient
+
+                override fun enqueueModesAssert(
+                    client: AirPlayClient,
+                    reason: String,
+                    requestKeyFrame: Boolean,
+                ) = this@SessionController.enqueueModesAssert(client, reason, requestKeyFrame)
+
+                override fun nativeBridge(): CarLifeAudioBridge? = nativeAudioBridge
+            },
+        )
 
     @Volatile
     private var disconnectCompletion: java.util.concurrent.CountDownLatch? = null
@@ -750,31 +768,17 @@ object SessionController {
 
     internal fun isDisconnecting(): Boolean = disconnectCompletion != null
 
-    internal fun isFormalCarLifeActive(): Boolean = currentCarLifeSession?.isRunning == true
+    internal fun isFormalCarLifeActive(): Boolean = streamPipeline.isFormalActive()
 
     val runningDiagnosticCarLifeSession: CarLifeSession?
-        get() = diagnosticCarLifeSession?.takeIf { it.isRunning }
+        get() = streamPipeline.runningDiagnosticSession()
 
     internal fun claimCarLifeSession(
         owner: CarLifeSessionRegistry.Owner,
         session: CarLifeSession,
-    ): Boolean =
-        synchronized(carLifeSessions) {
-            if (!carLifeSessions.acquire(owner, session.lease)) return@synchronized false
-            when (owner) {
-                CarLifeSessionRegistry.Owner.FORMAL -> formalCarLifeSession = session
-                CarLifeSessionRegistry.Owner.DIAGNOSTIC -> diagnosticCarLifeSession = session
-            }
-            true
-        }
+    ): Boolean = streamPipeline.claim(owner, session)
 
-    internal fun releaseCarLifeSession(session: CarLifeSession): Boolean =
-        synchronized(carLifeSessions) {
-            if (!carLifeSessions.release(session.lease)) return@synchronized false
-            if (formalCarLifeSession === session) formalCarLifeSession = null
-            if (diagnosticCarLifeSession === session) diagnosticCarLifeSession = null
-            true
-        }
+    internal fun releaseCarLifeSession(session: CarLifeSession): Boolean = streamPipeline.release(session)
 
     /** 当前会话的共享密钥与接收端地址：投影授权晚于连接时，动态补启音频用。 */
     @Volatile
@@ -1298,17 +1302,8 @@ object SessionController {
     }
 
     private fun stopFormalCarLife() {
-        carLifeOutput = null
-        currentCarLifeSession?.let {
-            it.stop()
-            releaseCarLifeSession(it)
-        }
-        synchronized(carLifeSessions) {
-            formalCarLifeSession = null
-        }
+        streamPipeline.stopFormal()
     }
-
-    /** 正式会话的 CarLife 源：输出按 [carLifeOutput] 路由，旧轮迟到回调被隔离。 */
 
     /**
      * 实验（issue #62，PR #78 评审 P2）：在 **VideoConfig 实际写出之后**判定面板几何是否生效。
@@ -1338,81 +1333,6 @@ object SessionController {
                 )
             DisplaySurfaceReport.PanelExperimentOutcome.NOT_REQUESTED -> Unit
         }
-    }
-
-    private fun newFormalCarLifeSession(
-        context: Context,
-        requestedVideoSize: Pair<Int, Int>? = null,
-        preferVehicleResolution: Boolean = false,
-    ): CarLifeSession {
-        lateinit var session: CarLifeSession
-        session =
-            CarLifeSession(
-                application = context.applicationContext as android.app.Application,
-                onAccessUnit = onAccessUnit@{ unit ->
-                    if (currentCarLifeSession !== session) return@onAccessUnit
-                    val output = carLifeOutput ?: return@onAccessUnit
-                    val joinsBefore = output.gate.joins
-                    val frame = output.gate.admit(unit) ?: return@onAccessUnit
-                    if (output.gate.joins != joinsBefore) {
-                        appendLog(
-                            "CARLIFE: 入流门控第 ${output.gate.joins} 次接入（此前等 IDR 丢弃 ${output.gate.droppedBeforeLastJoin} 帧，" +
-                                "补参数集=${output.gate.filledAtLastJoin.ifEmpty { "无（帧内已带齐）" }}）",
-                        )
-                    }
-                    ConnectionDiagnostics.timeline.sourceFrame(output.attempt)
-                    val sender = output.sender
-                    val dimensions = frame.dimensions()
-                    if (dimensions != null && sender.isNewSourceSize(dimensions.first, dimensions.second)) {
-                        ConnectionDiagnostics.timeline.note(
-                            output.attempt,
-                            "CARWITH_VIDEO_FORMAT ${dimensions.first}x${dimensions.second}",
-                        )
-                        sender.setVideoDimensions(dimensions.first, dimensions.second)
-                        appendLog("CARLIFE: 实际视频尺寸 ${dimensions.first}x${dimensions.second}")
-                    }
-                    if (!sender.submitExternalFrame(frame.toExternalVideoFrame())) output.gate.reset()
-                },
-                onEnded = { reason ->
-                    // 旧源的迟到回调不能停掉新一轮的发送端
-                    val output = carLifeOutput.takeIf { currentCarLifeSession === session }
-                    if (output != null) {
-                        ConnectionDiagnostics.timeline.finish(output.attempt, session.endDiagnosticCode, true, reason)
-                        appendLog("CARLIFE: 会话结束 - $reason")
-                        nativeAudioBridge?.stop()
-                        output.sender.stop()
-                    } else {
-                        appendLog("CARLIFE: 未接入推流的旧会话结束 - $reason")
-                    }
-                    releaseCarLifeSession(session)
-                },
-                onAudioEvent = onAudioEvent@{ channel, event ->
-                    if (currentCarLifeSession !== session) return@onAudioEvent
-                    val attempt = carLifeOutput?.attempt
-                    if (attempt != null && event is CarLifeAudioEvent.Init) {
-                        ConnectionDiagnostics.timeline.note(
-                            attempt,
-                            "CARWITH_AUDIO_FORMAT channel=$channel rate=${event.sampleRate} " +
-                                "channels=${event.channels} bits=${event.bitsPerSample}",
-                        )
-                    }
-                    if (attempt != null && event is CarLifeAudioEvent.Pcm) {
-                        ConnectionDiagnostics.timeline.media(attempt, false, event.littleEndian.size)
-                    }
-                    nativeAudioBridge?.submit(channel, event)
-                },
-                log = { line -> appendLog(line) },
-                requestedVideoSize = requestedVideoSize,
-                preferVehicleResolution = preferVehicleResolution,
-                launchStrategy = CarLifeLaunchStrategy.COMPATIBLE,
-                onReturnToCar = onReturnToCar@{
-                    if (currentCarLifeSession !== session) return@onReturnToCar
-                    val client = currentClient ?: return@onReturnToCar
-                    val note = client.modes.onUserReturnedToCar()
-                    enqueueModesAssert(client, "CarWith 返回车机（→ $note）", requestKeyFrame = false)
-                },
-            )
-        return session
     }
 
     /**
@@ -1961,7 +1881,7 @@ object SessionController {
                     get() = videoSender
 
                 override val outputSender: VideoSender?
-                    get() = carLifeOutput?.sender
+                    get() = streamPipeline.outputSender()
 
                 override val nativeBridge: CarLifeAudioBridge?
                     get() = nativeAudioBridge
@@ -1985,7 +1905,7 @@ object SessionController {
                     get() = consumerReleaseCount
 
                 override fun clearCarLifeOutput() {
-                    carLifeOutput = null
+                    streamPipeline.clearOutput()
                 }
 
                 override fun clearNativeBridge() {
@@ -4232,7 +4152,8 @@ object SessionController {
                                             }
                                         val previousSender =
                                             synchronized(this) {
-                                                val previousOutput = carLifeOutput ?: return@recover ScreenRecoveryResult.ABORTED
+                                                val previousOutput =
+                                                    streamPipeline.currentOutput() ?: return@recover ScreenRecoveryResult.ABORTED
                                                 val previous = videoSender ?: return@recover ScreenRecoveryResult.ABORTED
                                                 if (!scope.isActive ||
                                                     currentClient !== client ||
@@ -4242,7 +4163,7 @@ object SessionController {
                                                 ) {
                                                     return@recover ScreenRecoveryResult.ABORTED
                                                 }
-                                                carLifeOutput = null
+                                                streamPipeline.clearOutput()
                                                 videoSender = null
                                                 previous
                                             }
@@ -4274,7 +4195,7 @@ object SessionController {
                                                 if (!scope.isActive || currentClient !== client || videoSender !== replacement) {
                                                     return@recover ScreenRecoveryResult.ABORTED
                                                 }
-                                                carLifeOutput = CarLifeOutput(diagnosticAttempt, replacement)
+                                                streamPipeline.publishOutput(diagnosticAttempt, replacement)
                                             }
                                             client.modes.onScreenStreamRestored()
                                             replacement.requestKeyFrame(fromReceiver = false)
@@ -4285,7 +4206,7 @@ object SessionController {
                                             if (!restored) {
                                                 synchronized(this) {
                                                     if (videoSender === replacement) videoSender = null
-                                                    if (carLifeOutput?.sender === replacement) carLifeOutput = null
+                                                    streamPipeline.clearOutputIf(replacement)
                                                 }
                                                 replacement.stop()
                                             }
@@ -4323,11 +4244,10 @@ object SessionController {
                                 if (host != null) {
                                     val videoW = pendingVideoW
                                     val videoH = pendingVideoH
-                                    val output = CarLifeOutput(diagnosticAttempt, sessionVideoSender)
                                     // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准。
                                     // 实验（issue #62）：默认 1920 长边上限会把面板尺寸先压小（2288×1728 →
                                     // 1920×1448），使实验连「请求正确尺寸」都做不到；命中面板时放开到面板长边，
-                                    // 但是否真的生效仍以实际返回尺寸为准（见 newFormalCarLifeSession）。
+                                    // 但是否真的生效仍以实际返回尺寸为准（见 StreamPipeline.newFormalSession）。
                                     val experimentalPanelWidth = setup.experimentalPanelGeometry?.first
                                     val experimentalPanelHeight = setup.experimentalPanelGeometry?.second
                                     val requestMaxLongSide =
@@ -4370,13 +4290,13 @@ object SessionController {
                                         )
                                     }
                                     val createdCarLife =
-                                        newFormalCarLifeSession(
-                                            context,
+                                        streamPipeline.newFormalSession(
+                                            context.applicationContext as android.app.Application,
                                             requestedVideo,
                                             preferVehicleResolution = preferVehicleResolution,
                                         )
                                     carLife = createdCarLife
-                                    val claimed = claimCarLifeSession(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)
+                                    val claimed = streamPipeline.claim(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)
                                     val videoStarted = claimed && videoSender?.start {} == true
                                     // 入网已完成，此时才拿低延迟锁（持锁会让入网所需的 Wi‑Fi 扫描失败）
                                     if (videoStarted) StreamingWifiLock.acquire(context)
@@ -4389,7 +4309,7 @@ object SessionController {
                                             note = { ConnectionDiagnostics.timeline.note(diagnosticAttempt, it) },
                                         )
                                     }
-                                    if (videoStarted) carLifeOutput = output
+                                    if (videoStarted) streamPipeline.publishOutput(diagnosticAttempt, sessionVideoSender)
                                     // 在 CarWith 启动前布防：CarWith 可能在 start() 内就恢复媒体，
                                     // 启动后再取 nowPlaying 会把自动播放误当成“连接前已在播放”。
                                     if (videoStarted) armAutoPlayBehavior(createdCarLife)
@@ -4407,8 +4327,8 @@ object SessionController {
                                     } else {
                                         stopAutoPlayWatch()
                                         ConnectionDiagnostics.timeline.finish(diagnosticAttempt, DiagnosticCode.CARWITH_FAILED, true)
-                                        if (carLifeOutput === output) carLifeOutput = null
-                                        releaseCarLifeSession(createdCarLife)
+                                        streamPipeline.clearOutputIf(sessionVideoSender)
+                                        streamPipeline.release(createdCarLife)
                                     }
                                 }
                                 // 音频通道（可选）：SETUP type=100 → UDP RTP 推流。
