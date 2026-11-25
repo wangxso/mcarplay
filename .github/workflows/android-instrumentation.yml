@@ -34,8 +34,10 @@ jobs:
           persist-credentials: false
 
       - name: Validate Linux KVM acceleration
+        env:
+          INSTRUMENTATION_RUNNER_LABEL: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'ubuntu-24.04' }}
         run: |
-          echo "Runner label: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'ubuntu-24.04' }}"
+          echo "Runner label: $INSTRUMENTATION_RUNNER_LABEL"
           if [[ "$(uname -s)" != "Linux" ]]; then
             echo "::error::Instrumentation emulator requires a Linux runner with KVM"
             exit 1
