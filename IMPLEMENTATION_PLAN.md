@@ -1,12 +1,22 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-11-10。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-11-25。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
 ## 当前基线与结论
 
-- **11 月 24 日会话编排层重构 Phase 2d（本 PR，基线 `dev` @ `be895d8`，无设备或实车验证）：**
+- **11 月 25 日会话编排层重构 Phase 2e（本 PR，基线 `dev` @ `d61096f`，无设备或实车验证）：**
+  回屏策略中性化、不改行为：`PassatReturnStrategy`/`PassatReturnPolicy` 改名为 `ScreenReturnStrategy`/`ScreenReturnPolicy`
+  （枚举顺序、key、默认值与失败判据不变），有效策略收敛到 `ReceiverCompatibility.Policy.screenReturn`（默认 OFF），
+  手动大众资格与惰性偏好读取由 `ReceiverCompatibility.withScreenReturnPreference` 承担；`CompatibilityPrefs` 暴露
+  `screenReturnStrategy`/`setScreenReturnStrategy`，持久化键 `compat_passat_return_strategy` 与 `apply()` 语义不变；
+  `DisplayPanelFragment` 只改类型/API 引用，UI、文案与按钮顺序未动。`SessionController` 保留 3 秒检查、失败计数、
+  断开门禁锁与 `PASSAT:` 日志，在原时点动态解析；队列、重申、恢复与邀请代码未搬移（留待 2f）。
+  新增/扩充 JVM 测试覆盖九预设 × 四策略资格、惰性零读取、`takeBackFailed` 负值、重试/断开矩阵与旧持久化键往返；
+  完整门禁与测试计数见 PR。不以离线测试宣称任何车型兼容性。
+
+- **11 月 24 日会话编排层重构 Phase 2d（`dev` @ `fc9f489` / #122，无设备或实车验证）：**
   合并实现 2d-A `audio/AudioChannelStarter` 启动、候选、动态补启与归还重试控制流，及 2d-B `AudioChannelState` 三个独立
   volatile 槽。原控制器同步门面、同一 monitor、单例 CAS gate、gate 外 RECORD、初始 `skipRecordAfterInitialAudioSetup`、
   真实客户端引用判断及 sender/bridge 清理边界均保留；共享状态发布/读取/清理顺序不变，清理不清 receiverKey。

@@ -7,10 +7,15 @@ Phase 1a 进行中：`AttemptScope`/`LegacyAttemptScope` 与 `SessionUiPort` 已
 `attributeAudioTeardown`）；统一 `endAttempt` 待做，尚无实车证据。
 Phase 2c 的 `CarWifiLink`/`CarWifiState`、四条凭据入网路径与端点交接网络分派已在 `agy/phase2c*-car-wifi-joiner-20261124`
 PR 栈迁入 `net/CarWifiJoiner`；端点归属、配对/推流续体与收尾仍在上层，PR #116 的两条 P3 清理已在该栈处理。
-Phase 2d（本 PR，2026-11-24）在 `dev` @ `be895d8`（已合入 2c-3 / #118）上合并完成 2d-A 启动/重试控制流与
+Phase 2d（2026-11-24，已合入 `dev` @ `fc9f489` / #122）在 2c-3 / #118 之上合并完成 2d-A 启动/重试控制流与
 2d-B 三个独立 volatile 归因槽抽取：`audio/AudioChannelStarter` 通过窄端口共用原控制器 monitor，`AudioChannelState`
 供启动和既有 `AudioTeardown` 活读/清理。RECORD 仍在 gate 外，初始 skip 策略、日志、20 秒/看门狗与 UI 提示保持；
-未实现统一 `endAttempt`，未做设备或实车验证。**
+未实现统一 `endAttempt`，未做设备或实车验证。
+Phase 2e（本 PR，2026-11-25）在 `dev` @ `d61096f`（已合入 2d / #122、RGP08 / #124）上只做回屏策略中性化、不改行为：
+`PassatReturnStrategy`/`PassatReturnPolicy` 改名为 `ScreenReturnStrategy`/`ScreenReturnPolicy`（枚举顺序、key、默认值、
+失败判据不变），有效策略收敛到 `ReceiverCompatibility.Policy.screenReturn`（默认 OFF），手动大众资格与惰性偏好读取由
+`ReceiverCompatibility.withScreenReturnPreference` 承担；`SessionController` 保留原读取时点、锁、PASSAT 日志与副作用，
+队列/重申/恢复/3 秒检查/邀请代码未搬移。未做设备或实车验证。**
 2026-11-10 对照代码复查后修订过一次，改动见文末
 「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 
@@ -290,13 +295,15 @@ fun transition(phase: SessionPhase, event: SessionEvent, policy: Policy?): Pair<
 ### 3.6 车型差异规则
 
 - 流程代码（`session/`、`net/CarWifiJoiner`、`audio/AudioChannelStarter`、`airplay/ScreenOwnership`）只能读 `Policy` 字段。
-- 现有直接分支（例如 `passatReturnStrategy()`/`applyPassatReturnStrategy`、音频/RECORD 里的车型判断）改为 `Policy` 上的具名字段，
+- 现有直接分支（Phase 2e 已把 `passatReturnStrategy()`/`applyPassatReturnStrategy` 改为
+  `currentScreenReturnPolicy()`/`applyScreenReturnStrategy` 并收敛到 `Policy.screenReturn`；音频/RECORD 里的车型判断仍留待后续阶段）
+  改为 `Policy` 上的具名字段，
   字段 KDoc 保留日期证据，与现有 `Policy` 写法一致。
 - 车型名可以继续出现在注释与日志里（日志文本是 logbot 契约，见 4）。架构测试只检查去掉注释和字符串后的标识符：
   按驼峰/下划线拆词后不得出现 passat、audi、honda、cadillac、diplay、winplay、macplay、chery、arrizo、mib3、id7、vw、cinemo。
   上述流程文件建立前，这条规则没有可扫描的文件。
-- 因此 `airplay/ScreenOwnership` 不能直接搬：`PassatReturnStrategy`/`PassatReturnPolicy` 这类带车型名的类型要先改成 `Policy` 上的
-  中性字段（例如 `screenReturn: ScreenReturnStrategy`），作为单独的「行为保持」PR，再做抽取（Phase 2e、2f）。
+- 因此 `airplay/ScreenOwnership` 不能直接搬：`PassatReturnStrategy`/`PassatReturnPolicy` 这类带车型名的类型已由 Phase 2e 改为
+  `Policy.screenReturn` 中性字段（`ScreenReturnStrategy`/`ScreenReturnPolicy`），2f 才可以做抽取。
 
 ### 3.7 不拆 Gradle 多模块
 
@@ -389,7 +396,7 @@ interface SessionEnvironment {
 | 2b | `net/EndpointResolver`：`awaitCtrlInvite`、`resolveEndpointHost`、`mergeBrowserEndpoint`、`enrichEndpointFromBrowser`、`preferEndpoint`、`txtValue` | M | 端点合并优先级、IPv6-only、邀请超时（纯函数部分直接测） |
 | 2c | `net/CarWifiJoiner`：1271–2100、4130–4181 与 4078–4128 的分派；先提取 `CarWifiLink` 接口；状态 `boundCarSsid`/`lastCarWifiSsid`/`lastWifiPsk` 归入 `CarWifiState`；这段代码里 58 处对会话标志和 UI 钩子的引用改走 1a 的接口 | L | 四条入网路径的回退顺序、取消、超时；附录 B-2 |
 | 2d | `audio/AudioChannelStarter`：`startAudioChannel`、`attributeAudioTeardown`、`audioCandidateKeys`、`maybeStartAudioNow`、`retryAudioAfterClaimReturned` 及 `activeAudio*` 状态 | M | 档位候选顺序、20 s 存活窗口归因、看门狗守卫；附录 B-15 |
-| 2e | 帕萨特回屏改为 `Policy` 上的中性字段（不搬代码） | S | `ReceiverCompatibility` 测试覆盖原有各策略 |
+| 2e（已完成） | 帕萨特回屏改为 `Policy` 上的中性字段（不搬代码）：`ScreenReturnStrategy`/`ScreenReturnPolicy`、`Policy.screenReturn`、`ReceiverCompatibility.withScreenReturnPreference` | S | `ScreenReturnPolicyTest`（原 `PassatReturnPolicyTest` 精确改名）、`ReceiverCompatibilityTest` 资格/叠加矩阵、`CompatibilityPrefsScreenReturnTest` |
 | 2f | `airplay/ScreenOwnership`：`ModesAction` 队列、`enqueueModesAssert`、`scheduleModesReclaim`、`scheduleTakeBackCheck`、回屏策略、推流中邀请重连 | M | 合并语义、让出/拿回间隔；附录 B-11、B-17 |
 | 2g | `session/StreamPipeline`：正式 CarLife 源与路由、`newScreenSender`、主屏流重建（779–869、3717–3955） | L | 入流门控、旧源迟到回调隔离；附录 B-18 |
 | 2h | `session/SessionLog`、`service/ScreenPowerController`；消除 3.1 列出的反向依赖 | S | 架构测试允许清单删去对应项 |

@@ -47,12 +47,11 @@ import com.mcarplay.app.carlife.CarLifeProtocol
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
 import com.mcarplay.app.compat.CompatibilityPrefs
-import com.mcarplay.app.compat.PassatReturnPolicy
-import com.mcarplay.app.compat.PassatReturnStrategy
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverObservation
-import com.mcarplay.app.compat.VehiclePreset
+import com.mcarplay.app.compat.ScreenReturnPolicy
+import com.mcarplay.app.compat.ScreenReturnStrategy
 import com.mcarplay.app.compat.VehiclePresetRuntime
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.diagnostics.ConnectionMilestone
@@ -3253,40 +3252,44 @@ object SessionController {
                 "SESSION: 拿回主屏 ${TAKE_BACK_CHECK_MS}ms 后：车机触控 +${touchLogCount - touchesBefore} 条、" +
                     "要关键帧 +${forceKeyFrameCount - keyFramesBefore} 次（${client.modes.describe()}；起因 $reason）",
             )
-            applyPassatReturnStrategy(
+            applyScreenReturnStrategy(
                 client,
-                PassatReturnPolicy.takeBackFailed(touchLogCount - touchesBefore, forceKeyFrameCount - keyFramesBefore),
+                ScreenReturnPolicy.takeBackFailed(touchLogCount - touchesBefore, forceKeyFrameCount - keyFramesBefore),
                 alreadyRetried,
             )
         }
     }
 
-    /** 实验策略只在主页「车型适配」手动选了大众时生效，其他车型选择或自动判定一律视为关闭。 */
-    private fun passatReturnStrategy(): PassatReturnStrategy =
-        if (VehiclePresetRuntime.current == VehiclePreset.VOLKSWAGEN) {
-            appContext?.let(CompatibilityPrefs::passatReturnStrategy) ?: PassatReturnStrategy.OFF
-        } else {
-            PassatReturnStrategy.OFF
-        }
+    /**
+     * 回屏策略在当前时点的有效值：只有主页「车型适配」手动选了大众，兼容层才在这里读取用户偏好；
+     * 其他车型选择或自动判定一律 OFF。`client.receiverCompatibility()` 只作为中性 Policy 载体，
+     * 不用它的 family/rules/邀请重连判资格；资格与惰性读取都在
+     * [ReceiverCompatibility.withScreenReturnPreference] 内完成。
+     */
+    private fun currentScreenReturnPolicy(client: AirPlayClient): ReceiverCompatibility.Policy =
+        ReceiverCompatibility.withScreenReturnPreference(
+            client.receiverCompatibility(),
+            VehiclePresetRuntime.current,
+        ) { appContext?.let(CompatibilityPrefs::screenReturnStrategy) ?: ScreenReturnStrategy.OFF }
 
     /** 连续「拿回主屏车机没反应」次数；车机有反应或新一轮连接时清零。 */
     @Volatile
     private var takeBackFailures = 0
 
-    /** 帕萨特「回主界面再进」实验策略的失败后续动作；用户未选择策略时什么都不做。 */
-    private fun applyPassatReturnStrategy(
+    /** 回屏策略的失败后续动作；用户未选择策略（OFF）时什么都不做。 */
+    private fun applyScreenReturnStrategy(
         client: AirPlayClient,
         failed: Boolean,
         alreadyRetried: Boolean,
     ) {
-        val strategy = passatReturnStrategy()
-        if (strategy == PassatReturnStrategy.OFF) return
+        val strategy = currentScreenReturnPolicy(client).screenReturn
+        if (strategy == ScreenReturnStrategy.OFF) return
         if (!failed) {
             takeBackFailures = 0
             return
         }
         val failures = ++takeBackFailures
-        if (PassatReturnPolicy.retryRebuild(strategy, failed, alreadyRetried)) {
+        if (ScreenReturnPolicy.retryRebuild(strategy, failed, alreadyRetried)) {
             appendLog("PASSAT: 策略「失败后重建一次」——拿回主屏车机没反应，重建主屏流重试")
             enqueueModesAssert(
                 client,
@@ -3296,7 +3299,7 @@ object SessionController {
                 rebuildStream = true,
                 takeBackRetried = true,
             )
-        } else if (PassatReturnPolicy.disconnect(strategy, failures)) {
+        } else if (ScreenReturnPolicy.disconnect(strategy, failures)) {
             appendLog("PASSAT: 策略「连续失败后断开」——连续 $failures 次拿回主屏车机没反应，结束本轮，请重新连接")
             synchronized(this) {
                 if (!connectCancelled && !client.cancelled && currentClient === client) {
@@ -4157,7 +4160,7 @@ object SessionController {
                                     audioEnabled = { audioEnabledForSession },
                                     audioStreamRunning = { audioSender?.isRunning == true },
                                     resolveScreenReturnRebuild = { requested ->
-                                        PassatReturnPolicy.rebuildStream(passatReturnStrategy(), requested)
+                                        ScreenReturnPolicy.rebuildStream(currentScreenReturnPolicy(client).screenReturn, requested)
                                     },
                                 )
                             client.connectEventChannel(sessionKey, setup) { command ->

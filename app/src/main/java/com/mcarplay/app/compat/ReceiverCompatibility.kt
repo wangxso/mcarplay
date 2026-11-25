@@ -94,6 +94,12 @@ object ReceiverCompatibility {
          * 其它接收端保持关闭，避免一次改动同时影响所有车型。
          */
         val preferVehicleResolution: Boolean = false,
+        /**
+         * 回屏策略（原帕萨特「回主界面再进」实验）。只由用户在主页「车型适配」**手动**选择大众时经
+         * [withScreenReturnPreference] 读取偏好叠加；[VehiclePreset.AUTO] 自动识别到大众也不启用。
+         * 默认 [ScreenReturnStrategy.OFF]（2026-11-05：三种做法都没有实车证据，见 docs/CARWITH-ENTRY-FINDINGS.md）。
+         */
+        val screenReturn: ScreenReturnStrategy = ScreenReturnStrategy.OFF,
     )
 
     data class PairingFallback(
@@ -198,6 +204,28 @@ object ReceiverCompatibility {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")
                 }
         }
+
+    /**
+     * 把用户回屏偏好叠加到 [policy] 的 [Policy.screenReturn]：只有主页「车型适配」**手动**选择
+     * [VehiclePreset.VOLKSWAGEN] 时才调用 [readPreference]，其它选择（含 [VehiclePreset.AUTO]，
+     * 即使自动识别到 `VWxxxx`）一律 [ScreenReturnStrategy.OFF]，且不触碰偏好读取。
+     *
+     * 资格只取自 [preset] 这一次读取，不从 [policy] 的 family、rules、邀请重连或制造商推导。
+     * [readPreference] 在调用本函数时求值，调用方负责在原动态读取时点调用，不能提前缓存。
+     */
+    fun withScreenReturnPreference(
+        policy: Policy,
+        preset: VehiclePreset,
+        readPreference: () -> ScreenReturnStrategy,
+    ): Policy =
+        policy.copy(
+            screenReturn =
+                if (preset == VehiclePreset.VOLKSWAGEN) {
+                    readPreference()
+                } else {
+                    ScreenReturnStrategy.OFF
+                },
+        )
 
     /** 手动奔驰预设的冲突守卫：厂商未知时放行，已知时必须自报 Mercedes-Benz。 */
     private fun manualMercedesAllowed(signals: ReceiverProfile.Signals): Boolean {
