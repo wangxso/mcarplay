@@ -1,6 +1,6 @@
 # CarPlay 接收端兼容策略
 
-更新：2026-11-18。本文件描述代码中的兼容设计与证据范围，不是设备支持清单。软件接收端冒烟、协议回放和 JVM 测试不等于真实车机验收。
+更新：2026-11-25。本文件描述代码中的兼容设计与证据范围，不是设备支持清单。软件接收端冒烟、协议回放和 JVM 测试不等于真实车机验收。
 
 艾瑞泽 8 的固件/协议报告适用性、88 阶段检查点、合成回归与合并前实车矩阵见
 [艾瑞泽 8 协议回归](ARRIZO8-PROTOCOL-REGRESSION.md)。本轮不扩大 CHERY 策略范围，不新增实车通过结论。
@@ -31,7 +31,7 @@ flowchart LR
 
 | 接收端信号 | 配对 | 蓝牙生命周期 | 例外与约束 |
 | --- | --- | --- | --- |
-| WinPlay，型号 WinPlay、制造商 Roylyl、EA `io.github.roylyl.winplay`、固件 `1.2.4` 或 `1.2.5` | 由 features 决定；SETUP 前检查真实蓝牙身份 | RECORD 和网络 iAP 认证完成后，首帧前也可保留网络会话 | 禁止借用 DiPlay 的断蓝牙重试；占位 deviceID 直接给出明确日志；CarWith `0x18052` 声明 `DISABLE_RESOLUTION_OPTION=1`（仅在 `/info` 有有效 `displays[0]` 几何时） |
+| WinPlay，型号 WinPlay、制造商 Roylyl、EA `io.github.roylyl.winplay`、固件 `1.2.4` 或 `1.2.5` | 由 features 决定；SETUP 前检查真实蓝牙身份 | RECORD 和网络 iAP 认证完成后，首帧前也可保留网络会话 | 禁止借用 DiPlay 的断蓝牙重试；占位 deviceID 直接给出明确日志；CarWith `0x18052` 的 `DISABLE_RESOLUTION_OPTION=1` 属所有接收端共用的尺寸协商，不按接收端开关（见「媒体能力与记忆」） |
 | DiPlay，固定名称、EA `com.shilapi.xcertplay`、自报固件 `0.1.0` | 由 features 与配对应答决定 | bring-up 期间保留蓝牙；视频运行后由网络通道判断会话结束 | 仅该已识别软件画像允许原有断蓝牙恢复；403、未连通 RTSP、已配对成功仍禁止该恢复 |
 | DELPHI/AUDI 且双消息清单稀疏的既有 MIB3 画像 | 由 features 与配对应答决定 | 保留原有链路协商与资源重申；不主动断蓝牙重试 | 链路代际沿用现有证据判据；不能从该画像推断车型已支持 |
 | 明确未声明 HomeKit 配对能力的旧接收端 | `et=NONE` 起步；SETUP 不接受时仍可尝试加密升级 | 不主动执行软件接收端的危险恢复 | 使用原有明文事件与 AES-CTR 屏幕流路径 |
@@ -53,7 +53,7 @@ WinPlay 的“网络交接完成”必须同时满足 RECORD 成功和网络 iAP
 
 - **音频**：继续从 `/info` 的 `(type, audioType, audioOutputFormats)` 生成 AAC-LC/PCM 候选，按各自采样率与延迟协商。没有清单时保留协议基线探测；明确空清单、只有不支持的编码或只有通话档位时仅推视频，不强塞 PCM 媒体流。
 - **视频**：当前输入固定为 CarWith H.264，首帧由 IDR、SPS/PPS 门控，实际尺寸来自 SPS。接收端窗口、请求尺寸与实际视频尺寸分开记录；本层没有新增转码器，不能承诺接收端任意分辨率、HEVC 或高帧率。
-- **CarWith 尺寸协商**：`preferVehicleResolution` 只在 WinPlay 自动身份和手动奔驰 `MERCEDES_MB_E` 预设下开启。开启后 `0x18052` 追加 `DISABLE_RESOLUTION_OPTION=1`，并且必须已有本轮 `/info displays[0]` 的有效几何；手机端兜底的 1080×2320 不会触发。实际是否按车机尺寸编码仍以 `0x10008`/SPS 为准。
+- **CarWith 尺寸协商**：自动判定对所有接收端开启 `preferVehicleResolution`；是否真正在 `0x18052` 追加 `DISABLE_RESOLUTION_OPTION=1` 由 `carlife/CarWithVideoNegotiation` 按本轮 `/info displays[0]` 的合法几何统一决定（手机端兜底的 1080×2320 不算车机几何，不会触发）。取得合法几何时按车机尺寸精确请求，长边可超过默认 1920 上限（如 2560×1200），但仍受维度/像素安全边界约束；几何缺失或非法时回退 1920 长边请求且不声明该 key。手动「通用」（`GENERIC`）预设显式关闭该策略，作为回退出口。实际是否按车机尺寸编码仍以 `0x10008`/SPS 为准。
 - **输入**：继续按 HID 描述符、Usage 和报告结构解析触摸、旋钮与媒体键。描述符缺失只走已有明确回退，不因名称相似套用另一款接收端的布局。
 - **记忆隔离**：音频记忆键包含接收端实例标识（端点公钥/设备标识）、型号、制造商、固件、AirPlay 栈版本、features、EA 标识与音频能力指纹。持久化仅保存摘要；没有稳定实例和身份时不读写持久化记忆。切换接收端、固件或能力变化不会沿用旧档位结论。
 - **用户兜底开关**（默认关，`compat/CompatibilityPrefs`，界面在「车机设置 → 显示」）：「配对失败后尝试明文」在已连上 RTSP 的普通配对失败后恢复明文降级，403 与未连通 RTSP 仍禁止，且不影响断蓝牙重试许可；「音频格式未声明时仍尝试」在清单为空或无可用媒体格式时恢复协议基线与非媒体 PCM 档。两者是用户自担风险的旧行为，不改变默认策略矩阵。
@@ -76,3 +76,4 @@ WinPlay 的“网络交接完成”必须同时满足 RECORD 成功和网络 iAP
 
 2026-10-27：493 项 JVM 测试通过（0 失败、0 跳过），`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 均通过；使用仓库完整 standard debug 检查命令离线验证。
 2026-11-18：新增 `preferVehicleResolution` 策略与 `DISABLE_RESOLUTION_OPTION` 单元覆盖；standard 单测 1250 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、debug/release lint 与 `assembleStandardDebug` 通过。WinPlay 台架复测边界见 `CARWITH-ENTRY-FINDINGS.md`。
+2026-11-25：`preferVehicleResolution` 改为所有接收端自动开启，`0x18052` 是否声明 `DISABLE_RESOLUTION_OPTION=1` 及请求尺寸统一由 `CarWithVideoNegotiation` 按 `/info displays[0]` 几何决定（含 2560×1200 等超过 1920 长边的精确请求）。仅离线验证：standard 单测 1746 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、`lintStandardDebug` 与 `assembleStandardDebug` 通过；未做超 1920 实车复测，车机实际采纳尺寸仍以 `0x10008`/SPS 为准。
