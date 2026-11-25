@@ -417,6 +417,18 @@ class CarLifeSession(
             }
             videoWidth = format.width
             videoHeight = format.height
+            // issue #127：把「请求尺寸 / 是否声明 DISABLE_RESOLUTION_OPTION=1 / 实际返回」放在同一行，
+            // 支持报告里可直接判断出画协商是否被 CarWith 采纳（实际尺寸始终以此为准）。
+            requestedVideoSize?.let { (requestedWidth, requestedHeight) ->
+                val adopted = requestedWidth == format.width && requestedHeight == format.height
+                val declared =
+                    if (preferVehicleResolution) "（已声明 DISABLE_RESOLUTION_OPTION=1）" else "（未声明 DISABLE_RESOLUTION_OPTION）"
+                val outcome = if (adopted) "已采纳" else "未采纳（以实际返回为准）"
+                log(
+                    "CARLIFE: 出画协商请求 ${requestedWidth}x$requestedHeight$declared" +
+                        "，CarWith 实际返回 ${format.width}x${format.height}@${format.fps}——$outcome",
+                )
+            }
         }
     }
 
