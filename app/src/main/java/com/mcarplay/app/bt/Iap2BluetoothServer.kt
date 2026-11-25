@@ -203,12 +203,6 @@ class Iap2BluetoothServer(
                 runCatching { socket.close() }
                 break
             }
-            val peerName =
-                try {
-                    socket.remoteDevice?.name
-                } catch (_: SecurityException) {
-                    null
-                } ?: "unknown"
             // 指定了目标车机时拒绝其它设备的连入（用户配对了多台车机：非目标车机
             // 的控制器也会周期回连，放行会抢占/误建会话）。地址比对，大小写不敏感。
             val target = targetProvider()
@@ -219,39 +213,51 @@ class Iap2BluetoothServer(
                     null
                 }
             val match = peerMatch(target, peerAddress)
-            if (target != null && match == BluetoothDiagnostics.PeerMatch.OTHER) {
-                diagnostics.incoming(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, peerAddress, match)
-                log(
-                    "BT: 忽略非目标设备连入 name=$peerName addr=${peerAddress ?: "?"}" +
-                        "（当前目标：「${target.name}」）",
-                )
-                runCatching { socket.close() }
-                continue
-            }
-            val admission = BtSessionGate.admitInbound(peerAddress)
-            diagnostics.incoming(
-                diagnosticEpoch,
-                BluetoothDiagnostics.Service.IAP2,
-                peerAddress,
-                match,
-                outboundDialing = admission == null,
-            )
-            if (admission == null) {
-                log("BT: 拒绝 $peerName 的 iAP2 回连（同一车机正在出站拨号，继续监听）")
-                runCatching { socket.close() }
-                continue
-            }
-            log("BT: 接收端已连入 name=$peerName，开始 iAP2 发送端会话")
-            val observation = ReceiverDetectionRuntime.observation(peerAddress)
-            thread(isDaemon = true, name = "iap2-bt-session") {
-                try {
-                    admission.outboundFinished?.await()
-                    runSession(socket, observation)
-                } finally {
-                    BtSessionGate.inboundFinished()
+            val accepted = match != BluetoothDiagnostics.PeerMatch.OTHER && BtSessionGate.admitInbound()
+            if (!accepted) runCatching { socket.close() }
+            var workerStarted = false
+            try {
+                val peerName = runCatching { socket.remoteDevice?.name }.getOrNull() ?: "unknown"
+                if (target != null && match == BluetoothDiagnostics.PeerMatch.OTHER) {
+                    diagnostics.incoming(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, peerAddress, match)
+                    log(
+                        "BT: 忽略非目标设备连入 name=$peerName addr=${peerAddress ?: "?"}" +
+                            "（当前目标：「${target.name}」）",
+                    )
+                    continue
                 }
+                diagnostics.incoming(
+                    diagnosticEpoch,
+                    BluetoothDiagnostics.Service.IAP2,
+                    peerAddress,
+                    match,
+                    busy = !accepted,
+                )
+                if (!accepted) {
+                    log("BT: 拒绝 $peerName 的 iAP2 回连（已有拨号或会话，继续监听）")
+                    continue
+                }
+                log("BT: 接收端已连入 name=$peerName，开始 iAP2 握手")
+                val observation = ReceiverDetectionRuntime.observation(peerAddress)
+                thread(isDaemon = true, name = "iap2-bt-session") {
+                    try {
+                        if (listener.isCurrent(records)) runSession(socket, observation, records)
+                    } catch (error: IOException) {
+                        log("BT: RFCOMM 初始化失败 - ${error.message}")
+                    } finally {
+                        closeInbound(socket)
+                    }
+                }
+                workerStarted = true
+            } finally {
+                if (accepted && !workerStarted) closeInbound(socket)
             }
         }
+    }
+
+    private fun closeInbound(socket: BluetoothSocket) {
+        runCatching { socket.close() }
+        BtSessionGate.inboundFinished()
     }
 
     /** 该 UUID 仅声明 CarPlay 能力；真正的 iAP2 字节流仍由 …cafe 服务承载。 */
@@ -293,6 +299,7 @@ class Iap2BluetoothServer(
     private fun runSession(
         socket: BluetoothSocket,
         observation: ReceiverObservation?,
+        records: PhoneSdpRecords<BluetoothServerSocket>,
     ) {
         val pairing = Iap2Pairings.current(context).attempt(socket)
         log("BT: iAP2 RFCOMM 入站握手角色=${pairing.role}")
@@ -300,11 +307,18 @@ class Iap2BluetoothServer(
             StreamDuplexStream(socket.inputStream, socket.outputStream) {
                 runCatching { socket.close() }
             }
-        val channel = Iap2LinkChannel(stream, name = "iap2-bt", role = pairing.role, log = log)
+        val channel =
+            Iap2LinkChannel(
+                stream,
+                name = "iap2-bt",
+                role = pairing.role,
+                log = log,
+            )
         synchronized(channelLock) {
             activeChannel = channel
         }
         try {
+            if (!listener.isCurrent(records)) return
             channel.runSenderSession(
                 context,
                 SESSION_TIMEOUT_MILLIS,
@@ -328,6 +342,8 @@ class Iap2BluetoothServer(
                     synchronized(channelLock) { if (activeChannel === channel) activeSession = session }
                 },
             )
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         } catch (error: IOException) {
             log("SESSION 失败: ${error.message}")
         } finally {
@@ -369,6 +385,7 @@ class Iap2BluetoothServer(
 
     fun stop() {
         listener.stop()
+        detachCurrentSession()
         log("BT: 监听已停止")
     }
 }
