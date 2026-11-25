@@ -35,6 +35,13 @@ object HidNavigation {
     private val lastButtonMask = HashMap<String, Int>()
     private val lastHat = HashMap<String, Int>()
 
+    // MyKnob: 确认位及补齐、两个 8 位绝对轴、一个 8 位相对滚轮。
+    private val joystickWheelDescriptor =
+        (
+            "05010908a101050909011500250175019501810275019507810105010901a100093009311581257f750895028102c0" +
+                "09381581257f750895018106c0"
+        ).chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
     /** 报告对应的设备是否是导航类（有 Wheel/Hat、且不是触摸屏）。 */
     fun isNavigationDevice(descriptor: ByteArray?): Boolean {
         if (descriptor == null || descriptor.isEmpty()) return false
@@ -54,6 +61,9 @@ object HidNavigation {
         report: ByteArray,
     ): List<Int> {
         if (report.isEmpty()) return emptyList()
+        if (report.size == 4 && descriptor?.contentEquals(joystickWheelDescriptor) == true) {
+            return parseJoystickWheel(uuid, report)
+        }
         val nav = isNavigationDevice(descriptor) || (descriptor == null && report.size in 2..4)
         if (!nav) return emptyList()
         if (rawLogEnabled) {
@@ -68,6 +78,22 @@ object HidNavigation {
         } else {
             parseWheelAndButtons(uuid, report)
         }
+    }
+
+    private fun parseJoystickWheel(
+        uuid: String,
+        report: ByteArray,
+    ): List<Int> {
+        val mask =
+            (report[0].toInt() and 1) or
+                (if (report[2] < 0) 0x02 else 0) or
+                (if (report[2] > 0) 0x04 else 0) or
+                (if (report[1] < 0) 0x08 else 0) or
+                (if (report[1] > 0) 0x10 else 0)
+        val keys = buttonEdges(uuid, mask)
+        val wheel = report[3].toInt()
+        if (wheel != 0) keys += if (wheel > 0) KeyEvent.KEYCODE_NAVIGATE_NEXT else KeyEvent.KEYCODE_NAVIGATE_PREVIOUS
+        return keys
     }
 
     /** 8 向帽：0=上 1=右上 2=右 3=右下 4=下 5=左下 6=左 7=左上，其余=松开。 */
@@ -96,22 +122,12 @@ object HidNavigation {
         uuid: String,
         report: ByteArray,
     ): List<Int> {
-        val keys = ArrayList<Int>(3)
         val buttonBytes = if (report.size >= 2) report.size - 1 else report.size
         var mask = 0
         for (i in 0 until buttonBytes.coerceAtMost(2)) {
             mask = mask or ((report[i].toInt() and 0xFF) shl (8 * i))
         }
-        val pressed = mask and lastButtonMask[uuid].orZero().inv()
-        lastButtonMask[uuid] = mask
-        if (pressed != 0) {
-            if ((pressed and 0x01) != 0) keys += KeyEvent.KEYCODE_DPAD_CENTER
-            if ((pressed and 0x02) != 0) keys += KeyEvent.KEYCODE_DPAD_UP
-            if ((pressed and 0x04) != 0) keys += KeyEvent.KEYCODE_DPAD_DOWN
-            if ((pressed and 0x08) != 0) keys += KeyEvent.KEYCODE_DPAD_LEFT
-            if ((pressed and 0x10) != 0) keys += KeyEvent.KEYCODE_DPAD_RIGHT
-            if ((pressed and 0x20) != 0) keys += KeyEvent.KEYCODE_BACK
-        }
+        val keys = buttonEdges(uuid, mask)
         if (report.size >= 2) {
             val delta = report[report.size - 1].toInt()
             if (delta != 0) {
@@ -119,6 +135,21 @@ object HidNavigation {
                 repeat(kotlin.math.abs(delta).coerceAtMost(MAX_STEPS)) { keys += key }
             }
         }
+        return keys
+    }
+
+    private fun buttonEdges(
+        uuid: String,
+        mask: Int,
+    ): MutableList<Int> {
+        val keys = ArrayList<Int>(3)
+        val pressed = mask and lastButtonMask.put(uuid, mask).orZero().inv()
+        if ((pressed and 0x01) != 0) keys += KeyEvent.KEYCODE_DPAD_CENTER
+        if ((pressed and 0x02) != 0) keys += KeyEvent.KEYCODE_DPAD_UP
+        if ((pressed and 0x04) != 0) keys += KeyEvent.KEYCODE_DPAD_DOWN
+        if ((pressed and 0x08) != 0) keys += KeyEvent.KEYCODE_DPAD_LEFT
+        if ((pressed and 0x10) != 0) keys += KeyEvent.KEYCODE_DPAD_RIGHT
+        if ((pressed and 0x20) != 0) keys += KeyEvent.KEYCODE_BACK
         return keys
     }
 
@@ -194,6 +225,8 @@ object HidNavigation {
             KeyEvent.KEYCODE_DPAD_RIGHT -> "右"
             KeyEvent.KEYCODE_DPAD_CENTER -> "确认"
             KeyEvent.KEYCODE_BACK -> "返回"
+            KeyEvent.KEYCODE_NAVIGATE_NEXT -> "滚轮顺时针"
+            KeyEvent.KEYCODE_NAVIGATE_PREVIOUS -> "滚轮逆时针"
             else -> "$keyCode"
         }
 }

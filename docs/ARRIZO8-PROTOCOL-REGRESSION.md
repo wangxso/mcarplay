@@ -23,9 +23,8 @@ MCU 为 `M1E_IC2172_18_01_41.11_250609_R`，与仓库已有艾瑞泽 8 证据的
 | 会话后 Idle / SIGSEGV（正常结束和 `kConnectionErr` 均有样本） | 历史分析已定位周期回调读取空 server 的直接崩溃机制；重复 RECORD / 多次 SessionStart 仍是触发候选。按下节独立验收，不能把约 20 s 崩溃与建链 30 s 超时混算。 |
 
 当前 CHERY 策略已包含固定 32B MFi 挑战、`X-Apple-HKP: 0`、会话内 `auth-setup`、真实 Wi-Fi MAC、
-`disableBluetooth`、跳过 type-130 隧道；只有 `CHERY + Tiggo + 320.17.7` 自动命中单次 RECORD。
-另有 issue #55 车主报告中的 `Mercedes-Benz / MB_D-PP-3/4 / 320.17.7` 也登记为单次 RECORD，尚未实车复测；
-本轮不扩大策略匹配范围。`AirPlayRecordLifecycleTest` 继续保护其他接收端原有的重复 RECORD 行为。
+`disableBluetooth`、跳过 type-130 隧道。发送端在每条控制连接的初始 SETUP 成功后发送一次 RECORD，
+确认会话激活后再协商屏幕及音频流。动态加音频或重建主屏流不会重复启动会话。
 
 **源码核对发现的认证边界：** `AirPlayClient.runAuthSetup()` 只记录响应结构，HTTP 200 就记录 `AUTH_SETUP`，
 不校验证书/签名；HTTP 错误或 I/O 失败后仍继续 SETUP。`Iap2SenderSession` 也保留自报 `0xAA05` 的实验性行为。
@@ -56,7 +55,7 @@ MCU 为 `M1E_IC2172_18_01_41.11_250609_R`，与仓库已有艾瑞泽 8 证据的
 | 直接崩溃机制已定位 | 原厂 `_PerformPeriodTasks+640` 先取 `session+0x10` 的 server，再读 `[server+0xac]`；历史现场 server 为 0，访问 `0xac` 导致 SIGSEGV。Finalize 已清零该引用，周期回调仍执行。 |
 | 约 20 秒的来源 | server `+0xac` 的默认空闲阈值为 20 秒；历史现场计时约 20.001 / 20.002 秒，Finalize 后仍见 Idle 10 / 20 秒。它与建链时从 `TimerThread begin` 起算的约 30 秒 watchdog 是两条路径。 |
 | 优先触发候选，尚未证实 | 同一 session 多次成功 SessionStart 可能多次创建 timer，并覆盖 `session+0xd8`；清理只能取消当前保存的句柄，旧 timer 可能遗留。重复 RECORD 是否实际触发这条链，需要运行时关联证据。 |
-| 当前发送端保护 | 精确 CHERY 画像每条控制连接最多发送一次 RECORD，并发共享结果，超时/拒绝也不在原连接重发；停止时拦住新业务请求，按连接代次丢弃迟到任务。仅证明本机行为受限，不能证明原厂 timer 已完全退出。 |
+| 当前发送端保护 | 每条控制连接最多发送一次 RECORD，并发共享结果，超时/拒绝也不在原连接重发；停止时拦住新业务请求，按连接代次丢弃迟到任务。仅证明本机行为受限，不能证明原厂 timer 已完全退出。 |
 
 已有实验中，以下差异被修正或对齐后仍出现相同崩溃，不能再把它们单独当作已成立的触发解释：
 
@@ -131,7 +130,7 @@ A8-07 / A8-08 / A8-09 的断开稳定性记录补充以下判据：
 | A8-04 / 35–48 | 分别记录 Start、TimerThread begin、iAP2 PASS 和凭据下发；固定 32B 挑战不轮换至 20/16B；首次连接至少三次。 | 双端脱敏对时、挑战长度/应答耗时、凭据“已收到”标记；无材料时不声称签名验证成功。 |
 | A8-05 / 49–57 | 检查 `_airplay._tcp`、手机 `_carplay-ctrl._tcp` 的动态监听口、车机 GET 及手机 HTTP 200；再连车机 AirPlay。首次入网、切换回热点和缓存命中各复测。 | 当前解析端口、ctrl 请求/应答、CTRL_INVITED 与 AIRPLAY_CONNECTED；HTTP 可达不等同 pair 成功。 |
 | A8-06 / 58–62 | 首次 pair-setup / pair-verify / 会话 MFi auth-setup；再次连接检查保存的信任优先 pair-verify。自然遇到 bad setup code / unknown peer 时独立记录，不以 iAP2 PASS 掩盖。 | 配对结果、`X-Apple-HKP: 0`、auth-setup 状态与耗时；不导出密钥、证书或签名原文。 |
-| A8-07 / 63–70 | 核对 SETUP、RECORD、Modes/HID、`disableBluetooth`；确认蓝牙释放后画面/声音/触摸仍工作。CHERY 精确画像每条控制连接只发一次 RECORD。 | 同一控制连接的 RECORD 数、模式变化与蓝牙释放前后发送计数、用户三项确认。 |
+| A8-07 / 63–70 | 核对 SETUP、RECORD、Modes/HID、`disableBluetooth`；确认蓝牙释放后画面/声音/触摸仍工作。每条控制连接只发一次 RECORD。 | 同一控制连接的 RECORD 数、模式变化与蓝牙释放前后发送计数、用户三项确认。 |
 | A8-08 / 71–74 | 视频出画、实际尺寸/帧率、全屏角点点击与拖动；音乐、导航混音、暂停/恢复、换曲和动态开声音；记录主/辅音频各自格式。 | RECORD / 首视频写出 / 实车首画 / 首音频包 / 实车首声各自时间；音画触控确认。type-130 不支持单独归档。 |
 | A8-09 / 75 | 按“断开后约 20 秒崩溃”一节验收：手动断开、动态开声音后断开、自然掉网结束各记录；可复现场景至少三轮，每轮核对屏幕 TEARDOWN → 会话 TEARDOWN 并独立观察至少 60 s 后再重连。 | RECORD/SessionStart 与 timer 关联（如可见）、断开原因、TEARDOWN/Finalize、Idle、PID/重启、tombstone、下次新 attempt；未自然出现的场景或缺失证据标记未验证。 |
 | A8-10 / 76–84 | 合成接收端注入 pair 拒绝、EOF、超时；实车自然失败时按 TimerThread begin 算约 30 s，核对 `0 → 6 → 5`、Stop、Bonjour 注销，再看上层是否有新 Start。 | 每次尝试单独时间轴，失败原因及完整清理；不能只见随后成功就记“同一轮无缝恢复”。 |

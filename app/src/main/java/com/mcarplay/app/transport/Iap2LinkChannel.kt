@@ -14,8 +14,14 @@ import java.util.concurrent.TimeUnit
 class Iap2LinkChannel(
     private val stream: DuplexStream,
     name: String = "iap2-link",
+    private val role: Role = Role.INITIATOR,
     private val log: (String) -> Unit = {},
 ) : Closeable {
+    enum class Role {
+        INITIATOR,
+        RESPONDER,
+    }
+
     private val engine = Iap2LinkEngine()
     private val lock = Object()
     private val controls = LinkedBlockingQueue<ByteArray?>()
@@ -140,7 +146,10 @@ class Iap2LinkChannel(
     private fun runReader() {
         try {
             synchronized(lock) {
-                engine.start(nowMillis())
+                when (role) {
+                    Role.INITIATOR -> engine.start(nowMillis())
+                    Role.RESPONDER -> engine.startBluetoothResponder()
+                }
                 drainOutputLocked()
             }
             val buffer = ByteArray(4096)

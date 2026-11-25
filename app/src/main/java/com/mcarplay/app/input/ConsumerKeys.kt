@@ -19,6 +19,8 @@ import android.view.KeyEvent
  * 再按下标取值；描述符不可用时回退「字节即 Usage ID」的直读语义。
  */
 object ConsumerKeys {
+    const val USAGE_AC_BACK = 0x224
+
     /** Consumer 页面（Generic Desktop 之外最常用的多媒体页）。 */
     private const val USAGE_PAGE_CONSUMER = 0x0C
 

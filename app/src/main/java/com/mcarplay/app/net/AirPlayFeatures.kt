@@ -17,8 +17,14 @@ object AirPlayFeatures {
     /** 支持屏幕镜像。 */
     const val SCREEN: Long = 1L shl 7
 
+    /** 支持普通 MFi-SAP 认证。 */
+    const val MFI_SAP: Long = 1L shl 26
+
     /** 车机控制（CarPlay）。 */
     const val CARPLAY_CONTROL: Long = 1L shl 37
+
+    /** 将 MFi 认证并入配对流程。 */
+    const val UNIFIED_PAIRING_AND_MFI: Long = 1L shl 51
 
     fun parse(txt: String?): Long? {
         val text = txt?.trim().orEmpty()

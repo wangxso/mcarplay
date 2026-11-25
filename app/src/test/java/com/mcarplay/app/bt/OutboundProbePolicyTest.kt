@@ -32,9 +32,12 @@ class OutboundProbePolicyTest {
     @Test
     fun userArmProbesUntilWindowEndsWhenAclUnknown() {
         val policy = OutboundProbePolicy()
+        assertFalse(policy.hasOpenWindow(1_000L))
         policy.arm(1_000L, user)
+        assertTrue(policy.hasOpenWindow(1_000L + user - 1))
         assertTrue(policy.shouldProbe(null, 1_000L))
         assertTrue(policy.shouldProbe(null, 1_000L + user - 1))
+        assertFalse(policy.hasOpenWindow(1_000L + user))
         assertFalse(policy.shouldProbe(null, 1_000L + user))
     }
 
@@ -43,6 +46,16 @@ class OutboundProbePolicyTest {
         val policy = OutboundProbePolicy()
         policy.arm(5_000L, user)
         assertTrue(policy.shouldProbe(down(4_000L), 6_000L))
+    }
+
+    @Test
+    fun handoffTimeoutOnlyOpensAnOfflineProbeWindowForTheSameReceiver() {
+        val policy = OutboundProbePolicy()
+        policy.arm(5_000L, grace, peer = "AA:BB:CC:DD:EE:FF")
+        val acl = down(4_000L)
+        assertTrue(policy.shouldProbe(acl, 5_001L, peer = "aa:bb:cc:dd:ee:ff"))
+        assertFalse(policy.shouldProbe(acl, 5_001L, peer = "AA:BB:CC:DD:EE:00"))
+        assertFalse(policy.shouldProbe(acl, 5_000L + grace, peer = "AA:BB:CC:DD:EE:FF"))
     }
 
     @Test

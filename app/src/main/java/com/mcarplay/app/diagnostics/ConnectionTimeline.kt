@@ -153,31 +153,69 @@ class ConnectionTimeline(
     private val stageTime = LinkedHashMap<ConnectionStage, Long>()
     private var stageSince = 0L
 
-    fun begin(source: String): String =
+    fun begin(source: String): String = mutate { beginAttempt(source) }
+
+    /** 蓝牙监听可以跨越两次行程。端点前失败后由下一条实际进入协商的链路开新一轮。 */
+    fun bluetoothStarted(
+        source: String,
+        transportRunning: Boolean,
+    ): String =
         mutate {
-            id?.let { if (active()) end(it, DiagnosticCode.SUPERSEDED, false, "") }
-            id = idFactory()
-            startedAtMs = wallTime()
-            stage = ConnectionStage.PRECHECK
-            status = "waiting"
-            screenSuspended = false
-            code = null
-            started = elapsedTime()
-            endedAt = null
-            frames = 0
-            videoBytes = 0
-            chunks = 0
-            audioBytes = 0
-            lastVideo = null
-            sourceFrames = 0
-            audioPackets = 0
-            lastSample = started
-            milestones.clear()
-            stageTime.clear()
-            stageSince = started
-            emit("BEGIN", source)
-            requireNotNull(id)
+            val attempt = id?.takeIf { transportRunning && (active() || awaitingBluetoothRetry()) } ?: beginAttempt(source)
+            if (stage == ConnectionStage.PRECHECK) enterBluetooth()
+            attempt
         }
+
+    /** RFCOMM 可以先于上车广播进入握手。只接续已经结束的尝试。 */
+    fun bluetoothLinkStarted() =
+        mutate {
+            if (awaitingBluetoothRetry() || (!active() && code == DiagnosticCode.VIDEO_CLOSED)) {
+                beginAttempt("bt_retry")
+                enterBluetooth()
+            }
+        }
+
+    /** Wi-Fi 交接失败后，保持监听并开启同一接收端的下一次蓝牙尝试。 */
+    fun retryBluetooth(previousAttempt: String) =
+        mutate {
+            if (id == previousAttempt && status == "failed") {
+                beginAttempt("bt_retry")
+                enterBluetooth()
+            }
+        }
+
+    private fun awaitingBluetoothRetry(): Boolean =
+        status == "failed" && stage == ConnectionStage.BLUETOOTH && code == DiagnosticCode.BT_LINK_CLOSED
+
+    private fun enterBluetooth() {
+        enterStage(ConnectionStage.BLUETOOTH)
+        emit("STAGE")
+    }
+
+    private fun beginAttempt(source: String): String {
+        id?.let { if (active()) end(it, DiagnosticCode.SUPERSEDED, false, "") }
+        id = idFactory()
+        startedAtMs = wallTime()
+        stage = ConnectionStage.PRECHECK
+        status = "waiting"
+        screenSuspended = false
+        code = null
+        started = elapsedTime()
+        endedAt = null
+        frames = 0
+        videoBytes = 0
+        chunks = 0
+        audioBytes = 0
+        lastVideo = null
+        sourceFrames = 0
+        audioPackets = 0
+        lastSample = started
+        milestones.clear()
+        stageTime.clear()
+        stageSince = started
+        emit("BEGIN", source)
+        return requireNotNull(id)
+    }
 
     fun stage(
         attempt: String,

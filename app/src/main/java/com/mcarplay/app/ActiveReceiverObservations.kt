@@ -1,15 +1,22 @@
 package com.mcarplay.app
 
 import com.mcarplay.app.compat.ReceiverObservation
+import com.mcarplay.app.iap2.Iap2SenderSession
+import java.util.concurrent.CompletableFuture
 
 /** 同时有多个候选或身份未知时，不能把 Wi-Fi 邀请猜成属于其中某一条 RFCOMM 链路。 */
 internal class ActiveReceiverObservations {
-    private val active = mutableSetOf<ReceiverObservation>()
+    private data class WifiJoin(
+        val configuration: Iap2SenderSession.WifiConfiguration,
+        val result: CompletableFuture<Boolean>,
+    )
+
+    private val active = mutableMapOf<ReceiverObservation, WifiJoin?>()
     private var unknown = 0
 
     @Synchronized
     fun begin(observation: ReceiverObservation?) {
-        if (observation == null) unknown++ else active.add(observation)
+        if (observation == null) unknown++ else active[observation] = null
     }
 
     @Synchronized
@@ -18,7 +25,25 @@ internal class ActiveReceiverObservations {
     }
 
     @Synchronized
-    fun single(): ReceiverObservation? = if (unknown == 0) active.singleOrNull() else null
+    fun single(): ReceiverObservation? = if (unknown == 0) active.keys.singleOrNull() else null
+
+    @Synchronized
+    fun startWifiJoin(wifi: Iap2SenderSession.WifiConfiguration): CompletableFuture<Boolean> {
+        val result = CompletableFuture<Boolean>()
+        val observation = wifi.observation
+        if (observation != null && observation in active) active[observation] = WifiJoin(wifi, result)
+        return result
+    }
+
+    @Synchronized
+    fun hasWifiReady(
+        binding: String?,
+        isCurrent: (ReceiverObservation) -> Boolean,
+    ): Boolean = active.any { (observation, join) -> join != null && observation.binding == binding && isCurrent(observation) }
+
+    @Synchronized
+    fun wifiJoin(wifi: Iap2SenderSession.WifiConfiguration): CompletableFuture<Boolean>? =
+        active[wifi.observation]?.takeIf { it.configuration == wifi }?.result
 
     /**
      * 是否还有任何一条 RFCOMM 链路存活（身份未知的也算）。

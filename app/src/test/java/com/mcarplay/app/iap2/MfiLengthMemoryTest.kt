@@ -1,9 +1,13 @@
 package com.mcarplay.app.iap2
 
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.lang.reflect.Proxy
 
 /**
  * MFi 挑战长度的按车机持久化记忆。
@@ -13,6 +17,16 @@ import org.junit.Test
  * 记忆必须按车机身份分开存，且冷启动仍要有合理基线。
  */
 class MfiLengthMemoryTest {
+    @Test
+    fun explicitRejectionDisplacesLastSuccessAndSurvivesASilentAttempt() {
+        val receiver = "explicit-mfi-rejection-test"
+        MfiLengthMemory.recordSuccess(null, receiver, 32)
+        MfiLengthMemory.recordRejected(null, receiver, 32)
+        MfiLengthMemory.recordSilent(null, receiver, 32)
+
+        assertEquals(MfiLengthMemory.Entry(rejected = setOf(32)), MfiLengthMemory.load(null, receiver))
+    }
+
     private val baselineCar = listOf(20, 32, 16) // 真车系：20B 优先
     private val baselineTestBench = listOf(32, 20, 16) // 测试台：32B 优先
 
@@ -43,6 +57,41 @@ class MfiLengthMemoryTest {
         assertEquals(listOf(32, 20, 16), MfiLengthMemory.orderAttempts(baselineCar, entry))
         // 测试台场景同理（32B 本来就在最前，顺序不变）
         assertEquals(listOf(32, 20, 16), MfiLengthMemory.orderAttempts(baselineTestBench, entry))
+    }
+
+    @Test
+    fun persistedSuccessIsRetriedAfterEachAlternateAcrossReloads() {
+        val receiver = "stale_mfi_success"
+        val values = mutableMapOf<String, Any>("ok_$receiver" to 20, "silent_$receiver" to "32,16")
+        val context = preferenceContext(values)
+
+        fun nextLength() = MfiLengthMemory.beginAttempts(preferenceContext(values), receiver, baselineCar).second.first()
+
+        assertEquals(20, nextLength())
+        MfiLengthMemory.recordLinkDrop(context, receiver, 20)
+        assertEquals(20, nextLength())
+        MfiLengthMemory.recordLinkDrop(context, receiver, 20)
+
+        assertEquals(32, nextLength())
+        MfiLengthMemory.recordLinkDrop(context, receiver, 32)
+        assertEquals(16, nextLength())
+        MfiLengthMemory.recordLinkDrop(context, receiver, 16)
+        assertEquals(20, nextLength())
+        assertEquals(MfiLengthMemory.Entry(succeeded = 20, silent = setOf(32, 16)), MfiLengthMemory.load(context, receiver))
+
+        MfiLengthMemory.recordSuccess(context, receiver, 32)
+        assertEquals(MfiLengthMemory.Entry(succeeded = 32, silent = setOf(16)), MfiLengthMemory.load(context, receiver))
+    }
+
+    @Test
+    fun timeoutWithLinkStillUpBreaksTheDropStreak() {
+        val receiver = "mfi_drop_then_timeout"
+        MfiLengthMemory.recordSuccess(null, receiver, 20)
+        MfiLengthMemory.recordLinkDrop(null, receiver, 20)
+        MfiLengthMemory.recordSilent(null, receiver, 20)
+        MfiLengthMemory.recordLinkDrop(null, receiver, 20)
+
+        assertEquals(MfiLengthMemory.Entry(succeeded = 20, successDrops = 1), MfiLengthMemory.load(null, receiver))
     }
 
     @Test
@@ -108,5 +157,33 @@ class MfiLengthMemoryTest {
     fun contradictedSuccessGetsNoLongWindow() {
         val entry = MfiLengthMemory.Entry(succeeded = 20, rejected = setOf(20))
         assertEquals(6_000L, MfiLengthMemory.challengeWindow(20, entry, 6_000L, 1_500L))
+    }
+
+    private fun preferenceContext(values: MutableMap<String, Any>): Context {
+        val editorType = SharedPreferences.Editor::class.java
+        val editor =
+            Proxy.newProxyInstance(editorType.classLoader, arrayOf(editorType)) { proxy, method, args ->
+                when (method.name) {
+                    "putInt", "putString" -> proxy.also { values[args[0] as String] = args[1] }
+                    "remove" -> proxy.also { values.remove(args[0]) }
+                    "apply" -> null
+                    else -> error(method.name)
+                }
+            }
+        val prefsType = SharedPreferences::class.java
+        val prefs =
+            Proxy.newProxyInstance(prefsType.classLoader, arrayOf(prefsType)) { _, method, args ->
+                when (method.name) {
+                    "getInt", "getString" -> values[args[0]] ?: args[1]
+                    "edit" -> editor
+                    else -> error(method.name)
+                }
+            } as SharedPreferences
+        return object : ContextWrapper(null) {
+            override fun getSharedPreferences(
+                name: String,
+                mode: Int,
+            ): SharedPreferences = prefs
+        }
     }
 }

@@ -185,6 +185,7 @@ class Iap2LinkEngine(
 
     /** 本引擎是否发起过 SYN（start=发起方；enterNegotiating/startResponder=响应方）。 */
     private var originatedSyn = false
+    private var bluetoothResponder = false
 
     /**
      * **本方声明的发送窗口**（LSP maxOutgoing 语义 = 声明方自己的未确认包上限）：
@@ -259,6 +260,13 @@ class Iap2LinkEngine(
     fun enterNegotiating() {
         if (state != State.IDLE) return
         state = State.NEGOTIATING
+    }
+
+    /** RFCOMM 响应方先等车机探测，再等 SYN 与最终 ACK。 */
+    fun startBluetoothResponder() {
+        if (state != State.IDLE) return
+        bluetoothResponder = true
+        enterNegotiating()
     }
 
     fun feed(
@@ -348,10 +356,18 @@ class Iap2LinkEngine(
     // ---- 接收解析 ----
 
     private fun parseAvailable(nowMillis: Long): Boolean {
-        // 丢弃帧头前的杂字节（含对端 marker FF55…）
+        // RFCOMM 响应方回显探测标记，其它模式仍只扫描 FF5A 帧。
         while (receive.size >= 2 &&
             !(receive[0] == 0xFF.toByte() && receive[1] == 0x5A.toByte())
         ) {
+            if (bluetoothResponder && state == State.NEGOTIATING && receive[0] == MARKER[0] && receive[1] == MARKER[1]) {
+                if (receive.size < MARKER.size) return false
+                if (receive.peek(MARKER.size).contentEquals(MARKER)) {
+                    receive.discard(MARKER.size)
+                    appendOutput(MARKER)
+                    continue
+                }
+            }
             receive.discard(1)
         }
         if (receive.size < HEADER_BYTES) return false
@@ -469,12 +485,11 @@ class Iap2LinkEngine(
                 // 一次 0x1D00 都没走到（日志：133 条 SYN / 0 条 ACK）。
                 sendSynchronizationEcho(sync, sequence)
                 if (firstAdoption) onPeerSynchronizationAdopted?.invoke(sync)
-                // 响应方（未发过 SYN）回显即视为协商完成：对端见到 SYN|ACK 后即认为
-                // 链路可用（MIB3 真机 iPhone 发完 SYN|ACK 立即发 0x1D00，不等 ACK）；
-                // 发起方仍等对端 ACK/数据（原语义）
-                if (echoFirst || !originatedSyn) completeNegotiationIfPending(nowMillis)
+                // RFCOMM 响应方等待确认本次 SYN|ACK；虚拟链路按自身的回显规则就绪。
+                if (echoFirst || (!originatedSyn && !bluetoothResponder)) completeNegotiationIfPending(nowMillis)
             } else if (sync != null &&
                 !isPureSyn &&
+                !bluetoothResponder &&
                 adoptedSynchronization == null &&
                 state == State.NEGOTIATING
             ) {
@@ -494,6 +509,12 @@ class Iap2LinkEngine(
                 lastReceivedInOrder = sequence
                 completeNegotiationIfPending(nowMillis)
             }
+        }
+        if (bluetoothResponder &&
+            state == State.NEGOTIATING &&
+            (control != CONTROL_ACKNOWLEDGEMENT || lastEchoPeerSequence == null || ack != lastEchoOwnSequence)
+        ) {
+            return
         }
         if (control and CONTROL_ACKNOWLEDGEMENT != 0) {
             handleAcknowledgement(ack, nowMillis)

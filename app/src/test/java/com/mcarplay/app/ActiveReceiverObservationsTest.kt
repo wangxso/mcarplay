@@ -1,6 +1,7 @@
 package com.mcarplay.app
 
 import com.mcarplay.app.compat.ReceiverObservation
+import com.mcarplay.app.iap2.Iap2SenderSession
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -8,6 +9,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ActiveReceiverObservationsTest {
+    @Test
+    fun earlyWifiJoinIsReusedOnlyByTheLinkThatDeliveredTheCredentials() {
+        val tracker = ActiveReceiverObservations()
+        val first = ReceiverObservation("receiver", 1, 1)
+        val second = ReceiverObservation("receiver", 1, 2)
+        tracker.begin(first)
+        tracker.begin(second)
+        val wifi = Iap2SenderSession.WifiConfiguration("ap", "password", 48, 2, first)
+        val result = tracker.startWifiJoin(wifi)
+
+        assertTrue(tracker.hasWifiReady(first.binding) { it == first })
+        assertFalse(tracker.hasWifiReady(second.binding) { it == second })
+        assertEquals(result, tracker.wifiJoin(wifi))
+        assertNull(tracker.wifiJoin(wifi.copy(observation = second)))
+        assertNull(tracker.wifiJoin(wifi.copy(passphrase = "new-password")))
+        tracker.end(first)
+        assertNull(tracker.wifiJoin(wifi))
+    }
+
     @Test
     fun uniqueLinkCanIdentifyAutoSelectedReceiverButCompetingOrUnknownLinksCannot() {
         val tracker = ActiveReceiverObservations()

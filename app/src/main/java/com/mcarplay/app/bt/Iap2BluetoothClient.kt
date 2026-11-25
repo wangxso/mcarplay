@@ -16,8 +16,10 @@ import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.transport.StreamDuplexStream
+import java.io.Closeable
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -59,6 +61,7 @@ class Iap2BluetoothClient(
     private val onAdapterStateChanged: (Int) -> Unit = {},
     /** 车机拒绝主动连入、改为等它回连时调用一次（参数为设备名），界面据此提示「在车机上点本机」。 */
     private val onAwaitingReceiverTap: (String) -> Unit = {},
+    private val wifiHandoffDetached: () -> Boolean = { false },
 ) {
     /** 自动模式 SDP 闸门结论。 */
     enum class SdpGate {
@@ -362,6 +365,17 @@ class Iap2BluetoothClient(
         probePolicy.arm(SystemClock.elapsedRealtime(), OutboundProbePolicy.SESSION_END_GRACE_MILLIS)
     }
 
+    internal fun retryAfterWifiHandoff(address: String) {
+        probePolicy.arm(SystemClock.elapsedRealtime(), OutboundProbePolicy.SESSION_END_GRACE_MILLIS, peer = address)
+    }
+
+    fun hasProbeWindow(): Boolean = running && probePolicy.hasOpenWindow(SystemClock.elapsedRealtime())
+
+    fun canRetryAfterAclLoss(address: String?): Boolean {
+        val acl = address?.let(BtAclTracker::observe) ?: return false
+        return running && probePolicy.shouldProbe(acl, SystemClock.elapsedRealtime(), peer = address)
+    }
+
     /**
      * 该设备此刻是否值得主动连：ACL 在线、或处于探测窗口内；ACL 状态未知（进程启动晚于
      * 车机连上）且窗口已过时，以 HFP/A2DP 是否在线兜底（节流，避免每轮都查）。
@@ -371,7 +385,7 @@ class Iap2BluetoothClient(
         nowMillis: Long,
     ): Boolean {
         val acl = BtAclTracker.observe(device.address)
-        if (probePolicy.shouldProbe(acl, nowMillis)) return true
+        if (probePolicy.shouldProbe(acl, nowMillis, peer = device.address)) return true
         if (acl != null) return false
         val cached = profileOnlineCache[device.address]
         if (cached != null && nowMillis - cached.second < PROFILE_ONLINE_RECHECK_MILLIS) return cached.first
@@ -472,11 +486,11 @@ class Iap2BluetoothClient(
         val profileTrials = HashSet<String>()
         while (running && generation.get() == myGeneration) {
             // 静默降噪（2026-10-10 用户实测后启用）——会话期间完全静默，不产生任何连接尝试/日志：
-            //  - inboundActive：接收端正在连我们（两条 RFCOMM 会互相踩；Audi 实测双会话混乱）
+            //  - 有入站连接：接收端正在连我们（两条 RFCOMM 会互相踩；Audi 实测双会话混乱）
             //  - sessionActive：CarPlay 会话已建立（已拿到端点）——与其它接收端的连接尝试全部暂停
             //    典型场景：连着 Redmi/DiPlay 时不再无脑探测车机 Audi（消除日志噪音与蓝牙churn）；
             //    会话结束（任一端 BT 会话终结 / 手动断开）时自动恢复。
-            if (BtSessionGate.inboundActive || BtSessionGate.sessionActive) {
+            if (BtSessionGate.outboundPaused || wifiHandoffDetached()) {
                 sleepQuietly(2_000)
                 continue
             }
@@ -586,7 +600,10 @@ class Iap2BluetoothClient(
                     }
                 }
                 // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起（connect() 可阻塞数十秒）
-                val socket = selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch) }
+                val socket =
+                    BtSessionGate.dial(device.address, wifiHandoffDetached()) {
+                        selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch) }
+                    }
                 if (socket != null) {
                     log("BT-C: ✓ 已连入 $name 的无线 iAP2 服务（RFCOMM 建立）")
                     Iap2ReceiverMemory.remember(context, device.address)
@@ -610,7 +627,21 @@ class Iap2BluetoothClient(
                 runCatching { connected.close() }
                 return
             }
-            runSession(connected)
+            val ran =
+                BtSessionGate.runOutbound(connected, wifiHandoffDetached()) {
+                    try {
+                        selfLinkChange { runSession(connected) }
+                    } catch (error: IOException) {
+                        currentSocket.compareAndSet(connected, null)
+                        runCatching { connected.close() }
+                        log("BT-C: RFCOMM 初始化失败 - ${error.message}")
+                    }
+                }
+            if (!ran) {
+                currentSocket.compareAndSet(connected, null)
+                log("BT-C: 拨通时已有入站连接或 CarPlay 会话，已关闭本次出站连接，跳过 iAP2 握手")
+                continue
+            }
             sleepQuietly(RETRY_DELAY_MILLIS)
         }
         log("BT-C: 客户端已停止")
@@ -746,18 +777,23 @@ class Iap2BluetoothClient(
     }
 
     private fun runSession(socket: BluetoothSocket) {
+        val pairing = Iap2Pairings.current(context).attempt(socket)
+        log("BT-C: iAP2 RFCOMM 出站握手角色=${pairing.role}")
         val stream =
             StreamDuplexStream(socket.inputStream, socket.outputStream) {
                 runCatching { socket.close() }
             }
-        val channel = Iap2LinkChannel(stream, name = "iap2-bt-car") { line -> log(line) }
+        val channel = Iap2LinkChannel(stream, name = "iap2-bt-car", role = pairing.role, log = log)
         activeChannel.set(channel)
         try {
             channel.runSenderSession(
                 context,
                 SESSION_TIMEOUT_MILLIS,
                 log,
-                onEndpoint,
+                {
+                    pairing.complete()
+                    onEndpoint(it)
+                },
                 onWifiCredentials,
                 onEndpointUpdate,
                 onLinkClosed,
@@ -830,9 +866,84 @@ class Iap2BluetoothClient(
  * 目的：车机通常只有单条无线 iAP2 上下文，双向同时建链会让双方互相干扰。
  */
 object BtSessionGate {
-    /** 入站（车机主动连入）的 iAP2 会话活跃：出站暂停，避免两条 RFCOMM 互相踩。 */
-    @Volatile
-    var inboundActive: Boolean = false
+    // 从监听线程接受回连起计数，直到该连接的工作线程退出。
+    private val lock = Any()
+    private var inboundConnections = 0
+    private var dialingAddress: String? = null
+    private var outbound: Outbound? = null
+
+    private class Outbound(
+        val socket: Closeable,
+        val finished: CountDownLatch = CountDownLatch(1),
+    )
+
+    internal val outboundPaused: Boolean get() = synchronized(lock) { inboundConnections > 0 || sessionActive }
+
+    internal class Inbound(
+        val outboundFinished: CountDownLatch?,
+    )
+
+    /** 同一车机已在拨号时拒绝回连。接受回连后，等活跃的出站会话退出再开始 iAP2。 */
+    internal fun admitInbound(address: String?): Inbound? {
+        val previous =
+            synchronized(lock) {
+                if (dialingAddress?.equals(address, ignoreCase = true) == true) return null
+                inboundConnections++
+                outbound
+            }
+        previous?.let { runCatching { it.socket.close() } }
+        return Inbound(previous?.finished)
+    }
+
+    internal fun <T> dial(
+        address: String,
+        wifiHandoffDetached: Boolean = false,
+        connect: () -> T?,
+    ): T? {
+        synchronized(lock) {
+            if (dialingAddress != null || outbound != null || inboundConnections > 0 || sessionActive || wifiHandoffDetached) {
+                return null
+            }
+            dialingAddress = address
+        }
+        try {
+            return connect()
+        } finally {
+            synchronized(lock) { dialingAddress = null }
+        }
+    }
+
+    internal fun inboundFinished() {
+        synchronized(lock) { inboundConnections-- }
+    }
+
+    internal fun runOutbound(
+        socket: Closeable,
+        wifiHandoffDetached: Boolean = false,
+        run: () -> Unit,
+    ): Boolean {
+        val lease =
+            synchronized(lock) {
+                if (outbound != null || inboundConnections > 0 || sessionActive || wifiHandoffDetached) {
+                    null
+                } else {
+                    Outbound(socket).also { outbound = it }
+                }
+            }
+        if (lease == null) {
+            runCatching { socket.close() }
+            return false
+        }
+        try {
+            run()
+        } finally {
+            synchronized(lock) {
+                outbound = null
+                lease.finished.countDown()
+            }
+        }
+        return true
+    }
 
     /**
      * CarPlay 会话已建立（任一路径成功拿到端点后置位，由 SessionController 维护）：

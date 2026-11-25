@@ -150,7 +150,7 @@ class AirPlayRecordLifecycleTest {
     }
 
     @Test
-    fun otherReceiversRetainTheirExistingRepeatedRecordBehavior() {
+    fun unknownReceiverSendsOnlyOneRecordPerSession() {
         Peer().use { peer ->
             val client = client(peer.port, chery = false)
             try {
@@ -158,7 +158,7 @@ class AirPlayRecordLifecycleTest {
                 assertTrue(client.record())
                 assertTrue(client.record())
                 assertEquals("RECORD", peer.next()!!.method)
-                assertEquals("RECORD", peer.next()!!.method)
+                assertNull(peer.next(300))
             } finally {
                 client.close()
             }
@@ -166,13 +166,14 @@ class AirPlayRecordLifecycleTest {
     }
 
     @Test
-    fun rejectedRecordCannotBeRepeatedInTheSameSession() {
+    fun rejectedRecordBlocksScreenSetupAndCannotBeRepeated() {
         Peer().use { peer ->
             peer.reply = { it.respond(500) }
             val client = client(peer.port)
             try {
                 assertTrue(client.reconnect())
                 assertFalse(client.record())
+                assertNull(client.runScreenStream(null, "display"))
                 assertFalse(client.record())
                 assertEquals("RECORD", peer.next()!!.method)
                 assertNull(peer.next(300))

@@ -16,6 +16,19 @@ class CarLifeHardKeyAndVideoRequestTest {
     }
 
     @Test
+    fun directionsAndConfirmMapToCarLifeSelectorKeys() {
+        assertEquals(6, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_NAVIGATE_NEXT))
+        assertEquals(7, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_NAVIGATE_PREVIOUS))
+        assertEquals(20, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_CENTER))
+        assertEquals(21, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_LEFT))
+        assertEquals(22, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_RIGHT))
+        assertEquals(23, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_UP))
+        assertEquals(24, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_DOWN))
+        assertEquals(14, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_BACK))
+        assertArrayEquals(byteArrayOf(0x08, 0x17), CarLifeProtocol.hardKeyPayload(23))
+    }
+
+    @Test
     fun hardKeyIsProtobufFieldOne() {
         assertArrayEquals(byteArrayOf(0x08, 0x10), CarLifeProtocol.hardKeyPayload(16))
     }
