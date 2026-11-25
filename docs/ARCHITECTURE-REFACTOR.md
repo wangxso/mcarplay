@@ -38,14 +38,21 @@ Phase 2g-2（2026-11-25，已合入 `dev` @ `ccd474e` / #131）把发送端槽�
 `RoundRetirement.clearRecovery()` 委托组件；尺寸/几何/fps、`reportPanelExperiment`、`record()` 失败分支（含 `ui.*`）、
 S3 `VideoEndedHandling` 与音频仍留在控制器，`SessionUiPort` 45/10/2/1/1 计数不变。既有
 `EndAttemptTraceTest`/`ScreenOwnershipSourceContractTest` 的扫描目标同步改到组件，断言逐字保留、未删除或放宽。
-Phase 2h（本 PR，2026-11-25，基线 `dev` @ `ccd474e`，已合入 2g-2 / #131）完成 Phase 2 收官：
+Phase 2h（2026-11-25，已合入 `dev` @ `9772b7f` / #132）完成 Phase 2 收官：
 抽取 `session/SessionLog`（接管日志缓冲、NUL 清洗、时间戳格式化、增量监听与快照，控制器保留全部公开门面签名，
 `LogContractTest` 零改动通过）与 `service/ScreenPowerController`（接管物理屏启动恢复、断电、偏好切换与
 `retireSession`/B-13 `VideoSender.onEnded`/`disconnect` 三路径恢复策略，锁与日志逐字保持）；
 同时消除 3.1 节与 `ArchitectureRulesTest` 允许清单中的 4 处引擎→上层反向依赖（`CarLifeDiagnostics` 改为注入
 `CarLifeDiagnosticsHost`、`ExternalHuController` 改为注入 `log`、`BtSnoopActivity` 迁入 `ui/` 并同步清单与入口），
 `ArchitectureRulesTest` 允许清单缩减至 3.1 节明确保留的唯一静态广播入口 `bt/CarBluetoothReceiver.kt -> com.mcarplay.app.service`。
-未提前做 Phase 1c 统一 `endAttempt` 或 Phase 3 `AttemptScope`，`SessionUiPort` 45/10/2/1/1 计数不变；未做设备或实车验证。**
+Phase 3a（本 PR，2026-11-25，基线 `dev` @ `9772b7f`，已合入 2h / #132）落位真实 `AttemptScope` 与并行双判（零行为变化）：
+补全 `session/AttemptScope` 契约（`AttemptCancelled`、`cancelReason`/`cancel`/`checkActive`/`own`/`await`/`sleep`），
+新增 `session/RealAttemptScope`（单调取消、独立 `supersede`、锁外 LIFO 资源清理、无中断污染 `sleep`、Per-Waiter 叶锁 `await`）、
+`session/DualCheckAttemptScope`（权威返回值 100% 取自 `LegacyAttemptScope`，分歧时去重记录 `SESSION: SCOPE_MISMATCH`）与
+`session/AttemptRegistry`（活跃轮次槽与对象身份 `client -> scope` 绑定）；在 `SessionController` 的 7 处精确生命周期点接线，
+严格保持 `retireSession()` 不取消当前活跃轮次、`EndAttemptTraceTest` 顺序不变、引擎包生产代码零改动、
+`SessionUiPort` 45/10/2/1/1 与 `ArchitectureRulesTest` 允许清单不变；未迁移阻塞等待（留待 3b），未删除旧归属判断（留待 3c），
+未做设备或实车验证。**
 2026-11-10 对照代码复查后修订过一次，改动见文末
 「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 
