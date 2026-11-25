@@ -6,7 +6,19 @@
 
 ## 当前基线与结论
 
-- **11 月 25 日会话编排层重构 Phase 2h（本 PR，基线 `dev` @ `ccd474e`，已合入 2g-2 / #131，无设备或实车验证）：**
+- **11 月 25 日会话编排层重构 Phase 3a（本 PR，基线 `dev` @ `9772b7f`，已合入 2h / #132，零行为变化，无设备或实车验证）：**
+  补全 `session/AttemptScope` 契约（`AttemptCancelled`、`cancelReason`/`cancel`/`checkActive`/`own`/`await`/`sleep`），
+  新增 `session/RealAttemptScope`（单调取消、独立 `supersede`、锁外 LIFO 清理、无中断污染 `sleep`、Per-Waiter 叶锁 `await`）、
+  `session/DualCheckAttemptScope`（权威返回恒等于 `LegacyAttemptScope`，分歧去重记录 `SESSION: SCOPE_MISMATCH`）与
+  `session/AttemptRegistry`（活跃轮次与对象身份 `client -> scope` 绑定）。在 `SessionController` 的 7 处生命周期点接入
+  （`onSenderLinkClosed`、`startConnection`、`disconnect` 两点、`reconnectOnStreamingInvite`、`onCarPlayEndpoint` 构造/空端点摘除与两次 `bindClient`），
+  `retireSession()` 零改动防配对自杀；引擎包生产代码零改动，`ArchitectureRulesTest` 允许清单、`LogContractTest`、
+  `EndAttemptTraceTest`、`SessionUiPort` 45/10/2/1/1 与 `app/lint-baseline.xml` 保持不变。未提前迁移阻塞等待（3b）或删除旧归属判断（3c）；
+  新增 `RealAttemptScopeTest`、`DualCheckAttemptScopeTest`、`AttemptRegistryTest`（B-5/B-7）、
+  `AttemptScopeConcurrencyIntegrationTest`（锁序与中断位压测）与 `Phase3aSourceContractTest`。完整门禁与测试计数见 PR，
+  不以离线测试宣称任何车型兼容性，仍待 T1/T2 实车确认零 `SCOPE_MISMATCH`。
+
+- **11 月 25 日会话编排层重构 Phase 2h（已合入 `dev` @ `9772b7f` / #132，无设备或实车验证）：**
   完成 Phase 2 收官：抽取 `session/SessionLog`（接管日志缓冲、NUL 清洗、时间戳格式化、40k→20k 截断、增量监听与快照，
   控制器保留 `logListener`/`logEnabled`/`appendLog`/`logText`/`clearLog` 薄门面，`LogContractTest` 零改动通过）与
   `service/ScreenPowerController`（接管物理屏启动恢复、推流中断电、偏好切换与 `retireSession`/B-13 `VideoSender.onEnded`/

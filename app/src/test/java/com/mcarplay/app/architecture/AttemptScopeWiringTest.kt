@@ -159,7 +159,10 @@ class AttemptScopeWiringTest {
             endpointBody,
             "val diagnosticAttempt = ConnectionDiagnostics.receiverAttempt()",
             "ReceiverDetectionRuntime.attach(endpoint.observation, diagnosticAttempt)",
-            "val scope = LegacyAttemptScope(",
+            "val realScope = RealAttemptScope(",
+            "attemptRegistry.activate(realScope)",
+            "val scope: AttemptScope = DualCheckAttemptScope(",
+            "LegacyAttemptScope(",
             "fun handoffCancelled(): Boolean = attemptHandoffCancelled(scope)",
         )
     }

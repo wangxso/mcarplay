@@ -97,10 +97,14 @@ import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.ScreenPowerController
 import com.mcarplay.app.service.StreamingWifiLock
+import com.mcarplay.app.session.AttemptRegistry
+import com.mcarplay.app.session.AttemptScope
 import com.mcarplay.app.session.CarLifeStreamPorts
+import com.mcarplay.app.session.DualCheckAttemptScope
 import com.mcarplay.app.session.EventCommandRouter
 import com.mcarplay.app.session.LegacyAttemptScope
 import com.mcarplay.app.session.LegacySessionUiPort
+import com.mcarplay.app.session.RealAttemptScope
 import com.mcarplay.app.session.ScreenRecoveryPort
 import com.mcarplay.app.session.ScreenRecoveryResult
 import com.mcarplay.app.session.ScreenSenderHooks
@@ -809,6 +813,9 @@ object SessionController {
     /** 只允许交付了当前端点的 RFCOMM 链路取消这次交接。 */
     private val handoffOwnership = SessionHandoffOwnership(sessionStarting)
 
+    /** 维护当前活跃轮次与 client -> scope 绑定（Phase 3a 并行双判前置缝，零行为变化）。 */
+    private val attemptRegistry = AttemptRegistry()
+
     /** 连接阶段收到 ctrl 邀请时，至多启动一次“绑定当前网络”的交接。 */
     private val inviteHandoffInProgress = AtomicBoolean(false)
 
@@ -921,6 +928,7 @@ object SessionController {
                 // 所有权状态、取消标志与待处理状态必须在同一锁内转换，
                 // 否则新 begin 的 onAcquired 清掉 connectCancelled 后会被这里重新置位。
                 connectCancelled = true
+                attemptRegistry.cancelIfObservation(observation, DiagnosticCode.BT_LINK_CLOSED)
                 ConnectionDiagnostics.issueCurrent(DiagnosticCode.BT_LINK_CLOSED)
                 pendingStartSessionEndpoint.set(null)
                 ui.phase(closedHint)
@@ -1371,6 +1379,7 @@ object SessionController {
         if (!alreadyRunning) {
             bluetoothDiagnostics.begin(diagnosticAttempt)
             ReceiverDetectionRuntime.connectionStarted(diagnosticAttempt)
+            attemptRegistry.supersedeAll()
         }
         connectCancelled = false
         ui.phase(t(R.string.sc_bt_ready))
@@ -1452,6 +1461,7 @@ object SessionController {
         // “看到 disconnectCompletion=null” 后重新 begin 并清掉 connectCancelled。
         handoffOwnership.blockNewHandoffs()
         connectCancelled = true
+        attemptRegistry.cancelActive(reason)
         // 先读本轮 attempt：retireSession 后时间线仍保留结果，但这里尽早固定标识
         val autoAttempt = ConnectionDiagnostics.timeline.snapshot()?.id
         if (reason == DiagnosticCode.USER_STOP) {
@@ -1475,6 +1485,7 @@ object SessionController {
             } else {
                 ReceiverDetectionRuntime.stop(reason.name, cancelled = reason == DiagnosticCode.USER_STOP)
             }
+            attemptRegistry.supersedeAll()
             pendingEndpointUpdate.clear()
             pendingStartSessionEndpoint.set(null)
             retireSession(closeClient = false, preserveScreenSocket = true)
@@ -3160,6 +3171,7 @@ object SessionController {
             ConnectionDiagnostics.timeline.videoEnded(attempt)
         }
         streamingDiagnosticAttempt = null
+        attemptRegistry.supersedeClient(client, DiagnosticCode.SUPERSEDED)
         retireSession()
         onCarPlayEndpoint(endpoint, "推流中邀请重连")
     }
@@ -3322,13 +3334,24 @@ object SessionController {
         // 本轮失败/成功的熔断记账都以这条控制链路的对端地址为键。
         activePeerAddress = peerAddress
         ReceiverDetectionRuntime.attach(endpoint.observation, diagnosticAttempt)
-        // scope 只读现状：id/observation 固定为本轮，两个 Boolean 每次访问都重新问运行时。
-        val scope =
-            LegacyAttemptScope(
+        // Phase 3a 并行双判：权威返回值仍取自 LegacyAttemptScope，同步对照 RealAttemptScope 仅记分歧日志。
+        val realScope =
+            RealAttemptScope(
                 id = diagnosticAttempt,
                 observation = endpoint.observation,
-                cancelled = { connectCancelled },
-                owns = { ReceiverDetectionRuntime.isCurrent(it) },
+            )
+        attemptRegistry.activate(realScope)
+        val scope: AttemptScope =
+            DualCheckAttemptScope(
+                legacy =
+                    LegacyAttemptScope(
+                        id = diagnosticAttempt,
+                        observation = endpoint.observation,
+                        cancelled = { connectCancelled },
+                        owns = { ReceiverDetectionRuntime.isCurrent(it) },
+                    ),
+                real = realScope,
+                onMismatch = ::appendLog,
             )
 
         // 交接归属是独立于 isCurrent/isActive 的第二层判据，不能折进 scope。
@@ -3362,6 +3385,7 @@ object SessionController {
                     "检测到手机已连 WiFi 时会询问是否按车机热点继续",
             )
             ui.phase(t(R.string.sc_waiting_4301))
+            attemptRegistry.detachIfActive(realScope)
             releaseHandoff()
             watchForPendingStartSession(endpoint, source)
             return
@@ -3581,6 +3605,7 @@ object SessionController {
                         return@run
                     }
                     currentClient = client
+                    attemptRegistry.bindClient(client, realScope)
                     drainPendingEndpoint(client)
                     val compatibility = ReceiverCompatibility.describe(client.receiverCompatibility())
                     appendLog(compatibility)
@@ -3635,6 +3660,7 @@ object SessionController {
                             return@run
                         }
                         currentClient = client
+                        attemptRegistry.bindClient(client, realScope)
                         drainPendingEndpoint(client)
                         keys = client.runPairing()
                         if (!scope.isActive) {

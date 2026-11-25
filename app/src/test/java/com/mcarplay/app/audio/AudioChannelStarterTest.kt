@@ -2,6 +2,7 @@ package com.mcarplay.app.audio
 
 import com.mcarplay.app.airplay.AirPlayClient
 import com.mcarplay.app.airplay.ModeArbiter
+import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.session.AttemptScope
 import com.mcarplay.app.session.EventCommandRouter
 import org.junit.Assert.assertEquals
@@ -1223,6 +1224,20 @@ class AudioChannelStarterTest {
                             override val observation = null
                             override val isCurrent = true
                             override val isActive = true
+                            override val cancelReason: DiagnosticCode? = null
+
+                            override fun cancel(reason: DiagnosticCode) = Unit
+
+                            override fun checkActive() = Unit
+
+                            override fun <T : AutoCloseable> own(resource: T): T = resource
+
+                            override fun await(
+                                latch: CountDownLatch,
+                                timeoutMs: Long,
+                            ): Boolean = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+
+                            override fun sleep(ms: Long): Boolean = true
                         },
                     setup =
                         AirPlayClient.SetupInfo(
