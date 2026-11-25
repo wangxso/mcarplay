@@ -12,6 +12,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
 
 /**
  * [CarWifiJoiner] 的确定性 JVM 测试矩阵（Phase 2c-2 设计方案 §6–§7：J02–J16 与 S01/S02 接线契约）。
@@ -142,6 +143,7 @@ class CarWifiJoinerTest {
                     quickFallback: (() -> WifiId?)?,
                     deepFallback: (() -> WifiId?)?,
                     userChoicePending: ((Long) -> Boolean)?,
+                    awaitLatch: (CountDownLatch, Long) -> Boolean,
                 ) -> CarWifiLink.JoinResult<WifiId>
             )? = null
         var nextJoinResult: CarWifiLink.JoinResult<WifiId> = CarWifiLink.JoinResult.Unavailable
@@ -169,6 +171,7 @@ class CarWifiJoinerTest {
             quickFallback: (() -> WifiId?)?,
             deepFallback: (() -> WifiId?)?,
             userChoicePending: ((Long) -> Boolean)?,
+            awaitLatch: (CountDownLatch, Long) -> Boolean,
         ): CarWifiLink.JoinResult<WifiId> {
             trace +=
                 Trace.JoinCarPlayNetwork(
@@ -180,7 +183,17 @@ class CarWifiJoinerTest {
             val custom = onJoinCarPlayNetwork
             val result =
                 if (custom != null) {
-                    custom(ssid, passphrase, securityType, timeoutMillis, isCancelled, quickFallback, deepFallback, userChoicePending)
+                    custom(
+                        ssid,
+                        passphrase,
+                        securityType,
+                        timeoutMillis,
+                        isCancelled,
+                        quickFallback,
+                        deepFallback,
+                        userChoicePending,
+                        awaitLatch,
+                    )
                 } else {
                     nextJoinResult
                 }
@@ -350,7 +363,7 @@ class CarWifiJoinerTest {
                 globalCancelled = { globalCancelled },
                 ui = ui,
                 text = ::formatRes,
-                askChoice = { prompt, shownToken, isCancelled ->
+                askChoice = { prompt, shownToken, isCancelled, _ ->
                     val cancelledNow = isCancelled()
                     val answer =
                         if (cancelledNow) {
@@ -777,7 +790,7 @@ class CarWifiJoinerTest {
         // 4) specifier 返回 Unavailable（及 Unsupported），后置系统已连接近路命中（保留 ${result.javaClass.simpleName}）
         for (failedResult in listOf(CarWifiLink.JoinResult.Unavailable, CarWifiLink.JoinResult.Unsupported)) {
             val hPostHit = Harness()
-            hPostHit.link.onJoinCarPlayNetwork = { _, _, _, _, _, _, _, _ ->
+            hPostHit.link.onJoinCarPlayNetwork = { _, _, _, _, _, _, _, _, _ ->
                 // 请求期间系统自动连上了已保存的热点
                 hPostHit.link.apiSsid = wifi.ssid
                 hPostHit.verifiedNetworkBySsid[wifi.ssid] = netExisting
@@ -807,7 +820,7 @@ class CarWifiJoinerTest {
         // 1) quickFallback 命中：不执行 connect-network，直接绑定并跳过 deepFallback
         val hQuick = Harness()
         hQuick.verifiedNetworkBySsid[wifi.ssid] = netQuick
-        hQuick.link.onJoinCarPlayNetwork = { _, _, _, _, _, quick, deep, _ ->
+        hQuick.link.onJoinCarPlayNetwork = { _, _, _, _, _, quick, deep, _, _ ->
             hQuick.link.apiSsid = wifi.ssid
             val q = quick?.invoke()
             if (q != null) {
@@ -833,7 +846,7 @@ class CarWifiJoinerTest {
                 hDeep.shell.statusSsid = wifi.ssid
             }
         }
-        hDeep.link.onJoinCarPlayNetwork = { _, _, _, _, _, quick, deep, _ ->
+        hDeep.link.onJoinCarPlayNetwork = { _, _, _, _, _, quick, deep, _, _ ->
             assertNull(quick?.invoke())
             val d = deep?.invoke()
             if (d != null) CarWifiLink.JoinResult.Joined(d) else CarWifiLink.JoinResult.Unavailable

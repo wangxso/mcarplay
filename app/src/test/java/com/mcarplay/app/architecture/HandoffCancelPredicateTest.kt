@@ -98,7 +98,7 @@ class HandoffCancelPredicateTest {
         val source = body("legacyJoinCarWifi")
         assertNoBareGlobalCheck("legacyJoinCarWifi", source)
         assertTrue("弹窗必须收到 isCancelled", source.contains("isCancelled = isCancelled"))
-        assertTrue("手动兜底必须透传判据", source.contains("manualJoinCarWifi(wifi, isCancelled)"))
+        assertTrue("手动兜底必须透传判据", source.contains("manualJoinCarWifi(wifi, isCancelled, sleepFn, awaitLatchFn)"))
         assertTrue(
             "绑定必须传判据，否则交接失效后仍会绑定旧热点",
             Regex("""bindVerifiedCarWifi\([^)]*isCancelled""").findAll(source).count() >= 3,
@@ -178,21 +178,48 @@ class HandoffCancelPredicateTest {
         assertFalse("兜底调用不得传 isCancelled（现状未接归属）", code.contains("isCancelled"))
     }
 
-    /** 现状快照：specifier 兜底不查取消标志，快照钉住当前行为。 */
+    /** Phase 3b：快速兜底必须在发起绑定前查询调用方判据。 */
     @Test
-    fun specifierQuickFallbackHasNoCancellationCheck() {
-        val code = KotlinSource.scan(body("specifierQuickFallback")).code
-        assertFalse("specifierQuickFallback 现状不含任何取消检查", code.contains("connectCancelled") || code.contains("isCancelled"))
+    fun specifierQuickFallbackUsesTheCallersPredicate() {
+        val source = body("specifierQuickFallback")
+        assertTrue(
+            "specifierQuickFallback 必须接收 isCancelled",
+            joiner.contains(
+                "fun specifierQuickFallback(\n" +
+                    "        wifi: Iap2SenderSession.WifiConfiguration,\n" +
+                    "        sleepFn: (Long) -> Unit = sleep,\n" +
+                    "        isCancelled: () -> Boolean = { connectCancelled },\n" +
+                    "    ): N? {",
+            ),
+        )
+        assertNoBareGlobalCheck("specifierQuickFallback", source)
+        assertTrue("specifierQuickFallback 绑定前必须查 isCancelled()", source.contains("if (isCancelled()) return null"))
+        assertTrue(
+            "specifierQuickFallback 绑定必须传判据",
+            source.contains("bindExistingCarWifi(connector, wifi.ssid, sleepFn = sleepFn, isCancelled = isCancelled)"),
+        )
     }
 
-    /** 现状快照：深度兜底轮询仍查裸全局标志。 */
+    /** Phase 3b：深度兜底轮询也必须跟随调用方判据，不再只看全局标志。 */
     @Test
-    fun specifierDeepFallbackStillUsesBareConnectCancelled() {
-        val code = KotlinSource.scan(body("specifierDeepFallback")).code
-        val bareChecks =
-            Regex("""(?<![A-Za-z0-9_.])connectCancelled(?![A-Za-z0-9_])""").findAll(code).count()
-        assertTrue("specifierDeepFallback 应保留一处裸 connectCancelled 现状", bareChecks == 1)
-        assertTrue("specifierDeepFallback 没有 isCancelled 参数", !code.contains("isCancelled"))
+    fun specifierDeepFallbackUsesTheCallersPredicate() {
+        val source = body("specifierDeepFallback")
+        assertTrue(
+            "specifierDeepFallback 必须接收 isCancelled",
+            joiner.contains(
+                "fun specifierDeepFallback(\n" +
+                    "        wifi: Iap2SenderSession.WifiConfiguration,\n" +
+                    "        sleepFn: (Long) -> Unit = sleep,\n" +
+                    "        isCancelled: () -> Boolean = { connectCancelled },\n" +
+                    "    ): N? {",
+            ),
+        )
+        assertNoBareGlobalCheck("specifierDeepFallback", source)
+        assertTrue("深度兜底轮询必须查 isCancelled()", source.contains("if (isCancelled()) return null"))
+        assertTrue(
+            "深度兜底最终的绑定必须传判据",
+            source.contains("bindExistingCarWifi(connector, wifi.ssid, sleepFn = sleepFn, isCancelled = isCancelled)"),
+        )
     }
 
     /** 现状快照：配件交接路径必须真正使用 handoffCancelled 判据。 */
@@ -200,14 +227,14 @@ class HandoffCancelPredicateTest {
     fun accessoryHandoffPassesTheHandoffPredicate() {
         val controllerCode = KotlinSource.scan(controller).code
         val joinerCode = KotlinSource.scan(joiner).code
-        val directLambda =
+        val directCalls =
             Regex(
-                """joinAccessoryWifi\([^)]*request\.handoffCancelled\)\s*\{""",
-                RegexOption.DOT_MATCHES_ALL,
+                """joinAccessoryWifi\(request\.accessoryWifi!!, request\.handoffCancelled, sleepFn, awaitLatchFn\)|""" +
+                    """joinAccessoryWifi\(cachedConfiguration, request\.handoffCancelled, sleepFn, awaitLatchFn\)""",
             ).findAll(joinerCode).count()
         val namedParams =
             Regex("""isCancelled\s*=\s*request\.handoffCancelled""").findAll(joinerCode).count()
-        assertTrue("joinAccessoryWifi 两处直接调用必须传 handoffCancelled", directLambda == 2)
+        assertTrue("joinAccessoryWifi 两处直接调用必须传 handoffCancelled 与可取消等待端口", directCalls == 2)
         assertTrue("交接绑定/确认/手动路径必须至少三处显式传 handoffCancelled", namedParams >= 3)
         assertTrue(
             "SessionController 必须把 scope/handoff 判据接到握手请求",

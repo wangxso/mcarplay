@@ -146,7 +146,7 @@ class EndpointResolverWiringTest {
     @Test
     fun controllerDelegatesSixFunctionsAndFourPreferCallSitesToEndpointResolver() {
         val awaitBody = normalizeWhitespace(functionBody(controllerCode, "private fun awaitCtrlInvite("))
-        assertEquals("= endpointResolver.awaitCtrlInvite(endpoint, timeoutMillis)", awaitBody)
+        assertEquals("= endpointResolver.awaitCtrlInvite(endpoint, timeoutMillis, sleep)", awaitBody)
 
         // resolveEndpointHost 必须保持块体薄包装，且内部唯一持有 sc_mdns UI 回调
         val resolveRawBody = functionBody(controllerCode, "private fun resolveEndpointHost(")
@@ -216,7 +216,7 @@ class EndpointResolverWiringTest {
         requireOrder(
             ctor,
             "uptimeMillis = { android.os.SystemClock.uptimeMillis() },",
-            "sleepMillis = { millis -> Thread.sleep(millis) },",
+            "sleepMillis = { millis -> sessionCancelSignal.sleep(millis) },",
             "isConnectCancelled = { connectCancelled },",
             "captureInviteView = {",
             "awaitEndpoint = { timeoutMs ->",
@@ -241,10 +241,20 @@ class EndpointResolverWiringTest {
 
         // awaitEndpoint、forceAnnounce、gatewayCandidates 必须在每次回调时动态读取当前组件
         val awaitBlock = normalizeWhitespace(bracedBlockAfter(ctor, "awaitEndpoint ="))
-        assertTrue(
-            "awaitEndpoint 必须动态读取 endpointBrowser",
-            awaitBlock.contains("endpointBrowser?.awaitEndpoint(timeoutMs)?.let(::discoveredEndpoint)"),
+        requireOrder(
+            awaitBlock,
+            "val scope = attemptRegistry.activeScope()",
+            "endpointBrowser",
+            "awaitEndpoint(",
+            "timeoutMs,",
+            "isCancelled = {",
+            "scope?.isActive == false ||",
+            "sessionCancelSignal.isCancelled ||",
+            "connectCancelled",
+            "sleepMillis = { millis -> (scope?.sleep(millis) ?: sessionCancelSignal.sleep(millis)) },",
         )
+        assertTrue("awaitEndpoint 必须动态读取 endpointBrowser", awaitBlock.contains("endpointBrowser"))
+        assertTrue("awaitEndpoint 必须接线到 discoveredEndpoint", awaitBlock.contains("?.let(::discoveredEndpoint)"))
 
         val forceBlock = normalizeWhitespace(bracedBlockAfter(ctor, "forceAnnounce ="))
         assertTrue(
@@ -351,7 +361,10 @@ class EndpointResolverWiringTest {
             "reannouncedAt = now",
             "forceAnnounce(endpoint.ssid)",
             "if (now - lastLogAt > 1_200)",
-            "sleepMillis(50)",
+            "try {",
+            "sleep(50)",
+            "} catch (_: InterruptedException) {",
+            "return false",
         )
 
         val resolveInResolver = normalizeWhitespace(functionBody(resolverCode, "fun resolveEndpointHost("))
@@ -420,7 +433,8 @@ class EndpointResolverWiringTest {
             pairingBlock,
             "if (!scope.isActive) {",
             "if (endpointSelfContained) {",
-            "} else { awaitCtrlInvite(endpoint, CTRL_INVITE_WAIT_MS) }",
+            "awaitCtrlInvite(endpoint, CTRL_INVITE_WAIT_MS) { ms ->",
+            "if (!scope.sleep(ms)) throw InterruptedException(",
             "var effectiveEndpoint = resolveEndpointHost(endpoint, source)",
             "pendingEndpointUpdate.takeIf { it.observation === endpoint.observation }?.let { late ->",
             "effectiveEndpoint = preferEndpoint(late, effectiveEndpoint)",
@@ -429,14 +443,19 @@ class EndpointResolverWiringTest {
             "if (!scope.isActive) {",
             "endpointRefresher = { current -> enrichEndpointFromBrowser(current, source) },",
         )
-        // awaitCtrlInvite 与 resolveEndpointHost 之间不得插入新的 scope.isActive 检查
+        // awaitCtrlInvite 与 resolveEndpointHost 之间不得插入新的 scope.isActive 门禁；
+        // sleeper 自身的 scope.sleep 属于端口实参，不算门禁。
         val afterAwaitBeforeResolve =
             normalizeWhitespace(pairingBlock)
                 .substringAfter("awaitCtrlInvite(endpoint, CTRL_INVITE_WAIT_MS)")
                 .substringBefore("var effectiveEndpoint = resolveEndpointHost(endpoint, source)")
         assertFalse(
-            "awaitCtrlInvite 与 resolveEndpointHost 之间不得新增 scope 检查",
-            afterAwaitBeforeResolve.contains("scope."),
+            "awaitCtrlInvite 与 resolveEndpointHost 之间不得新增 scope.isActive 检查",
+            afterAwaitBeforeResolve.contains("scope.isActive"),
+        )
+        assertFalse(
+            "awaitCtrlInvite 与 resolveEndpointHost 之间不得新增 scope.checkActive()",
+            afterAwaitBeforeResolve.contains("scope.checkActive"),
         )
     }
 }

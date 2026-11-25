@@ -7,6 +7,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
 
 class CarWifiLinkContractTest {
     private data class WifiId(
@@ -49,6 +50,7 @@ class CarWifiLinkContractTest {
             quickFallback: (() -> WifiId?)?,
             deepFallback: (() -> WifiId?)?,
             userChoicePending: ((Long) -> Boolean)?,
+            awaitLatch: (CountDownLatch, Long) -> Boolean,
         ): CarWifiLink.JoinResult<WifiId> {
             lastJoinTimeoutMillis = timeoutMillis
             if (isCancelled()) return CarWifiLink.JoinResult.Unavailable
