@@ -16,14 +16,15 @@ concurrency:
 jobs:
   rgp07-two-phase-process-restart:
     name: Auto-reconnect prefs RGP07 and RGP08
-    # Apple Silicon macOS runs the arm64-v8a system image on HVF, so it is the default.
-    # Override with the INSTRUMENTATION_RUNNER_LABEL repository variable (for example a
-    # self-hosted Linux label); the Linux path keeps the x86_64 image on /dev/kvm.
-    runs-on: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'macos-15' }}
+    # Intel macOS is the only GitHub-hosted macOS label that exposes HVF: Apple Silicon
+    # hosted runners do not support nested virtualization, so an arm64 macOS job cannot
+    # accelerate the emulator. Override with the INSTRUMENTATION_RUNNER_LABEL repository
+    # variable (self-hosted Linux/KVM or a bare-metal Mac); Linux keeps the /dev/kvm path.
+    runs-on: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'macos-15-intel' }}
     timeout-minutes: 45
     env:
       PACKAGE_ID: com.mcarplay.app
-      INSTRUMENTATION_RUNNER_LABEL: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'macos-15' }}
+      INSTRUMENTATION_RUNNER_LABEL: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'macos-15-intel' }}
       INSTRUMENTATION_TARGET: com.mcarplay.app.test/androidx.test.runner.AndroidJUnitRunner
       PHASE1_CLASS: com.mcarplay.app.bt.Phase1WriterTest
       PHASE2_CLASS: com.mcarplay.app.bt.Phase2ReaderTest
@@ -70,17 +71,14 @@ jobs:
         run: |
           echo "Runner label: $INSTRUMENTATION_RUNNER_LABEL"
           echo "Runner platform: $(uname -s) $(sw_vers -productVersion) arch=$(uname -m)"
-          if [[ "$(uname -m)" != "arm64" ]]; then
-            echo "::error::macOS instrumentation requires an Apple Silicon (arm64) runner for HVF; got $(uname -m)"
-            exit 1
-          fi
-          hv_support="$(sysctl -n kern.hv_support 2>/dev/null || echo 0)"
-          echo "kern.hv_support=$hv_support"
+          hv_support="$(sysctl -n kern.hv_support 2>/dev/null || echo missing)"
+          hv_disable="$(sysctl -n kern.hv_disable 2>/dev/null || echo missing)"
+          echo "kern.hv_support=$hv_support kern.hv_disable=$hv_disable"
           if [[ "$hv_support" != "1" ]]; then
-            echo "::error::HVF acceleration unavailable: kern.hv_support is '$hv_support'; use an Apple Silicon runner with hypervisor support"
+            echo "::error::HVF acceleration unavailable (kern.hv_support=$hv_support): Apple Silicon GitHub-hosted runners do not expose nested virtualization, so macos-15 cannot accelerate the emulator. Use the default macos-15-intel label, a bare-metal Mac, or a Linux runner with KVM."
             exit 1
           fi
-          echo "Hardware acceleration decision: enabled (Apple Silicon HVF, arm64-v8a system image)"
+          echo "Hardware acceleration decision: enabled (macOS HVF on $(uname -m), image arch follows the runner architecture)"
 
       - uses: ./.github/actions/setup-build
 
@@ -98,8 +96,9 @@ jobs:
         with:
           api-level: 34
           target: google_apis
-          # Apple Silicon runs the arm64-v8a image on HVF; Linux keeps the x86_64 image on KVM.
-          arch: ${{ runner.os == 'macOS' && 'arm64-v8a' || 'x86_64' }}
+          # The system image must match the runner architecture: Intel hosts and Linux use
+          # x86_64, a bare-metal Apple Silicon Mac uses arm64-v8a. Both stay on HVF/KVM.
+          arch: ${{ runner.arch == 'ARM64' && 'arm64-v8a' || 'x86_64' }}
           profile: pixel_5
           avd-name: rgp07-rgp08-emulator
           emulator-boot-timeout: 1200
