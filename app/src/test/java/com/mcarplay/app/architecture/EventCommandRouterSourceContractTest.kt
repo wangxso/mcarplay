@@ -137,8 +137,8 @@ class EventCommandRouterSourceContractTest {
         requireOrder(code, "client.modes.onUserRequestedUi(", "output.enqueueModesAssert(", "先更新 UI 模式再入队")
         requireOrder(code, "output.enqueueModesAssert(", "client.modes.consumeAudioClaimRetry()", "入队后再消费 pending claim")
         assertTrue(
-            "Controller 仍在适配器原位置执行旧策略表达式",
-            registration.contains("PassatReturnPolicy.rebuildStream(passatReturnStrategy(), requested)"),
+            "Controller 仍在适配器原位置执行中性回屏策略表达式",
+            registration.contains("ScreenReturnPolicy.rebuildStream(currentScreenReturnPolicy(client).screenReturn, requested)"),
         )
     }
 
