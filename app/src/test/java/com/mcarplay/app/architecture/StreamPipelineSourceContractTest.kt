@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Phase 2g-1 S 层源码契约：`session/StreamPipeline` 承接正式 CarLife 源、租约与输出槽，
- * 控制器只保留薄门面与既有调用点的不变量。
+ * Phase 2g S 层源码契约：`session/StreamPipeline` 承接正式 CarLife 源、租约、输出槽、发送端工厂
+ * 与主屏流重建闭包，控制器只保留薄门面与既有调用点的不变量。
  *
  * 与 Phase 2f 的 [ScreenOwnershipSourceContractTest] 同风格：定位真实文件/声明，缺失即失败；
  * 不从注释或旧分支兜底，禁止扩大架构 allowlist。
@@ -34,11 +34,20 @@ class StreamPipelineSourceContractTest {
             "fun outputSender()",
             "internal fun handleAccessUnit(",
             "internal fun handleEnded(",
+            "var sender: VideoSender?",
+            "fun newScreenSender(",
+            "fun installRecovery(",
+            "fun recoveryOrNull()",
+            "fun clearRecovery()",
+            "internal class ScreenSenderPlan",
+            "internal interface ScreenSenderHooks",
+            "internal interface ScreenRecoveryPort",
+            "internal enum class ScreenRecoveryResult",
         ).forEach { assertTrue("组件缺少声明：$it", component.contains(it)) }
     }
 
     @Test
-    fun controllerNoLongerOwnsCarLifeState() {
+    fun controllerNoLongerOwnsCarLifeOrScreenState() {
         val body = code(controller)
         listOf(
             "private val carLifeSessions",
@@ -48,6 +57,9 @@ class StreamPipelineSourceContractTest {
             "private var diagnosticCarLifeSession",
             "fun newFormalCarLifeSession(",
             "CarLifeJoinGate(",
+            "fun newScreenSender(",
+            "private var screenStreamRecovery",
+            "private enum class ScreenRecoveryResult",
         ).forEach { assertFalse("状态应已迁入 StreamPipeline：$it", body.contains(it)) }
     }
 
@@ -71,22 +83,39 @@ class StreamPipelineSourceContractTest {
             "streamPipeline.outputSender()",
             "streamPipeline.clearOutput()",
             "streamPipeline.stopFormal()",
+            "var videoSender: VideoSender?",
+            "get() = streamPipeline.sender",
+            "streamPipeline.sender = value",
+            "streamPipeline.newScreenSender(screenPlan, screen)",
+            "streamPipeline.installRecovery(",
+            "streamPipeline.recoveryOrNull()",
+            "streamPipeline.clearRecovery()",
         ).forEach { assertTrue("控制器缺少门面/调用点：$it", body.contains(it)) }
     }
 
     @Test
-    fun phase2gTwoBoundaryStaysInController() {
-        val body = code(controller)
+    fun phase2gTwoBoundaryMovesIntoPipelineButStaysOutOfUiAndSizing() {
+        val component = code(pipeline)
         listOf(
             "fun newScreenSender(",
-            "private var screenStreamRecovery",
-            "screenStreamRecovery = recover@{",
+            "fun installRecovery(",
+            "ScreenSenderPlan(",
+            "private var recovery: (() -> ScreenRecoveryResult)?",
             "fun failure(): ScreenRecoveryResult",
-        ).forEach { assertTrue("2g-2 范围必须留在控制器：$it", body.contains(it)) }
-        val component = code(pipeline)
-        listOf("newScreenSender", "screenStreamRecovery", "ScreenRecoveryResult").forEach {
-            assertFalse("2g-1 不得提前搬移 2g-2 内容：$it", component.contains(it))
-        }
+            "internal enum class ScreenRecoveryResult",
+        ).forEach { assertTrue("2g-2 内容必须迁入组件：$it", component.contains(it)) }
+
+        // 尺寸/几何/fps、record 失败分支（含 ui.*）、实验面板上报、S3 收尾与音频仍留在控制器。
+        val body = code(controller)
+        listOf(
+            "DisplaySurfaceReport.fitWithinCanvasLimits(",
+            "activeScalePercent = scalePct",
+            "pendingVideoW = effectiveW",
+            "reportPanelExperiment(",
+            "VideoEndedHandling(",
+            "startAudioAndRecord(",
+            "sc_record_unconfirmed",
+        ).forEach { assertTrue("2g-2 边界必须留在控制器：$it", body.contains(it)) }
     }
 
     @Test
@@ -115,6 +144,13 @@ class StreamPipelineSourceContractTest {
         val component = code(pipeline)
         assertTrue("租约必须沿用 registry 监视器", component.contains("synchronized(registry)"))
         assertFalse("组件不得出现裸 synchronized(this)", Regex("""synchronized\(this\)""").containsMatchIn(component))
+        // 恢复闭包必须经注入的控制器锁回到同一监视器，不得改用组件自身。
+        assertTrue("恢复闭包必须经 withControllerLock 加锁", component.contains("ports.withControllerLock"))
+        assertEquals(
+            "控制器锁端口只允许一个绑定",
+            1,
+            Regex("""withControllerLock\(block: \(\) -> T\): T""").findAll(component).count(),
+        )
     }
 
     @Test
@@ -126,7 +162,7 @@ class StreamPipelineSourceContractTest {
     }
 
     @Test
-    fun componentKeepsCarLifeLogTemplatesVerbatim() {
+    fun componentKeepsCarLifeAndRecoveryLogTemplatesVerbatim() {
         listOf(
             "CARLIFE: 入流门控第 ",
             "补参数集=",
@@ -136,6 +172,8 @@ class StreamPipelineSourceContractTest {
             "CARWITH_VIDEO_FORMAT ",
             "CARWITH_AUDIO_FORMAT channel=",
             "CarWith 返回车机（→ ",
+            "SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频",
+            "SCREEN: 主屏流已重新 SETUP/RECORD，等待新的 IDR 与触控",
         ).forEach { assertTrue("日志模板必须逐字保留：$it", pipeline.contains(it)) }
     }
 
@@ -165,12 +203,23 @@ class StreamPipelineSourceContractTest {
             "override fun log(line: String) = appendLog(line)",
             "override fun currentClient(): AirPlayClient? = this@SessionController.currentClient",
             "override fun nativeBridge(): CarLifeAudioBridge? = nativeAudioBridge",
+            "override fun <T> withControllerLock(block: () -> T): T = synchronized(this@SessionController) { block() }",
         ).forEach { assertTrue("端口装配缺少 $it", creator.contains(it)) }
         assertEquals(
             "组件只允许构造一次",
             1,
             Regex("""(?<![A-Za-z])StreamPipeline\(""").findAll(code(controller)).count(),
         )
+    }
+
+    @Test
+    fun recoveryResultMappingStaysInController() {
+        val body = code(controller)
+        listOf(
+            "ScreenRecoveryResult.RESTORED -> RecoveryOutcome.RESTORED",
+            "ScreenRecoveryResult.ABORTED -> RecoveryOutcome.ABORTED",
+            "ScreenRecoveryResult.FAILED -> RecoveryOutcome.FAILED",
+        ).forEach { assertTrue("三态→中性映射必须留在控制器：$it", body.contains(it)) }
     }
 
     private fun rawBlock(

@@ -418,7 +418,6 @@ class AudioChannelStarterSourceContractTest {
         contract(controller, starter, state)
         val mutations =
             listOf(
-                Triple(controller, "synchronized(this@SessionController)", "synchronized(this)"),
                 Triple(controller, "override val currentClient get()", "override val currentClient"),
                 Triple(controller, "profile = audioChannelState.profile", "profile = null"),
                 Triple(controller, "profile = audioChannelState.profile", "profile = cachedState.profile"),
@@ -459,6 +458,23 @@ class AudioChannelStarterSourceContractTest {
             }
             assertTrue("mutation accepted $before -> $after", rejected)
         }
+        // Phase 2g-2 在 createStreamPipeline() 里也注入了一处控制器锁（ScreenRecovery 闭包用）。
+        // 锁身份变异必须在音频接线内定向替换，否则 replaceFirst 会命中更靠前的那一处而误判为「已拒绝」。
+        val audioStart = controller.indexOf("private fun createAudioChannelStarter()")
+        val lockAt = controller.indexOf("synchronized(this@SessionController)", audioStart)
+        check(audioStart >= 0 && lockAt > audioStart) { "missing audio lock binding" }
+        val tornAudio = "synchronized(this)"
+        val mutilated =
+            controller.substring(0, lockAt) +
+                tornAudio +
+                controller.substring(lockAt + "synchronized(this@SessionController)".length)
+        var lockRejected = false
+        try {
+            contract(mutilated, starter, state)
+        } catch (_: AssertionError) {
+            lockRejected = true
+        }
+        assertTrue("mutation accepted audio lock identity swap -> $tornAudio", lockRejected)
         listOf(
             "import com.mcarplay.app.SessionController\n",
             "private val mib3 = true\n",

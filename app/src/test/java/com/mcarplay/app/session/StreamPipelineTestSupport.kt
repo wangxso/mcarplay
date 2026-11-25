@@ -6,6 +6,7 @@ import com.mcarplay.app.audio.CarLifeAudioBridge
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeVideoAccessUnit
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.video.ExternalVideoSource
 import com.mcarplay.app.video.VideoSender
 import java.util.concurrent.atomic.AtomicBoolean
@@ -70,6 +71,16 @@ internal class FakeStreamPorts : CarLifeStreamPorts {
     }
 
     override fun nativeBridge(): CarLifeAudioBridge? = bridge
+
+    /** 测试里复用同一把监视器，验证恢复闭包确实经端口加锁而不是裸 synchronized(this)。 */
+    val controllerLock = Any()
+    var lockCalls = 0
+
+    override fun <T> withControllerLock(block: () -> T): T =
+        synchronized(controllerLock) {
+            lockCalls++
+            block()
+        }
 }
 
 /** 2g-1 单测共用的 H.264 样本与 sender/session 构造。 */
@@ -139,5 +150,115 @@ internal object StreamPipelineTestSupport {
     ) {
         val field = CarLifeSession::class.java.getDeclaredField("running").apply { isAccessible = true }
         (field.get(session) as AtomicBoolean).set(value)
+    }
+
+    fun cipher(): StreamFrameCipher = StreamFrameCipher.AesCtr(ByteArray(16), ByteArray(16))
+
+    /** 最小 [AirPlayClient]（不连接网络）：2g-2 恢复闭包只把它当作本轮身份令牌。 */
+    fun client(): AirPlayClient {
+        val endpoint =
+            Iap2SenderSession.CarPlayEndpoint(
+                "test",
+                "",
+                0,
+                0,
+                1,
+                null,
+                null,
+                null,
+                listOf("127.0.0.1"),
+            )
+        return AirPlayClient(endpoint, log = {})
+    }
+
+    fun plan(
+        hooks: ScreenSenderHooks,
+        width: Int = 1280,
+        height: Int = 720,
+    ): ScreenSenderPlan =
+        ScreenSenderPlan(
+            host = "127.0.0.1",
+            width = width,
+            height = height,
+            targetFps = 30,
+            keepAliveWithStats = false,
+            receiverMaxFps = 30,
+            externalVideoSource =
+                object : ExternalVideoSource {
+                    override fun requestKeyFrame(): Boolean = true
+                },
+            phoneOwnsScreen = { true },
+            hooks = hooks,
+        )
+}
+
+/** 记录发送端回调的测试钩子。 */
+internal class RecordingScreenHooks : ScreenSenderHooks {
+    val suspended = mutableListOf<Boolean>()
+    val frames = mutableListOf<Int>()
+    val ended = mutableListOf<VideoSender>()
+    val configs = mutableListOf<Pair<Int, Int>>()
+
+    override fun onScreenOutputSuspended(suspended: Boolean) {
+        this.suspended += suspended
+    }
+
+    override fun newExternalFrameObserver(): (bytes: Int) -> Unit = { bytes -> frames += bytes }
+
+    override fun newVideoConfigObserver(): ((width: Int, height: Int) -> Unit)? = { width, height -> configs += width to height }
+
+    override fun onEnded(sender: VideoSender) {
+        ended += sender
+    }
+}
+
+/** 可编排的恢复端口：记录调用顺序，按字段返回各叶子的结果。 */
+internal class FakeRecoveryPort : ScreenRecoveryPort {
+    var scopeActive = true
+    var currentClientMatches = true
+    var clientCancelled = false
+    var phoneOwns = true
+    var teardownResult = true
+    var recordResult = true
+    var screenInfo: AirPlayClient.ScreenStreamInfo? = null
+
+    val calls = mutableListOf<String>()
+    var onTeardown: (() -> Unit)? = null
+    var onRun: (() -> Unit)? = null
+
+    override fun isScopeActive(): Boolean = scopeActive
+
+    override fun isCurrentClient(client: AirPlayClient): Boolean = currentClientMatches
+
+    override fun isClientCancelled(client: AirPlayClient): Boolean = clientCancelled
+
+    override fun phoneOwnsScreen(client: AirPlayClient): Boolean = phoneOwns
+
+    override fun teardownScreenStream(client: AirPlayClient): Boolean {
+        calls += "teardown"
+        onTeardown?.invoke()
+        return teardownResult
+    }
+
+    override fun runScreenStream(
+        client: AirPlayClient,
+        sessionKey: ByteArray?,
+        displayUuid: String?,
+    ): AirPlayClient.ScreenStreamInfo? {
+        calls += "run"
+        onRun?.invoke()
+        return screenInfo
+    }
+
+    override fun record(
+        client: AirPlayClient,
+        force: Boolean,
+    ): Boolean {
+        calls += "record(force=$force)"
+        return recordResult
+    }
+
+    override fun onScreenStreamRestored(client: AirPlayClient) {
+        calls += "restored"
     }
 }

@@ -12,6 +12,7 @@ import org.junit.Test
 class ScreenOwnershipSourceContractTest {
     private val controller: String by lazy { SourceTree.mainKotlinFiles.getValue("SessionController.kt").readText() }
     private val ownership: String by lazy { SourceTree.mainKotlinFiles.getValue("airplay/ScreenOwnership.kt").readText() }
+    private val pipeline: String by lazy { SourceTree.mainKotlinFiles.getValue("session/StreamPipeline.kt").readText() }
 
     private fun code(source: String): String = KotlinSource.scan(source).code
 
@@ -191,17 +192,22 @@ class ScreenOwnershipSourceContractTest {
     }
 
     @Test
-    fun recoveryClosureAndInviteReconnectStayInController() {
-        assertTrue("恢复闭包字段仍在控制器", controller.contains("private var screenStreamRecovery: (() -> ScreenRecoveryResult)? = null"))
-        assertTrue("恢复闭包本体仍在控制器", controller.contains("screenStreamRecovery = recover@{"))
-        assertTrue("恢复失败判定闭包仍在控制器", controller.contains("fun failure(): ScreenRecoveryResult"))
+    fun recoveryClosureMovedIntoPipelineAndInviteReconnectStaysInController() {
+        // Phase 2g-2：恢复闭包本体与三态枚举迁入 session/StreamPipeline，控制器不再持有字段或实现。
+        assertFalse("控制器不得再持有恢复闭包字段", controller.contains("private var screenStreamRecovery"))
+        assertFalse("控制器不得再安装恢复闭包", controller.contains("screenStreamRecovery = recover@{"))
+        assertFalse("控制器不得再持有恢复失败判定闭包", controller.contains("fun failure(): ScreenRecoveryResult"))
+        assertTrue("恢复闭包字段必须由组件持有", code(pipeline).contains("private var recovery: (() -> ScreenRecoveryResult)"))
+        assertTrue("恢复闭包本体必须迁入组件", pipeline.contains("recover@{"))
+        assertTrue("恢复失败判定闭包必须迁入组件", pipeline.contains("fun failure(): ScreenRecoveryResult"))
+        assertTrue("控制器必须经门面读取恢复闭包", controller.contains("streamPipeline.recoveryOrNull()"))
 
         val reconnect =
             rawBlock(controller, "private fun reconnectOnStreamingInvite(client: AirPlayClient)", "private var inviteRetryCount")
         assertTrue("退役顺序保持", reconnect.indexOf("streamingDiagnosticAttempt = null") < reconnect.indexOf("retireSession()"))
         assertTrue("端点重交付保持", reconnect.contains("onCarPlayEndpoint(endpoint, \"推流中邀请重连\")"))
 
-        assertFalse("组件不得持有恢复闭包", code(ownership).contains("screenStreamRecovery"))
+        assertFalse("组件不得持有恢复闭包旧字段名", code(ownership).contains("screenStreamRecovery"))
         assertFalse("组件不得复用三态原名", code(ownership).contains("ScreenRecoveryResult"))
     }
 
