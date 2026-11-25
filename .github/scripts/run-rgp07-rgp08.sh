@@ -14,6 +14,43 @@ OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
 APP_APK="${APP_APK:?APP_APK is required}"
 ANDROID_TEST_APK="${ANDROID_TEST_APK:?ANDROID_TEST_APK is required}"
 
+# macOS runners have no GNU timeout (coreutils is not installed), so the RGP08 bound
+# must not depend on it alone. Prefer timeout, then Homebrew's gtimeout, and otherwise
+# supervise the command here while keeping GNU timeout's exit code 124 on expiry.
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$seconds" "$@"
+    return $?
+  fi
+  local fired status watchdog
+  fired="$(mktemp)"
+  "$@" &
+  local child=$!
+  (
+    sleep "$seconds"
+    echo fired >"$fired"
+    kill -TERM "$child" 2>/dev/null || true
+    sleep 2
+    kill -KILL "$child" 2>/dev/null || true
+  ) &
+  watchdog=$!
+  wait "$child" 2>/dev/null
+  status=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  if [[ -s "$fired" ]]; then
+    status=124
+  fi
+  rm -f "$fired"
+  return "$status"
+}
+
 if ! adb -s "$EXPECTED_SERIAL" get-state | grep -qx device; then
   echo "Expected emulator $EXPECTED_SERIAL is not ready" >&2
   exit 1
@@ -115,7 +152,7 @@ rgp08_run_id="${MARKER_PREFIX}-${RGP08_RUN_ATTEMPT}"
 rgp08_marker="${rgp08_run_id}-rgp08"
 clear_package "pre-RGP08"
 adb shell am force-stop "$PACKAGE_ID"
-if timeout "$RGP08_TIMEOUT_SECONDS" \
+if run_with_timeout "$RGP08_TIMEOUT_SECONDS" \
   adb shell am instrument \
   -e class "$RGP08_CLASS" \
   -e marker "$rgp08_marker" \

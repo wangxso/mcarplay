@@ -16,10 +16,14 @@ concurrency:
 jobs:
   rgp07-two-phase-process-restart:
     name: Auto-reconnect prefs RGP07 and RGP08
-    runs-on: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'ubuntu-24.04' }}
+    # Apple Silicon macOS runs the arm64-v8a system image on HVF, so it is the default.
+    # Override with the INSTRUMENTATION_RUNNER_LABEL repository variable (for example a
+    # self-hosted Linux label); the Linux path keeps the x86_64 image on /dev/kvm.
+    runs-on: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'macos-15' }}
     timeout-minutes: 45
     env:
       PACKAGE_ID: com.mcarplay.app
+      INSTRUMENTATION_RUNNER_LABEL: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'macos-15' }}
       INSTRUMENTATION_TARGET: com.mcarplay.app.test/androidx.test.runner.AndroidJUnitRunner
       PHASE1_CLASS: com.mcarplay.app.bt.Phase1WriterTest
       PHASE2_CLASS: com.mcarplay.app.bt.Phase2ReaderTest
@@ -33,9 +37,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate runner platform
+        if: runner.os != 'Linux' && runner.os != 'macOS'
+        run: |
+          echo "::error::Instrumentation requires a Linux runner with KVM or an Apple Silicon macOS runner with HVF; got ${{ runner.os }}"
+          exit 1
+
       - name: Validate Linux KVM acceleration
-        env:
-          INSTRUMENTATION_RUNNER_LABEL: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'ubuntu-24.04' }}
+        if: runner.os == 'Linux'
         run: |
           echo "Runner label: $INSTRUMENTATION_RUNNER_LABEL"
           if [[ "$(uname -s)" != "Linux" ]]; then
@@ -56,6 +65,23 @@ jobs:
           fi
           echo "KVM acceleration decision: enabled (/dev/kvm is usable)"
 
+      - name: Validate macOS HVF acceleration
+        if: runner.os == 'macOS'
+        run: |
+          echo "Runner label: $INSTRUMENTATION_RUNNER_LABEL"
+          echo "Runner platform: $(uname -s) $(sw_vers -productVersion) arch=$(uname -m)"
+          if [[ "$(uname -m)" != "arm64" ]]; then
+            echo "::error::macOS instrumentation requires an Apple Silicon (arm64) runner for HVF; got $(uname -m)"
+            exit 1
+          fi
+          hv_support="$(sysctl -n kern.hv_support 2>/dev/null || echo 0)"
+          echo "kern.hv_support=$hv_support"
+          if [[ "$hv_support" != "1" ]]; then
+            echo "::error::HVF acceleration unavailable: kern.hv_support is '$hv_support'; use an Apple Silicon runner with hypervisor support"
+            exit 1
+          fi
+          echo "Hardware acceleration decision: enabled (Apple Silicon HVF, arm64-v8a system image)"
+
       - uses: ./.github/actions/setup-build
 
       - name: Build app and instrumentation APKs
@@ -72,7 +98,8 @@ jobs:
         with:
           api-level: 34
           target: google_apis
-          arch: x86_64
+          # Apple Silicon runs the arm64-v8a image on HVF; Linux keeps the x86_64 image on KVM.
+          arch: ${{ runner.os == 'macOS' && 'arm64-v8a' || 'x86_64' }}
           profile: pixel_5
           avd-name: rgp07-rgp08-emulator
           emulator-boot-timeout: 1200
