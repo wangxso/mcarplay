@@ -6,7 +6,18 @@
 
 ## 当前基线与结论
 
-- **11 月 25 日会话编排层重构 Phase 2g-1（本 PR，基线 `dev` @ `a5b96d2`，已合入 2f / #128，无设备或实车验证）：**
+- **11 月 25 日会话编排层重构 Phase 2g-2（本 PR，基线 `dev` @ `22d2381`，已合入 2g-1 / #130，无设备或实车验证）：**
+  在已合入的 2g-1 之上把发送端槽、`newScreenSender` 工厂与主屏流重建闭包并入 `session/StreamPipeline`；组件持有
+  `@Volatile sender`、`ScreenSenderPlan`/`ScreenSenderHooks` 与 `recovery`。恢复闭包原 4 处 `synchronized(this)`
+  （`this` = 控制器单例）改经注入的 `CarLifeStreamPorts.withControllerLock`（生产绑定
+  `synchronized(this@SessionController)`），组件内无裸 `synchronized(this)`。控制器把 `videoSender` 降为组件槽的
+  计算属性门面，`readRecovery()` 只保留三态→`RecoveryOutcome` 映射，`RoundRetirement.clearRecovery()` 委托组件；
+  尺寸/几何/fps、`reportPanelExperiment`、`record()` 失败分支（含 `ui.*`）、S3 `VideoEndedHandling` 与音频仍留在控制器，
+  `SessionUiPort` 45/10/2/1/1 计数不变。既有 `EndAttemptTraceTest`（2 测）与 `ScreenOwnershipSourceContractTest`（1 测）
+  的扫描目标同步改到组件，断言逐字保留、未删除或放宽；新增 J/I/S JVM 测试覆盖恢复三态、原子发布/回滚与旧源迟到隔离。
+  完整门禁与测试计数见 PR，不以离线测试宣称任何车型兼容性。
+
+- **11 月 25 日会话编排层重构 Phase 2g-1（2026-11-25，基线 `dev` @ `a5b96d2`，已合入 2f / #128，无设备或实车验证）：**
   把正式 CarLife 源的构造与事件路由（`onAccessUnit`/`onEnded`/`onAudioEvent`/`onReturnToCar`）、
   `CarLifeSessionRegistry` 租约与输出槽（`CarLifeOutput`）抽到 `session/StreamPipeline`；组件持有
   `registry`/`formal`/`diagnostic`/`output`，租约仍用同一 `synchronized(registry)` 监视器，日志、诊断时间线、当前 client、

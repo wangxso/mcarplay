@@ -39,6 +39,10 @@ class EndAttemptTraceTest {
         KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("VideoEndedHandling.kt").readText()).code
     }
 
+    private val pipeline: String by lazy {
+        KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("session/StreamPipeline.kt").readText()).code
+    }
+
     private val mainActivity: String by lazy {
         SourceTree.scan("MainActivity.kt").code
     }
@@ -652,10 +656,11 @@ class EndAttemptTraceTest {
 
     @Test
     fun screenEndedCallbackFiltersStaleSenderBeforeSideEffects() {
-        requireOrder(controller, "fun newScreenSender(", "onEnded = onVideoEnded@", "回调挂在 newScreenSender")
+        // Phase 2g-2：发送端工厂迁入 session/StreamPipeline；onEnded 必须把真正结束的 sender 实例传回控制器钩子。
+        requireOrder(pipeline, "fun newScreenSender(", "plan.hooks.onEnded(created)", "回调挂在 newScreenSender")
+        requireContains(pipeline, "internal interface ScreenSenderHooks", "发送端回调必须经窄端口注入")
         requireContains(controller, "VideoEndedHandling(", "onEnded 收尾 helper 已接入")
-        requireOrder(controller, "VideoEndedHandling(", "onEnded = onVideoEnded@", "adapter 先于回调")
-        val callback = lambdaAfter(controller, "onEnded = onVideoEnded@").removePrefix("{").trimStart()
+        val callback = normalize(function(controller, "onEnded"))
         requireContains(callback, "videoEndedHandling.handle(", "onEnded 直接委托 helper")
         requireContains(callback, "override val senderIdentity: () -> VideoSender = { sender }", "延迟读取真实 sender 身份")
         requireContains(callback, "override val carLifeBinding: () -> CarLifeSession? = { carLife }", "延迟读取真实 CarLife 绑定")
@@ -828,7 +833,16 @@ class EndAttemptTraceTest {
         requireContains(slotBridge, "get() = nativeAudioBridge", "bridge getter 逐次转发")
         requireContains(slotBridge, "nativeAudioBridge = value", "bridge setter 只写原字段")
         requireContains(slotContext, "get() = appContext", "context getter 逐次转发")
-        requireContains(slotScope, "clearRecovery() { screenStreamRecovery = null", "clear recovery 只写原字段")
+        requireContains(
+            slotScope,
+            "clearRecovery() { streamPipeline.clearRecovery()",
+            "clear recovery 委托组件（Phase 2g-2 起字段归组件）",
+        )
+        requireContains(
+            normalize(function(pipeline, "clearRecovery")),
+            "recovery = null",
+            "组件清恢复闭包只写自身字段",
+        )
         requireContains(slotScope, "clearSharedSecret() { currentSharedSecret = null", "clear secret 只写原字段")
         requireContains(slotScope, "clearAudioHost() { currentAudioHost = null", "clear host 只写原字段")
         val markCancelled = memberFunction(source = slotScope, kind = "", name = "markCancelled", scope = slotScope)

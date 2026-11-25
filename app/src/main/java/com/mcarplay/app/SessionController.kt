@@ -100,6 +100,10 @@ import com.mcarplay.app.session.CarLifeStreamPorts
 import com.mcarplay.app.session.EventCommandRouter
 import com.mcarplay.app.session.LegacyAttemptScope
 import com.mcarplay.app.session.LegacySessionUiPort
+import com.mcarplay.app.session.ScreenRecoveryPort
+import com.mcarplay.app.session.ScreenRecoveryResult
+import com.mcarplay.app.session.ScreenSenderHooks
+import com.mcarplay.app.session.ScreenSenderPlan
 import com.mcarplay.app.session.SessionUiPort
 import com.mcarplay.app.session.StreamPipeline
 import com.mcarplay.app.session.attemptHandoffCancelled
@@ -542,8 +546,12 @@ object SessionController {
      */
     private var endpointBrowser: CarPlayServiceBrowser? = null
 
-    @Volatile
-    var videoSender: VideoSender? = null
+    /** 当前主屏发送端门面（Phase 2g-2 起由 [streamPipeline] 持有）；外部只读调用点保持不变。 */
+    var videoSender: VideoSender?
+        get() = streamPipeline.sender
+        set(value) {
+            streamPipeline.sender = value
+        }
 
     // ---- 「显示」运行时生效值（会话建立时快照；英雄卡展示运行时值而非偏好值）----
 
@@ -631,16 +639,11 @@ object SessionController {
     @Volatile
     var currentClient: AirPlayClient? = null
 
-    /** Phase 2g-1：正式 CarLife 源、会话租约与输出去向的编排组件（发送端工厂/恢复闭包仍在控制器）。 */
+    /** Phase 2g：正式 CarLife 源、租约、输出去向、发送端槽与主屏流重建的编排组件。 */
     private val streamPipeline = createStreamPipeline()
 
     private val currentCarLifeSession: CarLifeSession?
         get() = streamPipeline.currentFormalSession()
-
-    @Volatile
-    private var screenStreamRecovery: (() -> ScreenRecoveryResult)? = null
-
-    private enum class ScreenRecoveryResult { RESTORED, ABORTED, FAILED }
 
     private fun createStreamPipeline(): StreamPipeline =
         StreamPipeline(
@@ -676,6 +679,8 @@ object SessionController {
                 ) = this@SessionController.enqueueModesAssert(client, reason, requestKeyFrame)
 
                 override fun nativeBridge(): CarLifeAudioBridge? = nativeAudioBridge
+
+                override fun <T> withControllerLock(block: () -> T): T = synchronized(this@SessionController) { block() }
             },
         )
 
@@ -1798,7 +1803,7 @@ object SessionController {
                     get() = appContext
 
                 override fun clearRecovery() {
-                    screenStreamRecovery = null
+                    streamPipeline.clearRecovery()
                 }
 
                 override fun clearSharedSecret() {
@@ -3138,7 +3143,7 @@ object SessionController {
                     override val forceKeyFrameCount get() = this@SessionController.forceKeyFrameCount
 
                     override fun readRecovery(): (() -> RecoveryOutcome)? =
-                        screenStreamRecovery?.let { recover ->
+                        streamPipeline.recoveryOrNull()?.let { recover ->
                             {
                                 when (recover()) {
                                     ScreenRecoveryResult.RESTORED -> RecoveryOutcome.RESTORED
@@ -4068,151 +4073,118 @@ object SessionController {
                                             override fun requestKeyFrame(): Boolean = currentCarLifeSession?.requestKeyFrame() == true
                                         }
 
-                                    fun newScreenSender(screenInfo: AirPlayClient.ScreenStreamInfo): VideoSender {
-                                        lateinit var sender: VideoSender
-                                        val firstFrameSent = AtomicBoolean(false)
-                                        sender =
-                                            VideoSender(
-                                                host = host,
-                                                dataPort = screenInfo.dataPort,
-                                                frameCipher = screenInfo.cipher,
-                                                // 用收敛后的尺寸：实验面板不得把编码器画布推出资源上限。
-                                                width = effectiveW,
-                                                height = effectiveH,
-                                                targetFps = fps,
-                                                log = { line -> appendLog(line) },
-                                                keepAliveWithStats = setup.keepAliveSendStatsAsBody,
-                                                externalVideoSource = carLifeSource,
-                                                receiverMaxFps = setup.maxFps,
-                                                // 车机拿走主屏（原车界面、倒车影像等）时暂停屏幕视频，归还后从新的 IDR 恢复
-                                                phoneOwnsScreen = { client.modes.phoneOwnsScreen },
-                                                onScreenOutputSuspended = { suspended ->
-                                                    ConnectionDiagnostics.timeline.screenOutput(diagnosticAttempt, suspended)
-                                                },
-                                                onExternalFrameSent = { bytes ->
-                                                    ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
-                                                    if (firstFrameSent.compareAndSet(false, true)) {
-                                                        // 真出画了：清空自动重连熔断计数（本轮已是健康会话）
-                                                        appContext?.let { app ->
-                                                            AutoReconnectGuard.recordHealthy(
-                                                                app,
-                                                                peerAddress,
-                                                                diagnosticAttempt,
-                                                            )
-                                                        }
+                                    val screenPlan =
+                                        ScreenSenderPlan(
+                                            host = host,
+                                            width = effectiveW,
+                                            height = effectiveH,
+                                            targetFps = fps,
+                                            keepAliveWithStats = setup.keepAliveSendStatsAsBody,
+                                            receiverMaxFps = setup.maxFps,
+                                            externalVideoSource = carLifeSource,
+                                            phoneOwnsScreen = { client.modes.phoneOwnsScreen },
+                                            hooks =
+                                                object : ScreenSenderHooks {
+                                                    override fun onScreenOutputSuspended(suspended: Boolean) {
+                                                        ConnectionDiagnostics.timeline.screenOutput(diagnosticAttempt, suspended)
                                                     }
-                                                    val now = android.os.SystemClock.uptimeMillis()
-                                                    if (lastEnvironmentSampleAt == 0L ||
-                                                        now - lastEnvironmentSampleAt >= ENVIRONMENT_SAMPLE_MS
-                                                    ) {
-                                                        lastEnvironmentSampleAt = now
-                                                        appContext?.let { app ->
-                                                            Bg.run("stream-environment") {
-                                                                appendLog("ENV: ${StreamEnvironment.describe(app)}")
+
+                                                    override fun newExternalFrameObserver(): (Int) -> Unit {
+                                                        val firstFrameSent = AtomicBoolean(false)
+                                                        return { bytes ->
+                                                            ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)
+                                                            if (firstFrameSent.compareAndSet(false, true)) {
+                                                                // 真出画了：清空自动重连熔断计数（本轮已是健康会话）
+                                                                appContext?.let { app ->
+                                                                    AutoReconnectGuard.recordHealthy(
+                                                                        app,
+                                                                        peerAddress,
+                                                                        diagnosticAttempt,
+                                                                    )
+                                                                }
+                                                            }
+                                                            val now = android.os.SystemClock.uptimeMillis()
+                                                            if (lastEnvironmentSampleAt == 0L ||
+                                                                now - lastEnvironmentSampleAt >= ENVIRONMENT_SAMPLE_MS
+                                                            ) {
+                                                                lastEnvironmentSampleAt = now
+                                                                appContext?.let { app ->
+                                                                    Bg.run("stream-environment") {
+                                                                        appendLog("ENV: ${StreamEnvironment.describe(app)}")
+                                                                    }
+                                                                }
                                                             }
                                                         }
                                                     }
+
+                                                    override fun newVideoConfigObserver(): ((Int, Int) -> Unit)? {
+                                                        // 实验（issue #62，PR #78 评审 P2）：只在 VideoConfig 真正写出后判定，
+                                                        // 且尺寸变化时重新判定——首个源帧可能未发送，之后还可能切转码/主屏恢复。
+                                                        val target = setup.experimentalPanelGeometry ?: return null
+                                                        val lastReported = AtomicReference<Pair<Int, Int>?>(null)
+                                                        return { actualWidth, actualHeight ->
+                                                            reportPanelExperiment(target, actualWidth, actualHeight, lastReported)
+                                                        }
+                                                    }
+
+                                                    override fun onEnded(sender: VideoSender) {
+                                                        videoEndedHandling.handle(
+                                                            object : VideoEndCapture<VideoSender, CarLifeSession> {
+                                                                override val senderIdentity: () -> VideoSender = { sender }
+
+                                                                override val carLifeBinding: () -> CarLifeSession? = { carLife }
+
+                                                                override val mediaObservation: () -> Any? =
+                                                                    { client.currentEndpoint.observation }
+
+                                                                override val attempt: String = diagnosticAttempt
+
+                                                                override val peerAddress: String? = peerAddress
+                                                            },
+                                                        )
+                                                    }
                                                 },
-                                                onEnded = onVideoEnded@{
-                                                    videoEndedHandling.handle(
-                                                        object : VideoEndCapture<VideoSender, CarLifeSession> {
-                                                            override val senderIdentity: () -> VideoSender = { sender }
-
-                                                            override val carLifeBinding: () -> CarLifeSession? = { carLife }
-
-                                                            override val mediaObservation: () -> Any? =
-                                                                { client.currentEndpoint.observation }
-
-                                                            override val attempt: String = diagnosticAttempt
-
-                                                            override val peerAddress: String? = peerAddress
-                                                        },
-                                                    )
-                                                },
-                                            )
-                                        // 实验（issue #62，PR #78 评审 P2）：只在 VideoConfig 真正写出后判定，
-                                        // 且尺寸变化时重新判定——首个源帧可能未发送，之后还可能切转码/主屏恢复。
-                                        setup.experimentalPanelGeometry?.let { target ->
-                                            val lastReported = AtomicReference<Pair<Int, Int>?>(null)
-                                            sender.onVideoConfigSent = { actualWidth, actualHeight ->
-                                                reportPanelExperiment(target, actualWidth, actualHeight, lastReported)
-                                            }
-                                        }
-                                        return sender
-                                    }
-                                    sessionVideoSender = newScreenSender(screen)
+                                        )
+                                    sessionVideoSender = streamPipeline.newScreenSender(screenPlan, screen)
                                     videoSender = sessionVideoSender
                                     // 先连端口（车机看门狗），编码器等 RECORD 后再启动
                                     videoSender?.openDataPort()
-                                    screenStreamRecovery = recover@{
-                                        fun failure(): ScreenRecoveryResult =
-                                            if (!scope.isActive || client.cancelled || currentClient !== client) {
-                                                ScreenRecoveryResult.ABORTED
-                                            } else {
-                                                ScreenRecoveryResult.FAILED
-                                            }
-                                        val previousSender =
-                                            synchronized(this) {
-                                                val previousOutput =
-                                                    streamPipeline.currentOutput() ?: return@recover ScreenRecoveryResult.ABORTED
-                                                val previous = videoSender ?: return@recover ScreenRecoveryResult.ABORTED
-                                                if (!scope.isActive ||
-                                                    currentClient !== client ||
-                                                    previousOutput.sender !== previous ||
-                                                    currentCarLifeSession !== carLife ||
-                                                    !client.modes.phoneOwnsScreen
-                                                ) {
-                                                    return@recover ScreenRecoveryResult.ABORTED
+                                    streamPipeline.installRecovery(
+                                        plan = screenPlan,
+                                        client = client,
+                                        carLife = { carLife },
+                                        sessionKey = sessionKey,
+                                        displayUuid = setup.displayUuid,
+                                        diagnosticAttempt = diagnosticAttempt,
+                                        port =
+                                            object : ScreenRecoveryPort {
+                                                override fun isScopeActive(): Boolean = scope.isActive
+
+                                                override fun isCurrentClient(client: AirPlayClient): Boolean = currentClient === client
+
+                                                override fun isClientCancelled(client: AirPlayClient): Boolean = client.cancelled
+
+                                                override fun phoneOwnsScreen(client: AirPlayClient): Boolean = client.modes.phoneOwnsScreen
+
+                                                override fun teardownScreenStream(client: AirPlayClient): Boolean =
+                                                    client.teardownScreenStream()
+
+                                                override fun runScreenStream(
+                                                    client: AirPlayClient,
+                                                    sessionKey: ByteArray?,
+                                                    displayUuid: String?,
+                                                ): AirPlayClient.ScreenStreamInfo? = client.runScreenStream(sessionKey, displayUuid)
+
+                                                override fun record(
+                                                    client: AirPlayClient,
+                                                    force: Boolean,
+                                                ): Boolean = client.record(force = force)
+
+                                                override fun onScreenStreamRestored(client: AirPlayClient) {
+                                                    client.modes.onScreenStreamRestored()
                                                 }
-                                                streamPipeline.clearOutput()
-                                                videoSender = null
-                                                previous
-                                            }
-                                        appendLog("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频")
-                                        previousSender.stop()
-                                        if (!scope.isActive || !client.teardownScreenStream()) return@recover failure()
-                                        if (!scope.isActive) return@recover ScreenRecoveryResult.ABORTED
-                                        val resumed = client.runScreenStream(sessionKey, setup.displayUuid) ?: return@recover failure()
-                                        if (!scope.isActive) return@recover ScreenRecoveryResult.ABORTED
-                                        val replacement = newScreenSender(resumed)
-                                        var restored = false
-                                        try {
-                                            synchronized(this) {
-                                                if (!scope.isActive || currentClient !== client) return@recover ScreenRecoveryResult.ABORTED
-                                                videoSender = replacement
-                                            }
-                                            if (!replacement.openDataPort() ||
-                                                !scope.isActive ||
-                                                // 屏幕流已 TEARDOWN/SETUP：单次 RECORD 车机也必须重发一次，
-                                                // 否则新流没有激活（艾瑞泽 8 重进后触控/按键失效）。
-                                                !client.record(force = true) ||
-                                                !scope.isActive ||
-                                                !replacement.start {} ||
-                                                !scope.isActive
-                                            ) {
-                                                return@recover failure()
-                                            }
-                                            synchronized(this) {
-                                                if (!scope.isActive || currentClient !== client || videoSender !== replacement) {
-                                                    return@recover ScreenRecoveryResult.ABORTED
-                                                }
-                                                streamPipeline.publishOutput(diagnosticAttempt, replacement)
-                                            }
-                                            client.modes.onScreenStreamRestored()
-                                            replacement.requestKeyFrame(fromReceiver = false)
-                                            restored = true
-                                            appendLog("SCREEN: 主屏流已重新 SETUP/RECORD，等待新的 IDR 与触控")
-                                            ScreenRecoveryResult.RESTORED
-                                        } finally {
-                                            if (!restored) {
-                                                synchronized(this) {
-                                                    if (videoSender === replacement) videoSender = null
-                                                    streamPipeline.clearOutputIf(replacement)
-                                                }
-                                                replacement.stop()
-                                            }
-                                        }
-                                    }
+                                            },
+                                    )
                                 }
                                 // 先 RECORD 激活会话并起视频，再协商音频（2026-10-17 奥迪定谳）：
                                 // 车机在「屏幕流 SETUP 之后」有约 2s 看门狗，等不到 RECORD/数据流即

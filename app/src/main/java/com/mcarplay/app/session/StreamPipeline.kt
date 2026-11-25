@@ -11,19 +11,21 @@ import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
 import com.mcarplay.app.carlife.CarLifeVideoAccessUnit
 import com.mcarplay.app.diagnostics.DiagnosticCode
+import com.mcarplay.app.video.ExternalVideoSource
 import com.mcarplay.app.video.VideoSender
 
 /**
- * Phase 2g-1：正式 CarLife 源、会话租约与输出去向的编排组件。
+ * Phase 2g：正式 CarLife 源、会话租约、输出去向、主屏发送端与主屏流重建的编排组件。
  *
- * 从 `SessionController` 抽出的第一半：构造正式 CarLife 会话、路由它的事件、持有
- * [CarLifeSessionRegistry] 租约与正式输出去向（[CarLifeOutput]）。发送端工厂
- * （`newScreenSender`）与主屏流重建闭包（`screenStreamRecovery`）仍留在控制器，属 Phase 2g-2。
+ * 2g-1 承接正式 CarLife 会话、租约与 [CarLifeOutput]；2g-2 再承接发送端槽
+ * （[sender]）、[newScreenSender] 工厂与 [installRecovery] 重建闭包。
  *
  * 边界（见 docs/ARCHITECTURE-REFACTOR.md）：
  *  - 组件不引用 `SessionController` / Activity / `service` / `ui` / `settings` / `SessionUiPort`；
  *    一切日志、时间线、当前 client、音频桥与模式重申都经 [CarLifeStreamPorts] 注入。
  *  - 租约互斥仍用 `synchronized(registry)`（与基线同一监视器），不引入新锁。
+ *  - 主屏流重建闭包原在控制器 4 处 `synchronized(this)`；迁入后一律经 [CarLifeStreamPorts.withControllerLock]
+ *    回到控制器监视器，组件内不出现裸 `synchronized(this)`。
  *  - B-18：旧 CarLife 源的迟到 `onEnded` 只记「未接入推流的旧会话结束」并释放它自己的租约，
  *    绝不停止新一轮的发送端。
  *
@@ -46,6 +48,14 @@ internal class StreamPipeline(
     /** 正式 CarLife 源本轮的输出去向；null = 发送端尚未启动，帧直接丢弃。 */
     @Volatile
     private var output: CarLifeOutput? = null
+
+    /** 当前主屏发送端（含恢复重建后的 replacement）。null = 本轮尚未建立屏幕流。 */
+    @Volatile
+    var sender: VideoSender? = null
+
+    /** 主屏流重建闭包；由 [installRecovery] 安装、`RoundRetirement` 清除。 */
+    @Volatile
+    private var recovery: (() -> ScreenRecoveryResult)? = null
 
     fun isFormalActive(): Boolean = formal?.isRunning == true
 
@@ -102,6 +112,144 @@ internal class StreamPipeline(
 
     fun clearOutputIf(sender: VideoSender) {
         if (output?.sender === sender) output = null
+    }
+
+    fun recoveryOrNull(): (() -> ScreenRecoveryResult)? = recovery
+
+    fun clearRecovery() {
+        recovery = null
+    }
+
+    /**
+     * 构造主屏发送端。尺寸/几何/fps、诊断、实验与环境采样均已由控制器算好并经 [ScreenSenderPlan] 传入；
+     * 组件只按此计划创建 [VideoSender]，恢复重建时用同一计划配合新的 [AirPlayClient.ScreenStreamInfo] 再建一次。
+     */
+    fun newScreenSender(
+        plan: ScreenSenderPlan,
+        screenInfo: AirPlayClient.ScreenStreamInfo,
+    ): VideoSender {
+        lateinit var created: VideoSender
+        created =
+            VideoSender(
+                host = plan.host,
+                dataPort = screenInfo.dataPort,
+                frameCipher = screenInfo.cipher,
+                // 用收敛后的尺寸：实验面板不得把编码器画布推出资源上限。
+                width = plan.width,
+                height = plan.height,
+                targetFps = plan.targetFps,
+                log = { line -> ports.log(line) },
+                keepAliveWithStats = plan.keepAliveWithStats,
+                externalVideoSource = plan.externalVideoSource,
+                onExternalFrameSent = plan.hooks.newExternalFrameObserver(),
+                receiverMaxFps = plan.receiverMaxFps,
+                // 车机拿走主屏（原车界面、倒车影像等）时暂停屏幕视频，归还后从新的 IDR 恢复
+                phoneOwnsScreen = plan.phoneOwnsScreen,
+                onScreenOutputSuspended = { suspended -> plan.hooks.onScreenOutputSuspended(suspended) },
+                onEnded = { plan.hooks.onEnded(created) },
+            )
+        // 实验（issue #62，PR #78 评审 P2）：只在 VideoConfig 真正写出后判定，且尺寸变化时重新判定。
+        // 观察器按 sender 各取一份，保留「最近上报尺寸」的逐 sender 语义。
+        plan.hooks.newVideoConfigObserver()?.let { observer -> created.onVideoConfigSent = observer }
+        return created
+    }
+
+    /**
+     * 安装主屏流重建闭包（回原车界面后的 requestUI）。闭包内的身份判据与原实现逐点一致：
+     * `currentClient === client`、`currentFormalSession === carLife`、`output.sender === previous`、
+     * `sender === replacement`，任一不符即 `ABORTED`。
+     *
+     * 原实现 4 处 `synchronized(this)`（`this` = SessionController 单例）改经 [CarLifeStreamPorts.withControllerLock]，
+     * 锁身份保持为控制器监视器。
+     */
+    fun installRecovery(
+        plan: ScreenSenderPlan,
+        client: AirPlayClient,
+        carLife: () -> CarLifeSession?,
+        sessionKey: ByteArray?,
+        displayUuid: String?,
+        diagnosticAttempt: String,
+        port: ScreenRecoveryPort,
+    ) {
+        recovery =
+            recover@{
+                fun failure(): ScreenRecoveryResult =
+                    if (!port.isScopeActive() || port.isClientCancelled(client) || !port.isCurrentClient(client)) {
+                        ScreenRecoveryResult.ABORTED
+                    } else {
+                        ScreenRecoveryResult.FAILED
+                    }
+                val previousSender =
+                    ports.withControllerLock {
+                        val previousOutput = output ?: return@withControllerLock null
+                        val previous = sender ?: return@withControllerLock null
+                        if (!port.isScopeActive() ||
+                            !port.isCurrentClient(client) ||
+                            previousOutput.sender !== previous ||
+                            currentFormalSession() !== carLife() ||
+                            !port.phoneOwnsScreen(client)
+                        ) {
+                            return@withControllerLock null
+                        }
+                        output = null
+                        sender = null
+                        previous
+                    } ?: return@recover ScreenRecoveryResult.ABORTED
+                ports.log("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频")
+                previousSender.stop()
+                if (!port.isScopeActive() || !port.teardownScreenStream(client)) return@recover failure()
+                if (!port.isScopeActive()) return@recover ScreenRecoveryResult.ABORTED
+                val resumed = port.runScreenStream(client, sessionKey, displayUuid) ?: return@recover failure()
+                if (!port.isScopeActive()) return@recover ScreenRecoveryResult.ABORTED
+                val replacement = newScreenSender(plan, resumed)
+                var restored = false
+                try {
+                    val published =
+                        ports.withControllerLock {
+                            if (!port.isScopeActive() || !port.isCurrentClient(client)) {
+                                false
+                            } else {
+                                sender = replacement
+                                true
+                            }
+                        }
+                    if (!published) return@recover ScreenRecoveryResult.ABORTED
+                    if (!replacement.openDataPort() ||
+                        !port.isScopeActive() ||
+                        // 屏幕流已 TEARDOWN/SETUP：单次 RECORD 车机也必须重发一次，
+                        // 否则新流没有激活（艾瑞泽 8 重进后触控/按键失效）。
+                        !port.record(client, force = true) ||
+                        !port.isScopeActive() ||
+                        !replacement.start {} ||
+                        !port.isScopeActive()
+                    ) {
+                        return@recover failure()
+                    }
+                    val confirmed =
+                        ports.withControllerLock {
+                            if (!port.isScopeActive() || !port.isCurrentClient(client) || sender !== replacement) {
+                                false
+                            } else {
+                                publishOutput(diagnosticAttempt, replacement)
+                                true
+                            }
+                        }
+                    if (!confirmed) return@recover ScreenRecoveryResult.ABORTED
+                    port.onScreenStreamRestored(client)
+                    replacement.requestKeyFrame(fromReceiver = false)
+                    restored = true
+                    ports.log("SCREEN: 主屏流已重新 SETUP/RECORD，等待新的 IDR 与触控")
+                    ScreenRecoveryResult.RESTORED
+                } finally {
+                    if (!restored) {
+                        ports.withControllerLock {
+                            if (sender === replacement) sender = null
+                            clearOutputIf(replacement)
+                        }
+                        replacement.stop()
+                    }
+                }
+            }
     }
 
     /** 正式会话的 CarLife 源：输出按当前 [output] 路由，旧轮迟到回调被隔离。 */
@@ -207,6 +355,72 @@ internal class CarLifeOutput(
     val gate = CarLifeJoinGate()
 }
 
+/** 主屏流重建结果：成功 / 因轮次或绑定失效而放弃 / 真正失败。 */
+internal enum class ScreenRecoveryResult { RESTORED, ABORTED, FAILED }
+
+/**
+ * 主屏发送端的构造计划：只含控制器已算好的值（尺寸/几何/fps/心跳/帧率上限/视频源/主屏归属），
+ * 具体数据端口与帧加密随每次 [AirPlayClient.ScreenStreamInfo] 传入。
+ */
+internal class ScreenSenderPlan(
+    val host: String,
+    val width: Int,
+    val height: Int,
+    val targetFps: Int,
+    val keepAliveWithStats: Boolean,
+    val receiverMaxFps: Int,
+    val externalVideoSource: ExternalVideoSource,
+    val phoneOwnsScreen: () -> Boolean,
+    val hooks: ScreenSenderHooks,
+)
+
+/**
+ * 发送端回调控件：诊断、S3 收尾、实验判定与环境采样都留在控制器，经此注入。
+ * 三个 `new*Observer` 按发送端实例各取一份，保留逐 sender 的 `firstFrameSent` / `lastReported` 语义。
+ */
+internal interface ScreenSenderHooks {
+    fun onScreenOutputSuspended(suspended: Boolean)
+
+    fun newExternalFrameObserver(): (bytes: Int) -> Unit
+
+    /** 实验面板的 VideoConfig 上报观察器；未启用实验面板时返回 null（不挂回调）。 */
+    fun newVideoConfigObserver(): ((width: Int, height: Int) -> Unit)?
+
+    /** 推流自然结束；[sender] 是真正结束的发送端实例（陈旧判定依赖它）。 */
+    fun onEnded(sender: VideoSender)
+}
+
+/**
+ * 主屏流重建所需的客户端叶子与轮次判据。
+ *
+ * 全部由控制器按本轮 attempt 装配：`scope.isActive`、`currentClient === client`、`client.cancelled`、
+ * `client.modes.phoneOwnsScreen`，以及 teardown/run/record/restored 四个屏幕流叶子。
+ */
+internal interface ScreenRecoveryPort {
+    fun isScopeActive(): Boolean
+
+    fun isCurrentClient(client: AirPlayClient): Boolean
+
+    fun isClientCancelled(client: AirPlayClient): Boolean
+
+    fun phoneOwnsScreen(client: AirPlayClient): Boolean
+
+    fun teardownScreenStream(client: AirPlayClient): Boolean
+
+    fun runScreenStream(
+        client: AirPlayClient,
+        sessionKey: ByteArray?,
+        displayUuid: String?,
+    ): AirPlayClient.ScreenStreamInfo?
+
+    fun record(
+        client: AirPlayClient,
+        force: Boolean,
+    ): Boolean
+
+    fun onScreenStreamRestored(client: AirPlayClient)
+}
+
 /**
  * [StreamPipeline] 依赖的窄端口：控制器提供日志、诊断时间线、当前 client、音频桥与模式重申。
  *
@@ -244,4 +458,10 @@ internal interface CarLifeStreamPorts {
     )
 
     fun nativeBridge(): CarLifeAudioBridge?
+
+    /**
+     * 回到控制器监视器（生产绑定 `synchronized(this@SessionController)`）。
+     * 主屏流重建闭包原 4 处 `synchronized(this)` 依赖这把锁；迁入组件后必须显式注入，不得改用组件自身监视器。
+     */
+    fun <T> withControllerLock(block: () -> T): T
 }
