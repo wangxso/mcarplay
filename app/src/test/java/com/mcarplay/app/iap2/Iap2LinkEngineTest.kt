@@ -223,6 +223,33 @@ class Iap2LinkEngineTest {
         assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
     }
 
+    @Test
+    fun gs3ResponderCombinesMarkerFirstWithTheWideInitialWindow() {
+        val phone = Iap2LinkEngine(maxOutgoing = 0x7F, waitForPeerMarker = true)
+        phone.startBluetoothResponder()
+        assertTrue(phone.takeOutput().isEmpty())
+
+        phone.feed(Iap2LinkEngine.MARKER, 1)
+        assertArrayEquals(Iap2LinkEngine.MARKER, phone.takeOutput())
+        assertEquals(Iap2LinkEngine.State.NEGOTIATING, phone.state)
+
+        phone.feed(synFrame(peerSequence = 77).drop(Iap2LinkEngine.MARKER.size).toByteArray(), 2)
+        val echo = phone.takeOutput()
+        val synAck = parseFrames(echo).single()
+        assertEquals(0xC0, synAck.control)
+        assertEquals(77, synAck.ack)
+        assertEquals(Iap2LinkEngine.State.NEGOTIATING, phone.state)
+
+        phone.feed(ackFrame(ack = synAck.sequence + 1), 3)
+        assertEquals(Iap2LinkEngine.State.NEGOTIATING, phone.state)
+
+        phone.feed(ackFrame(ack = synAck.sequence), 4)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+        assertEquals(4, phone.peerSynchronization?.maxOutgoing)
+        val advertisedMaxOutgoing = echo[Iap2LinkEngine.HEADER_BYTES + 1].toInt() and 0xFF
+        assertEquals(0x7F, advertisedMaxOutgoing)
+    }
+
     /**
      * SYN-ACK 必须使用**新的**发送序号（对端按 `SYN.seq + 1` 校验）。
      *
