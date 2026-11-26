@@ -182,7 +182,7 @@ class AirPlayClient(
         private set
 
     /**
-     * 配对期间**任意阶段**出现 403（pair-setup / pair-verify / 认证段）。
+     * 配对期间出现 403，或已保存身份不符且重新配对失败。两种情况均禁止退役 BT 或降级明文。
      *
      * 真机抓包定谳（2026-10-21 奥迪 MMI 3315_5GHz sysdiagnose）：真 iPhone 首次
      * 连接在 pair-verify 通过后被车机 403 拒（MFi 认证段），车机 **18~20s 自行重发
@@ -451,7 +451,8 @@ class AirPlayClient(
                 // pair-verify 之后双方立即启用加密（接收端在 M4 应答后开启）
                 cipher = ControlCipher(keys.phoneReadKey, keys.phoneWriteKey)
                 log("AIRPLAY: 控制通道加密已启用")
-                milestone(ConnectionMilestone.PAIR_VERIFY, "savedTrust=${remembered != null}")
+                val reusedTrust = remembered != null && result.receiver === remembered
+                milestone(ConnectionMilestone.PAIR_VERIFY, "savedTrust=$reusedTrust")
                 return keys
             } catch (error: IOException) {
                 if (cancelled) {
@@ -463,6 +464,11 @@ class AirPlayClient(
                 // 见 pairingForbidden 注释：标记后主控不再断 BT / 不降级明文
                 if (message.contains("403")) pairingForbidden = true
                 log("AIRPLAY: 配对第 $attempt 次尝试失败 - $message")
+                if (error is SavedPairingRecoveryException) {
+                    pairingForbidden = true
+                    close()
+                    return null
+                }
                 if (error is PairingRejectedException &&
                     pairingRejectionAction(error, trustInvalidated) == PairingRejectionAction.STOP
                 ) {
@@ -1908,6 +1914,7 @@ class AirPlayClient(
             iapLink ?: synchronized(this) {
                 iapLink ?: run {
                     val epoch = connectionEpoch
+                    val policy = receiverCompatibility()
                     VirtualIap2Link(
                         log = { line -> log(line) },
                         sendEventIap = { data -> sendIapForGeneration(data, epoch) },
@@ -1923,8 +1930,9 @@ class AirPlayClient(
                             }
                         },
                         alive = { isSessionAlive(epoch) },
+                        requestWifiConfigAfterMfi = policy.requestWifiConfigAfterTunnelMfi,
                     ).also { created ->
-                        created.pinnedMfiLength = receiverCompatibility().pinnedMfiChallengeLength
+                        created.pinnedMfiLength = policy.pinnedMfiChallengeLength
                         created.onMediaKey = { keyCode ->
                             if (iapLink === created && isSessionAlive(epoch)) onMediaKey?.invoke(keyCode)
                         }
@@ -3370,6 +3378,8 @@ class AirPlayClient(
                 failAllPending("控制通道读线程结束", expectedSocket = client) &&
                 !sessionStopping
             ) {
+                val link = synchronized(this) { iapLink?.takeIf { socket === client && !sessionStopping } }
+                link?.onControlTransportLost()
                 onControlChannelClosed?.invoke()
             }
         }

@@ -219,7 +219,7 @@ class PairVerifyClient(
         val receiverId = inner[Tlv8.TYPE_IDENTIFIER] ?: throw IOException("pair-verify M2 信封缺少 identifier")
         val receiverSignature = inner[Tlv8.TYPE_SIGNATURE] ?: throw IOException("pair-verify M2 信封缺少 signature")
         if (expectedReceiverId != null && receiverId.toString(Charsets.UTF_8) != expectedReceiverId) {
-            throw IOException("pair-verify: 接收端身份与已保存配对不符")
+            throw PairVerifyPeerMismatchException("pair-verify: 接收端身份与已保存配对不符")
         }
 
         // 用 mDNS/0x4301 提供的接收端静态公钥验证（有则验，无则跳过）
@@ -231,7 +231,7 @@ class PairVerifyClient(
                     receiverSignature,
                 )
             log("pair-verify: 接收端签名校验（对照 pk）=$valid")
-            if (!valid) throw IOException("pair-verify: 接收端签名校验失败")
+            if (!valid) throw PairVerifyPeerMismatchException("pair-verify: 接收端签名校验失败")
         }
 
         // M3: 我们的长期签名

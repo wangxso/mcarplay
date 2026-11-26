@@ -101,6 +101,7 @@ object MfiLengthMemory {
         identityText: String,
         length: Int,
     ) {
+        if (length <= 0) return
         update(context, identityText) { entry ->
             // 成功即证伪该档位的 silent/rejected 旧结论（固件升级后行为可能变）
             Entry(succeeded = length, silent = entry.silent - length, rejected = entry.rejected - length)

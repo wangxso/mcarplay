@@ -37,7 +37,9 @@ object Iap2MessageIds {
     const val DEVICE_INFORMATION_UPDATE = 0x4E09 // 手机 → 配件：设备名
     const val DEVICE_LANGUAGE_UPDATE = 0x4E0A // 手机 → 配件：语言
     const val DEVICE_TIME_UPDATE = 0x4E0B // 手机 → 配件：时间（u64 epoch + u16 tz + u8 dst）
-    const val DEVICE_UUID_UPDATE = 0x4E0C // 手机 → 配件：UUID
+
+    // 蓝牙发送设备 UUID。虚拟隧道使用同一 ID 发送随机 UUID，含义待确认。
+    const val DEVICE_UUID_UPDATE = 0x4E0C
 
     // ---- WiFi 配置交换 ----
     const val REQUEST_ACCESSORY_WIFI_CONFIGURATION = 0x5702 // 手机 → 配件
@@ -54,7 +56,7 @@ object Iap2MessageIds {
     const val MFI_CERTIFICATE = 0xAA01 // 配件 → 手机（参数0=证书）
     const val MFI_REQUEST_CHALLENGE = 0xAA02 // 手机 → 配件（参数0=挑战 16B）
     const val MFI_RESPONSE = 0xAA03 // 配件 → 手机（参数0=签名）
-    const val MFI_AUTHENTICATION_FAILED = 0xAA04 // 手机 → 配件
+    const val MFI_AUTHENTICATION_FAILED = 0xAA04 // 本仓库仅处理配件 → 手机（车机拒绝挑战）
     const val MFI_AUTHENTICATION_SUCCEEDED = 0xAA05 // 手机 → 配件（自报结果）
 
     // ---- 配件 bring-up 期间发来的订阅请求（接收并忽略即可）----
@@ -85,6 +87,16 @@ object Iap2MessageIds {
             DEVICE_HID_REPORT -> "DeviceHIDReport"
             ACCESSORY_HID_REPORT -> "AccessoryHIDReport"
             STOP_HID -> "StopHID"
+            DEVICE_INFORMATION_UPDATE -> "DeviceInformationUpdate"
+            DEVICE_LANGUAGE_UPDATE -> "DeviceLanguageUpdate"
+            DEVICE_TIME_UPDATE -> "DeviceTimeUpdate"
+            DEVICE_UUID_UPDATE -> "DeviceUuidUpdate"
+            MFI_REQUEST_CERTIFICATE -> "MfiRequestCertificate"
+            MFI_CERTIFICATE -> "MfiCertificate"
+            MFI_REQUEST_CHALLENGE -> "MfiRequestChallenge"
+            MFI_RESPONSE -> "MfiResponse"
+            MFI_AUTHENTICATION_FAILED -> "MfiAuthenticationFailed"
+            MFI_AUTHENTICATION_SUCCEEDED -> "MfiAuthenticationSucceeded"
             EA_OPEN_SESSION -> "StartEASession"
             EA_CLOSE_SESSION -> "StopEASession"
             EA_SESSION_STATUS -> "EASessionStatus"

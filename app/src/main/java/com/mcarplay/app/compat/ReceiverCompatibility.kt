@@ -95,6 +95,8 @@ object ReceiverCompatibility {
          * 会话标识把屏幕流绑定到显示会话。仅对手动 `MERCEDES_MB_E` 开启。
          */
         val absoluteSessionUri: Boolean = false,
+        /** 手动 MB_E 预设在隧道认证后补一条配件 Wi-Fi 配置请求。 */
+        val requestWifiConfigAfterTunnelMfi: Boolean = false,
         /**
          * 会话 SETUP 是否提议 `mainBuffered`（AirPlay type 103 缓冲音频）。
          *
@@ -220,6 +222,7 @@ object ReceiverCompatibility {
                         preferVehicleResolution = true,
                         pinnedMfiChallengeLength = 32,
                         absoluteSessionUri = true,
+                        requestWifiConfigAfterTunnelMfi = true,
                         offerMainBufferedAudio = false,
                         offerHevc = false,
                         repeatScreenModesDeclaration = true,

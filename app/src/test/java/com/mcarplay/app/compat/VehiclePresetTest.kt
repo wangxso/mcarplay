@@ -72,6 +72,7 @@ class VehiclePresetTest {
         assertEquals(32, unknownPolicy.pinnedMfiChallengeLength)
         assertTrue("manual.mercedes-mb-e.mfi-32" in unknownPolicy.rules)
         assertTrue("MB_E-P 需要绝对会话 URI", unknownPolicy.absoluteSessionUri)
+        assertTrue(unknownPolicy.requestWifiConfigAfterTunnelMfi)
         assertFalse(
             "MB_E-P 不应提议未实现的 mainBuffered",
             unknownPolicy.offerMainBufferedAudio,
@@ -108,6 +109,7 @@ class VehiclePresetTest {
         assertFalse(resolve(mbep, VehiclePreset.AUTO).preferVehicleResolution)
         assertFalse(resolve(unknown, VehiclePreset.AUTO).preferVehicleResolution)
         assertFalse(resolve(mbep, VehiclePreset.AUTO).absoluteSessionUri)
+        assertFalse(resolve(mbep, VehiclePreset.AUTO).requestWifiConfigAfterTunnelMfi)
         assertTrue(resolve(mbep, VehiclePreset.AUTO).offerMainBufferedAudio)
         assertTrue(resolve(mbep, VehiclePreset.AUTO).offerHevc)
         assertFalse(resolve(mbep, VehiclePreset.AUTO).repeatScreenModesDeclaration)

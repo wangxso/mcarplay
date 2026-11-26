@@ -5,6 +5,7 @@ import com.mcarplay.app.iap2.Iap2LinkEngine
 import com.mcarplay.app.iap2.MfiLengthMemory
 import com.mcarplay.app.iap2.ReceiverProfile
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -41,7 +42,9 @@ private fun splitLinkFrames(chunk: ByteArray): List<ByteArray> {
 }
 
 class VirtualIap2LinkTest {
-    private class Harness {
+    private class Harness(
+        requestWifiConfigAfterMfi: Boolean = false,
+    ) {
         val controlSent = ArrayList<ByteArray>()
         val allControl = ArrayList<ByteArray>()
         val eventSent = ArrayList<ByteArray>()
@@ -61,6 +64,7 @@ class VirtualIap2LinkTest {
                 // 关闭节拍线程：测试内确定性驱动（无重传干扰）
                 alive = { false },
                 nowMillis = { clock },
+                requestWifiConfigAfterMfi = requestWifiConfigAfterMfi,
             )
         var clock = 0L
         var now = 1L
@@ -96,6 +100,15 @@ class VirtualIap2LinkTest {
                 exchange()
                 if (car.state == Iap2LinkEngine.State.NORMAL) return
             }
+        }
+
+        fun startMib3Mfi(receiverName: String) {
+            link.setGeneration(ReceiverProfile.LinkGeneration.CLASSIC_MIB3)
+            link.armMib3()
+            car.start(0)
+            exchangeUntilNormal()
+            carSends(0x1D01, Iap2Csm.string(0, receiverName))
+            carSends(0xAA01, Iap2Csm.param(0, ByteArray(642)))
         }
 
         /** 车机发一条 CSM，返回手机随后经控制通道发出的 CSM 消息号序列。 */
@@ -257,13 +270,11 @@ class VirtualIap2LinkTest {
         assertEquals(20, challengeBody.value.size)
         assertEquals(0, authenticated)
 
-        // 0xAA03（签名应答）→ 0xAA05 + 突发（0x4E0C/0x5702/0xA100/0x4E0A/0x4E0B/0x4E09/0xFFFA/0xFFF0）
+        // 0xAA03（签名应答）→ 0xAA05 + MIB3 问候。
         assertEquals(
-            listOf(0xAA05, 0x4E0C, 0x5702, 0xA100, 0x4E0A, 0x4E0B, 0x4E09, 0xFFFA, 0xFFF0),
+            listOf(0xAA05, 0x4E0C, 0xA100, 0x4E0A, 0x4E0B, 0x4E09, 0xFFFA, 0xFFF0),
             h.carSends(0xAA03, Iap2Csm.param(0, ByteArray(96))),
         )
-        // HyperCar 0.1.0.588 的认证后问候里，0x5702 是空体；0x5703 只作链路 ACK。
-        assertEquals(6, h.lastRawFrameOf(0x5702)!!.size)
         assertEquals(1, authenticated)
 
         // 订阅应答：0x5000 → 0x5001 空态；0x4157 → 0x4158；0x4154 → 0x4155；0x4170 → 0x4171
@@ -312,6 +323,59 @@ class VirtualIap2LinkTest {
         h.carSends(0xAA01, Iap2Csm.param(0, ByteArray(642)))
         // 记忆命中：32B 直接排第一，不再从 20B 试起
         assertEquals(listOf(32), h.challengeLengths())
+    }
+
+    @Test
+    fun manualMercedesWifiRequestIsSentOnlyAfterAuthentication() {
+        val h = Harness(requestWifiConfigAfterMfi = true)
+        h.startMib3Mfi("MbEWifiConfig")
+        assertNull(h.lastRawFrameOf(0x5702))
+        assertTrue(0x5702 in h.carSends(0xAA03, Iap2Csm.param(0, ByteArray(96))))
+        assertEquals(6, h.lastRawFrameOf(0x5702)!!.size)
+    }
+
+    @Test
+    fun duplicateMfiResponseCannotOverwriteTheSucceededLengthOrRepeatTheBurst() {
+        val identity = "DuplicateTunnelMfi"
+        val h = Harness()
+        h.startMib3Mfi(identity)
+        val response = Iap2Csm.param(0, ByteArray(96))
+        assertTrue(0xAA05 in h.carSends(0xAA03, response))
+        assertTrue(h.carSends(0xAA03, response).isEmpty())
+        assertEquals(20, MfiLengthMemory.load(null, "$identity tunnel").succeeded)
+    }
+
+    @Test
+    fun tunnelMemoryRetriesAnAlternateAfterConsecutiveTransportLosses() {
+        val identity = "DroppedTunnelMfi"
+        val key = "$identity tunnel"
+        MfiLengthMemory.recordSuccess(null, key, 20)
+        repeat(2) { index ->
+            val h = Harness()
+            h.startMib3Mfi(identity)
+            assertEquals(listOf(20), h.challengeLengths())
+            h.link.onControlTransportLost()
+            h.link.onControlTransportLost()
+            assertEquals(index + 1, MfiLengthMemory.load(null, key).successDrops)
+            assertTrue(MfiLengthMemory.load(null, key).rejected.isEmpty())
+        }
+        val following = Harness()
+        following.startMib3Mfi(identity)
+        assertEquals(listOf(32), following.challengeLengths())
+    }
+
+    @Test
+    fun explicitMfiRejectionInvalidatesAPreviouslySucceededLength() {
+        val identity = "RejectedTunnelMfi"
+        val key = "$identity tunnel"
+        MfiLengthMemory.recordSuccess(null, key, 20)
+        val h = Harness()
+        h.startMib3Mfi(identity)
+        h.carSends(0xAA04)
+        val memory = MfiLengthMemory.load(null, key)
+        assertNull(memory.succeeded)
+        assertTrue(20 in memory.rejected)
+        assertEquals(listOf(20, 32), h.challengeLengths())
     }
 
     @Test
