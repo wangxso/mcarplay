@@ -83,8 +83,12 @@ class ModeArbiterTest {
         val borrowed = ModeArbiter()
         borrowed.onChangeModes(mapOf("resources" to listOf(resource(1, 3, 500, 100))))
         assertFalse(borrowed.phoneOwnsScreen)
+        assertTrue(borrowed.screenNeedsRebuild)
         borrowed.onChangeModes(mapOf("resources" to listOf(resource(1, 4, 500, 100))))
         assertTrue(borrowed.phoneOwnsScreen)
+        assertTrue(borrowed.screenNeedsRebuild)
+        borrowed.onScreenStreamRestored()
+        assertFalse(borrowed.screenNeedsRebuild)
     }
 
     @Test

@@ -58,21 +58,45 @@ class VehiclePresetTest {
 
     /**
      * issue #62（`MB_E-P-4 / 480.7.4`，车主称 2025 GLC）实验选项：保持 `displays[0]` 几何，
-     * 只打开 CarWith 功能协商里的 `DISABLE_RESOLUTION_OPTION=1`，且**只在手动选择时**生效。
+     * 打开 CarWith 功能协商里的 `DISABLE_RESOLUTION_OPTION=1`，并将隧道 MFi 固定为 32B；
+     * 且**只在手动选择时**生效。
      */
     @Test
-    fun mercedesMbEPresetOnlyTogglesVehicleResolutionRequest() {
+    fun mercedesMbEPresetTogglesVehicleResolutionAndTunnelMfi() {
         val unknownPolicy = resolve(unknown, VehiclePreset.MERCEDES_MB_E)
         assertFalse(unknownPolicy.usePanelVideoGeometry)
         assertTrue(unknownPolicy.preferVehicleResolution)
         assertTrue("manual.mercedes-mb-e.vehicle-resolution" in unknownPolicy.rules)
         assertFalse(unknownPolicy.releaseBluetoothAfterSetup)
-        assertFalse(unknownPolicy.skipIapTunnel)
-        assertNull(unknownPolicy.pinnedMfiChallengeLength)
+        assertTrue("MB_E-P 对 type-130 不回包并 reset 控制通道", unknownPolicy.skipIapTunnel)
+        assertEquals(32, unknownPolicy.pinnedMfiChallengeLength)
+        assertTrue("manual.mercedes-mb-e.mfi-32" in unknownPolicy.rules)
+        assertTrue("MB_E-P 需要绝对会话 URI", unknownPolicy.absoluteSessionUri)
+        assertFalse(
+            "MB_E-P 不应提议未实现的 mainBuffered",
+            unknownPolicy.offerMainBufferedAudio,
+        )
+        assertFalse("MB_E-P 固定 H.264，不提议 HEVC", unknownPolicy.offerHevc)
+        assertTrue("MB_E-P 对齐 HyperCar 的二次资源声明", unknownPolicy.repeatScreenModesDeclaration)
+        assertTrue("MB_E-P 对齐 HyperCar，跳过屏幕 HID 武装", unknownPolicy.skipScreenHidArming)
+        assertTrue("manual.mercedes-mb-e.absolute-session-uri" in unknownPolicy.rules)
+        assertTrue("manual.mercedes-mb-e.no-iap-tunnel" in unknownPolicy.rules)
+        assertTrue("manual.mercedes-mb-e.no-main-buffered" in unknownPolicy.rules)
+        assertTrue("manual.mercedes-mb-e.no-hevc" in unknownPolicy.rules)
+        assertTrue("manual.mercedes-mb-e.repeat-modes" in unknownPolicy.rules)
+        assertTrue("manual.mercedes-mb-e.no-hid-arming" in unknownPolicy.rules)
         // 已知是奔驰（型号/固件不同）也放行——手动预设正是给自动判定认不出的车机用的。
         val mbep = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4", srcvers = "480.7.4")
         assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).preferVehicleResolution)
         assertFalse(resolve(mbep, VehiclePreset.MERCEDES_MB_E).usePanelVideoGeometry)
+        assertEquals(32, resolve(mbep, VehiclePreset.MERCEDES_MB_E).pinnedMfiChallengeLength)
+        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).absoluteSessionUri)
+        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).skipIapTunnel)
+        assertFalse(resolve(mbep, VehiclePreset.MERCEDES_MB_E).offerMainBufferedAudio)
+        assertFalse(resolve(mbep, VehiclePreset.MERCEDES_MB_E).offerHevc)
+        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).repeatScreenModesDeclaration)
+        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).skipScreenHidArming)
+        assertTrue(resolve(mbep, VehiclePreset.MERCEDES_MB_E).rebuildScreenOnResourceReturn)
     }
 
     @Test
@@ -83,16 +107,38 @@ class VehiclePresetTest {
         assertFalse(resolve(unknown, VehiclePreset.AUTO).usePanelVideoGeometry)
         assertFalse(resolve(mbep, VehiclePreset.AUTO).preferVehicleResolution)
         assertFalse(resolve(unknown, VehiclePreset.AUTO).preferVehicleResolution)
+        assertFalse(resolve(mbep, VehiclePreset.AUTO).absoluteSessionUri)
+        assertTrue(resolve(mbep, VehiclePreset.AUTO).offerMainBufferedAudio)
+        assertTrue(resolve(mbep, VehiclePreset.AUTO).offerHevc)
+        assertFalse(resolve(mbep, VehiclePreset.AUTO).repeatScreenModesDeclaration)
+        assertFalse(resolve(mbep, VehiclePreset.AUTO).skipScreenHidArming)
+        assertFalse(resolve(mbep, VehiclePreset.AUTO).rebuildScreenOnResourceReturn)
         // 已知是别家车机：守卫拒绝，只记录 blocked。
         listOf(chery, ReceiverProfile.Signals(manufacturer = "Volkswagen", model = "VW4131")).forEach { other ->
             val policy = resolve(other, VehiclePreset.MERCEDES_MB_E)
             assertFalse("${other.manufacturer} 不应套用奔驰实验开关", policy.usePanelVideoGeometry)
             assertFalse("${other.manufacturer} 不应套用奔驰尺寸协商", policy.preferVehicleResolution)
+            assertFalse("${other.manufacturer} 不应套用 MBUX 绝对 URI", policy.absoluteSessionUri)
+            assertFalse(
+                "${other.manufacturer} 不应套用 MBUX type-130 规则",
+                "manual.mercedes-mb-e.no-iap-tunnel" in policy.rules,
+            )
+            assertTrue("${other.manufacturer} 不应撤回 mainBuffered", policy.offerMainBufferedAudio)
+            assertTrue("${other.manufacturer} 不应撤回 HEVC", policy.offerHevc)
+            assertFalse("${other.manufacturer} 不应重发资源声明", policy.repeatScreenModesDeclaration)
+            assertFalse("${other.manufacturer} 不应跳过 HID 武装", policy.skipScreenHidArming)
+            assertFalse("${other.manufacturer} 不应套用 MBUX 主屏重建", policy.rebuildScreenOnResourceReturn)
+            assertFalse("${other.manufacturer} 不应套用奔驰 MFi 固定档", "manual.mercedes-mb-e.mfi-32" in policy.rules)
             assertTrue("manual.mercedes-mb-e-blocked" in policy.rules)
         }
         // 通用预设关闭实验开关。
         assertFalse(resolve(unknown, VehiclePreset.GENERIC).usePanelVideoGeometry)
         assertFalse(resolve(unknown, VehiclePreset.GENERIC).preferVehicleResolution)
+        assertFalse(resolve(unknown, VehiclePreset.GENERIC).absoluteSessionUri)
+        assertTrue(resolve(unknown, VehiclePreset.GENERIC).offerMainBufferedAudio)
+        assertTrue(resolve(unknown, VehiclePreset.GENERIC).offerHevc)
+        assertFalse(resolve(unknown, VehiclePreset.GENERIC).repeatScreenModesDeclaration)
+        assertFalse(resolve(unknown, VehiclePreset.GENERIC).skipScreenHidArming)
     }
 
     @Test

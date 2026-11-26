@@ -2,6 +2,7 @@ package com.mcarplay.app.airplay
 
 import com.mcarplay.app.iap2.Iap2SenderSession
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -66,6 +67,60 @@ class SessionSetupBodyTest {
         assertEquals(port.toLong(), root["timingPort"])
         assertTrue((root["features"] as List<*>).contains("viewAreas"))
         assertEquals(true, root["keepAliveLowPower"])
+    }
+
+    @Test
+    fun mainBufferedOfferCanBeWithdrawnForReceiversWithoutBufferedAudio() {
+        val defaultFeatures =
+            BinaryPlist.parse(
+                client().buildSessionSetupBody("10:C1:97:1A:C7:44", 35449),
+            ) as Map<*, *>
+        assertTrue((defaultFeatures["features"] as List<*>).contains("mainBuffered"))
+
+        val withoutBuffered =
+            BinaryPlist.parse(
+                client().buildSessionSetupBody(
+                    "10:C1:97:1A:C7:44",
+                    35449,
+                    includeMainBuffered = false,
+                ),
+            ) as Map<*, *>
+        val features = withoutBuffered["features"] as List<*>
+        assertFalse(features.contains("mainBuffered"))
+        assertTrue("其余能力不得被误删", features.contains("viewAreas"))
+        assertTrue("默认仍保留 HEVC；MB_E 手动预设单独撤回", features.contains("hevc"))
+    }
+
+    @Test
+    fun hevcOfferCanBeWithdrawnForH264OnlyReceivers() {
+        val withoutHevc =
+            BinaryPlist.parse(
+                client().buildSessionSetupBody(
+                    "10:C1:97:1A:C7:44",
+                    35449,
+                    includeHevc = false,
+                ),
+            ) as Map<*, *>
+        val features = withoutHevc["features"] as List<*>
+        assertFalse(features.contains("hevc"))
+        assertTrue("H.264 能力必须保留", features.contains("h.264Level5.1"))
+        assertTrue("其它通用能力不得被误删", features.contains("viewAreas"))
+        assertTrue("默认仍提议 mainBuffered", features.contains("mainBuffered"))
+
+        val h264OnlyWithoutBuffered =
+            BinaryPlist.parse(
+                client().buildSessionSetupBody(
+                    "10:C1:97:1A:C7:44",
+                    35449,
+                    includeMainBuffered = false,
+                    includeHevc = false,
+                ),
+            ) as Map<*, *>
+        val h264OnlyFeatures = h264OnlyWithoutBuffered["features"] as List<*>
+        assertFalse(h264OnlyFeatures.contains("hevc"))
+        assertFalse(h264OnlyFeatures.contains("mainBuffered"))
+        assertTrue(h264OnlyFeatures.contains("h.264Level5.1"))
+        assertTrue(h264OnlyFeatures.contains("viewAreas"))
     }
 
     /**

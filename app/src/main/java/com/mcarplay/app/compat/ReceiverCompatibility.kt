@@ -37,7 +37,8 @@ object ReceiverCompatibility {
         val reportWifiMacInSetup: Boolean = false,
         /**
          * 不 SETUP type-130 iAP 隧道。艾瑞泽 8 对它报 `Unsupported stream type: 130`，真 iPhone 从不请求，
-         * 隧道在该车机上本就不可用（2026-11-02 车机日志）。去掉后断开后约 20 s 的原厂崩溃仍在，二者无关。
+         * 隧道在该车机上本就不可用（2026-11-02 车机日志）。MBUX 对该 SETUP 不回包并在约 1.4 s 后
+         * reset 控制通道（2026-11-20 issue #62 日志），HyperCar 成功路径也不请求 type-130。
          */
         val skipIapTunnel: Boolean = false,
         /**
@@ -86,6 +87,43 @@ object ReceiverCompatibility {
          * 其它接收端保持关闭，避免一次改动同时影响所有车型。
          */
         val preferVehicleResolution: Boolean = false,
+        /**
+         * SETUP `/setup`、屏幕 SETUP `/`、RECORD `/`、TEARDOWN `/` 共用一个绝对会话 URI
+         * （`rtsp://<host>/<sessionId>`），而不是相对路径。
+         *
+         * 同一份 HyperCar 成功日志的每个请求都是绝对 URI；MBUX 的 RTSP 服务可能按 URI 中的
+         * 会话标识把屏幕流绑定到显示会话。仅对手动 `MERCEDES_MB_E` 开启。
+         */
+        val absoluteSessionUri: Boolean = false,
+        /**
+         * 会话 SETUP 是否提议 `mainBuffered`（AirPlay type 103 缓冲音频）。
+         *
+         * 本端只实现 type 100/101 的 UDP 音频；提议未实现的能力会让接收端启用后
+         * 等不到对应通道。HyperCar 0.1.0.588 在同车机成功轮明确记录
+         * `mainBuffered_proposed=false`，其 SETUP 报文也比 mcarplay 少这一项。
+         * 仅手动 `MERCEDES_MB_E` 关闭，其它接收端保持原能力集。
+         */
+        val offerMainBufferedAudio: Boolean = true,
+        /**
+         * 会话 SETUP 是否提议 `hevc`。本端视频编码器始终输出 H.264；对只按能力集选解码器的
+         * 接收端，提议 HEVC 会让车机等待一条永远不会来的 HEVC 流。HyperCar 0.1.0.588 在
+         * `MB_E-P-4` 成功轮提议了 HEVC，但用户要求本车型固定走 H.264，故仅手动
+         * `MERCEDES_MB_E` 关闭；其它接收端保持既有能力集。
+         */
+        val offerHevc: Boolean = true,
+        /**
+         * 屏幕 SETUP 前再发一次 `modesChanged`。HyperCar 0.1.0.588 在 `MB_E-P-4` 成功轮的
+         * 顺序是 RECORD → 首次资源声明 → 第二次资源声明 → 屏幕 SETUP；第二次声明与其屏幕
+         * 资源生命周期绑定。仅手动 `MERCEDES_MB_E` 开启，其它接收端保持已验证的一次声明。
+         */
+        val repeatScreenModesDeclaration: Boolean = false,
+        /**
+         * 屏幕 SETUP 前不发送 AirPlay `hidSetInputMode`。HyperCar 0.1.0.588 在 `MB_E-P-4`
+         * 成功轮没有发这些命令，首帧后车机仍正常发送 `hidSendReport` 并完成触控。仅手动
+         * `MERCEDES_MB_E` 跳过；其它接收端（奥迪等）继续靠该命令武装触摸。
+         */
+        val skipScreenHidArming: Boolean = false,
+        val rebuildScreenOnResourceReturn: Boolean = false,
     )
 
     data class PairingFallback(
@@ -136,6 +174,10 @@ object ReceiverCompatibility {
                     reconnectOnStreamingInvite = false,
                     usePanelVideoGeometry = false,
                     preferVehicleResolution = false,
+                    offerHevc = true,
+                    repeatScreenModesDeclaration = false,
+                    skipScreenHidArming = false,
+                    rebuildScreenOnResourceReturn = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -166,17 +208,34 @@ object ReceiverCompatibility {
                     linkGeneration = ReceiverProfile.LinkGeneration.CLASSIC_MIB3,
                     rules = policy.rules + "manual.classic-mib3",
                 )
-            // 奔驰 MB_E-P / 2025 GLC（issue #62）：先验证「CarWith 是否按车机尺寸出流」。
-            // HyperCar 日志已给出同车机的 A/B：请求 1624x1278 时，未声明 DISABLE_RESOLUTION_OPTION
-            // 会被 CarWith 回成 1280x720，声明后才返回 1624x1278。因此当前预设不再使用 1728 面板，
-            // 保持 displays[0] 的 1624x1278，并只打开功能协商这一条改动。
+            // 奔驰 MB_E-P / 2025 GLC（issue #62）：CarWith 尺寸协商已完成；当前实车日志显示 20B
+            // 隧道挑战被静默 6s，32B 才在约 0.44s 内应答。HyperCar 对同一车机直接发 32B，
+            // RECORD 后约 0.5s 完成认证并随后收到 StartHID。固定 32B，避免错过 MBUX 激活窗口。
+            // 仍保持 displays[0] 的 1624x1278 与 DISABLE_RESOLUTION_OPTION=1。
             // 已知是别家车机时拒绝套用，避免把实验开关带到其它接收端上。
             VehiclePreset.MERCEDES_MB_E ->
                 if (manualMercedesAllowed(signals)) {
                     policy.copy(
                         usePanelVideoGeometry = false,
                         preferVehicleResolution = true,
-                        rules = policy.rules + "manual.mercedes-mb-e.vehicle-resolution",
+                        pinnedMfiChallengeLength = 32,
+                        absoluteSessionUri = true,
+                        offerMainBufferedAudio = false,
+                        offerHevc = false,
+                        repeatScreenModesDeclaration = true,
+                        skipScreenHidArming = true,
+                        rebuildScreenOnResourceReturn = true,
+                        skipIapTunnel = true,
+                        rules =
+                            policy.rules + "manual.mercedes-mb-e.vehicle-resolution" +
+                                "manual.mercedes-mb-e.mfi-32" +
+                                "manual.mercedes-mb-e.absolute-session-uri" +
+                                "manual.mercedes-mb-e.no-iap-tunnel" +
+                                "manual.mercedes-mb-e.no-main-buffered" +
+                                "manual.mercedes-mb-e.no-hevc" +
+                                "manual.mercedes-mb-e.repeat-modes" +
+                                "manual.mercedes-mb-e.no-hid-arming" +
+                                "manual.mercedes-mb-e.screen-rebuild",
                     )
                 } else {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")

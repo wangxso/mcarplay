@@ -3,6 +3,86 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.7-test.7] - 2026-11-20
+
+> Experimental prerelease on top of `v0.1.7-test.6`: a Mercedes MB_E-P / GLC compatibility trial that aligns the AirPlay screen-resource sequence with HyperCar and fixes the request to H.264-only. The manual `MERCEDES_MB_E` preset now sends two resource declarations before screen SETUP and skips the optional `hidSetInputMode` arming. It also stops offering HEVC, matching the app's existing H.264 encoder. This build has not been tried on a vehicle, issue #62 remains open, and it does not prove that the black screen is fixed.
+
+### English
+- **HyperCar screen-resource sequence (issue #62):** after the early RECORD, the manual `MERCEDES_MB_E` preset now sends `modesChanged` twice before the main-screen SETUP. HyperCar's successful `MB_E-P-4 / 480.7.4` log used the order RECORD → first resource declaration → second resource declaration → screen SETUP, then connected the returned `dataPort` immediately. mcarplay previously sent one declaration and four `hidSetInputMode` commands before the screen SETUP.
+- **No screen HID arming on MB_E:** the same HyperCar success did not send AirPlay `hidSetInputMode`; the head unit still sent `hidSendReport` after the first frame. The MB_E preset now skips those four commands, while Audi and other receivers keep the existing touch-arming path.
+- **H.264-only session capability:** the MB_E session SETUP no longer proposes `hevc`; with the car's observed feature intersection, the enabled list should become `[h.264Level5.1, viewAreas]`. mcarplay already encodes H.264 only. HyperCar's successful run actually proposed and enabled HEVC, so this is a requested codec-path experiment, not evidence that HEVC caused the black screen.
+- **Kept fixes:** MB_E still skips the type-130 iAP tunnel, keeps RECORD before screen SETUP, uses one absolute session URI, withdraws `mainBuffered`, pins the tunnel MFi challenge to 32 bytes and keeps the `displays[0]` 1624x1278 geometry. The screen `dataPort` is connected before the optional tunnel so a non-responsive type-130 SETUP cannot miss the head unit's ~2 s watchdog.
+- **Limits:** the vehicle has not been retested. The next report should confirm the two `modesChanged` requests, absence of `hidSetInputMode` and type-130 SETUP, immediate `dataPort` connection, and `enabledFeatures` without `hevc`. Issue #62 remains open; do not claim vehicle compatibility from this build.
+- **Validation:** 1260 standard JVM tests and 25 remote bridge tests passed; `spotlessCheck`, `lintStandardDebug` and `assembleStandardDebug` passed locally. The signed tag workflow additionally builds `assembleStandardRelease`.
+
+### 简体中文
+- **HyperCar 屏幕资源时序（issue #62）：** 提前 RECORD 后，手动「奔驰 MB_E-P / GLC（实验）」预设现在会在主屏 SETUP 前发送两次 `modesChanged`。HyperCar 在 `MB_E-P-4 / 480.7.4` 的成功日志顺序为 RECORD → 第一次资源声明 → 第二次资源声明 → 屏幕 SETUP，随后立即连接返回的 `dataPort`。mcarplay 之前只声明一次，并在屏幕 SETUP 前连发 4 条 `hidSetInputMode`。
+- **MB_E 不再武装屏幕 HID：** 同一份 HyperCar 成功日志没有发送 AirPlay `hidSetInputMode`，首帧后车机仍正常发送 `hidSendReport`。MB_E 预设现在跳过这 4 条命令；奥迪等其他接收端继续保留原有触摸武装路径。
+- **会话能力改为 H.264-only：** MB_E 的会话 SETUP 不再提议 `hevc`；按车机此前的能力交集，启用列表应为 `[h.264Level5.1, viewAreas]`。mcarplay 本身只编码 H.264。HyperCar 成功轮实际提议并启用了 HEVC，因此本轮是按要求做的编码路径实验，不能据此认定 HEVC 是黑屏原因。
+- **保留的修复：** MB_E 仍跳过 type-130 iAP 隧道、先 RECORD 再建主屏流、使用绝对会话 URI、撤回 `mainBuffered`、把隧道 MFi 固定为 32B，并保持 `displays[0]` 的 1624×1278 几何。主屏 `dataPort` 先于可选隧道连接，避免 type-130 无响应时错过车机约 2 秒的看门狗窗口。
+- **限制：** 本构建尚未实车复测。下一份报告应确认两次 `modesChanged`、没有 `hidSetInputMode` 和 type-130 SETUP、`dataPort` 立即连接，以及 `enabledFeatures` 不含 `hevc`。issue #62 仍开放，不能根据本构建声称车型已兼容。
+- **验证：** standard JVM 测试 1260 个、remote bridge 测试 25 个通过；`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 在本地通过。签名 tag 工作流还会构建 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.7-test.6...v0.1.7-test.7](https://github.com/wangxso/mcarplay/compare/v0.1.7-test.6...v0.1.7-test.7)
+
+## [v0.1.7-test.6] - 2026-11-19
+
+> Experimental prerelease on top of `v0.1.7-test.5`: a multi-variable MBUX request-shape trial for issue #62, plus a hotspot-confirmation fix. For the manual Mercedes MB_E-P / GLC preset only, the app now sends RECORD before resource declaration and screen SETUP, reuses one absolute session URI for session-scoped RTSP requests, and stops offering the unimplemented `mainBuffered` audio stream. These match the request shape observed in HyperCar 0.1.0.588 on the same head unit. This build has not been tried on a vehicle, does not change the H.264 video path, issue #62 remains open, and this does not prove that the black screen is fixed.
+
+### English
+- **MBUX request shape (issue #62):** the manual `MERCEDES_MB_E` preset now sends RECORD before `modesChanged`, HID input mode and the main-screen SETUP, matching HyperCar's successful order. Session SETUP `/setup`, screen SETUP `/`, RECORD `/` and session TEARDOWN `/` share one generated absolute `rtsp://<host>/<sessionId>` URI, including IPv6 link-local scope escaping. The session SETUP no longer offers `mainBuffered`, because mcarplay implements UDP type-100/101 audio but not the type-103 buffered-audio sender. Generic, AUTO and other vehicle presets are unchanged.
+- **Evidence:** the `v0.1.7-test.5` report had a complete `0x4301` endpoint and a stable session with `VIDEO_INIT_DONE 1624x1278@30`, 3546 frames, 30 IDRs and about 12 MB sent with zero queue drops, yet the head unit still showed no picture. Its initial SETUP was 739 B and returned `enabledFeatures=[hevc, h.264Level5.1, mainBuffered, viewAreas]`; it sent screen SETUP before RECORD. HyperCar 0.1.0.588 on the same `MB_E-P-4 / 480.7.4` identity sent a 727 B SETUP without `mainBuffered`, recorded before resource declaration and screen SETUP, and used one absolute session URI. Its successful video was HEVC-transcoded from the CarWith H.264 source.
+- **Hotspot confirmation:** when a Wi-Fi `Network` handle exists but the SSID cannot be read, the app now still shows the “continue on the head-unit hotspot” prompt instead of silently skipping it. Prompts are deduplicated by SSID or network handle, the network is rechecked after confirmation, and the reason for not prompting is logged when neither identity is available. This makes the intermittent prompt observable; it is not evidence that the prompt caused, or fixes, the black screen.
+- **Limits:** this is an experimental multi-variable request-shape trial, not a confirmed display fix. It changes RECORD ordering, URI form and `mainBuffered`, while the hotspot prompt is a separate connection-path change. mcarplay still sends H.264; the HyperCar success used HEVC. If the vehicle still shows no picture, the next experiment should change only the video codec/transcode path. Issue #62 remains open.
+- **Validation:** 1257 standard JVM tests and 25 remote bridge tests, 87 Python tool tests and 20 Node debug-bridge tests passed; `spotlessCheck`, `lintStandardDebug` and `assembleStandardDebug` passed locally. The signed tag workflow additionally builds `assembleStandardRelease`.
+
+### 简体中文
+- **MBUX 请求形状（issue #62）：** 手动「奔驰 MB_E-P / GLC（实验）」预设现在先发 RECORD，再发 `modesChanged`、HID 输入模式和主屏 SETUP，与 HyperCar 成功轮的顺序一致。会话 SETUP `/setup`、屏幕 SETUP `/`、RECORD `/` 与会话 TEARDOWN `/` 共用一个生成的绝对 `rtsp://<host>/<sessionId>` URI，并处理 IPv6 链路本地地址的 scope 转义。会话 SETUP 不再提议 `mainBuffered`：mcarplay 只实现 UDP type-100/101 音频，没有 type-103 缓冲音频发送端。通用、AUTO 和其他车型预设均不变。
+- **证据：** `v0.1.7-test.5` 报告已拿到完整 `0x4301` 端点，稳定会话为 `VIDEO_INIT_DONE 1624x1278@30`，发送 3546 帧、30 个 IDR、约 12 MB，队满丢帧 0，但车机仍无画面。该轮初始 SETUP 为 739 B，返回 `enabledFeatures=[hevc, h.264Level5.1, mainBuffered, viewAreas]`，且屏幕 SETUP 早于 RECORD。HyperCar 0.1.0.588 在同一 `MB_E-P-4 / 480.7.4` 身份上发送 727 B SETUP、不提议 `mainBuffered`，先 RECORD 再声明资源和屏幕 SETUP，并使用一个绝对会话 URI；其成功画面是把 CarWith 的 H.264 源转成 HEVC 后发送的。
+- **热点确认：** 有 Wi-Fi `Network` 句柄但读不到 SSID 时，应用现在仍会弹出「按车机热点继续」，不会再静默跳过。弹窗按 SSID 或 Network 句柄去重，用户确认后重新核验网络；两者都拿不到时会记录不弹窗的原因。这只让偶发弹窗变得可观测，不能证明弹窗是黑屏原因，也不能证明本次修复了黑屏。
+- **限制：** 这是同时改动 RECORD 顺序、URI 形式和 `mainBuffered` 的实验版，不是已确认的显示修复；热点提示属于另一条连接路径改动。mcarplay 仍发送 H.264，而 HyperCar 成功轮使用 HEVC。若车机仍无画面，下一轮应只改视频编码/转码路径。issue #62 仍开放。
+- **验证：** standard JVM 测试 1257 个、remote bridge 测试 25 个、Python 工具测试 87 个、Node debug-bridge 测试 20 个，均通过；`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 在本地通过。签名 tag 工作流还会构建 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.7-test.5...v0.1.7-test.6](https://github.com/wangxso/mcarplay/compare/v0.1.7-test.5...v0.1.7-test.6)
+
+## [v0.1.7-test.5] - 2026-11-19
+
+> Experimental prerelease on top of `v0.1.7-test.4`: a single-variable iAP2 fix for the Mercedes MB_E-P / GLC report. The head unit sent a complete `0x4301` during the optional StartHID wait, but the old receive loop logged and discarded it; the later Wi-Fi-credential window then timed out, the app prompted for hotspot confirmation and fell back to a gateway endpoint. This build defers every unexpected frame in that window and lets the existing `0x5703`/`0x4301` stages consume it in order. The test.4 changes are unchanged: 32-byte tunnel MFi and the post-authentication empty `0x5702` were both observed on the vehicle. Issue #62 remains open, and this build does not establish vehicle compatibility.
+
+### English
+- **Early `0x4301` is no longer discarded (issue #62):** `awaitOptionalHid()` now uses the same `expectOrNull()` path as the other optional waits. A complete `0x4301` that arrives during the 2-second StartHID window is stored in `pendingFrames` and consumed by the later credential/start-session stages. The regression test covers subscription noise followed by an early `0x4301` and asserts that the endpoint is delivered without the 8-second "not received" fallback.
+- **Test.4 results:** the same `MB_E-P-4 / 480.7.4` vehicle sent 32-byte MFi challenges for both Bluetooth and the Wi-Fi/event link, authenticated in about 0.45 s, received the post-authentication empty `0x5702`, and returned `0x6800`/`0x5000`/`0x4157`/`0x4154`/`0x4170`. A long session sent 1995 frames, 34 IDRs and 19.1 MB with zero queue drops, but the head unit still showed no picture. CarWith geometry, video sending, MFi, `0x5702` and subscription absence are therefore excluded from this report.
+- **Limits:** this build changes only the handling of an early `0x4301`. It corrects endpoint selection, not display activation; it does not prove that the black screen is fixed. H.264/HEVC behaviour, `modesChanged` replies, panel geometry and audio are unchanged. The next vehicle report should confirm whether the complete `0x4301` endpoint is retained and whether a stable 30-second session produces a picture.
+- **Validation:** 1251 standard JVM tests and 25 remote bridge tests passed; `spotlessCheck`, `lintStandardDebug`, `assembleStandardDebug` and the remote bridge test task passed locally. The signed tag workflow additionally builds `assembleStandardRelease`.
+
+### 简体中文
+- **早到 `0x4301` 不再被丢弃（issue #62）：** `awaitOptionalHid()` 改用与其他可选等待一致的 `expectOrNull()` 路径。落在 2 秒 StartHID 窗口内的完整 `0x4301` 会进入 `pendingFrames`，由后续凭据/启动阶段按原顺序消费。新增回归覆盖「先订阅噪声、再早到 `0x4301`」，断言端点正常交付且不再出现 8 秒「未收到」兜底。
+- **test.4 结果：** 同一台 `MB_E-P-4 / 480.7.4` 的蓝牙和 Wi-Fi/事件链路都已使用 32B MFi，约 0.45 秒完成认证；认证后收到空 `0x5702`，并收到 `0x6800`/`0x5000`/`0x4157`/`0x4154`/`0x4170`。长会话发送 1995 帧、34 个 IDR、19.1 MB，队满丢帧 0，但车机仍无画面。因此本轮可排除 CarWith 尺寸、视频发送、MFi、`0x5702` 和「订阅完全缺失」。
+- **限制：** 本构建只改变早到 `0x4301` 的处理，修正的是端点选择，不是显示激活；不证明黑屏已解决。H.264/HEVC 行为、`modesChanged` 回执、面板几何和音频均未改动。下一份实车报告应确认完整 `0x4301` 端点是否保留，以及稳定 30 秒以上是否出画。
+- **验证：** standard JVM 测试 1251 个、remote bridge 测试 25 个通过；`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 与 remote bridge 测试任务在本地通过。签名 tag 工作流还会构建 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.7-test.4...v0.1.7-test.5](https://github.com/wangxso/mcarplay/compare/v0.1.7-test.4...v0.1.7-test.5)
+
+## [v0.1.7-test.4] - 2026-11-18
+
+> Experimental prerelease on top of `v0.1.7-test.3`: a combined Mercedes MB_E-P / GLC tunnel-authentication trial. The manual preset now sends a 32-byte tunnel MFi challenge first, and the MIB3/event-link burst adds an empty `0x5702` after `0x4e0c`, matching the sequence observed in HyperCar 0.1.0.588 on the same head unit. This is a two-change experiment, so a pass or failure cannot be attributed to either change alone. It has not been tried on a vehicle, issue #62 remains open, and this does not establish vehicle compatibility.
+
+### English
+- **Mercedes MB_E-P / GLC tunnel MFi (issue #62):** the manual preset now pins the Wi-Fi/event-link MFi challenge to 32 bytes, sends it once and waits 40 s. The `v0.1.7-test.3` vehicle report showed a 20-byte challenge being silently ignored for 6000 ms before a 32-byte challenge succeeded in 438 ms; HyperCar 0.1.0.588 sends 32 bytes first and authenticates in about 0.5 s on the same `MB_E-P-4 / 480.7.4`. Bluetooth and DiPlay keep their existing challenge policy.
+- **Post-authentication `0x5702`:** the MIB3/event-link burst now sends an empty `0x5702` after `0x4e0c`. HyperCar 0.1.0.588 sends this in its authenticated `greetings()` sequence before the head unit emits `0x4301`, `0x5000` and `StartHID`. mcarplay previously skipped it; the test.3 report showed no `StartHID` and no subscription round-trip for 43 s after the burst. `0x5703` remains link-ACK only and does not trigger a new Wi-Fi join.
+- **Evidence:** on the same vehicle, test.3 already produced `VIDEO_INIT_DONE 1624x1278@30` and 542 sent frames with 5 IDRs and zero queue drops, so the CarWith size and video-send paths are excluded. The remaining failure is in tunnel activation: 20B was ignored for 6 s, then 32B authenticated, but no `0x6800`/`0x5000`/`0x4157`/`0x4154`/`0x4170` arrived. WinPlay 1.2.4 with test.3 passed video, touch and audio.
+- **Limits:** test.4 changes two variables in one build, so it cannot isolate 32B from `0x5702`. If the vehicle still has no picture, the next build will change only one variable. Issue #51, #26, #55, #62 and #66 remain open.
+- **Validation:** 1250 standard JVM tests and 25 remote bridge tests, 87 Python tool tests and 20 Node debug-bridge tests passed; `spotlessCheck`, `lintStandardDebug`, `lintStandardRelease` and `assembleStandardDebug` passed locally. The signed tag workflow additionally builds `assembleStandardRelease`.
+
+### 简体中文
+- **奔驰 MB_E-P / GLC 隧道 MFi（issue #62）：** 手动预设现在把 Wi-Fi/事件链路的 MFi 挑战固定为 32B，只发一次并等待 40 s。`v0.1.7-test.3` 实车报告显示，20B 挑战被车机静默 6000 ms，之后 32B 才在 438 ms 内成功；HyperCar 0.1.0.588 在同一台 `MB_E-P-4 / 480.7.4` 上直接发 32B，约 0.5 s 完成认证。蓝牙与 DiPlay 的挑战策略不变。
+- **认证后 `0x5702`：** MIB3/事件链路突发现在在 `0x4e0c` 后补发一条空 `0x5702`。HyperCar 0.1.0.588 在认证后的 `greetings()` 中固定发送这条，随后车机才发 `0x4301`、`0x5000` 与 `StartHID`。mcarplay 此前跳过它；test.3 报告里突发后 43 s 没有任何 `StartHID` 或订阅往返。`0x5703` 仍只作链路 ACK，不会触发重新入网。
+- **证据：** 同一台车的 test.3 已做到 `VIDEO_INIT_DONE 1624x1278@30`、542 帧、5 个 IDR、队满丢帧 0，因此 CarWith 尺寸和视频发送链路已排除。剩余卡点在隧道激活：20B 空等 6 s，32B 认证成功，但车机没有发 `0x6800`/`0x5000`/`0x4157`/`0x4154`/`0x4170`。WinPlay 1.2.4 的 test.3 台架画面、触控、声音均正常。
+- **限制：** test.4 在一个包里改了两个变量，无法把结果单独归因到 32B 或 `0x5702`。若实车仍无画面，下一版只改一个变量。issue #51、#26、#55、#62、#66 仍开放。
+- **验证：** standard JVM 测试 1250 个、remote bridge 测试 25 个、Python 工具测试 87 个、Node debug-bridge 测试 20 个，均通过；`spotlessCheck`、`lintStandardDebug`、`lintStandardRelease`、`assembleStandardDebug` 在本地通过。签名 tag 工作流还会构建 `assembleStandardRelease`。
+
+Full changes / 完整变更: [v0.1.7-test.3...v0.1.7-test.4](https://github.com/wangxso/mcarplay/compare/v0.1.7-test.3...v0.1.7-test.4)
+
 ## [v0.1.7-test.3] - 2026-11-18
 
 > Experimental prerelease on top of `v0.1.7-test.2`: a targeted, single-variable issue #62 trial. WinPlay and the manual Mercedes MB_E-P / GLC preset now ask CarWith to encode at the vehicle display size with `DISABLE_RESOLUTION_OPTION=1`, and that preset keeps the `displays[0]` geometry (1624 x 1278) instead of the 1728-high `displayPanels` surface. No mcarplay result on the vehicle is included, issue #62 remains open, and this does not establish vehicle compatibility.

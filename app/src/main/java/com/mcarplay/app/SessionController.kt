@@ -3622,7 +3622,8 @@ object SessionController {
         source: String,
     ) {
         Bg.run("pending-start-session-watch") {
-            var promptedSsid: String? = null
+            var promptedKey: String? = null
+            var loggedNoWifi = false
             var triedInvites = 0
             var tick = 0
             val deadline = android.os.SystemClock.uptimeMillis() + PENDING_START_SESSION_WAIT_MS
@@ -3648,13 +3649,33 @@ object SessionController {
                 if (connectCancelled) return@run
                 if (++tick % 5 != 0) continue
                 val ssid = liveWifiSsid()?.takeIf { it.isNotBlank() }
-                val network = wifiConnector?.currentWifiNetwork() ?: continue
-                if (ssid.isNullOrEmpty() && !hasRecentUnverifiedInvite()) continue
-                val label = ssid?.takeIf { it.isNotEmpty() } ?: INVITED_WIFI_LABEL
-                // 同一 SSID 只问一次（用户选「继续等待」后不再打扰）；换网络再问。
+                val network = wifiConnector?.currentWifiNetwork()
+                if (network == null && ssid == null) {
+                    // 没有 Network 句柄也读不到 SSID 时无法证明「当前网络」是哪一张；
+                    // 仍继续等 0x4301/邀请，但把原因写进日志，避免弹窗看起来随机消失。
+                    if (!loggedNoWifi) {
+                        loggedNoWifi = true
+                        appendLog(
+                            ">>> [$source] 当前没有可用的 WiFi Network 句柄，也读不到 SSID——" +
+                                "本轮无法弹出「按车机热点继续」确认，继续等待 0x4301/邀请",
+                        )
+                    }
+                    continue
+                }
+                loggedNoWifi = false
+                val shown = WifiNetworkToken(network, ssid)
+                val label = ssid ?: INVITED_WIFI_LABEL
+                // 同一 SSID 只问一次（用户选「继续等待」后不再打扰）；SSID 不可读时按
+                // Network 句柄去重，换网络后重新询问。
                 val promptKey = ssid ?: network.toString()
-                if (promptedSsid == promptKey) continue
-                promptedSsid = promptKey
+                if (promptedKey == promptKey) continue
+                promptedKey = promptKey
+                appendLog(
+                    ">>> [$source] 当前 WiFi（" +
+                        (if (ssid != null) "SSID 已读取" else "SSID 不可读") + "，" +
+                        (if (network != null) "Network 可用" else "Network 不可用") +
+                        "）尚未核验为车机热点——询问是否按车机热点继续",
+                )
                 val choice =
                     askWifiJoinChoice(
                         DialogSpec(
@@ -3670,11 +3691,16 @@ object SessionController {
                             negative = t(R.string.sc_keep_waiting),
                         ),
                         // 同一张网络只问一次；答案也只能在这张网络上复用。
-                        shownNetwork = WifiNetworkToken(network, ssid),
+                        shownNetwork = shown,
                     )
                 if (choice == true && !connectCancelled && !sessionStarting.get() && stillPending()) {
-                    if (wifiConnector?.currentWifiNetwork() != network) {
-                        promptedSsid = null
+                    val confirmedNetwork = wifiConnector?.currentWifiNetwork()
+                    if (confirmedNetwork == null) {
+                        appendLog(">>> [$source] 用户确认后仍拿不到 WiFi Network 句柄——继续等待，不重复弹窗")
+                        continue
+                    }
+                    if (!shown.matches(confirmedNetwork, liveWifiSsid())) {
+                        promptedKey = null
                         appendLog(">>> [$source] 用户确认期间当前网络已变化——重新等待确认")
                         continue
                     }
@@ -3685,7 +3711,7 @@ object SessionController {
                             wifiCredentialSource = WifiCredentialSource.CURRENT_NETWORK,
                         ),
                         "$source/手动入网",
-                        verifiedCurrentNetwork = network,
+                        verifiedCurrentNetwork = confirmedNetwork,
                     )
                     return@run
                 }
@@ -3937,7 +3963,11 @@ object SessionController {
                 return@execute
             }
             // 用户点图标时主屏本就归手机：车机停在原车界面却不认这个归属，先报让出、再报拿回
-            if (request.retakeScreen && client.modes.phoneOwnsScreen) {
+            val rebuildOnResourceReturn = client.receiverCompatibility().rebuildScreenOnResourceReturn
+            if (request.retakeScreen &&
+                client.modes.phoneOwnsScreen &&
+                !(rebuildOnResourceReturn && client.modes.screenNeedsRebuild)
+            ) {
                 if (client.assertModes(releaseScreen = true, expectedEpoch = connectionGeneration)) {
                     try {
                         Thread.sleep(SCREEN_RETAKE_GAP_MS)
@@ -3949,9 +3979,12 @@ object SessionController {
             if (connectCancelled || currentClient !== client || !client.isConnectionCurrent(connectionGeneration)) return@execute
             val asserted = client.assertModes(expectedEpoch = connectionGeneration)
             if (connectCancelled || currentClient !== client || !client.isConnectionCurrent(connectionGeneration)) return@execute
-            val restoreScreen = request.requestKeyFrame && asserted && client.modes.phoneOwnsScreen
+            val rebuildScreen =
+                if (rebuildOnResourceReturn) client.modes.screenNeedsRebuild else request.rebuildStream
+            val restoreScreen =
+                (request.requestKeyFrame || (rebuildOnResourceReturn && rebuildScreen)) && asserted && client.modes.phoneOwnsScreen
             val recovery = screenStreamRecovery
-            if (restoreScreen && request.rebuildStream && recovery != null) {
+            if (restoreScreen && rebuildScreen && recovery != null) {
                 when (recovery()) {
                     ScreenRecoveryResult.ABORTED -> return@execute
                     ScreenRecoveryResult.FAILED -> {
@@ -4815,6 +4848,9 @@ object SessionController {
                             currentSharedSecret = sessionKey
                             currentAudioHost =
                                 client.activeHost ?: EndpointHosts.candidates(client.currentEndpoint.ipAddresses).firstOrNull()
+                            val screenPolicy = client.receiverCompatibility()
+                            val backMasks = setup.hidDescriptors.mapValues { (_, descriptor) -> HidNavigation.consoleBackMask(descriptor) }
+                            val pressedBackDevices = HashSet<String>()
                             // 每台媒体键 HID 设备一个边沿判定器；随本条 event 通道重建，旧轮按住状态不残留
                             val mediaKeyEdges = HashMap<String, MediaKeyEdge>()
                             val voiceButton = SiriButtonEdge()
@@ -4837,7 +4873,7 @@ object SessionController {
                                         // 本帧处于按下状态的 Consumer Usage；null = 不是媒体键设备。
                                         // 位图（Variable，`81 02`）与 Array（`81 00`）都按描述符展开——
                                         // 只读首字节当下标会让位图车机的「下一首 0x04」解码成无键。
-                                        val consumerUsages =
+                                        val mediaUsages =
                                             when {
                                                 report == null -> null
                                                 // 有描述符：只有 Consumer 设备才解析（非 Consumer → null）
@@ -4846,6 +4882,21 @@ object SessionController {
                                                 // 值当 Usage ID 直读
                                                 report.size == 1 -> listOf(report[0].toInt() and 0xFF).filter { it != 0 }
                                                 else -> null
+                                            }
+                                        val backMask = backMasks[uuid]
+                                        val consumerUsages =
+                                            if (uuid != null && backMask != null && report?.size == 1) {
+                                                if (report[0].toInt() and backMask == 0) {
+                                                    pressedBackDevices.remove(uuid)
+                                                } else if (pressedBackDevices.add(uuid) &&
+                                                    client.modes.phoneOwnsScreen &&
+                                                    currentCarLifeSession?.sendHardKey(CarLifeProtocol.HARD_KEY_BACK) == true
+                                                ) {
+                                                    appendLog("EVENT: 车机返回键 → CarWith 硬按键")
+                                                }
+                                                mediaUsages.orEmpty().filterNot { it == ConsumerKeys.USAGE_AC_BACK }
+                                            } else {
+                                                mediaUsages
                                             }
                                         // 旋钮/四向拨杆（Generic Desktop 页的 Wheel/Hat）：
                                         // 不是 Consumer 设备才走这里；方向键转换为 CarWith 焦点硬按键。
@@ -5064,10 +5115,22 @@ object SessionController {
                             if (client.receiverCompatibility().releaseBluetoothAfterSetup) client.releaseReceiverBluetooth()
                             // 资源声明（must）：真车对未声明资源的屏幕流 SETUP 直接 400
                             client.assertModes()
+                            // HyperCar 在 MB_E-P-4 成功轮于屏幕 SETUP 前连发两次 modesChanged：
+                            // 第一次随 RECORD 激活，第二次随屏幕资源生命周期。只对登记过的车型重发。
+                            if (screenPolicy.repeatScreenModesDeclaration) {
+                                appendLog("AIRPLAY: MBUX 资源二次声明——对齐 HyperCar 的屏幕 SETUP 前时序")
+                                if (!client.assertModes()) {
+                                    appendLog("AIRPLAY: MBUX 二次资源声明未确认——继续尝试屏幕 SETUP，失败原因以随后的流协商为准")
+                                }
+                            }
                             // HID 输入模式武装：/info hidDevices（奥迪字符串 "0"/"1"，触摸="1"）。
                             // display features=0x08（高保真触摸）已声明，缺这步车机不发 hidSendReport。
-                            setup.hidDeviceUuids.forEach { uuid ->
-                                client.sendHidSetInputMode(uuid, mode = 0)
+                            if (!screenPolicy.skipScreenHidArming) {
+                                setup.hidDeviceUuids.forEach { uuid ->
+                                    client.sendHidSetInputMode(uuid, mode = 0)
+                                }
+                            } else {
+                                appendLog("AIRPLAY: MBUX 跳过 hidSetInputMode（HyperCar 成功轮未发，触摸由车机 HID 报告驱动）")
                             }
                             val screen = client.runScreenStream(sessionKey, setup.displayUuid)
                             if (screen != null) {
@@ -5082,22 +5145,6 @@ object SessionController {
                                     client.startKeepAlive(host, setup.keepAlivePort!!)
                                 }
                                 client.startFeedbackLoop()
-                                // iAP 隧道（type-130）：车机→手机的 iAP2 EA 数据（触摸 HID 载体）。
-                                // 建立失败不阻塞会话（触摸不可用但视频照常）。
-                                val tunnel = client.runIapTunnel(sessionKey)
-                                tunnel?.onIapMessage = { frame ->
-                                    // 触摸证据采集：先全量记录，格式确认后接 TouchRouter
-                                    if (frame.messageId != 0x0000) {
-                                        val hex = frame.body.joinToString(" ") { "%02x".format(it) }
-                                        appendLog(
-                                            "TUNNEL: rx 0x${frame.messageId.toString(16)} " +
-                                                "(${Iap2MessageIds.nameOf(
-                                                    frame.messageId,
-                                                )}) ${frame.body.size}B" +
-                                                if (frame.body.isNotEmpty()) " hex=${hex.take(120)}" else "",
-                                        )
-                                    }
-                                }
                                 var pendingVideoW = 0
                                 var pendingVideoH = 0
                                 var carLife: CarLifeSession? = null
@@ -5184,7 +5231,10 @@ object SessionController {
                                                 externalVideoSource = carLifeSource,
                                                 receiverMaxFps = setup.maxFps,
                                                 // 车机拿走主屏（原车界面、倒车影像等）时暂停屏幕视频，归还后从新的 IDR 恢复
-                                                phoneOwnsScreen = { client.modes.phoneOwnsScreen },
+                                                phoneOwnsScreen = {
+                                                    client.modes.phoneOwnsScreen &&
+                                                        !(screenPolicy.rebuildScreenOnResourceReturn && client.modes.screenNeedsRebuild)
+                                                },
                                                 onScreenOutputSuspended = { suspended ->
                                                     ConnectionDiagnostics.timeline.screenOutput(diagnosticAttempt, suspended)
                                                 },
@@ -5216,6 +5266,16 @@ object SessionController {
                                                     if (videoSender !==
                                                         sender
                                                     ) {
+                                                        return@onVideoEnded
+                                                    }
+                                                    if (screenPolicy.rebuildScreenOnResourceReturn &&
+                                                        client.modes.screenNeedsRebuild &&
+                                                        currentClient === client &&
+                                                        client.sessionActive &&
+                                                        !client.controlChannelClosed &&
+                                                        !wasCancelled()
+                                                    ) {
+                                                        appendLog("SCREEN: 主屏让出后视频端口已关闭，保留 CarWith 与音频，等待恢复主屏")
                                                         return@onVideoEnded
                                                     }
                                                     appendLog(
@@ -5292,22 +5352,45 @@ object SessionController {
                                         failMediaStartup(DiagnosticCode.SETUP_FAILED)
                                         return@run
                                     }
+                                    // iAP 隧道（type-130）：车机→手机的 iAP2 EA 数据（触摸 HID 载体）。
+                                    // 必须在主屏端口之后：2026-11-20 MB_E-P-4 无响应，同步 SETUP
+                                    // 占住控制通道，导致屏幕 dataPort 直到车机 reset 后才开始连接。
+                                    // 建立失败不阻塞会话（触摸不可用但视频照常）。
+                                    val tunnel = client.runIapTunnel(sessionKey)
+                                    tunnel?.onIapMessage = { frame ->
+                                        // 触摸证据采集：先全量记录，格式确认后接 TouchRouter
+                                        if (frame.messageId != 0x0000) {
+                                            val hex = frame.body.joinToString(" ") { "%02x".format(it) }
+                                            appendLog(
+                                                "TUNNEL: rx 0x${frame.messageId.toString(16)} " +
+                                                    "(${Iap2MessageIds.nameOf(
+                                                        frame.messageId,
+                                                    )}) ${frame.body.size}B" +
+                                                    if (frame.body.isNotEmpty()) " hex=${hex.take(120)}" else "",
+                                            )
+                                        }
+                                    }
                                     screenStreamRecovery = recover@{
+                                        fun canRestore(): Boolean =
+                                            !wasCancelled() &&
+                                                !client.cancelled &&
+                                                currentClient === client &&
+                                                currentCarLifeSession === carLife &&
+                                                client.modes.phoneOwnsScreen
+
                                         fun failure(): ScreenRecoveryResult =
-                                            if (wasCancelled() || client.cancelled || currentClient !== client) {
+                                            if (!canRestore()) {
                                                 ScreenRecoveryResult.ABORTED
                                             } else {
                                                 ScreenRecoveryResult.FAILED
                                             }
                                         val previousSender =
                                             synchronized(this) {
-                                                val previousOutput = carLifeOutput ?: return@recover ScreenRecoveryResult.ABORTED
-                                                val previous = videoSender ?: return@recover ScreenRecoveryResult.ABORTED
-                                                if (wasCancelled() ||
-                                                    currentClient !== client ||
-                                                    previousOutput.sender !== previous ||
-                                                    currentCarLifeSession !== carLife ||
-                                                    !client.modes.phoneOwnsScreen
+                                                val previous = videoSender
+                                                if (!canRestore() ||
+                                                    carLife == null ||
+                                                    carLifeOutput?.sender !== previous ||
+                                                    (previous == null && !screenPolicy.rebuildScreenOnResourceReturn)
                                                 ) {
                                                     return@recover ScreenRecoveryResult.ABORTED
                                                 }
@@ -5315,28 +5398,28 @@ object SessionController {
                                                 videoSender = null
                                                 previous
                                             }
-                                        appendLog("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频")
-                                        previousSender.stop()
-                                        if (wasCancelled() || !client.teardownScreenStream()) return@recover failure()
-                                        if (wasCancelled()) return@recover ScreenRecoveryResult.ABORTED
+                                        appendLog("SCREEN: 回原车界面后拿回主屏——仅重建主屏流，保留 CarWith 与音频")
+                                        previousSender?.stop()
+                                        if (!canRestore() || !client.teardownScreenStream()) return@recover failure()
+                                        if (!canRestore()) return@recover ScreenRecoveryResult.ABORTED
                                         val resumed = client.runScreenStream(sessionKey, setup.displayUuid) ?: return@recover failure()
-                                        if (wasCancelled()) return@recover ScreenRecoveryResult.ABORTED
+                                        if (!canRestore()) return@recover ScreenRecoveryResult.ABORTED
                                         val replacement = newScreenSender(resumed)
                                         var restored = false
                                         try {
                                             synchronized(this) {
-                                                if (wasCancelled() || currentClient !== client) return@recover ScreenRecoveryResult.ABORTED
+                                                if (!canRestore()) return@recover ScreenRecoveryResult.ABORTED
                                                 videoSender = replacement
                                             }
                                             if (!replacement.openDataPort() ||
-                                                wasCancelled() ||
+                                                !canRestore() ||
                                                 !replacement.start {} ||
-                                                wasCancelled()
+                                                !canRestore()
                                             ) {
                                                 return@recover failure()
                                             }
                                             synchronized(this) {
-                                                if (wasCancelled() || currentClient !== client || videoSender !== replacement) {
+                                                if (!canRestore() || videoSender !== replacement) {
                                                     return@recover ScreenRecoveryResult.ABORTED
                                                 }
                                                 carLifeOutput = CarLifeOutput(diagnosticAttempt, replacement)

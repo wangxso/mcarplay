@@ -13,6 +13,11 @@
 - **11 月 21 日熄火后重连（待实车复测）：** 蓝牙监听跨行程保留时，回车握手使用新尝试，防止拨号失败后的 ACL 断开误停监听。车机先回连时，手机关闭随后拨通的出站连接，由入站链路继续握手。
   HeadUnit-1 首次上车正常，回车后 Wi-Fi iAP2 身份识别包未获确认；双向蓝牙握手重叠与黑屏的关系仍待验证。见 [设备证据](docs/CARWITH-ENTRY-FINDINGS.md#2026-11-21熄火后回车蓝牙监听误停与-wi-fi-iap2-身份识别超时)。
 
+- **11 月 21 日 issue #62 实车反馈：** 奔驰 MB_E-P-4 的 `v0.1.7-test.7` 两轮仅视频连接均持续推流，
+  其中第二轮车主确认 H.264 画面与触控正常。首轮未显示仍待定位。开启声音断画面的反馈待新版日志验证，
+  本地先为手动 MB_E 预设启用单次 RECORD，依据是同车机旧日志在音频加入后的补发 RECORD 附近拆链。
+  详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
 - **11 月 14 日 issue #62 诊断补充（仅离线验证，未上车，未改协议行为）：** 奔驰 MB_E-P-4（AirPlay 480.7.4，2025 款 GLC）报告链路全通、CarWith 透传 1392 帧 / 109 s，车机却无画面、点 CarPlay 图标无反应。报告里三条线索此前只能靠「缺席」推断：`/info` 的 `displays[0]`（1278 高）与 `displayPanels[0].initialVideoStreams`（1728 高）几何冲突、`modesChanged` 应答恒为 42B `{}`、MIB3 突发后车机零订阅。本次只新增三类诊断（显示表面对照、模式切换应答归类计数、MIB3 订阅观察），**未**按面板几何改协商、也**未**改 `modesChanged` 时序——两者都需实车对照。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。已通过新增 JVM 单测与本地门禁；无设备或实车证据。
 
 - **11 月 13 日 v0.1.7-test.1 测试预览（已建 tag，触发签名发布；仅门禁与离线验证）：** 汇总 11 月 12 日合入的 #45（重进 CarPlay 音频/输入、DiPlay 0.2.22 `/feedback` 500、自动播放改用 CarWith 硬按键、断链崩溃、Android 14+ Wi-Fi 低延迟）、#47 的重构 Phase 0 护栏测试与 `tools/compare_diagnostics.py`、#48（重连 Wi-Fi 交接与 iAP2 重新协商）、#52（自动重连断路器）、#53（通知使用权入口），以及 #57（奔驰 MB_D-PP 单次 RECORD、仅视频选择在自动回连时保留、音频拆链间隔归因）。四接收端 DiPlay、WinPlay、macplay、艾瑞泽 8 未在本构建上回归；#45 仅有 2026-11-06 一次 `0.1.6-debug` 观察，#57 的证据来自 #55 车主报告，其余改动无设备验证。已通过 1050 项 standard JVM 测试、25 项 remote 调试桥测试、87 项 Python 工具测试、20 项 Node debug-bridge 测试，以及 Spotless、standard lint/debug、`lintStandardRelease` 构建；未使用设备或实车。
