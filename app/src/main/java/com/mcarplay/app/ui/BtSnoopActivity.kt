@@ -1,4 +1,4 @@
-package com.mcarplay.app.diagnostics.btsnoop
+package com.mcarplay.app.ui
 
 import android.content.ActivityNotFoundException
 import android.content.ClipData
@@ -16,7 +16,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.IntentCompat
 import com.mcarplay.app.R
-import com.mcarplay.app.ui.EdgeToEdge
+import com.mcarplay.app.diagnostics.btsnoop.BtSnoopFileAnalysis
+import com.mcarplay.app.diagnostics.btsnoop.BtSnoopImporter
+import com.mcarplay.app.diagnostics.btsnoop.BtSnoopReport
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 

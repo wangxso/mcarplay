@@ -4,6 +4,7 @@ import android.view.KeyEvent
 import com.mcarplay.app.airplay.AirPlayClient
 import com.mcarplay.app.airplay.ModeArbiter
 import com.mcarplay.app.compat.ReceiverObservation
+import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.input.TouchReports
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,6 +14,8 @@ import org.junit.Assert.fail
 import org.junit.Test
 import java.util.ArrayDeque
 import java.util.LinkedHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * EventCommandRouter 的确定性行为矩阵（J 层）。
@@ -1217,12 +1220,30 @@ class EventCommandRouterTest {
         override val id = "test"
         override val observation: ReceiverObservation? = null
         override val isCurrent: Boolean = true
+        override val cancelReason: DiagnosticCode? = null
 
         override val isActive: Boolean
             get() {
                 activeReads++
                 return active
             }
+
+        override fun cancel(reason: DiagnosticCode) {
+            active = false
+        }
+
+        override fun checkActive() {
+            if (!isActive) throw AttemptCancelled(cancelReason)
+        }
+
+        override fun <T : AutoCloseable> own(resource: T): T = resource
+
+        override fun await(
+            latch: CountDownLatch,
+            timeoutMs: Long,
+        ): Boolean = isActive && latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+
+        override fun sleep(ms: Long): Boolean = isActive
     }
 
     private class RecordingClient(

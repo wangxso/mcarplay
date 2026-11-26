@@ -26,6 +26,10 @@ class AttemptScopeWiringTest {
 
     private val helperCode: String by lazy { KotlinSource.scan(helper).code }
 
+    private val pipeline: String by lazy {
+        KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("session/StreamPipeline.kt").readText()).code
+    }
+
     private val endpointBody: String by lazy { functionBody(controllerCode, "private fun onCarPlayEndpoint(") }
 
     private val controllerLines: List<String> by lazy { controller.lines() }
@@ -60,28 +64,8 @@ class AttemptScopeWiringTest {
             MigrationSite("wasCancelled()", "if (!scope.isActive) {"),
             MigrationSite("ownsConnection()", "if (scope.isCurrent) retireSession()"),
             MigrationSite("wasCancelled()", "if (!scope.isActive) {"),
-            MigrationSite(
-                "wasCancelled()",
-                "if (!scope.isActive || client.cancelled || currentClient !== client) {",
-            ),
-            MigrationSite("wasCancelled()", "if (!scope.isActive ||"),
-            MigrationSite(
-                "wasCancelled()",
-                "if (!scope.isActive || !client.teardownScreenStream()) return@recover failure()",
-            ),
-            MigrationSite("wasCancelled()", "if (!scope.isActive) return@recover ScreenRecoveryResult.ABORTED"),
-            MigrationSite("wasCancelled()", "if (!scope.isActive) return@recover ScreenRecoveryResult.ABORTED"),
-            MigrationSite(
-                "wasCancelled()",
-                "if (!scope.isActive || currentClient !== client) return@recover ScreenRecoveryResult.ABORTED",
-            ),
-            MigrationSite("wasCancelled()", "!scope.isActive ||"),
-            MigrationSite("wasCancelled()", "!scope.isActive ||"),
-            MigrationSite("wasCancelled()", "!scope.isActive"),
-            MigrationSite(
-                "wasCancelled()",
-                "if (!scope.isActive || currentClient !== client || videoSender !== replacement) {",
-            ),
+            // Phase 2g-2：恢复闭包的 10 处 scope 判据迁入 session/StreamPipeline，改为经 ScreenRecoveryPort
+            // 的 isScopeActive()/isCurrentClient()/isClientCancelled() 读取，不再登记为控制器迁移点。
             MigrationSite("ownsConnection()", "if (scope.isCurrent && currentClient === client) {"),
             MigrationSite("ownsConnection()", "if (scope.isCurrent && videoSender?.isRunning != true) {"),
             MigrationSite("wasCancelled()", "!scope.isActive,"),
@@ -91,9 +75,9 @@ class AttemptScopeWiringTest {
             ),
             MigrationSite("!wasCancelled()", "if (scope.isActive) {"),
             MigrationSite("!wasCancelled()", "if (pending != null && scope.isActive) {"),
-            MigrationSite("ownsConnection()", "targetCurrent = scope.isCurrent,"),
-            MigrationSite("!wasCancelled()", "if (!success && scope.isActive) {"),
-            MigrationSite("wasCancelled()", "if (!scope.isActive) {"),
+            MigrationSite("ownsConnection()", "targetCurrent = { scope.isCurrent },"),
+            MigrationSite("!wasCancelled()", "scopeActive = { scope.isActive },"),
+            MigrationSite("wasCancelled()", "cachedRetryCancelled = { !scope.isActive },"),
         )
 
     /** 在已去注释/字符串的源码中取块体或表达式体函数。 */
@@ -175,28 +159,33 @@ class AttemptScopeWiringTest {
             endpointBody,
             "val diagnosticAttempt = ConnectionDiagnostics.receiverAttempt()",
             "ReceiverDetectionRuntime.attach(endpoint.observation, diagnosticAttempt)",
-            "val scope = LegacyAttemptScope(",
+            "val realScope = RealAttemptScope(",
+            "attemptRegistry.activate(realScope)",
+            "val scope: AttemptScope = DualCheckAttemptScope(",
+            "LegacyAttemptScope(",
             "fun handoffCancelled(): Boolean = attemptHandoffCancelled(scope)",
         )
     }
 
     @Test
-    fun migrationCountIsSixCurrentAndTwentySevenActiveIncludingHelper() {
+    fun migrationCountIsSixCurrentAndSixteenActiveIncludingHelper() {
         val current = Regex("""(?<![A-Za-z0-9_.])scope\.isCurrent\b""").findAll(controllerCode).count()
         val negatedActive = Regex("""!scope\.isActive\b""").findAll(controllerCode).count()
         val plainActive = Regex("""(?<![!A-Za-z0-9_.])scope\.isActive\b""").findAll(controllerCode).count()
         assertEquals("SessionController 的 isCurrent 迁移点", 6, current)
-        assertEquals("SessionController 的取反 isActive 迁移点", 20, negatedActive)
-        assertEquals("SessionController 的直查 isActive 迁移点", 5, plainActive)
-        assertEquals("SessionController 活跃判断合计", 25, negatedActive + plainActive)
+        // Phase 2g-2：恢复闭包的 10 处 !scope.isActive 迁入组件，改经 ScreenRecoveryPort.isScopeActive()。
+        assertEquals("SessionController 的取反 isActive 迁移点", 10, negatedActive)
+        // 5 处原迁移点 + 1 处 ScreenRecoveryPort 装配（scope.isActive → isScopeActive）。
+        assertEquals("SessionController 的直查 isActive 迁移点", 6, plainActive)
+        assertEquals("SessionController 活跃判断合计", 16, negatedActive + plainActive)
 
         val helperActive = Regex("""!scope\.isActive\b""").findAll(helperCode).count()
         assertEquals("第33处真实 helper 的活跃判断", 1, helperActive)
         val routerActive = Regex("""!scope\.isActive\b""").findAll(routerCode).count()
         assertEquals("事件 router 的活跃判断", 1, routerActive)
         assertEquals(
-            "33 处总计 = 6 current + 25 Controller active + router active + helper active",
-            33,
+            "24 处总计 = 6 current + 16 Controller active + router active + helper active",
+            24,
             current + negatedActive + plainActive + routerActive + helperActive,
         )
 
@@ -213,9 +202,9 @@ class AttemptScopeWiringTest {
 
     @Test
     fun everyControllerCallSiteKeepsItsLegacyPredicateMapping() {
-        assertEquals("控制器迁移点（事件守卫已迁入 router）", 31, migrationSites.size)
+        assertEquals("控制器迁移点（恢复闭包已迁入组件）", 21, migrationSites.size)
         assertEquals("current 点", 6, migrationSites.count { it.legacy == "ownsConnection()" })
-        assertEquals("取消点", 20, migrationSites.count { it.legacy == "wasCancelled()" })
+        assertEquals("取消点", 10, migrationSites.count { it.legacy == "wasCancelled()" })
         assertEquals("活跃点", 5, migrationSites.count { it.legacy == "!wasCancelled()" })
         var cursor = 0
         migrationSites.forEach { site ->
@@ -246,7 +235,21 @@ class AttemptScopeWiringTest {
     fun independentClientAndVideoGuardsRemainOutsideTheScope() {
         val code = normalizeWhitespace(controllerCode)
         val eventRouterCode = normalizeWhitespace(routerCode)
-        assertTrue(code.contains("if (!scope.isActive || client.cancelled || currentClient !== client)"))
+        val component = normalizeWhitespace(pipeline)
+
+        // Phase 2g-2：恢复闭包迁入 StreamPipeline 后，client 取消/身份、sender 身份与主屏归属仍是
+        // scope 活跃之外的独立判据，经 ScreenRecoveryPort 读取而不是折进 AttemptScope。
+        assertTrue(
+            component.contains(
+                "if (!port.isScopeActive() || port.isClientCancelled(client) || !port.isCurrentClient(client))",
+            ),
+        )
+        assertTrue(
+            component.contains(
+                "if (!port.isScopeActive() || !port.isCurrentClient(client) || sender !== replacement)",
+            ),
+        )
+        assertTrue(component.contains("!port.phoneOwnsScreen(client)"))
         assertEquals(
             "事件通道 guard 必须留在 router，且只保留一处",
             1,
@@ -254,16 +257,9 @@ class AttemptScopeWiringTest {
                 .findAll(eventRouterCode)
                 .count(),
         )
-        assertTrue(
-            code.contains(
-                "if (!scope.isActive || currentClient !== client) return@recover ScreenRecoveryResult.ABORTED",
-            ),
-        )
-        assertTrue(
-            code.contains(
-                "if (!scope.isActive || currentClient !== client || videoSender !== replacement)",
-            ),
-        )
+        // 控制器仍以独立字段/比较承载 client 取消，而不是折进 scope 的 getter。
+        assertTrue(code.contains("override fun isClientCancelled(client: AirPlayClient): Boolean = client.cancelled"))
+        assertTrue(code.contains("override fun isCurrentClient(client: AirPlayClient): Boolean = currentClient === client"))
     }
 
     @Test

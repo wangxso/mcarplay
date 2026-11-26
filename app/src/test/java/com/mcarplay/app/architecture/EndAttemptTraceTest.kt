@@ -39,6 +39,10 @@ class EndAttemptTraceTest {
         KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("VideoEndedHandling.kt").readText()).code
     }
 
+    private val pipeline: String by lazy {
+        KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("session/StreamPipeline.kt").readText()).code
+    }
+
     private val mainActivity: String by lazy {
         SourceTree.scan("MainActivity.kt").code
     }
@@ -652,10 +656,11 @@ class EndAttemptTraceTest {
 
     @Test
     fun screenEndedCallbackFiltersStaleSenderBeforeSideEffects() {
-        requireOrder(controller, "fun newScreenSender(", "onEnded = onVideoEnded@", "回调挂在 newScreenSender")
+        // Phase 2g-2：发送端工厂迁入 session/StreamPipeline；onEnded 必须把真正结束的 sender 实例传回控制器钩子。
+        requireOrder(pipeline, "fun newScreenSender(", "plan.hooks.onEnded(created)", "回调挂在 newScreenSender")
+        requireContains(pipeline, "internal interface ScreenSenderHooks", "发送端回调必须经窄端口注入")
         requireContains(controller, "VideoEndedHandling(", "onEnded 收尾 helper 已接入")
-        requireOrder(controller, "VideoEndedHandling(", "onEnded = onVideoEnded@", "adapter 先于回调")
-        val callback = lambdaAfter(controller, "onEnded = onVideoEnded@").removePrefix("{").trimStart()
+        val callback = normalize(function(controller, "onEnded"))
         requireContains(callback, "videoEndedHandling.handle(", "onEnded 直接委托 helper")
         requireContains(callback, "override val senderIdentity: () -> VideoSender = { sender }", "延迟读取真实 sender 身份")
         requireContains(callback, "override val carLifeBinding: () -> CarLifeSession? = { carLife }", "延迟读取真实 CarLife 绑定")
@@ -678,14 +683,19 @@ class EndAttemptTraceTest {
             "adapter 必须挂接 actions",
         )
         requireOrder(adapter, "override val currentSender: VideoSender?", "get() = videoSender", "sender 身份必须动态转发")
-        requireOrder(adapter, "override val outputSender: VideoSender?", "get() = carLifeOutput?.sender", "输出身份必须动态转发")
+        requireOrder(
+            adapter,
+            "override val outputSender: VideoSender?",
+            "get() = streamPipeline.outputSender()",
+            "输出身份必须动态转发",
+        )
         requireOrder(adapter, "override val nativeBridge: CarLifeAudioBridge?", "get() = nativeAudioBridge", "音频桥必须动态转发")
         requireOrder(adapter, "override val btClient: Iap2BluetoothClient?", "get() = bluetoothClient", "蓝牙客户端必须动态转发")
         requireOrder(adapter, "override val context: Context?", "get() = appContext", "Context 必须动态转发")
         requireOrder(adapter, "override fun log(message: String)", "appendLog(message)", "日志委托 SC")
         requireOrder(adapter, "override fun stopCarLife(carLife: CarLifeSession)", "carLife.stop()", "CarLife stop 委托叶子")
         requireOrder(adapter, "override fun releaseCarLife(carLife: CarLifeSession)", "releaseCarLifeSession(carLife)", "CarLife 释放委托叶子")
-        requireOrder(adapter, "override fun clearCarLifeOutput()", "carLifeOutput = null", "输出清理委托 SC")
+        requireOrder(adapter, "override fun clearCarLifeOutput()", "streamPipeline.clearOutput()", "输出清理委托组件")
         requireOrder(adapter, "override fun recordAutoReconnectOutcome(", "DiagnosticCode.VIDEO_CLOSED", "记账必须透传 VIDEO_CLOSED")
         requireOrder(adapter, "override fun disconnect(context: Context)", "DiagnosticCode.VIDEO_CLOSED", "终态收尾必须透传 VIDEO_CLOSED")
         val helper = videoEndedFunction("handle")
@@ -823,7 +833,16 @@ class EndAttemptTraceTest {
         requireContains(slotBridge, "get() = nativeAudioBridge", "bridge getter 逐次转发")
         requireContains(slotBridge, "nativeAudioBridge = value", "bridge setter 只写原字段")
         requireContains(slotContext, "get() = appContext", "context getter 逐次转发")
-        requireContains(slotScope, "clearRecovery() { screenStreamRecovery = null", "clear recovery 只写原字段")
+        requireContains(
+            slotScope,
+            "clearRecovery() { streamPipeline.clearRecovery()",
+            "clear recovery 委托组件（Phase 2g-2 起字段归组件）",
+        )
+        requireContains(
+            normalize(function(pipeline, "clearRecovery")),
+            "recovery = null",
+            "组件清恢复闭包只写自身字段",
+        )
         requireContains(slotScope, "clearSharedSecret() { currentSharedSecret = null", "clear secret 只写原字段")
         requireContains(slotScope, "clearAudioHost() { currentAudioHost = null", "clear host 只写原字段")
         val markCancelled = memberFunction(source = slotScope, kind = "", name = "markCancelled", scope = slotScope)
@@ -984,11 +1003,12 @@ class EndAttemptTraceTest {
         val bodyTop = normalize(rawScFunctionLast("attributeAudioTeardown"))
         val teardownBlock = normalize(audioTeardownConstructorBlock())
         requireContains(bodyTop, "audioTeardown.attribute()", "收尾必须委托音频拆链归因")
-        requireContains(teardownBlock, "profile = activeAudioProfile", "音频档位必须来自 active profile")
-        requireContains(teardownBlock, "startedAtMs = activeAudioStartedAt", "音频起点必须来自真实状态")
-        requireContains(teardownBlock, "receiverKey = activeAudioReceiverKey", "音频身份必须来自真实状态")
+        requireContains(teardownBlock, "profile = audioChannelState.profile", "音频档位必须来自 active profile")
+        requireContains(teardownBlock, "startedAtMs = audioChannelState.startedAtMs", "音频起点必须来自真实状态")
+        requireContains(teardownBlock, "receiverKey = audioChannelState.receiverKey", "音频身份必须来自真实状态")
         requireContains(teardownBlock, "clearState = { clearActiveAudioState() }", "音频状态清理必须委托 SC")
-        requireOrder(teardownBlock, "profile = activeAudioProfile", "currentClient?.let { client ->", "身份状态先于动态 client 守卫")
+        requireContains(scFunction("clearActiveAudioState"), "audioChannelState.clear()", "清理必须委托共享三槽")
+        requireOrder(teardownBlock, "profile = audioChannelState.profile", "currentClient?.let { client ->", "身份状态先于动态 client 守卫")
         requireContains(teardownBlock, "currentClient?.let { client ->", "看门狗必须读取动态当前 client")
         requireOrder(teardownBlock, "currentClient?.let { client ->", "Mib3LinkWatchdog(", "动态 client 先构造看门狗")
         requireContains(teardownBlock, "armed = client.mib3LinkArmed", "MIB3 布防状态必须透传")

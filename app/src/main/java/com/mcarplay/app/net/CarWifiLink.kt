@@ -1,5 +1,8 @@
 package com.mcarplay.app.net
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
 /**
  * 车机 Wi-Fi 入网与进程网络绑定机制抽象（Phase 2c-1）。
  *
@@ -58,6 +61,7 @@ internal interface CarWifiLink<N : Any> {
         quickFallback: (() -> N?)? = null,
         deepFallback: (() -> N?)? = null,
         userChoicePending: ((Long) -> Boolean)? = null,
+        awaitLatch: (CountDownLatch, Long) -> Boolean = { latch, ms -> latch.await(ms, TimeUnit.MILLISECONDS) },
     ): JoinResult<N>
 
     /** 绑定当前已连接的 Wi-Fi 网络。 */

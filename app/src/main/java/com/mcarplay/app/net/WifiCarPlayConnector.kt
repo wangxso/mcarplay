@@ -342,6 +342,8 @@ internal class WifiCarPlayConnector(
         deepFallback: (() -> Network?)?,
         /** 参数为请求发出时刻（uptimeMillis）；返回 true 表示系统选择框正等用户选择。 */
         userChoicePending: ((Long) -> Boolean)?,
+        /** 中性等待端口：生产侧绑定可取消的 `scope.await`/`SessionCancelSignal.await`。 */
+        awaitLatch: (CountDownLatch, Long) -> Boolean,
     ): JoinResult<Network> {
         val specifier =
             buildSpecifier(ssid, passphrase, securityType)
@@ -373,7 +375,7 @@ internal class WifiCarPlayConnector(
         val secondWindowMs = minOf(timeoutMillis - firstWindowMs, 20_000L).coerceAtLeast(0)
         val unavailable = AtomicBoolean(false)
         var network =
-            requestAndAwait(ssid, request, firstWindowMs, isCancelled, unavailable, userChoicePending, timeoutMillis)
+            requestAndAwait(ssid, request, firstWindowMs, isCancelled, unavailable, userChoicePending, timeoutMillis, awaitLatch)
         // 系统明确拒绝（onUnavailable：用户拒了授权框/热点不在范围）后重发无意义，
         // 只会再拒一次——与挂起（零回调）必须区分开。
         if (network == null && !isCancelled() && !unavailable.get() && secondWindowMs > 0) {
@@ -389,7 +391,7 @@ internal class WifiCarPlayConnector(
             }
             if (!isCancelled()) {
                 log("WiFi: 首窗 ${firstWindowMs / 1000}s 零回调——specifier 可能挂起，重发网络请求（实测重发 1.6s 可入网）")
-                network = requestAndAwait(ssid, request, secondWindowMs, isCancelled, unavailable)
+                network = requestAndAwait(ssid, request, secondWindowMs, isCancelled, unavailable, awaitLatch = awaitLatch)
             }
             if (network == null && !isCancelled() && !unavailable.get()) {
                 release()
@@ -418,6 +420,7 @@ internal class WifiCarPlayConnector(
         unavailable: AtomicBoolean,
         userChoicePending: ((Long) -> Boolean)? = null,
         holdLimitMillis: Long = timeoutMillis,
+        awaitLatch: (CountDownLatch, Long) -> Boolean = { latch, ms -> latch.await(ms, TimeUnit.MILLISECONDS) },
     ): Network? {
         val latch = CountDownLatch(1)
         val result = AtomicReference<Network?>(null)
@@ -483,10 +486,11 @@ internal class WifiCarPlayConnector(
             }
             if (isCancelled()) return null
             try {
-                if (latch.await(200, TimeUnit.MILLISECONDS)) break
+                if (awaitLatch(latch, 200L)) break
             } catch (_: InterruptedException) {
                 return null
             }
+            if (isCancelled()) return null
         }
         return result.get()?.takeIf { it == currentNetwork }
     }

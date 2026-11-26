@@ -16,10 +16,15 @@ concurrency:
 jobs:
   rgp07-two-phase-process-restart:
     name: Auto-reconnect prefs RGP07 and RGP08
-    runs-on: ubuntu-24.04
+    # Intel macOS is the only GitHub-hosted macOS label that exposes HVF: Apple Silicon
+    # hosted runners do not support nested virtualization, so an arm64 macOS job cannot
+    # accelerate the emulator. Override with the INSTRUMENTATION_RUNNER_LABEL repository
+    # variable (self-hosted Linux/KVM or a bare-metal Mac); Linux keeps the /dev/kvm path.
+    runs-on: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'macos-15-intel' }}
     timeout-minutes: 45
     env:
       PACKAGE_ID: com.mcarplay.app
+      INSTRUMENTATION_RUNNER_LABEL: ${{ vars.INSTRUMENTATION_RUNNER_LABEL || 'macos-15-intel' }}
       INSTRUMENTATION_TARGET: com.mcarplay.app.test/androidx.test.runner.AndroidJUnitRunner
       PHASE1_CLASS: com.mcarplay.app.bt.Phase1WriterTest
       PHASE2_CLASS: com.mcarplay.app.bt.Phase2ReaderTest
@@ -33,6 +38,48 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate runner platform
+        if: runner.os != 'Linux' && runner.os != 'macOS'
+        run: |
+          echo "::error::Instrumentation requires a Linux runner with KVM or an Apple Silicon macOS runner with HVF; got ${{ runner.os }}"
+          exit 1
+
+      - name: Validate Linux KVM acceleration
+        if: runner.os == 'Linux'
+        run: |
+          echo "Runner label: $INSTRUMENTATION_RUNNER_LABEL"
+          if [[ "$(uname -s)" != "Linux" ]]; then
+            echo "::error::Instrumentation emulator requires a Linux runner with KVM"
+            exit 1
+          fi
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [[ ! -e /dev/kvm ]]; then
+            echo "::error::KVM acceleration unavailable: /dev/kvm is missing; use a KVM-capable runner"
+            exit 1
+          fi
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            echo "::error::KVM acceleration unavailable: /dev/kvm is not readable and writable"
+            exit 1
+          fi
+          echo "KVM acceleration decision: enabled (/dev/kvm is usable)"
+
+      - name: Validate macOS HVF acceleration
+        if: runner.os == 'macOS'
+        run: |
+          echo "Runner label: $INSTRUMENTATION_RUNNER_LABEL"
+          echo "Runner platform: $(uname -s) $(sw_vers -productVersion) arch=$(uname -m)"
+          hv_support="$(sysctl -n kern.hv_support 2>/dev/null || echo missing)"
+          hv_disable="$(sysctl -n kern.hv_disable 2>/dev/null || echo missing)"
+          echo "kern.hv_support=$hv_support kern.hv_disable=$hv_disable"
+          if [[ "$hv_support" != "1" ]]; then
+            echo "::error::HVF acceleration unavailable (kern.hv_support=$hv_support): Apple Silicon GitHub-hosted runners do not expose nested virtualization, so macos-15 cannot accelerate the emulator. Use the default macos-15-intel label, a bare-metal Mac, or a Linux runner with KVM."
+            exit 1
+          fi
+          echo "Hardware acceleration decision: enabled (macOS HVF on $(uname -m), image arch follows the runner architecture)"
+
       - uses: ./.github/actions/setup-build
 
       - name: Build app and instrumentation APKs
@@ -45,17 +92,24 @@ jobs:
 
       - uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         env:
-          ANDROID_I_WANT_MY_TCG: "yes"
           EXPECTED_SERIAL: emulator-5554
         with:
           api-level: 34
           target: google_apis
-          arch: x86_64
+          # The system image must match the runner architecture: Intel hosts and Linux use
+          # x86_64, a bare-metal Apple Silicon Mac uses arm64-v8a. Both stay on HVF/KVM.
+          arch: ${{ runner.arch == 'ARM64' && 'arm64-v8a' || 'x86_64' }}
           profile: pixel_5
+          # macos-15-intel has 4 vCPUs; the default of 2 made the cold boot take ~10 minutes.
+          cores: 4
           avd-name: rgp07-rgp08-emulator
           emulator-boot-timeout: 1200
-          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -no-snapshot-save
+          disable-linux-hw-accel: 'false'
+          emulator-options: -accel on -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -no-snapshot-save
           script: >-
+            "$ANDROID_HOME/emulator/emulator" -accel-check || true;
+            adb -s "$EXPECTED_SERIAL" shell settings put global verifier_verify_adb_installs 0;
+            adb -s "$EXPECTED_SERIAL" shell settings put global package_verifier_enable 0;
             RGP08_RUN_ATTEMPT="$RGP08_RUN_ATTEMPT" APP_APK="$GITHUB_WORKSPACE/app/build/outputs/apk/standard/debug/app-standard-debug.apk"
             ANDROID_TEST_APK="$GITHUB_WORKSPACE/app/build/outputs/apk/androidTest/standard/debug/app-standard-debug-androidTest.apk"
             OUTPUT_DIR="$RUNNER_TEMP/instrumentation" bash "$GITHUB_WORKSPACE/.github/scripts/run-rgp07-rgp08.sh"

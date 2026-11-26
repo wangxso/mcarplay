@@ -12,7 +12,8 @@ object CompatibilityPrefs {
     private const val KEY_VEHICLE_PRESET = "compat_vehicle_preset"
     private const val KEY_AUDIO_BASELINE = "compat_audio_baseline"
 
-    private const val KEY_PASSAT_RETURN = "compat_passat_return_strategy"
+    // 历史持久化键：中性化只改 Kotlin API，不改字符串，老安装的选择继续生效。
+    private const val KEY_SCREEN_RETURN = "compat_passat_return_strategy"
     private const val KEY_KNOWN_ORA03 = "compat_known_ora03_"
 
     const val PLAIN_FALLBACK_DEFAULT = false
@@ -78,18 +79,18 @@ object CompatibilityPrefs {
             .apply()
     }
 
-    /** 帕萨特「回主界面再进」实验策略；默认关，仅用户手动选择时生效。 */
-    fun passatReturnStrategy(context: Context): PassatReturnStrategy =
-        PassatReturnStrategy.fromKey(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PASSAT_RETURN, null))
+    /** 回屏策略（原帕萨特「回主界面再进」实验）；默认关，只有手动选择大众时由兼容层读取。 */
+    fun screenReturnStrategy(context: Context): ScreenReturnStrategy =
+        ScreenReturnStrategy.fromKey(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_SCREEN_RETURN, null))
 
-    fun setPassatReturnStrategy(
+    fun setScreenReturnStrategy(
         context: Context,
-        strategy: PassatReturnStrategy,
+        strategy: ScreenReturnStrategy,
     ) {
         context
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_PASSAT_RETURN, strategy.key)
+            .putString(KEY_SCREEN_RETURN, strategy.key)
             .apply()
     }
 }

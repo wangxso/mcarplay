@@ -1121,7 +1121,7 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, com.mcarplay.app.update.UpdateActivity::class.java))
         }
         findViewById<View>(R.id.btnBtSnoop).setOnClickListener {
-            startActivity(Intent(this, com.mcarplay.app.diagnostics.btsnoop.BtSnoopActivity::class.java))
+            startActivity(Intent(this, com.mcarplay.app.ui.BtSnoopActivity::class.java))
         }
         findViewById<View>(R.id.btnLanguage).setOnClickListener { showLanguagePicker() }
         updateLanguageRow()
