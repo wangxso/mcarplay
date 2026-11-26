@@ -7,6 +7,8 @@ import com.mcarplay.app.SessionHandoffOwnership
 import com.mcarplay.app.audio.AudioCodec
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverObservation
+import com.mcarplay.app.compat.VehiclePreset
+import com.mcarplay.app.compat.VehiclePresetRuntime
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.net.AirPlayFeatures
@@ -26,6 +28,249 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 class ReceiverCompatibilityIntegrationTest {
+    @Test
+    fun gs3ExplicitStartClaimsA500ScreenAndAnnouncesItWithoutTakingAudio() {
+        AirPlayRecordLifecycleTest.Peer().use { peer ->
+            val previousPreset = VehiclePresetRuntime.current
+            VehiclePresetRuntime.current = VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW
+            val intent = ExplicitStartScreenClaim().apply { manualStart() }
+            val claim = requireNotNull(intent.lease())
+            intent.adopt(claim)
+            val logs = mutableListOf<String>()
+            val client =
+                AirPlayClient(
+                    endpoint().copy(
+                        airPlayPort = peer.port,
+                        receiverSignals = ReceiverProfile.Signals(),
+                    ),
+                    log = logs::add,
+                    explicitStartScreenClaim = claim,
+                )
+            try {
+                peer.reply = { request ->
+                    when (request.path) {
+                        "/setup" ->
+                            request.respond(
+                                200,
+                                BinaryPlist.encode(mapOf("eventPort" to 0L, "timingPort" to 0L)),
+                            )
+
+                        "/info" ->
+                            request.respond(
+                                200,
+                                BinaryPlist.encode(
+                                    mapOf(
+                                        "displays" to listOf(mapOf("uuid" to "display-test")),
+                                        "modes" to
+                                            mapOf(
+                                                "resources" to
+                                                    listOf(
+                                                        modeResource(
+                                                            ModeArbiter.SCREEN,
+                                                            ModeArbiter.TRANSFER_TAKE,
+                                                            ModeArbiter.PRIORITY_USER_INITIATED,
+                                                            500,
+                                                        ),
+                                                        modeResource(
+                                                            ModeArbiter.MAIN_AUDIO,
+                                                            ModeArbiter.TRANSFER_TAKE,
+                                                            ModeArbiter.PRIORITY_USER_INITIATED,
+                                                            ModeArbiter.CONSTRAINT_NEVER,
+                                                        ),
+                                                    ),
+                                            ),
+                                    ),
+                                ),
+                            )
+
+                        "/command" -> request.respond(200)
+                        else -> request.respond(200)
+                    }
+                }
+                assertTrue(client.reconnect())
+                val setup = client.runSetup()
+                assertNotNull(setup)
+                assertTrue(client.modes.phoneOwnsScreen)
+                assertFalse("Taking the screen for GS3 must leave main audio with the head unit", client.modes.phoneOwnsAudio)
+                assertTrue(logs.any { it.contains("MODE: GS3 用户手动启动且主屏约束≤userInitiated") })
+                assertTrue("The intent must survive until modesChanged is acknowledged", claim.isPending())
+                assertTrue(client.assertModes(acknowledgeInitialScreenClaim = true))
+                assertFalse(claim.isPending())
+
+                assertEquals("SETUP", peer.next()!!.method)
+                assertEquals("/info", peer.next()!!.path)
+                val modesRequest = peer.next()!!
+                assertEquals("/command", modesRequest.path)
+                val body = BinaryPlist.parse(modesRequest.body) as Map<*, *>
+                assertEquals("modesChanged", body["type"])
+                val resources = ((body["params"] as Map<*, *>)["resources"] as List<*>).map { it as Map<*, *> }
+                assertEquals(ModeArbiter.Entity.CONTROLLER.code, resources.first { it["resourceID"] == ModeArbiter.SCREEN }["entity"])
+                assertEquals(
+                    "The initial non-user-initiated modesChanged must not steal main audio",
+                    ModeArbiter.Entity.ACCESSORY.code,
+                    resources.first { it["resourceID"] == ModeArbiter.MAIN_AUDIO }["entity"],
+                )
+                assertFalse(claim.consume())
+            } finally {
+                client.close()
+                VehiclePresetRuntime.current = previousPreset
+            }
+        }
+    }
+
+    @Test
+    fun gs3ExplicitClaimWaitsWhenInitialAnnouncementNoLongerOwnsTheScreen() {
+        AirPlayRecordLifecycleTest.Peer().use { peer ->
+            val previousPreset = VehiclePresetRuntime.current
+            VehiclePresetRuntime.current = VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW
+            val intent = ExplicitStartScreenClaim().apply { manualStart() }
+            val claim = requireNotNull(intent.lease())
+            intent.adopt(claim)
+            val client =
+                AirPlayClient(
+                    endpoint().copy(
+                        airPlayPort = peer.port,
+                        receiverSignals = ReceiverProfile.Signals(),
+                    ),
+                    log = {},
+                    explicitStartScreenClaim = claim,
+                )
+            try {
+                peer.reply = { request ->
+                    when (request.path) {
+                        "/setup" -> request.respond(200, BinaryPlist.encode(mapOf("eventPort" to 0L)))
+                        "/info" ->
+                            request.respond(
+                                200,
+                                BinaryPlist.encode(
+                                    mapOf(
+                                        "displays" to listOf(mapOf("uuid" to "display-test")),
+                                        "modes" to
+                                            mapOf(
+                                                "resources" to
+                                                    listOf(
+                                                        modeResource(
+                                                            ModeArbiter.SCREEN,
+                                                            ModeArbiter.TRANSFER_TAKE,
+                                                            ModeArbiter.PRIORITY_USER_INITIATED,
+                                                            500,
+                                                        ),
+                                                    ),
+                                            ),
+                                    ),
+                                ),
+                            )
+
+                        else -> request.respond(200)
+                    }
+                }
+                assertTrue(client.reconnect())
+                assertNotNull(client.runSetup())
+                assertTrue(client.modes.phoneOwnsScreen)
+
+                client.modes.onChangeModes(
+                    mapOf(
+                        "resources" to
+                            listOf(
+                                modeResource(
+                                    ModeArbiter.SCREEN,
+                                    ModeArbiter.TRANSFER_TAKE,
+                                    ModeArbiter.PRIORITY_USER_INITIATED,
+                                    500,
+                                ),
+                            ),
+                    ),
+                )
+                assertFalse(client.modes.phoneOwnsScreen)
+                assertTrue(client.assertModes(acknowledgeInitialScreenClaim = true))
+                assertTrue("A receiver-owned announcement must not consume the retry intent", claim.isPending())
+
+                assertEquals("SETUP", peer.next()!!.method)
+                assertEquals("/info", peer.next()!!.path)
+                val modesRequest = peer.next()!!
+                val body = BinaryPlist.parse(modesRequest.body) as Map<*, *>
+                val resources = ((body["params"] as Map<*, *>)["resources"] as List<*>).map { it as Map<*, *> }
+                assertEquals(ModeArbiter.Entity.ACCESSORY.code, resources.first { it["resourceID"] == ModeArbiter.SCREEN }["entity"])
+            } finally {
+                client.close()
+                VehiclePresetRuntime.current = previousPreset
+            }
+        }
+    }
+
+    @Test
+    fun gs3ExplicitStartLeavesNeverConstraintsAndAutomaticStartsUntouched() {
+        AirPlayRecordLifecycleTest.Peer().use { peer ->
+            val previousPreset = VehiclePresetRuntime.current
+            VehiclePresetRuntime.current = VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW
+            val intent = ExplicitStartScreenClaim().apply { manualStart() }
+            val claim = requireNotNull(intent.lease())
+            intent.adopt(claim)
+            val client =
+                AirPlayClient(
+                    endpoint().copy(
+                        airPlayPort = peer.port,
+                        receiverSignals = ReceiverProfile.Signals(),
+                    ),
+                    log = {},
+                    explicitStartScreenClaim = claim,
+                )
+            try {
+                peer.reply = { request ->
+                    when (request.path) {
+                        "/setup" -> request.respond(200, BinaryPlist.encode(mapOf("eventPort" to 0L)))
+                        "/info" ->
+                            request.respond(
+                                200,
+                                BinaryPlist.encode(
+                                    mapOf(
+                                        "displays" to listOf(mapOf("uuid" to "display-test")),
+                                        "modes" to
+                                            mapOf(
+                                                "resources" to
+                                                    listOf(
+                                                        modeResource(
+                                                            ModeArbiter.SCREEN,
+                                                            ModeArbiter.TRANSFER_TAKE,
+                                                            ModeArbiter.PRIORITY_USER_INITIATED,
+                                                            ModeArbiter.CONSTRAINT_NEVER,
+                                                        ),
+                                                    ),
+                                            ),
+                                    ),
+                                ),
+                            )
+
+                        else -> request.respond(200)
+                    }
+                }
+                assertTrue(client.reconnect())
+                assertNotNull(client.runSetup())
+                assertFalse("A 1000 constraint must remain with the head unit", client.modes.phoneOwnsScreen)
+
+                val automatic =
+                    AirPlayClient(
+                        endpoint().copy(
+                            airPlayPort = peer.port,
+                            receiverSignals = ReceiverProfile.Signals(),
+                        ),
+                        log = {},
+                        explicitStartScreenClaim = ExplicitStartScreenClaim().lease(),
+                    )
+                try {
+                    assertTrue(automatic.reconnect())
+                    assertNotNull(automatic.runSetup())
+                    assertFalse("An automatic start must not claim the screen", automatic.modes.phoneOwnsScreen)
+                } finally {
+                    automatic.close()
+                }
+            } finally {
+                client.close()
+                VehiclePresetRuntime.current = previousPreset
+            }
+        }
+    }
+
     @Test
     fun mdnsRefreshRetainsPrivateBindingAndUpdatesCapabilityFingerprint() {
         val observation = ReceiverObservation("local-private-binding", 1, 1)
@@ -475,6 +720,20 @@ class ReceiverCompatibilityIntegrationTest {
         audioType: String,
         output: Long,
     ): Map<String, Any> = mapOf("type" to type, "audioType" to audioType, "audioOutputFormats" to output)
+
+    private fun modeResource(
+        resourceId: Long,
+        transferType: Int,
+        priority: Int,
+        constraint: Int,
+    ): Map<String, Long> =
+        mapOf(
+            "resourceID" to resourceId,
+            "transferType" to transferType.toLong(),
+            "transferPriority" to priority.toLong(),
+            "takeConstraint" to constraint.toLong(),
+            "borrowConstraint" to 100L,
+        )
 
     private fun endpoint() =
         Iap2SenderSession.CarPlayEndpoint(

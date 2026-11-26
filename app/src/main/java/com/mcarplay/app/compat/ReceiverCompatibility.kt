@@ -99,6 +99,17 @@ object ReceiverCompatibility {
          * 只允许手动 GS3 预设启用，其它接收端继续按原蓝牙断开策略收尾。
          */
         val keepNetworkSessionDuringSetupHandoffOnBluetoothLoss: Boolean = false,
+        /**
+         * 用户明确发起连接时，是否允许在初始 `/info` 车机持有主屏且约束不高于 userInitiated 时
+         * 由手机接管主屏。
+         *
+         * 2023 款传祺 GS3 影速偶发白屏（2026-11-26 报告 `36a2e771`）：CarWith 持续出帧、音频始终
+         * 正常，但 `/info modes` 以 500/500 把主屏交给车机，[com.mcarplay.app.video.ScreenOutputGate]
+         * 因主屏不归手机连续跳过 3016 / 2796 帧。车机之后发 `requestUI` 时现有请求路径能正常恢复，
+         * 故此开关只在用户点击连接后的首轮协商补一次同语义的主屏接管，且始终不接管主音频。
+         * 自动重连、CarWith 主动返回车机和 501/1000 约束保持原行为。
+         */
+        val claimScreenOnExplicitStart: Boolean = false,
     )
 
     data class PairingFallback(
@@ -152,6 +163,7 @@ object ReceiverCompatibility {
                     iap2InitialMaxOutgoing = Iap2LinkEngine.DEFAULT_MAX_OUTGOING,
                     waitForIap2PeerMarker = false,
                     keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = false,
+                    claimScreenOnExplicitStart = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -188,7 +200,13 @@ object ReceiverCompatibility {
                     iap2InitialMaxOutgoing = Iap2LinkEngine.MAX_OUTGOING_LIMIT,
                     waitForIap2PeerMarker = true,
                     keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = true,
-                    rules = policy.rules + "manual.trumpchi-gs3.iap2-marker-first",
+                    claimScreenOnExplicitStart = true,
+                    rules =
+                        policy.rules +
+                            listOf(
+                                "manual.trumpchi-gs3.iap2-marker-first",
+                                "manual.trumpchi-gs3.explicit-start-screen-claim",
+                            ),
                 )
             // 奔驰 MB_E-P / 2025 GLC（issue #62）：先验证「CarWith 是否按车机尺寸出流」。
             // HyperCar 日志已给出同车机的 A/B：请求 1624x1278 时，未声明 DISABLE_RESOLUTION_OPTION

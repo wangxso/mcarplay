@@ -68,7 +68,12 @@ class AirPlayClient(
     private val retryTick: ((attempt: Int) -> Unit)? = null,
     initialInfoRequest: InfoRequest = InfoRequest.GET_EMPTY_PLIST,
     private val detecting: Boolean = false,
+    /** 用户明确启动所形成的一次性主屏接管意图租约；首个 modesChanged 成功后才确认消费。 */
+    private val explicitStartScreenClaim: ExplicitStartScreenClaim.Lease? = null,
 ) {
+    internal val explicitStartScreenClaimLease: ExplicitStartScreenClaim.Lease?
+        get() = explicitStartScreenClaim
+
     var negotiatedInfoRequest: InfoRequest = initialInfoRequest
         private set
 
@@ -883,11 +888,17 @@ class AirPlayClient(
 
     /** 本会话的资源仲裁状态：/info modes 初始化，事件通道的 changeModes / requestUI 更新。 */
     internal val modes = ModeArbiter()
+    private val initialScreenClaimAwaitingAck = AtomicBoolean(false)
 
     fun assertModes(
         releaseScreen: Boolean = false,
         expectedEpoch: Long = connectionEpoch,
+        acknowledgeInitialScreenClaim: Boolean = false,
     ): Boolean {
+        val resources = modes.resourcesPayload(releaseScreen)
+        val announcesPhoneScreen =
+            resources.firstOrNull { it["resourceID"] == ModeArbiter.SCREEN }?.get("entity") ==
+                ModeArbiter.Entity.CONTROLLER.code
         val body =
             BinaryPlist.encode(
                 linkedMapOf(
@@ -900,7 +911,7 @@ class AirPlayClient(
                                     linkedMapOf<String, Any?>("appStateID" to 3L, "entity" to 0L),
                                     linkedMapOf<String, Any?>("appStateID" to 1L, "entity" to 0L, "speechMode" to -1L),
                                 ),
-                            "resources" to modes.resourcesPayload(releaseScreen),
+                            "resources" to resources,
                         ),
                 ),
             )
@@ -925,7 +936,15 @@ class AirPlayClient(
                 if (response.isEmpty()) "" else " 应答体 " + ModesAckClassifier.describe(response, responseShape)
             val state = if (releaseScreen) "让出主屏，随后拿回" else modes.describe()
             log("AIRPLAY: modesChanged（$state）[$statusLine]$responseText")
-            statusLine.contains("200")
+            val accepted = statusLine.contains("200")
+            if (accepted &&
+                announcesPhoneScreen &&
+                acknowledgeInitialScreenClaim &&
+                initialScreenClaimAwaitingAck.getAndSet(false)
+            ) {
+                explicitStartScreenClaim?.consume()
+            }
+            accepted
         } catch (error: IOException) {
             log("AIRPLAY: modesChanged 失败 - ${error.message}")
             false
@@ -1206,6 +1225,23 @@ class AirPlayClient(
             // modes 决定车机如何仲裁主屏/主音频（requestUI 后能否切到 CarPlay），上一行被截断，单独完整记录
             root["modes"]?.let { log("AIRPLAY: /info modes=$it") }
             log("AIRPLAY: 资源仲裁初始 → ${modes.applyInitial(root["modes"] as? Map<*, *>)}")
+            val explicitStart = explicitStartScreenClaim?.isPending() == true
+            if (needsExplicitStartScreenClaim(explicitStart, compat, modes.phoneOwnsScreen)) {
+                val claim = modes.onUserRequestedUi(takeAudio = false)
+                initialScreenClaimAwaitingAck.set(claim.allowed)
+                if (claim.allowed) {
+                    log(
+                        "MODE: GS3 用户手动启动且主屏约束≤userInitiated——仅接管主屏（主音频保持原归属）",
+                    )
+                } else {
+                    log("MODE: GS3 用户手动启动但主屏约束高于 userInitiated——保持车机归属")
+                }
+            } else if (explicitStart && compat.claimScreenOnExplicitStart && modes.phoneOwnsScreen) {
+                // 主屏本就归手机；首个资源声明仍是对该手动启动意图的有效确认。
+                initialScreenClaimAwaitingAck.set(true)
+            } else if (explicitStartScreenClaim?.isPending() != true) {
+                initialScreenClaimAwaitingAck.set(false)
+            }
             // displays / displayPanels 已在 logInfoSummary 里逐条打印（含键值与几何对照），此处不再重复
             // 音频能力逐条打印（整行 /info 被 take(200) 截断，audioFormats 恰好断在中间）：
             // 决定 audioType 只能靠这里——奥迪 type=100 到底声明了 compatibility 还是 media

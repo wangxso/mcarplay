@@ -16,5 +16,11 @@ internal class EndedScreen<N : Any>(
         observation: ReceiverObservation?,
         invite: CtrlInviteEvidence<N>,
         retry: (CtrlInviteEvidence<N>) -> Unit,
-    ): Boolean = invite !== inviteBeforeStream && handoff.begin(observation, retryWhenReleased = { retry(invite) })
+    ): Boolean =
+        invite !== inviteBeforeStream &&
+            handoff.begin(
+                observation,
+                retryWhenReleased = { retry(invite) },
+                ownerContext = client.explicitStartScreenClaimLease,
+            )
 }

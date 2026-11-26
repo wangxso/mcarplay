@@ -193,7 +193,9 @@ class ReceiverCompatibilityTest {
         assertEquals(Iap2LinkEngine.MAX_OUTGOING_LIMIT, gs3.iap2InitialMaxOutgoing)
         assertTrue(gs3.waitForIap2PeerMarker)
         assertTrue(gs3.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss)
+        assertTrue(gs3.claimScreenOnExplicitStart)
         assertTrue("manual.trumpchi-gs3.iap2-marker-first" in gs3.rules)
+        assertTrue("manual.trumpchi-gs3.explicit-start-screen-claim" in gs3.rules)
         assertEquals(
             ReceiverCompatibility.BluetoothLossAction.END_SESSION,
             ReceiverCompatibility.bluetoothLossAction(gs3, videoRunning = false, networkHandoffReady = false),
@@ -213,6 +215,7 @@ class ReceiverCompatibilityTest {
             assertEquals(Iap2LinkEngine.DEFAULT_MAX_OUTGOING, policy.iap2InitialMaxOutgoing)
             assertFalse(policy.waitForIap2PeerMarker)
             assertFalse(policy.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss)
+            assertFalse(policy.claimScreenOnExplicitStart)
             assertEquals(
                 preset.name,
                 ReceiverCompatibility.BluetoothLossAction.END_SESSION,
