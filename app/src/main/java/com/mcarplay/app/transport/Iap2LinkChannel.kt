@@ -15,6 +15,8 @@ class Iap2LinkChannel(
     private val stream: DuplexStream,
     name: String = "iap2-link",
     private val role: Role = Role.INITIATOR,
+    private val initialMaxOutgoing: Int = Iap2LinkEngine.DEFAULT_MAX_OUTGOING,
+    private val waitForPeerMarker: Boolean = false,
     private val log: (String) -> Unit = {},
 ) : Closeable {
     enum class Role {
@@ -22,7 +24,7 @@ class Iap2LinkChannel(
         RESPONDER,
     }
 
-    private val engine = Iap2LinkEngine()
+    private val engine = Iap2LinkEngine(maxOutgoing = initialMaxOutgoing, waitForPeerMarker = waitForPeerMarker)
     private val lock = Object()
     private val controls = LinkedBlockingQueue<ByteArray?>()
     private val readyLatch = CountDownLatch(1)
@@ -48,10 +50,13 @@ class Iap2LinkChannel(
     /** 逐帧摘要日志预算（每方向每连接）。 */
     private var rxFrameLogs = 0
     private var txFrameLogs = 0
+    private var probeReadLogs = 0
 
     val isAlive: Boolean get() = !terminated
 
     init {
+        log("LINK: local initial maxOutgoing=$initialMaxOutgoing waitForPeerMarker=$waitForPeerMarker")
+        if (waitForPeerMarker) engine.onPeerMarkerReceived = { log("LINK probe rx: peer marker") }
         engine.onPeerSynchronizationAdopted = { sync ->
             log(
                 "LINK: 采纳对端会话表 maxOutgoing=${sync.maxOutgoing} maxLen=${sync.maxLength} " +
@@ -162,8 +167,13 @@ class Iap2LinkChannel(
                 if (count == 0) continue
                 synchronized(lock) {
                     if (terminated) return
-                    dumpInbound(buffer.copyOf(count))
-                    engine.feed(buffer.copyOf(count), nowMillis())
+                    if (waitForPeerMarker && !readySignalled && probeReadLogs < PROBE_READ_LOG_LIMIT) {
+                        probeReadLogs++
+                        log("LINK probe rx: bytes=$count")
+                    }
+                    val bytes = buffer.copyOf(count)
+                    dumpInbound(bytes)
+                    engine.feed(bytes, nowMillis())
                     processEventsLocked()
                     drainOutputLocked()
                     signalReadyLocked()
@@ -284,6 +294,7 @@ class Iap2LinkChannel(
 
     private companion object {
         const val PACER_POLL_MILLIS = 20L
+        const val PROBE_READ_LOG_LIMIT = 8
 
         /** 原始字节转储预算：rx 需覆盖车机全部协商帧（Audi 实测约 140B），给 512B 余量。 */
         // 预算按字节计。曾为 512/256：一次完整 bring-up 都盖不住（0x1D01 单帧即 565B），

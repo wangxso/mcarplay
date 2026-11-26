@@ -741,7 +741,12 @@ object SessionController {
         observation: ReceiverObservation? = null,
         peerAddress: String? = null,
     ) {
-        if (bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) return
+        if (bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) {
+            // 保留会话期间不能释放交接所有权。车机可能在 SETUP 后立即回连并重发
+            // 0x4301，而 sessionStarting 仍被本轮占用；释放后会放行这个端点，
+            // 进而 retireSession 掉仍在等待 RECORD 的 AirPlay TCP。
+            return
+        }
         // BT 客户端与服务端可能同时各有一条链路：迟到的非本轮链路断开不能释放本轮互斥，
         // 也不能把失败记到当前车机头上。
         val attemptPeer = activePeerAddress
@@ -1144,6 +1149,7 @@ object SessionController {
             videoSender?.isRunning == true,
             client?.networkHandoffReady == true,
             client?.bluetoothReleaseRequested == true,
+            client?.setupHandoffStarted == true,
         )
     }
 

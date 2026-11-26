@@ -1,5 +1,6 @@
 package com.mcarplay.app.compat
 
+import com.mcarplay.app.iap2.Iap2LinkEngine
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.net.AirPlayFeatures
 import org.junit.Assert.assertEquals
@@ -184,6 +185,45 @@ class ReceiverCompatibilityTest {
             ReceiverCompatibility.BluetoothLossAction.END_SESSION,
             ReceiverCompatibility.bluetoothLossAction(policy, false, false, bluetoothReleased = false),
         )
+    }
+
+    @Test
+    fun gs3PresetUsesMarkerFirstAndKeepsNetworkSessionDuringSetupHandoff() {
+        val gs3 = ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW)
+        assertEquals(Iap2LinkEngine.MAX_OUTGOING_LIMIT, gs3.iap2InitialMaxOutgoing)
+        assertTrue(gs3.waitForIap2PeerMarker)
+        assertTrue(gs3.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss)
+        assertTrue("manual.trumpchi-gs3.iap2-marker-first" in gs3.rules)
+        assertEquals(
+            ReceiverCompatibility.BluetoothLossAction.END_SESSION,
+            ReceiverCompatibility.bluetoothLossAction(gs3, videoRunning = false, networkHandoffReady = false),
+        )
+        assertEquals(
+            ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION,
+            ReceiverCompatibility.bluetoothLossAction(
+                gs3,
+                videoRunning = false,
+                networkHandoffReady = false,
+                setupHandoffStarted = true,
+            ),
+        )
+
+        listOf(VehiclePreset.AUTO, VehiclePreset.GENERIC).forEach { preset ->
+            val policy = ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = preset)
+            assertEquals(Iap2LinkEngine.DEFAULT_MAX_OUTGOING, policy.iap2InitialMaxOutgoing)
+            assertFalse(policy.waitForIap2PeerMarker)
+            assertFalse(policy.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss)
+            assertEquals(
+                preset.name,
+                ReceiverCompatibility.BluetoothLossAction.END_SESSION,
+                ReceiverCompatibility.bluetoothLossAction(
+                    policy,
+                    videoRunning = false,
+                    networkHandoffReady = false,
+                    setupHandoffStarted = true,
+                ),
+            )
+        }
     }
 
     @Test

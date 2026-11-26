@@ -1,5 +1,6 @@
 package com.mcarplay.app.compat
 
+import com.mcarplay.app.iap2.Iap2LinkEngine
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.net.AirPlayFeatures
 import java.security.MessageDigest
@@ -86,6 +87,18 @@ object ReceiverCompatibility {
          * 其它接收端保持关闭，避免一次改动同时影响所有车型。
          */
         val preferVehicleResolution: Boolean = false,
+        /** 手动车型实验覆盖的首个 iAP2 SYN 发送窗口；协议默认值为 4。 */
+        val iap2InitialMaxOutgoing: Int = Iap2LinkEngine.DEFAULT_MAX_OUTGOING,
+        /** 手动实验预设要求先等到对端 marker 时，是否暂缓发起本方 SYN。 */
+        val waitForIap2PeerMarker: Boolean = false,
+        /**
+         * 车机在初始 AirPlay SETUP 写出后主动关闭蓝牙，并用已建立的 AirPlay TCP 继续会话。
+         *
+         * 2023 款传祺 GS3 的首轮实车日志中，RFCOMM 比 `SETUP 200` 早约 110 ms 关闭；
+         * 仅等待 [com.mcarplay.app.airplay.AirPlayClient.sessionSetupAccepted] 会错过交接窗口。
+         * 只允许手动 GS3 预设启用，其它接收端继续按原蓝牙断开策略收尾。
+         */
+        val keepNetworkSessionDuringSetupHandoffOnBluetoothLoss: Boolean = false,
     )
 
     data class PairingFallback(
@@ -136,6 +149,9 @@ object ReceiverCompatibility {
                     reconnectOnStreamingInvite = false,
                     usePanelVideoGeometry = false,
                     preferVehicleResolution = false,
+                    iap2InitialMaxOutgoing = Iap2LinkEngine.DEFAULT_MAX_OUTGOING,
+                    waitForIap2PeerMarker = false,
+                    keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -165,6 +181,14 @@ object ReceiverCompatibility {
                     family = Family.CLASSIC_MIB3,
                     linkGeneration = ReceiverProfile.LinkGeneration.CLASSIC_MIB3,
                     rules = policy.rules + "manual.classic-mib3",
+                )
+            // 2023 款传祺 GS3 影速：先等车机 marker，再用 0x7F 窗口发起 iAP2。
+            VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW ->
+                policy.copy(
+                    iap2InitialMaxOutgoing = Iap2LinkEngine.MAX_OUTGOING_LIMIT,
+                    waitForIap2PeerMarker = true,
+                    keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = true,
+                    rules = policy.rules + "manual.trumpchi-gs3.iap2-marker-first",
                 )
             // 奔驰 MB_E-P / 2025 GLC（issue #62）：先验证「CarWith 是否按车机尺寸出流」。
             // HyperCar 日志已给出同车机的 A/B：请求 1624x1278 时，未声明 DISABLE_RESOLUTION_OPTION
@@ -296,8 +320,14 @@ object ReceiverCompatibility {
         networkHandoffReady: Boolean,
         /** 本会话已请求车机关蓝牙（disableBluetooth）：随后的蓝牙断开是预期结果，不收会话。 */
         bluetoothReleased: Boolean = false,
+        /** GS3 初始 SETUP 已写出但应答尚未返回时，车机可能先关闭蓝牙。 */
+        setupHandoffStarted: Boolean = false,
     ): BluetoothLossAction =
-        if (bluetoothReleased || videoRunning || (policy.bluetoothRole == BluetoothRole.NETWORK_HANDOFF && networkHandoffReady)) {
+        if (bluetoothReleased ||
+            videoRunning ||
+            (policy.bluetoothRole == BluetoothRole.NETWORK_HANDOFF && networkHandoffReady) ||
+            (policy.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss && setupHandoffStarted)
+        ) {
             BluetoothLossAction.KEEP_NETWORK_SESSION
         } else {
             BluetoothLossAction.END_SESSION

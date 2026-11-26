@@ -3,6 +3,7 @@ package com.mcarplay.app.airplay
 import android.app.Service
 import android.content.Intent
 import com.mcarplay.app.SessionController
+import com.mcarplay.app.SessionHandoffOwnership
 import com.mcarplay.app.audio.AudioCodec
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverObservation
@@ -13,6 +14,7 @@ import com.mcarplay.app.service.CarPlayService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -21,6 +23,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class ReceiverCompatibilityIntegrationTest {
     @Test
@@ -130,6 +133,259 @@ class ReceiverCompatibilityIntegrationTest {
     }
 
     @Test
+    fun gs3SetupHandoffKeepsNetworkSessionAcrossBothBluetoothClosePaths() {
+        val client = setupClient(endpoint().copy(receiverSignals = ReceiverProfile.Signals()))
+        Socket().use { socket ->
+            field("socket").set(client, socket)
+            setInitialSetupWritten(client, true)
+            val starting =
+                SessionController::class.java
+                    .getDeclaredField("sessionStarting")
+                    .apply { isAccessible = true }
+                    .get(SessionController) as AtomicBoolean
+            val previousStarting = starting.getAndSet(true)
+            val previousClient = SessionController.currentClient
+            val previousCancelled = SessionController.connectCancelled
+            val previousPreset = com.mcarplay.app.compat.VehiclePresetRuntime.current
+            SessionController.currentClient = client
+            SessionController.connectCancelled = false
+            com.mcarplay.app.compat.VehiclePresetRuntime.current =
+                com.mcarplay.app.compat.VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW
+            try {
+                val intent =
+                    object : Intent() {
+                        override fun getAction(): String = CarPlayService.ACTION_AUTO_STOP_SESSION
+                    }
+                assertEquals(Service.START_STICKY, CarPlayService().onStartCommand(intent, 0, 1))
+                SessionController.onSenderLinkClosed()
+                assertFalse(SessionController.connectCancelled)
+                assertTrue("GS3 交接期间仍须占住会话互斥，避免新端点拆掉待 RECORD 的 AirPlay 会话", starting.get())
+                assertTrue("只处理 ACL 广播时也不能放行并发端点", handoffOwnsObservation(client))
+
+                // 随后到达的 RFCOMM 关闭也必须幂等，不能把仍未完成的交接所有权释放掉。
+                SessionController.onSenderLinkClosed(client.currentEndpoint.observation)
+                assertTrue(starting.get())
+                assertTrue(handoffOwnsObservation(client))
+            } finally {
+                com.mcarplay.app.compat.VehiclePresetRuntime.current = previousPreset
+                SessionController.currentClient = previousClient
+                SessionController.connectCancelled = previousCancelled
+                starting.set(previousStarting)
+                client.close()
+            }
+        }
+    }
+
+    private fun handoffOwnsObservation(client: AirPlayClient): Boolean {
+        val ownership =
+            SessionController::class.java
+                .getDeclaredField("handoffOwnership")
+                .apply { isAccessible = true }
+                .get(SessionController) as SessionHandoffOwnership
+        return ownership.owns(client.currentEndpoint.observation)
+    }
+
+    @Test
+    fun setupHandoffStartsOnlyAfterInitialSetupWriteAndSurvivesDelayedResponse() {
+        AirPlayRecordLifecycleTest.Peer().use { peer ->
+            val setupResult = AtomicReference<AirPlayClient.SetupInfo?>(null)
+            val failure = AtomicReference<Throwable?>(null)
+            peer.reply = {}
+            val client =
+                AirPlayClient(
+                    endpoint().copy(
+                        airPlayPort = peer.port,
+                        receiverSignals = ReceiverProfile.Signals(),
+                    ),
+                    log = {},
+                )
+            assertTrue(client.reconnect())
+            assertFalse(client.setupHandoffStarted)
+            val runner =
+                Thread({
+                    try {
+                        setupResult.set(client.runSetup())
+                    } catch (error: Throwable) {
+                        failure.set(error)
+                    }
+                }, "gs3-setup-runner").apply {
+                    isDaemon = true
+                    start()
+                }
+            try {
+                val setupRequest = peer.next()!!
+                assertEquals("SETUP", setupRequest.method)
+                assertEquals("/setup", setupRequest.path)
+                val waitForWriteState = System.currentTimeMillis() + 2_000
+                while (!client.setupHandoffStarted && System.currentTimeMillis() < waitForWriteState) Thread.sleep(5)
+                assertTrue("SETUP 写出后、200 响应前必须开启交接窗口", client.setupHandoffStarted)
+                setupRequest.respond(200, BinaryPlist.encode(mapOf("eventPort" to 0L)))
+
+                exchangeSetupInfo(peer)
+                runner.join(2_000)
+                assertFalse(runner.isAlive)
+                assertNull(failure.get())
+                assertNotNull(setupResult.get())
+                assertTrue("控制 TCP 仍存活时，交接窗口应保持开启", client.setupHandoffStarted)
+
+                val recording =
+                    Thread(
+                        { setupResult.set(if (client.record()) setupResult.get() else null) },
+                        "gs3-record-runner",
+                    ).apply {
+                        isDaemon = true
+                        start()
+                    }
+                val recordRequest = peer.next()!!
+                assertEquals("RECORD", recordRequest.method)
+                recordRequest.respond(200)
+                recording.join(2_000)
+                assertFalse(recording.isAlive)
+                assertNotNull(setupResult.get())
+                assertTrue(client.sessionActive)
+            } finally {
+                client.close()
+            }
+        }
+    }
+
+    @Test
+    fun setupHandoffIsClearedAfterRejectedSetupIoFailureAndClose() {
+        AirPlayRecordLifecycleTest.Peer().use { peer ->
+            peer.reply = {}
+            val client =
+                AirPlayClient(
+                    endpoint().copy(
+                        airPlayPort = peer.port,
+                        receiverSignals = ReceiverProfile.Signals(),
+                    ),
+                    log = {},
+                )
+            try {
+                assertTrue(client.reconnect())
+                val setupResult = AtomicReference<AirPlayClient.SetupInfo?>(null)
+                val setupFailure = AtomicReference<Throwable?>(null)
+                val runner =
+                    Thread({
+                        try {
+                            setupResult.set(client.runSetup())
+                        } catch (error: Throwable) {
+                            setupFailure.set(error)
+                        }
+                    }, "gs3-rejected-setup").apply {
+                        isDaemon = true
+                        start()
+                    }
+                peer.next()!!.respond(403)
+                runner.join(2_000)
+                assertFalse(runner.isAlive)
+                assertNull(setupFailure.get())
+                assertNull(setupResult.get())
+                assertFalse(client.setupHandoffStarted)
+            } finally {
+                client.close()
+            }
+        }
+
+        AirPlayRecordLifecycleTest.Peer().use { peer ->
+            peer.reply = {}
+            val client =
+                AirPlayClient(
+                    endpoint().copy(
+                        airPlayPort = peer.port,
+                        receiverSignals = ReceiverProfile.Signals(),
+                    ),
+                    log = {},
+                )
+            try {
+                assertTrue(client.reconnect())
+                val setupResult = AtomicReference<AirPlayClient.SetupInfo?>(null)
+                val setupFailure = AtomicReference<Throwable?>(null)
+                val runner =
+                    Thread({
+                        try {
+                            setupResult.set(client.runSetup())
+                        } catch (error: Throwable) {
+                            setupFailure.set(error)
+                        }
+                    }, "gs3-io-failed-setup").apply {
+                        isDaemon = true
+                        start()
+                    }
+                peer
+                    .next()!!
+                    .connection.socket
+                    .close()
+                runner.join(2_000)
+                assertFalse(runner.isAlive)
+                assertNull(setupFailure.get())
+                assertNull(setupResult.get())
+                assertFalse(client.setupHandoffStarted)
+            } finally {
+                client.close()
+            }
+        }
+
+        AirPlayRecordLifecycleTest.Peer().use { peer ->
+            val client =
+                AirPlayClient(
+                    endpoint().copy(
+                        airPlayPort = peer.port,
+                        receiverSignals = ReceiverProfile.Signals(),
+                    ),
+                    log = {},
+                )
+            try {
+                assertTrue(client.reconnect())
+                var pending: AirPlayRecordLifecycleTest.Request? = null
+                peer.reply = { pending = it }
+                val setupResult = AtomicReference<AirPlayClient.SetupInfo?>(null)
+                val runner =
+                    Thread(
+                        {
+                            setupResult.set(client.runSetup())
+                        },
+                        "gs3-close-setup",
+                    ).apply {
+                        isDaemon = true
+                        start()
+                    }
+                val waitForRequest = System.currentTimeMillis() + 2_000
+                while (pending == null && System.currentTimeMillis() < waitForRequest) Thread.sleep(5)
+                while (!client.setupHandoffStarted && System.currentTimeMillis() < waitForRequest) Thread.sleep(5)
+                assertTrue("关闭前应已进入 SETUP 交接窗口", client.setupHandoffStarted)
+                client.close()
+                runner.join(2_000)
+                assertFalse(runner.isAlive)
+                assertNull(setupResult.get())
+                assertFalse(client.setupHandoffStarted)
+            } finally {
+                client.close()
+            }
+        }
+
+        val closed = setupClient(endpoint())
+        setInitialSetupWritten(closed, true)
+        assertFalse("没有控制 TCP 时不能进入交接窗口", closed.setupHandoffStarted)
+        Socket().use { socket ->
+            field("socket").set(closed, socket)
+            assertTrue(closed.setupHandoffStarted)
+            closed.close()
+            assertFalse(closed.setupHandoffStarted)
+        }
+    }
+
+    private fun exchangeSetupInfo(peer: AirPlayRecordLifecycleTest.Peer) {
+        val infoRequest = peer.next()!!
+        val info =
+            when {
+                infoRequest.path == "/info" -> mapOf("displays" to listOf(mapOf("uuid" to "display-test")))
+                else -> error("expected /info after SETUP, got ${infoRequest.method} ${infoRequest.path}")
+            }
+        infoRequest.respond(200, BinaryPlist.encode(info))
+    }
+
+    @Test
     fun declaredMediaFormatsDriveReceiverSpecificAudioSelection() {
         val client = AirPlayClient(endpoint(), log = {})
         setInfo(client, listOf(format(102, "media", 1L shl 23)))
@@ -233,6 +489,25 @@ class ReceiverCompatibilityIntegrationTest {
             ipAddresses = listOf("127.0.0.1"),
             receiverSignals = signals,
         )
+
+    private fun setupClient(
+        endpoint: Iap2SenderSession.CarPlayEndpoint,
+        log: (String) -> Unit = {},
+    ): AirPlayClient =
+        AirPlayClient(
+            endpoint.copy(
+                receiverSignals = endpoint.receiverSignals,
+            ),
+            log = log,
+        )
+
+    @Suppress("UNCHECKED_CAST")
+    private fun setInitialSetupWritten(
+        client: AirPlayClient,
+        value: Boolean,
+    ) {
+        (field("initialSetupWritten").get(client) as AtomicBoolean).set(value)
+    }
 
     private fun field(name: String) = AirPlayClient::class.java.getDeclaredField(name).apply { isAccessible = true }
 }

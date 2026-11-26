@@ -300,7 +300,7 @@ class Iap2BluetoothServer(
             StreamDuplexStream(socket.inputStream, socket.outputStream) {
                 runCatching { socket.close() }
             }
-        val channel = Iap2LinkChannel(stream, name = "iap2-bt", role = pairing.role, log = log)
+        val channel = createIap2BluetoothLinkChannel(stream, name = "iap2-bt", role = pairing.role, log = log)
         synchronized(channelLock) {
             activeChannel = channel
         }

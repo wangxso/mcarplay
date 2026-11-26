@@ -30,6 +30,7 @@ import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * AirPlay 客户端（Phase 2）：
@@ -255,6 +256,20 @@ class AirPlayClient(
 
     /** RECORD 和网络 iAP 认证均完成，软件接收端才可在首帧前释放蓝牙。 */
     val networkHandoffReady: Boolean get() = recordAccepted && networkIapAuthenticated
+
+    /** 初始 SETUP 请求已经成功写出（不等待响应）：GS3 可在此刻开始网络交接。 */
+    private val initialSetupWritten = AtomicBoolean(false)
+
+    /**
+     * GS3 的 SETUP 交接窗口：控制 TCP 仍存活、尚未开始有序停止，且初始 SETUP 已成功写出。
+     * 响应可能在车机关闭蓝牙之后才到，因此不能依赖 `sessionSetupAccepted`。
+     */
+    val setupHandoffStarted: Boolean
+        get() =
+            initialSetupWritten.get() &&
+                !sessionStopping &&
+                !controlChannelClosed &&
+                socket?.isClosed == false
 
     /** 本连接已请求车机关蓝牙（[releaseReceiverBluetooth]），随后的蓝牙断开属预期。 */
     @Volatile
@@ -650,6 +665,7 @@ class AirPlayClient(
     }
 
     fun close() {
+        initialSetupWritten.set(false)
         sessionSetupAccepted = false
         screenStreamUuid = null
         // 会话结束前记下 MIB3 订阅情况（issue #62）：突发后一条订阅都没有是「车机不认本会话」
@@ -1085,12 +1101,20 @@ class AirPlayClient(
                     "/setup",
                     body,
                     contentType = "application/x-apple-binary-plist",
+                    onWritten = {
+                        initialSetupWritten.set(true)
+                        if (policy.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss) {
+                            log("GS3: AirPlay SETUP 已发出，进入网络交接窗口——继续等待 RECORD")
+                        }
+                    },
                 )
             } catch (error: IOException) {
+                initialSetupWritten.set(false)
                 log("AIRPLAY: SETUP 失败 - ${error.message}")
                 return null
             }
         if (!statusLine.contains("200")) {
+            initialSetupWritten.set(false)
             log("AIRPLAY: SETUP 应答 [$statusLine]（自报 deviceID=$deviceId）")
             if (statusLine.contains("403")) {
                 // 403 的两类成因按可能性排序：设备过滤（WinPlay 等「只接受指定
@@ -3025,6 +3049,7 @@ class AirPlayClient(
                                 socket = newSocket
                                 activeAddress = address
                                 activeHost = addressLiteral(address)
+                                initialSetupWritten.set(false)
                                 sessionStopping = false
                                 true
                             }
@@ -3151,6 +3176,7 @@ class AirPlayClient(
         extraHeaders: List<Pair<String, String>> = emptyList(),
         expectedEpoch: Long? = null,
         allowDuringStop: Boolean = false,
+        onWritten: (() -> Unit)? = null,
     ): Pair<String, ByteArray> {
         val client = socket ?: throw IOException("未连接")
         // 主线程上 socket 写会抛 NetworkOnMainThreadException，而那时报文已加密、计数已前移：
@@ -3200,6 +3226,7 @@ class AirPlayClient(
                 val output = client.getOutputStream()
                 output.write(wire)
                 output.flush()
+                onWritten?.invoke()
             } catch (error: Throwable) {
                 synchronized(pendingLock) { pendingResponses.remove(cseq) }
                 throw error

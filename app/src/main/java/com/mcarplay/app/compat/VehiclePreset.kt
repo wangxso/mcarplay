@@ -20,6 +20,9 @@ enum class VehiclePreset {
     DIPLAY,
     CLASSIC_MIB3,
 
+    /** 2023 款传祺 GS3 影速：iAP2 先探测再发 SYN（窗口 0x7F），手动实验。 */
+    TRUMPCHI_GS3_IAP2_WINDOW,
+
     /**
      * 奔驰 MB_E-P / 2025 GLC（issue #62，AirPlay 480.7.4）：**实验选项，尚无实车验证**。
      *
