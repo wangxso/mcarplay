@@ -243,7 +243,11 @@ class SessionUiPortSourceContractTest {
         val code = KotlinSource.scan(producerBody("joinCarWifiSpecifier")).code
         val joinedCount = Regex("""ui\.phase\(t\(R\.string\.sc_joined\)\)""").findAll(code).count()
         assertTrue("specifier 成功与系统已连近路必须各写一次 sc_joined（当前共两处）", joinedCount == 2)
-        requireContains(code, "if (bindExistingCarWifi(connector, wifi.ssid) != null)", "specifier 失败近路必须走统一绑定")
+        requireContains(
+            code,
+            "if (bindExistingCarWifi(connector, wifi.ssid, sleepFn = sleepFn, isCancelled = isCancelled) != null)",
+            "specifier 失败近路必须走统一绑定并透传可取消等待端口",
+        )
     }
 
     @Test

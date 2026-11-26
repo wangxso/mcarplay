@@ -86,7 +86,7 @@ internal class ScreenOwnership<C : Any>(
                     }
                     val remain = atMs - (scheduling.uptimeMillis() - start)
                     if (remain <= 0) break
-                    scheduling.sleep(minOf(remain, 200L))
+                    scheduling.sleepFor(client, minOf(remain, 200L))
                 }
                 if (epoch != modesReclaimEpoch ||
                     clients.isCancelled(client) ||
@@ -140,7 +140,7 @@ internal class ScreenOwnership<C : Any>(
             if (request.retakeScreen && clients.phoneOwnsScreen(client)) {
                 if (clients.assertModes(client, releaseScreen = true, expectedEpoch = connectionGeneration)) {
                     try {
-                        scheduling.sleep(SCREEN_RETAKE_GAP_MS)
+                        scheduling.sleepFor(client, SCREEN_RETAKE_GAP_MS)
                     } catch (_: InterruptedException) {
                         return@control
                     }
@@ -204,7 +204,7 @@ internal class ScreenOwnership<C : Any>(
         val keyFramesBefore = runtime.forceKeyFrameCount
         scheduling.runBackground("takeback-check") check@{
             try {
-                scheduling.sleep(TAKE_BACK_CHECK_MS)
+                scheduling.sleepFor(client, TAKE_BACK_CHECK_MS)
             } catch (_: InterruptedException) {
                 return@check
             }
@@ -367,4 +367,10 @@ internal interface ScreenOwnershipScheduling {
     fun uptimeMillis(): Long
 
     fun sleep(millis: Long)
+
+    /** 按客户端所属轮次可取消休眠；默认回退 [sleep] 以兼容既有纯 JVM 测试替身。 */
+    fun sleepFor(
+        client: Any,
+        millis: Long,
+    ) = sleep(millis)
 }

@@ -1,9 +1,8 @@
 package com.mcarplay.app
 
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutionException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 
 /**
  * 同一轮连接内「同一个问题、同一个网络」的弹窗单飞。
@@ -109,21 +108,27 @@ internal class WifiPromptBroker<K : Any, T : Any>(
         future: CompletableFuture<Boolean?>,
         timeoutMs: Long,
         isExpired: () -> Boolean = { false },
+        awaitLatch: (CountDownLatch, Long) -> Boolean = { latch, ms -> latch.await(ms, TimeUnit.MILLISECONDS) },
     ): Boolean? {
+        val done = CountDownLatch(1)
+        future.whenComplete { _, _ -> done.countDown() }
         val deadline = System.currentTimeMillis() + timeoutMs
         while (true) {
             if (isExpired()) return null
             val remaining = deadline - System.currentTimeMillis()
             if (remaining <= 0) return null
-            try {
-                return future.get(minOf(remaining, EXPIRY_POLL_MS), TimeUnit.MILLISECONDS)
-            } catch (_: TimeoutException) {
-                // 继续循环：既等答案，也等取消。
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return null
-            } catch (_: ExecutionException) {
-                return null
+            val completed =
+                try {
+                    awaitLatch(done, minOf(remaining, EXPIRY_POLL_MS))
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return null
+                }
+            if (completed) {
+                return future.getNow(null)
+            }
+            if (done.count == 0L) {
+                return future.getNow(null)
             }
         }
     }

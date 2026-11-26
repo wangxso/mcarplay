@@ -121,4 +121,7 @@ internal class AttemptRegistry {
         synchronized(lock) {
             clientScopes[client]
         }
+
+    /** 当前活跃轮次作用域（供可取消的发现等待读取）。 */
+    fun activeScope(): RealAttemptScope? = synchronized(lock) { active }
 }

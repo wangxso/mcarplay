@@ -84,7 +84,11 @@ class ScreenOwnershipSourceContractTest {
         assertTrue("控制队列注入", scheduling.contains("override fun executeControl(task: () -> Unit) = controlActions.execute(task)"))
         assertTrue("后台任务保持 Bg.run", scheduling.contains("override fun runBackground(") && scheduling.contains("= Bg.run(name, task)"))
         assertTrue("单调 uptime 保持", scheduling.contains("override fun uptimeMillis(): Long = SystemClock.uptimeMillis()"))
-        assertTrue("sleep 保持 Thread.sleep", scheduling.contains("override fun sleep(millis: Long) = Thread.sleep(millis)"))
+        assertTrue("sleep 必须绑定会话取消信号", scheduling.contains("sessionCancelSignal.sleep(millis)"))
+        assertTrue(
+            "sleepFor 必须按 client 路由到该轮 scope，缺失时回退会话信号",
+            scheduling.contains("attemptRegistry.scopeForClient(client)?.sleep(millis) ?: sessionCancelSignal.sleep(millis)"),
+        )
 
         assertTrue("重申后台任务名保持", ownership.contains("\"modes-reclaim\""))
         assertTrue("3 秒检查任务名保持", ownership.contains("\"takeback-check\""))
@@ -276,7 +280,7 @@ class ScreenOwnershipSourceContractTest {
         val copy = scanned.indexOf("action.copy()")
         val firstGate = scanned.indexOf("runtime.connectCancelled")
         val release = scanned.indexOf("clients.assertModes(client, releaseScreen = true")
-        val gap = scanned.indexOf("scheduling.sleep(SCREEN_RETAKE_GAP_MS)")
+        val gap = scanned.indexOf("scheduling.sleepFor(client, SCREEN_RETAKE_GAP_MS)")
         val plain = scanned.indexOf("clients.assertModes(client, releaseScreen = false")
         val recovery = scanned.indexOf("runtime.readRecovery()")
         val cancelledGate = scanned.indexOf("clients.isCancelled(client)")
