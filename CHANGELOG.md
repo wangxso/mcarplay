@@ -3,6 +3,28 @@
 Release notes are listed newest first. English is followed by Simplified Chinese.
 Test releases are experimental and do not establish real-vehicle compatibility.
 
+## [v0.1.7] - 2026-11-26
+
+### English
+
+- **Connection and audio.** The initial AirPlay SETUP is followed by one RECORD per control connection. Audio added later and rebuilt screen streams reuse that activation. RFCOMM arbitration keeps late outbound dials from taking over the current connection, and Wi-Fi handoff can finish after Bluetooth drops.
+- **Pairing recovery.** If the saved receiver identity or signature no longer matches, the app tries pairing once on a fresh connection. It replaces the saved entry once the new identity is verified. Tunnel MFi ignores duplicate completion replies and can retry another challenge length after repeated link drops.
+- **Vehicle display negotiation.** Auto mode requests the vehicle's valid `/info displays[0]` geometry, including 2560 × 1200 as reported by the Roewe head unit. CarWith receives the feature flag and an even-aligned size within the dimension and pixel limits. Diagnostics record the requested and returned sizes. The Generic preset retains the capped request. Issue #127.
+- **Mercedes MB_E-P / GLC experimental preset.** The candidate brings in the H.264 path and session request settings from the recent previews, rebuilds the screen stream on resource return, and forwards the console Back key. The preset stays manual. Issue #62.
+- **Network choice and diagnostics.** The Connect tab offers a car-network preference, ORA 03 retains its invite-first timing, and previously unnamed iAP2 messages have readable names in reports.
+- **Validation.** Spotless, 1,314 standard JVM tests, 25 remote bridge JVM tests, 87 Python tool tests, and 20 Node bridge tests passed. Vehicle and receiver acceptance on this candidate is pending. The Roewe display, Mercedes audio and screen return, and Porsche reconnect are tracked in issues #127, #62, #55 and #66.
+
+### 简体中文
+
+- **连接和音频。** 初始 AirPlay SETUP 之后，每条控制连接发一次 RECORD。动态加声音和重建主屏流复用同一次会话激活。RFCOMM 仲裁挡住迟到的出站结果，蓝牙断开后仍可完成已开始的 Wi-Fi 交接。
+- **配对恢复。** 发现已保存的车机身份或签名不符时，换新连接重新配对一次。新身份通过验证后才替换对应旧记录。隧道 MFi 忽略重复完成应答，连续断链后可改试其他挑战长度。
+- **车机尺寸协商。** 自动模式按本轮 `/info displays[0]` 的合法几何请求 CarWith 编码，覆盖荣威报告中的 2560 × 1200。请求经过偶数对齐并受宽高及像素上限保护，诊断同时记录请求与返回尺寸。「通用」预设沿用长边受限请求。见 #127。
+- **奔驰 MB_E-P / GLC 实验预设。** 带入近期测试包的 H.264 路径与会话请求设置，取回主屏时重建屏幕流，并转发控制台返回键。该预设需手动选择。见 #62。
+- **网络选择和诊断。** 连接页可选择是否优先使用车机网络，欧拉 ORA 03 保留优先等车机邀请的时序，排查报告补齐 iAP2 消息名称。
+- **验证。** Spotless、1,314 项 standard JVM 单测、25 项 remote bridge 单测、87 项 Python 工具测试及 20 项 Node 调试桥测试通过。 该候选仍待车型和台架复测，重点为荣威出画、奔驰带声音与回切、保时捷重连。见 #127、#62、#55、#66。
+
+[完整变更 / Full changes · v0.1.6...v0.1.7](https://github.com/wangxso/mcarplay/compare/v0.1.6...v0.1.7)
+
 ## [v0.1.7-test.7] - 2026-11-20
 
 > Experimental prerelease on top of `v0.1.7-test.6`: a Mercedes MB_E-P / GLC compatibility trial that aligns the AirPlay screen-resource sequence with HyperCar and fixes the request to H.264-only. The manual `MERCEDES_MB_E` preset now sends two resource declarations before screen SETUP and skips the optional `hidSetInputMode` arming. It also stops offering HEVC, matching the app's existing H.264 encoder. This build has not been tried on a vehicle, issue #62 remains open, and it does not prove that the black screen is fixed.
