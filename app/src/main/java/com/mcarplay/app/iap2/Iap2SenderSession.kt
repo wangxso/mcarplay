@@ -1289,35 +1289,24 @@ class Iap2SenderSession(
         // 声明会发却没到时写「该接收端不发 StartHID」会误导排查（issue #66，
         // 2026-11-15 保时捷 NEW 轮的实测：声明 StartHID=会发，2s 内未到）。
         val hidWindowNanos = minOf(System.nanoTime() + START_HID_WAIT_NANOS, deadline)
-        while (true) {
-            val remaining = (hidWindowNanos - System.nanoTime()) / 1_000_000L
-            if (remaining <= 0) {
+        // 必须走 expectOrNull 而不是自己 recvFrame：后者会把非 0x6800 帧直接丢掉。
+        // 2026-11-19 奔驰 MBUX 实车日志：0x4301 在 StartHID 窗口内先到（车机随后
+        // 34 秒才重发），旧实现把它当普通日志吞掉，8 秒窗口空等后误弹「未收到车机
+        // 连接信息」并回退到网关地址。expectOrNull 会把非预期帧暂存，供后续
+        // 0x5703 / 0x4301 阶段原样消费。
+        val hid = expectOrNull(Iap2MessageIds.START_HID, hidWindowNanos)
+        if (hid == null) {
+            if (channel.isAlive) {
                 log(startHidTimeoutLine(declaresSend = accessoryDeclaresSend(Iap2MessageIds.START_HID)))
-                return
             }
-            val frame = recvFrame(remaining)
-            if (frame == null) {
-                if (!channel.isAlive) return // 链路已死：交给后续 expect 报出明确错误
-                continue
-            }
-            when (frame.messageId) {
-                Iap2MessageIds.START_HID -> {
-                    log("iap2 rx=0x6800 start-hid bytes=${frame.body.size}")
-                    send(
-                        Iap2MessageIds.DEVICE_HID_REPORT,
-                        Iap2Csm.u16(0, 0),
-                        Iap2Csm.param(1, byteArrayOf(0)),
-                    )
-                    return
-                }
-
-                else ->
-                    log(
-                        "iap2 rx=0x${frame.messageId.toString(16).padStart(4, '0')} " +
-                            "(${Iap2MessageIds.nameOf(frame.messageId)})",
-                    )
-            }
+            return
         }
+        log("iap2 rx=0x6800 start-hid bytes=${hid.body.size}")
+        send(
+            Iap2MessageIds.DEVICE_HID_REPORT,
+            Iap2Csm.u16(0, 0),
+            Iap2Csm.param(1, byteArrayOf(0)),
+        )
     }
 
     /**

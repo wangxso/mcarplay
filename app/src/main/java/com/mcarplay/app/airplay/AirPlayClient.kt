@@ -32,6 +32,48 @@ import java.util.UUID
 import java.util.concurrent.CompletableFuture
 
 /**
+ * MBUX 绝对会话 URI（HyperCar 0.1.0.588 同车机成功轮的请求形状）。
+ *
+ * 只改 SETUP `/setup`、屏幕 SETUP `/`、RECORD `/`、TEARDOWN `/` 四类请求；
+ * `GET /info`、`POST /command`、`POST /feedback` 等仍走相对路径。IPv6 链路本地
+ * 地址的 `%<iface>` 在 URI 中必须写成 `%25<iface>`（RFC 6874）。
+ */
+internal object AirPlaySessionUri {
+    fun build(
+        host: String?,
+        sessionId: Long,
+    ): String? {
+        val raw =
+            host
+                ?.trim()
+                ?.removeSurrounding("[", "]")
+                ?.takeIf { it.isNotEmpty() }
+                ?: return null
+        if (raw.any { it.isWhitespace() || it.isISOControl() || it in "/?#@" }) return null
+        val authority =
+            if (raw.contains(':')) {
+                "[${raw.replace("%", "%25")}]"
+            } else {
+                raw
+            }
+        return "rtsp://$authority/$sessionId"
+    }
+
+    fun resolve(
+        sessionUri: String?,
+        method: String,
+        path: String,
+    ): String {
+        if (sessionUri == null) return path
+        return when {
+            method == "SETUP" && (path == "/setup" || path == "/") -> sessionUri
+            (method == "RECORD" || method == "TEARDOWN") && path == "/" -> sessionUri
+            else -> path
+        }
+    }
+}
+
+/**
  * AirPlay 客户端（Phase 2）：
  *  - /info 能力清单拉取与 bplist 解析
  *  - /pair-setup + /pair-verify 完整配对（持久 RTSP 连接上顺序 POST TLV8）
@@ -98,6 +140,10 @@ class AirPlayClient(
     private var cSeq = 0
     private val attemptedFallbackPorts = HashSet<String>()
 
+    /** 非 null = 本轮 SETUP/屏幕/RECORD/TEARDOWN 共用的绝对会话 URI（仅手动 MB_E-P 预设）。 */
+    @Volatile
+    private var sessionUri: String? = null
+
     /**
      * 最近一次成功连上接收端时使用的地址（字符串形式，IPv6 链路本地地址带 `%<iface>`）。
      *
@@ -136,7 +182,7 @@ class AirPlayClient(
         private set
 
     /**
-     * 配对期间**任意阶段**出现 403（pair-setup / pair-verify / 认证段）。
+     * 配对期间出现 403，或已保存身份不符且重新配对失败。两种情况均禁止退役 BT 或降级明文。
      *
      * 真机抓包定谳（2026-10-21 奥迪 MMI 3315_5GHz sysdiagnose）：真 iPhone 首次
      * 连接在 pair-verify 通过后被车机 403 拒（MFi 认证段），车机 **18~20s 自行重发
@@ -405,7 +451,8 @@ class AirPlayClient(
                 // pair-verify 之后双方立即启用加密（接收端在 M4 应答后开启）
                 cipher = ControlCipher(keys.phoneReadKey, keys.phoneWriteKey)
                 log("AIRPLAY: 控制通道加密已启用")
-                milestone(ConnectionMilestone.PAIR_VERIFY, "savedTrust=${remembered != null}")
+                val reusedTrust = remembered != null && result.receiver === remembered
+                milestone(ConnectionMilestone.PAIR_VERIFY, "savedTrust=$reusedTrust")
                 return keys
             } catch (error: IOException) {
                 if (cancelled) {
@@ -417,6 +464,11 @@ class AirPlayClient(
                 // 见 pairingForbidden 注释：标记后主控不再断 BT / 不降级明文
                 if (message.contains("403")) pairingForbidden = true
                 log("AIRPLAY: 配对第 $attempt 次尝试失败 - $message")
+                if (error is SavedPairingRecoveryException) {
+                    pairingForbidden = true
+                    close()
+                    return null
+                }
                 if (error is PairingRejectedException &&
                     pairingRejectionAction(error, trustInvalidated) == PairingRejectionAction.STOP
                 ) {
@@ -663,6 +715,7 @@ class AirPlayClient(
                 sessionStopping = true
                 recordAttempt?.complete(false)
                 recordAttempt = null
+                sessionUri = null
                 endingLink = iapLink
                 iapLink = null
                 recordAccepted = false
@@ -1044,6 +1097,21 @@ class AirPlayClient(
         val deviceId = setupDeviceId()
         val policy = receiverCompatibility()
         log(ReceiverCompatibility.describe(policy))
+        sessionUri =
+            if (policy.absoluteSessionUri) {
+                AirPlaySessionUri
+                    .build(
+                        socket?.inetAddress?.hostAddress,
+                        SecureRandom().nextLong() and Long.MAX_VALUE or 1L,
+                    )?.also { uri ->
+                        log("AIRPLAY: 会话绝对 URI=$uri（SETUP/屏幕/RECORD/TEARDOWN 共用）")
+                    } ?: run {
+                    log("AIRPLAY: 无法从当前连接地址构造绝对会话 URI——回退相对路径")
+                    null
+                }
+            } else {
+                null
+            }
         if (policy.requiresRealBluetoothIdentity && deviceId == DeviceIdentity.PLACEHOLDER_MAC) {
             log("AIRPLAY: 当前接收端要求真实蓝牙身份；请启动 Shizuku，或在「本机蓝牙地址」中手动填写后重连（未发送占位 deviceID）")
             return null
@@ -1071,7 +1139,15 @@ class AirPlayClient(
                 timingServer.port,
                 encrypted = cipher != null,
                 macAddress = wifiMac?.mac ?: PLACEHOLDER_WIFI_MAC,
+                includeMainBuffered = policy.offerMainBufferedAudio,
+                includeHevc = policy.offerHevc,
             )
+        if (!policy.offerMainBufferedAudio) {
+            log("AIRPLAY: 不提议 mainBuffered（本端仅实现 UDP type100/101 音频，未实现 type103 缓冲音频）")
+        }
+        if (!policy.offerHevc) {
+            log("AIRPLAY: 接收端兼容策略不提议 HEVC（本端固定 H.264）")
+        }
         log(
             "AIRPLAY: 初始 SETUP body=${body.size}B timingPort=${timingServer.port} " +
                 "deviceID=$deviceId 加密=${if (cipher != null) "是" else "否（et=NONE）"}",
@@ -1658,7 +1734,7 @@ class AirPlayClient(
             return null
         }
         if (receiverCompatibility().skipIapTunnel) {
-            log("TUNNEL: 该车机不支持 type-130（规则 chery.no-iap-tunnel）——不 SETUP iAP 隧道")
+            log("TUNNEL: 接收端兼容策略跳过 type-130——不 SETUP iAP 隧道")
             return null
         }
         val host = receiverHost() ?: return null
@@ -1680,7 +1756,13 @@ class AirPlayClient(
             )
         val (statusLine, responseBody) =
             try {
-                request("SETUP", "/", body, contentType = "application/x-apple-binary-plist")
+                request(
+                    "SETUP",
+                    "/",
+                    body,
+                    contentType = "application/x-apple-binary-plist",
+                    resolveSessionUri = false,
+                )
             } catch (error: IOException) {
                 log("TUNNEL: SETUP 失败 - ${error.message}")
                 return null
@@ -1832,6 +1914,7 @@ class AirPlayClient(
             iapLink ?: synchronized(this) {
                 iapLink ?: run {
                     val epoch = connectionEpoch
+                    val policy = receiverCompatibility()
                     VirtualIap2Link(
                         log = { line -> log(line) },
                         sendEventIap = { data -> sendIapForGeneration(data, epoch) },
@@ -1847,8 +1930,9 @@ class AirPlayClient(
                             }
                         },
                         alive = { isSessionAlive(epoch) },
+                        requestWifiConfigAfterMfi = policy.requestWifiConfigAfterTunnelMfi,
                     ).also { created ->
-                        created.pinnedMfiLength = receiverCompatibility().pinnedMfiChallengeLength
+                        created.pinnedMfiLength = policy.pinnedMfiChallengeLength
                         created.onMediaKey = { keyCode ->
                             if (iapLink === created && isSessionAlive(epoch)) onMediaKey?.invoke(keyCode)
                         }
@@ -3151,6 +3235,7 @@ class AirPlayClient(
         extraHeaders: List<Pair<String, String>> = emptyList(),
         expectedEpoch: Long? = null,
         allowDuringStop: Boolean = false,
+        resolveSessionUri: Boolean = true,
     ): Pair<String, ByteArray> {
         val client = socket ?: throw IOException("未连接")
         // 主线程上 socket 写会抛 NetworkOnMainThreadException，而那时报文已加密、计数已前移：
@@ -3164,6 +3249,8 @@ class AirPlayClient(
         }
         val startedAt = SystemClock.uptimeMillis()
         val queue = java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>(1)
+        val targetPath =
+            if (resolveSessionUri) AirPlaySessionUri.resolve(sessionUri, method, path) else path
         val cseq: Int
         synchronized(rtspWriteLock) {
             // 在写锁内复核，防止旧轮心跳/RECORD 在重连后把报文发到新连接。
@@ -3181,7 +3268,7 @@ class AirPlayClient(
             }
             try {
                 val head =
-                    "$method $path RTSP/1.0\r\n" +
+                    "$method $targetPath RTSP/1.0\r\n" +
                         "CSeq: $cseq\r\n" +
                         "User-Agent: AirPlay/$SENDER_SOURCE_VERSION\r\n" +
                         "Content-Type: $contentType\r\n" +
@@ -3291,6 +3378,8 @@ class AirPlayClient(
                 failAllPending("控制通道读线程结束", expectedSocket = client) &&
                 !sessionStopping
             ) {
+                val link = synchronized(this) { iapLink?.takeIf { socket === client && !sessionStopping } }
+                link?.onControlTransportLost()
                 onControlChannelClosed?.invoke()
             }
         }
@@ -3536,7 +3625,15 @@ class AirPlayClient(
         encrypted: Boolean = true,
         /** 本机 Wi-Fi 地址；取不到时沿用 catplay 的占位值。 */
         macAddress: String = PLACEHOLDER_WIFI_MAC,
+        /** false = 不提议 `mainBuffered`：本端没有 type 103 缓冲音频发送端。 */
+        includeMainBuffered: Boolean = true,
+        /** false = 不提议 `hevc`：本端只发送 H.264。 */
+        includeHevc: Boolean = true,
     ): ByteArray {
+        val features =
+            CONTROLLER_FEATURES
+                .filter { includeMainBuffered || it != "mainBuffered" }
+                .filter { includeHevc || it != "hevc" }
         val fields =
             linkedMapOf<String, Any?>(
                 "deviceID" to deviceId,
@@ -3562,7 +3659,7 @@ class AirPlayClient(
                 "statsCollectionEnabled" to false,
                 "updateSessionRequest" to false,
                 "keepAliveLowPower" to true,
-                "features" to CONTROLLER_FEATURES,
+                "features" to features,
             )
         if (!encrypted) {
             // AirPlayEncryptionType::NONE = 1<<0（catplay 未走 /pair-setup 时的降级值）。

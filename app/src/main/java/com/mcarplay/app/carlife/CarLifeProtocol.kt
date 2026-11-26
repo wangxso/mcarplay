@@ -99,6 +99,15 @@ object CarLifeProtocol {
     /** `videoRequestFor` 默认的长边上限（请求尺寸，不是实际输出尺寸）。 */
     const val VIDEO_REQUEST_MAX_LONG_SIDE = 1920
 
+    /**
+     * `DISABLE_RESOLUTION_OPTION=1` 生效时，按车机 `displays[0]` 精确请求的单边上限。
+     * 取 4K 级别：远高于已知车机主屏（2560x1200/2560x1440），只挡车机自报的溢出/哨兵值。
+     */
+    const val VIDEO_REQUEST_MAX_EXACT_DIMENSION = 4_096
+
+    /** 精确请求的像素总量上限（约 3840×2160），避免畸形自报值把编码器画布撑爆。 */
+    const val VIDEO_REQUEST_MAX_EXACT_PIXELS = 8_294_400L
+
     private const val COMMAND_HEADER_SIZE = 8
     private const val VIDEO_HEADER_SIZE = 12
     private const val MAX_COMMAND_BODY = 65_535
@@ -312,6 +321,29 @@ object CarLifeProtocol {
 
         fun even(value: Double) = ((value.toInt() / 2) * 2).coerceAtLeast(2)
         return even(displayWidth * scale) to even(displayHeight * scale)
+    }
+
+    /**
+     * 声明 `DISABLE_RESOLUTION_OPTION=1` 时，按车机 `/info displays[0]` 的**精确**几何生成请求。
+     *
+     * issue #127：车机主屏 2560x1200 会先被 [videoRequestFor] 的 1920 长边上限压成 1920x900；
+     * CarWith 不接受时回退自己的档位（实车报告 1920x1080），车机不出画。声明该 key 后不再压缩，
+     * 直接请求车机几何本身。宽高按 H.264 偶数对齐。
+     *
+     * 安全门控：宽/高必须为正且在 [2, VIDEO_REQUEST_MAX_EXACT_DIMENSION] 内，像素总量不超过
+     * [VIDEO_REQUEST_MAX_EXACT_PIXELS]。几何缺失或非法时返回 null，调用方回退 [videoRequestFor]
+     * 并**不声明**该 key（绝不把非法自报值交给编码器）。
+     */
+    fun vehicleResolutionRequestFor(
+        displayWidth: Int,
+        displayHeight: Int,
+    ): Pair<Int, Int>? {
+        if (displayWidth !in 2..VIDEO_REQUEST_MAX_EXACT_DIMENSION) return null
+        if (displayHeight !in 2..VIDEO_REQUEST_MAX_EXACT_DIMENSION) return null
+        if (displayWidth.toLong() * displayHeight.toLong() > VIDEO_REQUEST_MAX_EXACT_PIXELS) return null
+
+        fun even(value: Int) = ((value / 2) * 2).coerceAtLeast(2)
+        return even(displayWidth) to even(displayHeight)
     }
 
     fun touchPayload(

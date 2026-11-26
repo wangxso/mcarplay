@@ -46,6 +46,7 @@ class VirtualIap2Link(
     private val mfiContext: Context? = null,
     /** 时钟（单测可注入）。 */
     private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
+    private val requestWifiConfigAfterMfi: Boolean = false,
 ) {
     private val lock = Any()
     private val engine = Iap2LinkEngine()
@@ -423,6 +424,17 @@ class VirtualIap2Link(
         }
     }
 
+    internal fun onControlTransportLost() {
+        synchronized(lock) { recordMfiLinkDropLocked() }
+    }
+
+    private fun recordMfiLinkDropLocked() {
+        val length = mfiCurrentLength
+        mfiCurrentLength = 0
+        if (length <= 0 || mfiFinished || pinnedMfiLength != null) return
+        mfiIdentity?.let { MfiLengthMemory.recordLinkDrop(mfiContext, it, length) }
+    }
+
     private fun drainLocked() {
         while (true) {
             when (val event = engine.pollEvent()) {
@@ -431,11 +443,13 @@ class VirtualIap2Link(
                     handleFrameLocked(event.bytes)
 
                 is Iap2LinkEngine.Event.Dead -> {
+                    recordMfiLinkDropLocked()
                     log("IAPLINK: 虚拟链路终止 - ${event.reason ?: "EOF"}")
                     return
                 }
             }
         }
+        if (engine.isDead) return
         noteLinkStateLocked()
         // 先冲刷（回显必须先行送达对端），再启动 CSM；超时换档可能新排队帧，最后再冲一次
         flushOutputLocked()
@@ -472,16 +486,20 @@ class VirtualIap2Link(
     private fun startNextMfiChallengeLocked() {
         val identity = mfiIdentity ?: return
         if (mfiOrder.isEmpty()) {
-            mfiMemory = MfiLengthMemory.load(mfiContext, identity)
             val pinned = pinnedMfiLength
-            mfiOrder = if (pinned != null) listOf(pinned) else MfiLengthMemory.orderAttempts(TUNNEL_MFI_BASELINE, mfiMemory)
             if (pinned != null) {
+                mfiOrder = listOf(pinned)
                 log("IAPLINK: 隧道 MFi 固定 ${pinned}B（接收端策略）——只发一次，窗口 ${PINNED_MFI_WINDOW_MS}ms")
-            } else if (!mfiMemory.isEmpty) {
-                log(
-                    "IAPLINK: 隧道 MFi 按车机记忆：${MfiLengthMemory.describe(mfiMemory)}" +
-                        " → 本轮顺序 ${mfiOrder.joinToString("/")}B",
-                )
+            } else {
+                val (memory, order) = MfiLengthMemory.beginAttempts(mfiContext, identity, TUNNEL_MFI_BASELINE)
+                mfiMemory = memory
+                mfiOrder = order
+                if (!memory.isEmpty) {
+                    log(
+                        "IAPLINK: 隧道 MFi 按车机记忆：${MfiLengthMemory.describe(memory)}" +
+                            " → 本轮顺序 ${order.joinToString("/")}B",
+                    )
+                }
             }
         }
         mfiPosition += 1
@@ -637,15 +655,18 @@ class VirtualIap2Link(
             }
 
             ids.MFI_AUTHENTICATION_FAILED -> {
-                if (!mib3 || mfiFinished) return
-                mfiIdentity?.let { MfiLengthMemory.recordRejected(mfiContext, it, mfiCurrentLength) }
-                log("IAPLINK: 隧道 MFi ${mfiCurrentLength}B 被拒（0xaa04）——记入记忆，换下一档")
+                if (!mib3 || mfiFinished || mfiCurrentLength <= 0) return
+                if (pinnedMfiLength == null) {
+                    mfiIdentity?.let { MfiLengthMemory.recordRejected(mfiContext, it, mfiCurrentLength) }
+                }
+                log("IAPLINK: 隧道 MFi ${mfiCurrentLength}B 被拒（0xaa04）")
                 mfiCurrentLength = 0
                 startNextMfiChallengeLocked()
             }
 
             ids.MFI_CERTIFICATE -> {
                 if (mib3) {
+                    if (mfiFinished || mfiCurrentLength > 0) return
                     // 长度按车机记忆（冷启动 20B 优先，Frida 真机值；详见 startNextMfiChallengeLocked）
                     startNextMfiChallengeLocked()
                 } else {
@@ -660,8 +681,12 @@ class VirtualIap2Link(
             ids.MFI_RESPONSE -> {
                 val challenged = mib3AuthStage == 3
                 if (mib3) {
-                    mfiIdentity?.let { MfiLengthMemory.recordSuccess(mfiContext, it, mfiCurrentLength) }
-                    log("IAPLINK: 隧道 rx=0xaa03 签名 ${frame.body.size}B（${mfiCurrentLength}B 挑战成功，已记忆）")
+                    if (mfiFinished || !challenged || mfiCurrentLength <= 0) return
+                    // 后续档的应答可能来自前一档已超时的挑战，无法可靠归因。
+                    if (pinnedMfiLength == null && mfiPosition == 0) {
+                        mfiIdentity?.let { MfiLengthMemory.recordSuccess(mfiContext, it, mfiCurrentLength) }
+                    }
+                    log("IAPLINK: 隧道 rx=0xaa03 签名 ${frame.body.size}B（${mfiCurrentLength}B 挑战应答）")
                     mfiCurrentLength = 0
                     mfiFinished = true
                 }
@@ -812,9 +837,14 @@ class VirtualIap2Link(
                 mib3WirelessSessionId = it
             }
         sendCsmLocked(
-            WIRELESS_SESSION_ID,
+            DEVICE_UUID_OR_SESSION,
             Iap2Csm.param(0, sessionId.toByteArray(Charsets.UTF_8)),
         )
+        // 认证后的 AirPlay 端点会再请求一次配件 Wi-Fi 配置。HyperCar 0.1.0.588 在
+        // 同一台 MB_E-P-4（480.7.4）上固定发这条空 0x5702，随后收到 0x4301、0x5000
+        // 与 StartHID；我们此前跳过它，车机在突发后 43s 内没有任何订阅。0x5703 只作
+        // 链路 ACK，不触发重新入网。仅 MIB3/事件链路走这里，不影响蓝牙或 DiPlay。
+        if (requestWifiConfigAfterMfi) sendCsmLocked(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
         sendCsmLocked(AUX_STATUS_NOTIFICATION, Iap2Csm.param(0x0006, ByteArray(0)))
         sendCsmLocked(
             DEVICE_LANGUAGE,
@@ -978,7 +1008,9 @@ class VirtualIap2Link(
 
         // ---- MIB3 消息号（无正式名/未入 Iap2MessageIds 的小集合） ----
         const val MFI_AUTH_SERIAL = 0xAA06
-        const val WIRELESS_SESSION_ID = 0x4E0C
+
+        // 蓝牙发送设备 UUID。隧道沿用实测的随机值，0x4E0C 的确切含义待确认。
+        const val DEVICE_UUID_OR_SESSION = Iap2MessageIds.DEVICE_UUID_UPDATE
         const val DEVICE_TIME = 0x4E0B
         const val DEVICE_LANGUAGE = 0x4E0A
         const val DEVICE_INFORMATION_UPDATE = 0x4E09

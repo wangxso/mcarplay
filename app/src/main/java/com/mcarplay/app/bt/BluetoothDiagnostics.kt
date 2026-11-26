@@ -245,11 +245,11 @@ class BluetoothDiagnostics(
         service: Service,
         address: String?,
         match: PeerMatch,
-        outboundDialing: Boolean = false,
+        busy: Boolean = false,
     ) = update(epoch) {
         if (service == Service.CARPLAY) {
             capabilityConnections++
-        } else if (match == PeerMatch.OTHER || outboundDialing) {
+        } else if (match == PeerMatch.OTHER || busy) {
             incomingRejected++
         } else {
             incomingAccepted++
@@ -258,7 +258,7 @@ class BluetoothDiagnostics(
             when {
                 service == Service.CARPLAY -> "CAPABILITY_ONLY"
                 match == PeerMatch.OTHER -> "REJECTED_TARGET"
-                outboundDialing -> "REJECTED_OUTBOUND_DIALING"
+                busy -> "REJECTED_BUSY"
                 else -> "ACCEPTED_IAP2"
             }
         emit("INCOMING", "service=$service peer=${address?.let(::peer) ?: 0} match=$match decision=$decision")

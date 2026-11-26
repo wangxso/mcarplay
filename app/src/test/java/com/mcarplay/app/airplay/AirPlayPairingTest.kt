@@ -215,6 +215,65 @@ class AirPlayPairingTest {
     }
 
     @Test
+    fun staleReceiverIdentityAndKeyCanBeReplacedWithAVerifiedPairing() {
+        for (changedId in listOf(true, false)) {
+            val receiver = MockReceiver()
+            val oldPairId = if (changedId) "previous-receiver-id" else receiver.pairingId
+            val oldKey = if (changedId) receiver.staticKey.publicKey else newIdentity().publicKey
+            val remembered = PairSetupClient.ReceiverIdentity(oldPairId, oldKey)
+            val requests = ArrayList<String>()
+            val transport =
+                TlvTransport { path, body ->
+                    requests.add(path)
+                    receiver.handle(path, body)
+                }
+            var reconnects = 0
+            val handshake =
+                PairingHandshake(
+                    newIdentity(),
+                    { transport },
+                    reconnect = { reconnects++ },
+                    log = {},
+                    onTrustInvalidated = { error("keep the old record until a replacement is verified") },
+                )
+            val result = handshake.run(remembered, null)
+            assertEquals(1, reconnects)
+            assertEquals(
+                listOf("/pair-verify", "/pair-setup", "/pair-setup", "/pair-setup", "/pair-verify", "/pair-verify"),
+                requests,
+            )
+            assertEquals(receiver.pairingId, result.receiver?.pairingId)
+            assertArrayEquals(receiver.staticKey.publicKey, result.receiver?.publicKey)
+            assertArrayEquals(receiver.lastReadKey, result.keys.phoneWriteKey)
+        }
+    }
+
+    @Test
+    fun recoveryRefusalKeepsStoredTrustAndCannotFallBackToAdvertisedKey() {
+        val receiver = MockReceiver()
+        val remembered = PairSetupClient.ReceiverIdentity("previous-receiver-id", receiver.staticKey.publicKey)
+        val requests = ArrayList<String>()
+        val transport =
+            TlvTransport { path, body ->
+                requests.add(path)
+                if (path == "/pair-setup") throw IOException("HTTP/1.1 403 Forbidden")
+                receiver.handle(path, body)
+            }
+        var reconnects = 0
+        val handshake =
+            PairingHandshake(
+                newIdentity(),
+                { transport },
+                reconnect = { reconnects++ },
+                log = {},
+                onTrustInvalidated = { error("failed recovery must keep the old record") },
+            )
+        assertThrows(SavedPairingRecoveryException::class.java) { handshake.run(remembered, receiver.staticKey.publicKey) }
+        assertEquals(1, reconnects)
+        assertEquals(listOf("/pair-verify", "/pair-setup"), requests)
+    }
+
+    @Test
     fun pairingResponsesRejectErrorsAndUnexpectedStates() {
         for ((path, state) in listOf(
             "/pair-setup" to 2,

@@ -9,6 +9,16 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class Iap2CodecsTest {
+    @Test
+    fun everyMessageIdHasADiagnosticName() {
+        val constants = Iap2MessageIds::class.java.fields.filter { it.type == Int::class.javaPrimitiveType }
+        assertTrue(constants.isNotEmpty())
+        for (constant in constants) {
+            val id = constant.getInt(null)
+            assertTrue(constant.name, !Iap2MessageIds.nameOf(id).startsWith("0x"))
+        }
+    }
+
     // ---- 链路层 ----
 
     @Test

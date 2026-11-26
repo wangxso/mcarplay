@@ -8,7 +8,7 @@ import android.content.Context
  * 不代表该车型已被实车验证，见 docs/CARWITH-ENTRY-FINDINGS.md。
  *
  * [MERCEDES_MB_E] 是 issue #62（`MB_E-P-4 / 480.7.4`）的**实验开关**：保持 `displays[0]` 车机几何，
- * 在 CarWith 功能协商里声明 `DISABLE_RESOLUTION_OPTION=1`，不代表该车型已验证。
+ * 显式启用 CarWith 车辆尺寸协商。issue #127 起合法主屏几何也触发通用自动协商。
  * 宝马没有可开关的品牌例外（现有 BMW 改动都是按协议事实分派的通用路径），因此不设宝马预设。
  */
 enum class VehiclePreset {
@@ -21,11 +21,14 @@ enum class VehiclePreset {
     CLASSIC_MIB3,
 
     /**
-     * 奔驰 MB_E-P / 2025 GLC（issue #62，AirPlay 480.7.4）：**实验选项，尚无实车验证**。
+     * 奔驰 MB_E-P / 2025 GLC（issue #62，AirPlay 480.7.4）：**实验选项，尚无成功实车验证**。
      *
-     * 保持 `displays[0]` 的车机几何，并打开
-     * [ReceiverCompatibility.Policy.preferVehicleResolution]（CarWith `DISABLE_RESOLUTION_OPTION=1`）；
-     * 不再使用 `displayPanels` 的 1728 高假设。默认自动判定不会启用；文案必须如实标注「实验」。
+     * 与奔驰 MB_D-PP 属于不同代际。本项保持 `displays[0]` 的车机几何，打开
+     * [ReceiverCompatibility.Policy.preferVehicleResolution]（CarWith `DISABLE_RESOLUTION_OPTION=1`），
+     * 并按 HyperCar 同车机的成功时序把隧道 MFi 固定为 32B、先 RECORD 再声明资源/建主屏流，让
+     * SETUP/屏幕/RECORD/TEARDOWN 共用绝对会话 URI，并撤回本端未实现的 `mainBuffered` 提议；
+     * 不再使用 `displayPanels` 的 1728 高假设。
+     * 默认自动判定不会启用；文案必须如实标注「实验」。
      */
     MERCEDES_MB_E,
     ;
