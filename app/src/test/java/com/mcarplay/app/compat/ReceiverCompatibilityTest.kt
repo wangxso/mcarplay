@@ -57,6 +57,28 @@ class ReceiverCompatibilityTest {
         assertFalse(ReceiverCompatibility.resolve(mib3).allowBluetoothRetireRetry)
     }
 
+    /** issue #127：出画协商对所有接收端自动启用，只有手动「通用」预设关闭。 */
+    @Test
+    fun vehicleResolutionIsAutomaticForEveryReceiverExceptTheGenericPreset() {
+        listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals(), ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo"))
+            .forEach { signals ->
+                assertTrue(
+                    "${signals.model}/${signals.manufacturer} 应走通用出画协商",
+                    ReceiverCompatibility.resolve(signals).preferVehicleResolution,
+                )
+                assertFalse(
+                    "手动通用应关闭出画协商",
+                    ReceiverCompatibility.resolve(signals, preset = VehiclePreset.GENERIC).preferVehicleResolution,
+                )
+            }
+        assertTrue(
+            ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.MERCEDES_MB_E).preferVehicleResolution,
+        )
+        assertTrue(
+            ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.WINPLAY).preferVehicleResolution,
+        )
+    }
+
     @Test
     fun namesAndUnverifiedVersionsCannotEnableDestructiveExceptions() {
         val spoofed = ReceiverCompatibility.resolve(diPlay.copy(externalAccessoryProtocols = emptySet()))
@@ -350,6 +372,8 @@ class ReceiverCompatibilityTest {
         assertFalse(text.contains("private-hotspot"))
         assertFalse(text.contains("AA:BB:CC:DD:EE:FF"))
         assertTrue(text.contains("protocol.pair_and_encrypt"))
+        // issue #127：支持报告里应能直接看到出画协商策略是否开启。
+        assertTrue("诊断行应包含 vehicleResolution=true", text.contains("vehicleResolution=true"))
     }
 
     private fun failedPairing(
@@ -393,5 +417,111 @@ class ReceiverCompatibilityTest {
         assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals(model = "VW")).reconnectOnStreamingInvite)
         assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals(model = "VW41310")).reconnectOnStreamingInvite)
         assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals()).reconnectOnStreamingInvite)
+    }
+
+    // ---- Phase 2e：回屏策略只由「手动大众 + 保存值 + context 可用」决定 ----
+
+    @Test
+    fun screenReturnMatrixCoversAllNinePresetsWithLazyPreferenceRead() {
+        assertEquals(
+            "车型预设清单变化必须同步更新回屏资格矩阵",
+            setOf(
+                VehiclePreset.AUTO,
+                VehiclePreset.GENERIC,
+                VehiclePreset.CHERY,
+                VehiclePreset.VOLKSWAGEN,
+                VehiclePreset.WINPLAY,
+                VehiclePreset.DIPLAY,
+                VehiclePreset.CLASSIC_MIB3,
+                VehiclePreset.MERCEDES_MB_DPP,
+                VehiclePreset.MERCEDES_MB_E,
+            ),
+            VehiclePreset.entries.toSet(),
+        )
+        val base = ReceiverCompatibility.resolve(ReceiverProfile.Signals())
+        VehiclePreset.entries.forEach { preset ->
+            var reads = 0
+            val overlaid =
+                ReceiverCompatibility.withScreenReturnPreference(base, preset) {
+                    reads++
+                    ScreenReturnStrategy.DISCONNECT_AFTER_FAILURES
+                }
+            if (preset == VehiclePreset.VOLKSWAGEN) {
+                assertEquals("手动大众必须采用保存值", ScreenReturnStrategy.DISCONNECT_AFTER_FAILURES, overlaid.screenReturn)
+                assertEquals("手动大众只读一次偏好", 1, reads)
+            } else {
+                assertEquals("$preset 必须为 OFF", ScreenReturnStrategy.OFF, overlaid.screenReturn)
+                assertEquals("$preset 不得调用惰性偏好读取", 0, reads)
+            }
+        }
+        // context 不可用时 Controller 的回调直接返回 OFF，兼容层不额外读 prefs。
+        val noContext = ReceiverCompatibility.withScreenReturnPreference(base, VehiclePreset.VOLKSWAGEN) { ScreenReturnStrategy.OFF }
+        assertEquals(ScreenReturnStrategy.OFF, noContext.screenReturn)
+    }
+
+    @Test
+    fun screenReturnIgnoresDetectedManufacturerAndAutoMode() {
+        val observed =
+            listOf(
+                ReceiverProfile.Signals(),
+                ReceiverProfile.Signals(model = "Tiggo", manufacturer = "CHERY"),
+                ReceiverProfile.Signals(model = "VW4131", manufacturer = "Volkswagen"),
+                ReceiverProfile.Signals(model = "VW4211", manufacturer = "Toppower"),
+            )
+        observed.forEach { signals ->
+            // 自动模式即使自报 VWxxxx，也不启用回屏策略，且不读取偏好。
+            val auto = ReceiverCompatibility.resolve(signals, preset = VehiclePreset.AUTO)
+            var reads = 0
+            val overlaid =
+                ReceiverCompatibility.withScreenReturnPreference(auto, VehiclePreset.AUTO) {
+                    reads++
+                    ScreenReturnStrategy.REBUILD_RETRY
+                }
+            assertEquals(ScreenReturnStrategy.OFF, overlaid.screenReturn)
+            assertEquals(0, reads)
+            // 邀请重连资格保持自动规则，与回屏偏好分开。
+            assertEquals(signals.model?.startsWith("VW") == true, auto.reconnectOnStreamingInvite)
+        }
+        // 手动大众即使信号明确是别家车机，回屏仍按用户选择执行。
+        val chery = ReceiverProfile.Signals(model = "Tiggo", manufacturer = "CHERY")
+        val manual = ReceiverCompatibility.resolve(chery, preset = VehiclePreset.VOLKSWAGEN)
+        val overlaid =
+            ReceiverCompatibility.withScreenReturnPreference(manual, VehiclePreset.VOLKSWAGEN) {
+                ScreenReturnStrategy.REBUILD_RETRY
+            }
+        assertEquals(ScreenReturnStrategy.REBUILD_RETRY, overlaid.screenReturn)
+        assertTrue(manual.reconnectOnStreamingInvite)
+        assertTrue("manual.volkswagen" in manual.rules)
+    }
+
+    @Test
+    fun screenReturnOverlayLeavesEveryOtherPolicyFieldAlone() {
+        val signalsList =
+            listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals(), ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo"))
+        VehiclePreset.entries.forEach { preset ->
+            signalsList.forEach { signals ->
+                val base = ReceiverCompatibility.resolve(signals, preset = preset)
+                assertEquals("base policy 默认不回屏", ScreenReturnStrategy.OFF, base.screenReturn)
+                val overlaid =
+                    ReceiverCompatibility.withScreenReturnPreference(base, preset) {
+                        ScreenReturnStrategy.REBUILD_RETRY
+                    }
+                val expected =
+                    base.copy(
+                        screenReturn =
+                            if (preset == VehiclePreset.VOLKSWAGEN) {
+                                ScreenReturnStrategy.REBUILD_RETRY
+                            } else {
+                                ScreenReturnStrategy.OFF
+                            },
+                    )
+                assertEquals("preset=$preset signals=${signals.model}", expected, overlaid)
+                assertEquals(base.rules, overlaid.rules)
+                assertEquals(base.memoryKey, overlaid.memoryKey)
+                assertEquals(base.reconnectOnStreamingInvite, overlaid.reconnectOnStreamingInvite)
+                assertEquals(ReceiverCompatibility.describe(base), ReceiverCompatibility.describe(overlaid))
+                assertFalse("describe 不得追加回屏字段", ReceiverCompatibility.describe(overlaid).contains("screenReturn"))
+            }
+        }
     }
 }

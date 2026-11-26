@@ -68,6 +68,9 @@ internal object ReconnectPrefsInstrumentationTestSupport {
                 .put("expectedLegacyKeys", JSONArray(LEGACY_KEYS))
                 .put("expectedUnrelatedKey", UNRELATED_KEY)
                 .put("expectedUnrelatedValue", UNRELATED_VALUE)
+        // Phase 1 结束前把同一 "settings" 文件落盘：AutoReconnectGuard 用 apply() 异步写，
+        // 脚本紧接着 force-stop，Phase 2 新进程可能读不到尚未刷新的熔断状态（RGP07 normal 空读）。
+        settings(context).edit().commit()
         val file = handoffFile(context)
         FileOutputStream(file).use { stream ->
             stream.write(handoff.toString().toByteArray(Charsets.UTF_8))

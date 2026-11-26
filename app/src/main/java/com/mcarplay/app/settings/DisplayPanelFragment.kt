@@ -11,7 +11,7 @@ import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.AudioDuckingPrefs
 import com.mcarplay.app.bt.AutoConnectPrefs
 import com.mcarplay.app.compat.CompatibilityPrefs
-import com.mcarplay.app.compat.PassatReturnStrategy
+import com.mcarplay.app.compat.ScreenReturnStrategy
 
 /**
  * 「显示」面板：流分辨率缩放（30%–160%，下次连接起效）+ 目标帧率（30/60，
@@ -142,13 +142,13 @@ class DisplayPanelFragment : SettingsPanelFragment() {
         // 帕萨特「回主界面再进」实验策略：四选一，默认关；仅主页「车型适配」选了大众时才执行
         val passatButtons =
             listOf(
-                PassatReturnStrategy.OFF to view.findViewById<TextView>(R.id.btnPassat0),
-                PassatReturnStrategy.REBUILD_RETRY to view.findViewById<TextView>(R.id.btnPassat1),
-                PassatReturnStrategy.DISCONNECT_AFTER_FAILURES to view.findViewById<TextView>(R.id.btnPassat2),
-                PassatReturnStrategy.NO_REBUILD to view.findViewById<TextView>(R.id.btnPassat3),
+                ScreenReturnStrategy.OFF to view.findViewById<TextView>(R.id.btnPassat0),
+                ScreenReturnStrategy.REBUILD_RETRY to view.findViewById<TextView>(R.id.btnPassat1),
+                ScreenReturnStrategy.DISCONNECT_AFTER_FAILURES to view.findViewById<TextView>(R.id.btnPassat2),
+                ScreenReturnStrategy.NO_REBUILD to view.findViewById<TextView>(R.id.btnPassat3),
             )
 
-        fun refreshPassat(selected: PassatReturnStrategy) {
+        fun refreshPassat(selected: ScreenReturnStrategy) {
             passatButtons.forEach { (strategy, button) ->
                 val on = strategy == selected
                 button.setBackgroundResource(if (on) R.drawable.bg_segment_sel else R.drawable.bg_segment)
@@ -156,21 +156,21 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             }
         }
 
-        var passatCurrent = CompatibilityPrefs.passatReturnStrategy(ctx)
+        var passatCurrent = CompatibilityPrefs.screenReturnStrategy(ctx)
         refreshPassat(passatCurrent)
         passatButtons.forEach { (strategy, button) ->
             button.setOnClickListener {
                 if (strategy == passatCurrent) return@setOnClickListener
                 passatCurrent = strategy
-                CompatibilityPrefs.setPassatReturnStrategy(ctx, strategy)
+                CompatibilityPrefs.setScreenReturnStrategy(ctx, strategy)
                 refreshPassat(strategy)
                 hostToast(
                     getString(
                         when (strategy) {
-                            PassatReturnStrategy.OFF -> R.string.sf_passat_off
-                            PassatReturnStrategy.REBUILD_RETRY -> R.string.sf_passat_retry
-                            PassatReturnStrategy.DISCONNECT_AFTER_FAILURES -> R.string.sf_passat_disconnect
-                            PassatReturnStrategy.NO_REBUILD -> R.string.sf_passat_norebuild
+                            ScreenReturnStrategy.OFF -> R.string.sf_passat_off
+                            ScreenReturnStrategy.REBUILD_RETRY -> R.string.sf_passat_retry
+                            ScreenReturnStrategy.DISCONNECT_AFTER_FAILURES -> R.string.sf_passat_disconnect
+                            ScreenReturnStrategy.NO_REBUILD -> R.string.sf_passat_norebuild
                         },
                     ),
                 )

@@ -5,12 +5,14 @@ import com.mcarplay.app.WifiNetworkToken
 import com.mcarplay.app.architecture.KotlinSource
 import com.mcarplay.app.architecture.SourceTree
 import com.mcarplay.app.iap2.Iap2SenderSession.WifiConfiguration
+import com.mcarplay.app.iap2.WifiHandoffAction
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
 
 /**
  * [CarWifiJoiner] 的确定性 JVM 测试矩阵（Phase 2c-2 设计方案 §6–§7：J02–J16 与 S01/S02 接线契约）。
@@ -84,11 +86,6 @@ class CarWifiJoinerTest {
             val lockHeld: Boolean,
         ) : Trace
 
-        data class ConfirmCurrent(
-            val ssid: String,
-            val source: String,
-        ) : Trace
-
         data class Reannounce(
             val ssid: String,
             val force: Boolean,
@@ -103,6 +100,10 @@ class CarWifiJoinerTest {
 
         data class Log(
             val message: String,
+        ) : Trace
+
+        data class LateEndpoint(
+            val phase: String,
         ) : Trace
     }
 
@@ -142,6 +143,7 @@ class CarWifiJoinerTest {
                     quickFallback: (() -> WifiId?)?,
                     deepFallback: (() -> WifiId?)?,
                     userChoicePending: ((Long) -> Boolean)?,
+                    awaitLatch: (CountDownLatch, Long) -> Boolean,
                 ) -> CarWifiLink.JoinResult<WifiId>
             )? = null
         var nextJoinResult: CarWifiLink.JoinResult<WifiId> = CarWifiLink.JoinResult.Unavailable
@@ -169,6 +171,7 @@ class CarWifiJoinerTest {
             quickFallback: (() -> WifiId?)?,
             deepFallback: (() -> WifiId?)?,
             userChoicePending: ((Long) -> Boolean)?,
+            awaitLatch: (CountDownLatch, Long) -> Boolean,
         ): CarWifiLink.JoinResult<WifiId> {
             trace +=
                 Trace.JoinCarPlayNetwork(
@@ -180,7 +183,17 @@ class CarWifiJoinerTest {
             val custom = onJoinCarPlayNetwork
             val result =
                 if (custom != null) {
-                    custom(ssid, passphrase, securityType, timeoutMillis, isCancelled, quickFallback, deepFallback, userChoicePending)
+                    custom(
+                        ssid,
+                        passphrase,
+                        securityType,
+                        timeoutMillis,
+                        isCancelled,
+                        quickFallback,
+                        deepFallback,
+                        userChoicePending,
+                        awaitLatch,
+                    )
                 } else {
                     nextJoinResult
                 }
@@ -316,7 +329,6 @@ class CarWifiJoinerTest {
         var verifiedNetworkBySsid: MutableMap<String, WifiId?> = mutableMapOf()
         var bindVerifiedAndRegisterResult: Boolean = true
         var onBindVerifiedAndRegister: ((String, WifiId?, () -> Boolean, WifiId?) -> Boolean)? = null
-        var onConfirmCurrent: ((String, String, () -> Boolean, (Boolean) -> Unit) -> Unit)? = null
 
         val pendingBackgroundTasks = ArrayDeque<Pair<String, () -> Unit>>()
         var runBackgroundImmediately: Boolean = true
@@ -351,7 +363,7 @@ class CarWifiJoinerTest {
                 globalCancelled = { globalCancelled },
                 ui = ui,
                 text = ::formatRes,
-                askChoice = { prompt, shownToken, isCancelled ->
+                askChoice = { prompt, shownToken, isCancelled, _ ->
                     val cancelledNow = isCancelled()
                     val answer =
                         if (cancelledNow) {
@@ -407,15 +419,6 @@ class CarWifiJoinerTest {
                         link.verifiedWifiNetwork(ssid)
                     }
                 },
-                confirmCurrent = { ssid, source, isCancelled, onResult ->
-                    trace += Trace.ConfirmCurrent(ssid, source)
-                    val custom = onConfirmCurrent
-                    if (custom != null) {
-                        custom(ssid, source, isCancelled, onResult)
-                    } else {
-                        onResult(false)
-                    }
-                },
                 reannounce = { ssid, force, network ->
                     trace += Trace.Reannounce(ssid, force, network)
                 },
@@ -446,6 +449,7 @@ class CarWifiJoinerTest {
                     logs += message
                     trace += Trace.Log(message)
                 },
+                invitedWifiLabel = "(车机所在 WLAN)",
             )
 
         fun formatRes(
@@ -519,6 +523,60 @@ class CarWifiJoinerTest {
             channel = channel,
             securityType = securityType,
         )
+
+    /** 端点交接分派的测试驱动：真实 CarWifiHandoffRequest，记录取消/续体/晚到端点消费。 */
+    private class HandoffHarness(
+        val harness: Harness,
+    ) {
+        val results = ArrayList<Boolean>()
+        val releases = ArrayList<Unit>()
+        val clears = ArrayList<Unit>()
+        var targetCurrent: Boolean = true
+        var scopeActive: Boolean = true
+        var cachedRetryCancelled: Boolean = false
+        var handoffCancelled: Boolean = false
+        var freshInvite: Boolean = false
+        var beginOfStep: (() -> Unit)? = null
+
+        fun request(
+            source: CarWifiHandoffSource,
+            ssid: String,
+            accessoryWifi: WifiConfiguration? = null,
+            cachedWifi: WifiConfiguration? = null,
+            verifiedCurrentNetwork: WifiId? = null,
+            requireCurrentBinding: Boolean = false,
+            pendingEndpoint: CarWifiPendingEndpointPort? = null,
+            inviteNetwork: () -> WifiId? = { null },
+        ): CarWifiHandoffRequest<WifiId> =
+            CarWifiHandoffRequest(
+                sourceLabel = "endpoint",
+                source = source,
+                ssid = ssid,
+                accessoryWifi = accessoryWifi,
+                cachedWifi = cachedWifi,
+                verifiedCurrentNetwork = verifiedCurrentNetwork,
+                requireCurrentBinding = requireCurrentBinding,
+                pendingEndpoint = pendingEndpoint,
+                targetCurrent = { targetCurrent },
+                scopeActive = { scopeActive },
+                cachedRetryCancelled = { cachedRetryCancelled },
+                handoffCancelled = { handoffCancelled },
+                freshInvite = { freshInvite },
+                continueWithNetwork = { results += it },
+                releaseHandoff = { releases += Unit },
+                clearCachedCredentials = { clears += Unit },
+                inviteNetwork = inviteNetwork,
+            )
+
+        fun dispatch(request: CarWifiHandoffRequest<WifiId>) {
+            beginOfStep?.invoke()
+            harness.joiner.dispatchHandoff(request)
+        }
+    }
+
+    private fun Harness.handoff(): HandoffHarness = HandoffHarness(this)
+
+    private fun Harness.backgroundNames(): List<String> = trace.filterIsInstance<Trace.TaskSubmitted>().map { it.name }
 
     @Test
     fun j02_preferenceReadDynamicallyAtEachEntryAndPolicyControlsSystemPaths() {
@@ -659,13 +717,17 @@ class CarWifiJoinerTest {
         val hAssociatedNoHandle = Harness()
         hAssociatedNoHandle.shell.connectUpdatesStatusSsidTo = wifi.ssid
         hAssociatedNoHandle.verifiedNetworkBySsid[wifi.ssid] = null
-        hAssociatedNoHandle.onConfirmCurrent = { _, _, _, onResult -> onResult(false) }
+        hAssociatedNoHandle.dialogAnswers.addLast(null)
 
         hAssociatedNoHandle.joiner.autoJoinCarWifi(wifi)
 
+        assertEquals(1, hAssociatedNoHandle.trace.filterIsInstance<Trace.Ask>().size)
         assertEquals(
-            1,
-            hAssociatedNoHandle.trace.filterIsInstance<Trace.ConfirmCurrent>().size,
+            "sc_use_current_title",
+            hAssociatedNoHandle.trace
+                .filterIsInstance<Trace.Ask>()
+                .single()
+                .prompt.title,
         )
         assertTrue(
             "已连上目标 SSID 时绝不能退回会弹窗的 specifier",
@@ -728,7 +790,7 @@ class CarWifiJoinerTest {
         // 4) specifier 返回 Unavailable（及 Unsupported），后置系统已连接近路命中（保留 ${result.javaClass.simpleName}）
         for (failedResult in listOf(CarWifiLink.JoinResult.Unavailable, CarWifiLink.JoinResult.Unsupported)) {
             val hPostHit = Harness()
-            hPostHit.link.onJoinCarPlayNetwork = { _, _, _, _, _, _, _, _ ->
+            hPostHit.link.onJoinCarPlayNetwork = { _, _, _, _, _, _, _, _, _ ->
                 // 请求期间系统自动连上了已保存的热点
                 hPostHit.link.apiSsid = wifi.ssid
                 hPostHit.verifiedNetworkBySsid[wifi.ssid] = netExisting
@@ -758,7 +820,7 @@ class CarWifiJoinerTest {
         // 1) quickFallback 命中：不执行 connect-network，直接绑定并跳过 deepFallback
         val hQuick = Harness()
         hQuick.verifiedNetworkBySsid[wifi.ssid] = netQuick
-        hQuick.link.onJoinCarPlayNetwork = { _, _, _, _, _, quick, deep, _ ->
+        hQuick.link.onJoinCarPlayNetwork = { _, _, _, _, _, quick, deep, _, _ ->
             hQuick.link.apiSsid = wifi.ssid
             val q = quick?.invoke()
             if (q != null) {
@@ -784,7 +846,7 @@ class CarWifiJoinerTest {
                 hDeep.shell.statusSsid = wifi.ssid
             }
         }
-        hDeep.link.onJoinCarPlayNetwork = { _, _, _, _, _, quick, deep, _ ->
+        hDeep.link.onJoinCarPlayNetwork = { _, _, _, _, _, quick, deep, _, _ ->
             assertNull(quick?.invoke())
             val d = deep?.invoke()
             if (d != null) CarWifiLink.JoinResult.Joined(d) else CarWifiLink.JoinResult.Unavailable
@@ -1322,23 +1384,30 @@ class CarWifiJoinerTest {
             assertTrue("CarWifiJoiner 必须定义 $fn", joinerCode.contains("fun $fn("))
         }
 
-        // 2c-3 端点网络分派函数与上层绑定/弹窗/清理函数本轮必须留在 SessionController
-        val retainedInController =
+        // 2c-3 端点网络分派函数已迁入 CarWifiJoiner；上层绑定/弹窗/清理仍留在 SessionController
+        val movedEndpointFunctions =
             listOf(
-                "onWifiCredentials",
-                "bindVerifiedCarWifi",
-                "verifiedWifiNetworkFor",
-                "bindCarWifiAndRegister",
-                "cleanupShellFallbackNetwork",
-                "askWifiJoinChoice",
-                "openWlanSettings",
-                "copyHotspotPsk",
                 "joinAccessoryWifi",
                 "bindHandoffWifi",
                 "confirmCurrentWifiThenContinue",
                 "joinKnownWifiManually",
                 "waitForKnownWifiThenContinue",
                 "waitForManualWifiThenContinue",
+            )
+        movedEndpointFunctions.forEach { fn ->
+            assertFalse("SessionController 不得残留 $fn 的重复定义", controllerCode.contains("fun $fn("))
+            assertTrue("CarWifiJoiner 必须定义 $fn", joinerCode.contains("fun $fn("))
+        }
+
+        val retainedInController =
+            listOf(
+                "onWifiCredentials",
+                "verifiedWifiNetworkFor",
+                "bindCarWifiAndRegister",
+                "cleanupShellFallbackNetwork",
+                "askWifiJoinChoice",
+                "openWlanSettings",
+                "copyHotspotPsk",
             )
         retainedInController.forEach { fn ->
             assertTrue("SessionController 必须保留 $fn", controllerCode.contains("fun $fn("))
@@ -1406,6 +1475,7 @@ class CarWifiJoinerTest {
         assertTrue("waitForWifiEnabled 必须把 caller isCancelled 透传给 askChoice", wifiOffAsk.cancelledAtEntry)
         assertFalse("取消时不得落入 null 分支写 sc_wifi_off_needed", harness.phases.contains("sc_wifi_off_needed"))
 
+        val asksBeforeManual = harness.trace.count { it is Trace.Ask }
         harness.joiner.manualJoinCarWifi(wifi, isCancelled = { callerCancelled })
         assertEquals(0, harness.sleepCount)
 
@@ -1416,6 +1486,393 @@ class CarWifiJoinerTest {
         harness.joiner.manualJoinCarWifi(wifi, isCancelled = { callerCancelled })
         assertEquals(1, harness.sleepCount)
         assertTrue(harness.trace.filterIsInstance<Trace.BindVerifiedAndRegister>().isEmpty())
-        assertTrue(harness.trace.filterIsInstance<Trace.ConfirmCurrent>().isEmpty())
+        assertEquals("manualJoin 不得新增确认弹窗", asksBeforeManual, harness.trace.count { it is Trace.Ask })
+    }
+
+    @Test
+    fun j18_endpointDispatchCoversAllEightActionsAndPreservesWaitReleases() {
+        val wifi = wifiConfig()
+        val net = WifiId("net-endpoint")
+
+        // IGNORE：非当前轮次直接忽略并释放交接，不发起任何网络动作
+        val hIgnore = Harness()
+        val ignore = hIgnore.handoff().apply { targetCurrent = false }
+        ignore.dispatch(ignore.request(CarWifiHandoffSource.ACCESSORY, wifi.ssid, accessoryWifi = wifi))
+        assertEquals(1, ignore.releases.size)
+        assertTrue(ignore.results.isEmpty())
+        assertTrue(hIgnore.logs.contains("WIFI: 旧轮次/非目标端点的网络动作已忽略"))
+
+        // WAIT：没有可验证归属时保持等待并释放交接
+        val hWait = Harness()
+        val wait = hWait.handoff()
+        wait.dispatch(wait.request(CarWifiHandoffSource.NONE, wifi.ssid))
+        assertEquals(1, wait.releases.size)
+        assertTrue(wait.results.isEmpty())
+        assertTrue(hWait.logs.contains("WIFI: 没有可验证的网络归属——保持等待，不绑定任意 Wi-Fi"))
+
+        // JOIN_ACCESSORY -> 复用 joinAccessoryWifi 的后台名与续体
+        val hJoinAccessory = Harness()
+        hJoinAccessory.dialogAnswers.addLast(null)
+        hJoinAccessory.link.nextJoinResult = CarWifiLink.JoinResult.Joined(net)
+        val joinAccessory = hJoinAccessory.handoff()
+        joinAccessory.dispatch(joinAccessory.request(CarWifiHandoffSource.ACCESSORY, wifi.ssid, accessoryWifi = wifi))
+        assertEquals(listOf("wifi-join-on-endpoint"), hJoinAccessory.backgroundNames())
+        assertEquals(listOf(true), joinAccessory.results)
+
+        // JOIN_CACHED -> 只对 KNOWN_SSID 的缓存走缓存加入
+        val hJoinCached = Harness()
+        hJoinCached.link.nextJoinResult = CarWifiLink.JoinResult.Joined(net)
+        val joinCached = hJoinCached.handoff()
+        joinCached.dispatch(
+            joinCached.request(
+                CarWifiHandoffSource.KNOWN_SSID,
+                wifi.ssid,
+                cachedWifi = wifi,
+            ),
+        )
+        assertEquals(listOf("wifi-join-on-endpoint"), hJoinCached.backgroundNames())
+        assertEquals(listOf(true), joinCached.results)
+        assertTrue(hJoinCached.logs.any { it.startsWith("WIFI: 交接决策=JOIN_CACHED 来源=KNOWN_SSID") })
+
+        // ACCESSORY/CURRENT_NETWORK 即使误带缓存也不得进入 JOIN_CACHED
+        val hAccessoryWithCache = Harness()
+        hAccessoryWithCache.link.nextJoinResult = CarWifiLink.JoinResult.Joined(net)
+        val accessoryWithCache = hAccessoryWithCache.handoff()
+        accessoryWithCache.dispatch(
+            accessoryWithCache.request(
+                CarWifiHandoffSource.ACCESSORY,
+                wifi.ssid,
+                accessoryWifi = wifi,
+                cachedWifi = wifi,
+            ),
+        )
+        assertTrue(
+            "缓存只对 KNOWN_SSID 生效",
+            hAccessoryWithCache.logs.none { it.contains("交接决策=JOIN_CACHED") },
+        )
+
+        // BIND_KNOWN -> 绑定已核验的网络，后台名保持 wifi-bind-handoff
+        val hBindKnown = Harness()
+        hBindKnown.link.apiSsid = wifi.ssid
+        hBindKnown.verifiedNetworkBySsid[wifi.ssid] = net
+        val bindKnown = hBindKnown.handoff()
+        bindKnown.dispatch(bindKnown.request(CarWifiHandoffSource.KNOWN_SSID, wifi.ssid))
+        assertEquals(listOf("wifi-bind-handoff"), hBindKnown.backgroundNames())
+        assertEquals(listOf(true), bindKnown.results)
+        assertEquals(wifi.ssid, hBindKnown.state.boundCarSsid)
+
+        // BIND_CURRENT -> 使用上层提供的已验证句柄，并保留 requiredCurrent
+        val hBindCurrent = Harness()
+        hBindCurrent.link.currentNetwork = net
+        val bindCurrent = hBindCurrent.handoff().apply { freshInvite = true }
+        bindCurrent.dispatch(
+            bindCurrent.request(
+                CarWifiHandoffSource.CURRENT_NETWORK,
+                wifi.ssid,
+                verifiedCurrentNetwork = net,
+                requireCurrentBinding = true,
+            ),
+        )
+        assertEquals(listOf("wifi-bind-handoff"), hBindCurrent.backgroundNames())
+        assertEquals(listOf(true), bindCurrent.results)
+        assertTrue(
+            hBindCurrent.trace
+                .filterIsInstance<Trace.BindVerifiedAndRegister>()
+                .single()
+                .requiredCurrent == net,
+        )
+        assertTrue(
+            "invite callback must not be needed when networkToBind is present",
+            hBindCurrent.trace.filterIsInstance<Trace.BindVerifiedAndRegister>().size == 1,
+        )
+
+        // ASK_CONFIRM_CURRENT -> 后台确认流程；选 false 时不绑定，转入已知网等待
+        val hAskConfirm = Harness()
+        hAskConfirm.link.currentNetwork = net
+        hAskConfirm.link.existingWifi = true
+        hAskConfirm.link.apiSsid = null
+        hAskConfirm.link.uniqueWifiNetwork = null
+        hAskConfirm.dialogAnswers.addLast(false)
+        val askConfirm =
+            hAskConfirm.handoff().apply {
+                freshInvite = false
+            }
+        askConfirm.dispatch(askConfirm.request(CarWifiHandoffSource.KNOWN_SSID, wifi.ssid))
+        assertEquals(listOf("wifi-confirm-current"), hAskConfirm.backgroundNames())
+        assertEquals(listOf(false), askConfirm.results)
+        assertTrue(hAskConfirm.trace.filterIsInstance<Trace.OpenWlanSettings>().isNotEmpty())
+
+        // ASK_JOIN_KNOWN -> 已知 SSID 手动加入流程，后台名 wifi-manual-known
+        val hAskKnown = Harness()
+        hAskKnown.dialogAnswers.addLast(null)
+        hAskKnown.link.apiSsid = "Office-WiFi"
+        val askKnown = hAskKnown.handoff()
+        askKnown.dispatch(askKnown.request(CarWifiHandoffSource.KNOWN_SSID, wifi.ssid))
+        assertEquals(listOf("wifi-manual-known"), hAskKnown.backgroundNames())
+        assertEquals(listOf(false), askKnown.results)
+    }
+
+    @Test
+    fun j18_endpointCacheFailureRealtimeRetryClearsOnceAndDoesNotRecurseIntoJoinCached() {
+        val wifi = wifiConfig()
+        val h = Harness()
+        h.link.apiSsid = "Office-WiFi"
+        h.dialogAnswers.addLast(null)
+        h.link.nextJoinResult = CarWifiLink.JoinResult.Unavailable
+        val handoff = h.handoff()
+
+        handoff.dispatch(
+            handoff.request(
+                CarWifiHandoffSource.KNOWN_SSID,
+                wifi.ssid,
+                cachedWifi = wifi,
+            ),
+        )
+
+        assertEquals("缓存失败且 scope active 才清一次缓存", 1, handoff.clears.size)
+        assertEquals(listOf(false), handoff.results)
+        assertTrue(h.logs.contains("WIFI: 缓存热点凭据入网失败——已清除并回退=${WifiHandoffAction.ASK_JOIN_KNOWN}"))
+        assertEquals("重判不得再次进入 JOIN_CACHED", 1, h.backgroundNames().count { it == "wifi-join-on-endpoint" })
+    }
+
+    @Test
+    fun j19_confirmCurrentTokenChangesThreeTimesAndReasksWithoutBindingWrongNetwork() {
+        val wifi = wifiConfig()
+        val netA = WifiId("net-A")
+        val netB = WifiId("net-B")
+        val netC = WifiId("net-C")
+        val h = Harness()
+        h.link.currentNetwork = netA
+        h.link.apiSsid = null
+        var step = 0
+        h.onAskChoice = { _, _, _ ->
+            step++
+            h.link.currentNetwork =
+                when (step) {
+                    1 -> netB
+                    2 -> netC
+                    else -> netA
+                }
+            true
+        }
+        h.link.existingWifi = true
+        h.link.uniqueWifiNetwork = null
+        h.shell.statusSsid = wifi.ssid
+        val handoff = h.handoff()
+        handoff.targetCurrent = true
+        handoff.scopeActive = true
+
+        handoff.dispatch(handoff.request(CarWifiHandoffSource.KNOWN_SSID, wifi.ssid))
+
+        assertEquals("连续换网会在至多三次尝试内重新提示", 3, step)
+        assertEquals("三次令牌都对不上时不得绑定任意网络", listOf(false), handoff.results)
+        assertTrue(
+            h.logs.count { it.contains("用户确认期间当前网络已变化——重新提示") } >= 2,
+        )
+        assertTrue(h.trace.filterIsInstance<Trace.BindVerifiedAndRegister>().isEmpty())
+    }
+
+    @Test
+    fun j20_knownWifiWaitEightSecondUnknownConfirmationAnd120SecondTimeout() {
+        val wifi = wifiConfig()
+        val h = Harness()
+        h.shell.statusSsid = null
+        h.link.apiSsid = null
+        h.dialogAnswers.addLast(null)
+        val handoff = h.handoff()
+        handoff.dispatch(handoff.request(CarWifiHandoffSource.KNOWN_SSID, wifi.ssid))
+
+        assertEquals("8 秒未知确认必须先发生一次", 1, h.trace.filterIsInstance<Trace.Ask>().size)
+        assertEquals("确认无人应答后立即失败，不继续硬等", listOf(false), handoff.results)
+        assertTrue(h.sleepCount == 0)
+
+        val hTimeout = Harness()
+        hTimeout.shell.statusSsid = null
+        hTimeout.link.apiSsid = null
+        hTimeout.dialogAnswers.addLast(false)
+        val knownTimeout = hTimeout.handoff()
+        knownTimeout.dispatch(knownTimeout.request(CarWifiHandoffSource.KNOWN_SSID, wifi.ssid))
+        assertEquals(120, hTimeout.sleepCount)
+        assertEquals(listOf(false), knownTimeout.results)
+        assertTrue(hTimeout.logs.last().contains("等待超时——继续等待车机邀请或晚到端点"))
+        assertTrue(
+            "未知网络先确认，选 false 后继续等待并再次给确认机会",
+            hTimeout.trace.filterIsInstance<Trace.Ask>().size >= 1,
+        )
+    }
+
+    @Test
+    fun j20_lateEndpointDuringKnownWaitReplacesAndSuppressesOldBinding() {
+        val wifi = wifiConfig()
+        val h = Harness()
+        h.link.apiSsid = "Office-WiFi"
+        h.shell.statusSsid = "Office-WiFi"
+        var duringCalls = 0
+        var timeoutCalls = 0
+        val pending =
+            object : CarWifiPendingEndpointPort {
+                override fun tryContinueDuringWait(onClaimed: () -> Unit): Boolean {
+                    duringCalls++
+                    return false
+                }
+
+                override fun tryContinueBeforeTimeout(onClaimed: () -> Unit): Boolean {
+                    timeoutCalls++
+                    onClaimed()
+                    return true
+                }
+            }
+        var completed = false
+        h.joiner.waitForKnownWifiThenContinue(wifi.ssid, "endpoint", pending, { false }) { completed = true }
+
+        assertTrue("等待期间必须逐轮检查晚到端点", duringCalls > 0)
+        assertEquals("超时前最后检查晚到端点一次", 1, timeoutCalls)
+        assertFalse("晚到端点接替后不得再回调旧等待完成", completed)
+        assertTrue(
+            "晚到端点接替后旧等待不得继续绑定",
+            h.trace.filterIsInstance<Trace.BindVerifiedAndRegister>().isEmpty(),
+        )
+        assertEquals(
+            "晚到端点接替日志必须只输出一次",
+            1,
+            h.logs.count { it.contains("手动入网超时前收到完整 0x4301——直接接替本轮连接") },
+        )
+    }
+
+    @Test
+    fun j20_manualWaitUses45SecondsAndStrictlyGreaterThanFiveSecondBoundary() {
+        val wifi = wifiConfig()
+        val h = Harness()
+        h.link.apiSsid = "Other-WiFi"
+        h.link.existingWifi = true
+        h.shell.statusSsid = "Other-WiFi"
+        var bound = true
+        h.joiner.waitForManualWifiThenContinue(wifi, { false }) { bound = it }
+
+        assertEquals(45, h.sleepCount)
+        assertFalse(bound)
+        assertTrue(h.logs.any { it.contains("等待用户在系统 WLAN 中加入车机热点") })
+        assertTrue(h.logs.last().contains("等待车机热点超时"))
+    }
+
+    @Test
+    fun j20_staleCallerCannotBindOldNetworkAfterScopeInvalidation() {
+        val wifi = wifiConfig()
+        val h = Harness()
+        h.link.apiSsid = wifi.ssid
+        h.verifiedNetworkBySsid[wifi.ssid] = WifiId("net-old")
+        h.link.existingWifi = true
+        h.link.uniqueWifiNetwork = null
+        h.link.currentNetwork = null
+        h.state.boundCarSsid = null
+        val handoff = h.handoff()
+        h.dialogAnswers.addLast(true)
+        handoff.beginOfStep = { handoff.handoffCancelled = true }
+
+        handoff.dispatch(
+            handoff.request(
+                CarWifiHandoffSource.ACCESSORY,
+                wifi.ssid,
+                accessoryWifi = wifi,
+            ),
+        )
+
+        assertTrue("旧 caller 失效后不得绑定旧端点网络", h.trace.filterIsInstance<Trace.BindVerifiedAndRegister>().isEmpty())
+        assertEquals("旧 caller 失效必须显式回报 false", listOf(false), handoff.results)
+    }
+
+    @Test
+    fun p3_productionAdapterWiringIsPinnedToInternetNetworkPolicy() {
+        val bodies = carWifiJoinerAdapterBodies()
+        val useSystem = bodies.getValue("useSystemWifi")
+        assertEquals(
+            "系统 Wi-Fi 首选项必须透传原名 Shizuku 就绪判定",
+            1,
+            Regex("""InternetNetworkPolicy\.useSystemWifi\(preference\.toInternetNetwork\(\), shizukuReady\)""")
+                .findAll(useSystem)
+                .count(),
+        )
+        listOf(
+            "allowExistingSystemWifi" to "InternetNetworkPolicy.allowExistingSystemWifi(preference.toInternetNetwork())",
+            "allowSystemFallback" to "InternetNetworkPolicy.allowSystemFallback(preference.toInternetNetwork())",
+        ).forEach { (adapter, expected) ->
+            assertEquals(
+                "$adapter 必须精确映射到 InternetNetworkPolicy",
+                1,
+                Regex(Regex.escape(expected)).findAll(bodies.getValue(adapter)).count(),
+            )
+        }
+        val phoneMode = bodies.getValue("phoneModeDecision")
+        listOf(
+            "phoneModeSystemWifiDecision(",
+            "network = preference.toInternetNetwork(),",
+            "activeTarget = activeTarget,",
+            "activeIdentityUnknown = activeIdentityUnknown,",
+            "saved = saved,",
+            ").toCarWifiDecision()",
+        ).forEach { fragment ->
+            assertTrue("PHONE 策略适配器缺少 $fragment：$phoneMode", phoneMode.contains(fragment))
+        }
+        assertFalse(
+            "不得绕过 InternetNetworkPolicy 直接按 PHONE/CAR 手写四路决策",
+            useSystem.contains("preference == CarWifiInternetPreference.CAR"),
+        )
+    }
+
+    private fun carWifiJoinerAdapterBodies(): Map<String, String> {
+        val code = SourceTree.scan("SessionController.kt").code
+        val property = code.indexOf("private val carWifiJoiner =")
+        check(property >= 0) { "找不到 CarWifiJoiner 生产装配" }
+        val constructor = code.indexOf("CarWifiJoiner<", property)
+        check(constructor > property) { "找不到 CarWifiJoiner 构造调用" }
+        var depth = 0
+        var index = code.indexOf('(', constructor)
+        check(index > constructor) { "找不到 CarWifiJoiner 参数表" }
+        var end = -1
+        while (index < code.length) {
+            when (code[index]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) {
+                        end = index + 1
+                        break
+                    }
+                }
+            }
+            index++
+        }
+        check(end > 0) { "CarWifiJoiner 生产装配没有闭合" }
+        val wiring = code.substring(property, end)
+        val adapters =
+            listOf(
+                "useSystemWifi",
+                "allowExistingSystemWifi",
+                "allowSystemFallback",
+                "phoneModeDecision",
+                "bindVerifiedAndRegister",
+            )
+        val starts = adapters.map { adapter -> adapter to wiring.indexOf("$adapter = {") }
+        starts.forEach { (adapter, at) -> check(at >= 0) { "找不到 $adapter 生产适配器" } }
+        check(starts.zipWithNext().all { (left, right) -> left.second < right.second }) {
+            "生产适配器顺序不符合接线契约"
+        }
+        return starts
+            .mapIndexed { i, (adapter, from) ->
+                val to = starts.getOrNull(i + 1)?.second ?: wiring.length
+                adapter to wiring.substring(from, to)
+            }.toMap()
+    }
+
+    @Test
+    fun p3_deadControllerBindVerifiedCarWifiIsRemovedAndJoinerHasSingleImplementation() {
+        val controllerCode = SourceTree.scan("SessionController.kt").code
+        val joinerCode = SourceTree.scan("net/CarWifiJoiner.kt").code
+        assertFalse("SessionController 不得残留无调用点的 bindVerifiedCarWifi", controllerCode.contains("fun bindVerifiedCarWifi("))
+        assertEquals(
+            "joiner 必须只有一份 bindVerifiedCarWifi 实现",
+            1,
+            Regex("""fun bindVerifiedCarWifi\(""").findAll(joinerCode).count(),
+        )
     }
 }

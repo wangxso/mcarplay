@@ -49,12 +49,16 @@ class CarPlayServiceBrowser(
      * 等已解析结果（轮询缓存）。返回 null = 超时仍未发现。
      * 调用方通常在等待期间继续做别的事（绑定网络、握手），不是纯粹的阻塞 sleep。
      */
-    fun awaitEndpoint(timeoutMillis: Long): NsdServiceInfo? {
+    fun awaitEndpoint(
+        timeoutMillis: Long,
+        isCancelled: () -> Boolean = { false },
+        sleepMillis: (Long) -> Unit = { Thread.sleep(it) },
+    ): NsdServiceInfo? {
         val deadline = android.os.SystemClock.uptimeMillis() + timeoutMillis
-        while (android.os.SystemClock.uptimeMillis() < deadline) {
+        while (android.os.SystemClock.uptimeMillis() < deadline && !isCancelled()) {
             resolved?.let { return it }
             try {
-                Thread.sleep(100)
+                sleepMillis(100)
             } catch (_: InterruptedException) {
                 return resolved
             }

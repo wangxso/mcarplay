@@ -56,6 +56,7 @@ internal class EndpointResolver(
     fun awaitCtrlInvite(
         endpoint: Iap2SenderSession.CarPlayEndpoint,
         timeoutMillis: Long,
+        sleep: (Long) -> Unit = sleepMillis,
     ): Boolean {
         val advertiser = captureInviteView()
         val deadline = uptimeMillis() + timeoutMillis
@@ -123,7 +124,7 @@ internal class EndpointResolver(
                 lastLogAt = now
             }
             try {
-                sleepMillis(50)
+                sleep(50)
             } catch (_: InterruptedException) {
                 return false
             }

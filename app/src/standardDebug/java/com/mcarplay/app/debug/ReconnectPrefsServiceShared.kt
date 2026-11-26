@@ -63,6 +63,7 @@ public abstract class ReconnectPrefsServiceShared : Service() {
             COMMAND_READ ->
                 reply.data =
                     Bundle(identityBundle).apply {
+                        putLong(KEY_START_ELAPSED_MS, startElapsedMs)
                         val peer = message.data.getString(KEY_PEER)
                         val nowMs = message.data.getLong(KEY_NOW_MS)
                         val block = AutoReconnectGuard.block(applicationContext, peer, nowMs)
@@ -74,6 +75,7 @@ public abstract class ReconnectPrefsServiceShared : Service() {
             COMMAND_ACTIVE_BLOCK ->
                 reply.data =
                     Bundle(identityBundle).apply {
+                        putLong(KEY_START_ELAPSED_MS, startElapsedMs)
                         val nowMs = message.data.getLong(KEY_NOW_MS)
                         val block = AutoReconnectGuard.activeBlock(applicationContext, nowMs)
                         putString(KEY_READ_FAILURES, block?.failures?.toString())
