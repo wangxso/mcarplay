@@ -134,7 +134,7 @@ class CarLifeAudioBridge(
         if (accepted == 1L || accepted % LOG_EVERY == 0L) {
             log(
                 "AUDIO: CarWith 原生 PCM 接入 #$accepted ${pcm.size}B nonzero=${pcm.any { it != 0.toByte() }} dropped=$dropped " +
-                    "promptDropped=${mixer.droppedPromptFrames} clipped=${mixer.clippedSamples}",
+                    "promptDropped=${mixer.droppedPromptFrames} clipped=${mixer.clippedSamples} musicDb=${mixer.config.musicAttenuationDb}",
             )
         }
     }
@@ -160,9 +160,9 @@ class CarLifeAudioBridge(
         duckingLogged = active
         log(
             if (active) {
-                "AUDIO: 提示音开始，音乐压低到 ${mixer.config.duckDb}dB（淡出 ${ducking.attackMs}ms）"
+                "AUDIO: 提示音开始，音乐额外增益 ${mixer.config.duckDb}dB（淡出 ${ducking.attackMs}ms）"
             } else {
-                "AUDIO: 提示音结束，音乐淡回原音量（${ducking.releaseMs}ms）"
+                "AUDIO: 提示音结束，音乐淡回基础音量（${ducking.releaseMs}ms）"
             },
         )
     }

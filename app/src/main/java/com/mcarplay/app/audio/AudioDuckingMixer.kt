@@ -115,8 +115,10 @@ class AudioDuckingMixer<K : Any>(
     }
 
     fun setMusicAttenuationDb(db: Float) {
-        if (db == config.musicAttenuationDb) return
-        config = config.copy(musicAttenuationDb = db)
+        if (db.isNaN()) return
+        val boundedDb = db.coerceIn(AudioDuckingPrefs.MUSIC_ATTENUATION_MIN_DB.toFloat(), 0f)
+        if (boundedDb == config.musicAttenuationDb) return
+        config = config.copy(musicAttenuationDb = boundedDb)
         targetMusicGain = config.musicGain
     }
 

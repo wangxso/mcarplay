@@ -212,7 +212,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
         val musicValue = view.findViewById<TextView>(R.id.musicAttenuationValue)
         val savedMusicDb = AudioDuckingPrefs.musicAttenuationDb(ctx)
         musicSeek.max = -AudioDuckingPrefs.MUSIC_ATTENUATION_MIN_DB
-        musicSeek.progress = -savedMusicDb
+        musicSeek.progress = AudioDuckingPrefs.progressOfMusicAttenuationDb(savedMusicDb)
         musicValue.text = getString(R.string.lay_duck_level_value, savedMusicDb)
         musicSeek.setOnSeekBarChangeListener(
             object : SeekBar.OnSeekBarChangeListener {
@@ -222,7 +222,7 @@ class DisplayPanelFragment : SettingsPanelFragment() {
                     fromUser: Boolean,
                 ) {
                     if (!fromUser) return
-                    val db = -progress
+                    val db = AudioDuckingPrefs.musicAttenuationDbOfProgress(progress)
                     musicValue.text = getString(R.string.lay_duck_level_value, db)
                     AudioDuckingPrefs.setMusicAttenuationDb(ctx, db)
                     SessionController.applyMusicAttenuationDb(db)
