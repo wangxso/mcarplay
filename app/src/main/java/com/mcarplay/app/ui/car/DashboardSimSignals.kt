@@ -83,7 +83,13 @@ internal class DashboardSimSignals(
         TelephonyCallback.DisplayInfoListener {
         private var level = runCatching { phone.signalStrength?.level }.getOrNull()
         private var generation =
-            runCatching { networkGeneration(phone.dataNetworkType) ?: networkGeneration(phone.voiceNetworkType) }.getOrNull()
+            try {
+                networkGeneration(phone.dataNetworkType) ?: networkGeneration(phone.voiceNetworkType)
+            } catch (_: SecurityException) {
+                null
+            } catch (_: UnsupportedOperationException) {
+                null
+            }
 
         override fun onSignalStrengthsChanged(signalStrength: SignalStrength) {
             level = signalStrength.level
