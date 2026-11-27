@@ -1,5 +1,6 @@
 package com.mcarplay.app
 
+import com.mcarplay.app.airplay.ExplicitStartScreenClaim
 import com.mcarplay.app.compat.ReceiverObservation
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -12,8 +13,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class SessionHandoffOwnership(
     private val active: AtomicBoolean,
 ) {
+    enum class BeginResult {
+        ACQUIRED,
+        RETAINED,
+        REJECTED,
+    }
+
     private val lock = Any()
     private var owner: ReceiverObservation? = null
+    private var ownerContext: ExplicitStartScreenClaim.Lease? = null
     private var wifiPeer: String? = null
     private var wifiDetached = false
     private var accepting = true
@@ -28,6 +36,7 @@ internal class SessionHandoffOwnership(
         observation: ReceiverObservation?,
         retryWhenReleased: (() -> Unit)? = null,
         wifiPeer: String? = null,
+        ownerContext: ExplicitStartScreenClaim.Lease? = null,
         onAcquired: () -> Unit = {},
     ): Boolean =
         synchronized(lock) {
@@ -37,9 +46,36 @@ internal class SessionHandoffOwnership(
                 return@synchronized false
             }
             owner = observation
+            this.ownerContext = ownerContext
             this.wifiPeer = wifiPeer
             onAcquired()
             true
+        }
+
+    /**
+     * 获取所有权，或在仍接受交接但已被另一条链路占用时，在同一把锁内暂存候选。
+     *
+     * [retainWhenBusy] 在 ownership 锁内执行。它返回 false 表示候选不应保留（例如属于
+     * 其它车机），调用方应把它视为明确拒绝。该锁顺序保证 owner 的释放和 pending 的
+     * 唤醒都不能插在「抢占失败 → 暂存」之间。
+     */
+    fun beginOrRetain(
+        observation: ReceiverObservation?,
+        ownerContext: ExplicitStartScreenClaim.Lease? = null,
+        wifiPeer: String? = null,
+        retainWhenBusy: () -> Boolean,
+        onAcquired: () -> Unit = {},
+    ): BeginResult =
+        synchronized(lock) {
+            if (!accepting) return@synchronized BeginResult.REJECTED
+            if (!active.compareAndSet(false, true)) {
+                return@synchronized if (retainWhenBusy()) BeginResult.RETAINED else BeginResult.REJECTED
+            }
+            owner = observation
+            this.ownerContext = ownerContext
+            this.wifiPeer = wifiPeer
+            onAcquired()
+            BeginResult.ACQUIRED
         }
 
     fun endIfOwnedBy(observation: ReceiverObservation?): Boolean {
@@ -93,15 +129,16 @@ internal class SessionHandoffOwnership(
     fun cancelIfOwnedBy(
         observation: ReceiverObservation?,
         isAlreadyCancelled: () -> Boolean = { false },
-        onCancel: () -> Unit,
+        onCancel: (ownerContext: ExplicitStartScreenClaim.Lease?) -> Unit,
     ): Boolean =
         synchronized(lock) {
             if (!active.get() || owner != observation) return@synchronized false
+            val endedContext = ownerContext
             active.set(false)
             clearOwner()
             pendingRetry = null
             if (isAlreadyCancelled()) return@synchronized false
-            onCancel()
+            onCancel(endedContext)
             true
         }
 
@@ -133,6 +170,7 @@ internal class SessionHandoffOwnership(
 
     private fun clearOwner() {
         owner = null
+        ownerContext = null
         wifiPeer = null
         wifiDetached = false
     }

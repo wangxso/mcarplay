@@ -18,6 +18,13 @@ internal class PendingHandoffUpdate<T : Any>(
     private fun slotOf(update: T): Any? = keyOf?.invoke(update) ?: singleSlot
 
     /**
+     * 与 ownership 获取组成原子转换时，必须先持本锁再进入
+     * [SessionHandoffOwnership]。现有 `takeIfAndRelease` 也按同样的 pending → ownership
+     * 顺序执行，反向嵌套会死锁。
+     */
+    fun <R> withLock(block: () -> R): R = synchronized(this, block)
+
+    /**
      * [current] 与 [update] 是否属于同一暂存槽位（生产为同一 RFCOMM observation）。
      *
      * 直接热更新、drain 前必须用它校验：另一条链路的晚到端点只能留在自己的槽位，
@@ -39,11 +46,25 @@ internal class PendingHandoffUpdate<T : Any>(
     ): Boolean {
         if (!isActive()) return false
         if (!deliverDirectly()) {
-            val slot = slotOf(update)
-            val previous = pending[slot]
-            pending[slot] = if (previous != null) merge(previous, update) else update
+            mergeOrPut(update, merge)
         }
         return true
+    }
+
+    /**
+     * 不检查交接是否仍忙，直接把更新并入自己的槽位。
+     *
+     * 调用方必须用 [SessionHandoffOwnership] 的同一把锁包住“获取失败 → 暂存”转换，
+     * 否则 owner 可能恰好在两者之间释放，留下无人唤醒的端点。
+     */
+    @Synchronized
+    fun mergeOrPut(
+        update: T,
+        merge: (T, T) -> T,
+    ) {
+        val slot = slotOf(update)
+        val previous = pending[slot]
+        pending[slot] = if (previous != null) merge(previous, update) else update
     }
 
     @Synchronized
@@ -64,10 +85,15 @@ internal class PendingHandoffUpdate<T : Any>(
     /**
      * 把未能投递/交接被占用的端点放回自己的槽位。
      * 同槽已有更新条目时保留更新的那条，避免旧端点覆盖新地址。
+     *
+     * @return false 表示同槽已有更新条目，调用方必须清理传入的旧候选。
      */
     @Synchronized
-    fun requeue(update: T) {
-        pending.putIfAbsent(slotOf(update), update)
+    fun requeue(update: T): Boolean {
+        val slot = slotOf(update)
+        if (pending.containsKey(slot)) return false
+        pending[slot] = update
+        return true
     }
 
     @Synchronized
@@ -80,6 +106,38 @@ internal class PendingHandoffUpdate<T : Any>(
         return value
     }
 
+    /**
+     * 在同一把锁内取走匹配条目并释放交接入口。
+     *
+     * 收尾路径必须用此方法把「检查暂存」和「释放 sessionStarting」变成原子转换，否则
+     * 新端点可能恰好在两步之间进入暂存，随后被当成普通唤醒且丢失原租约。
+     */
+    fun takeIfAndRelease(
+        matches: (T) -> Boolean,
+        release: () -> Unit,
+    ): T? = takeIfAndRelease(matches, release) {}
+
+    @Synchronized
+    fun takeIfAndRelease(
+        matches: (T) -> Boolean,
+        release: () -> Unit,
+        afterRelease: (T?) -> Unit,
+    ): T? = takeIfAndRelease(matches, release, beforeRelease = {}, afterRelease)
+
+    @Synchronized
+    fun takeIfAndRelease(
+        matches: (T) -> Boolean,
+        release: () -> Unit,
+        beforeRelease: (T?) -> Unit,
+        afterRelease: (T?) -> Unit,
+    ): T? {
+        val value = takeIf(matches)
+        beforeRelease(value)
+        release()
+        afterRelease(value)
+        return value
+    }
+
     @Synchronized
     fun take(): T? {
         val entry = pending.entries.lastOrNull() ?: return null
@@ -88,8 +146,17 @@ internal class PendingHandoffUpdate<T : Any>(
     }
 
     @Synchronized
-    fun retainIf(matches: (T) -> Boolean) {
-        pending.entries.removeAll { !matches(it.value) }
+    fun retainIf(matches: (T) -> Boolean): List<T> {
+        val removed = ArrayList<T>()
+        val iterator = pending.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (!matches(entry.value)) {
+                removed += entry.value
+                iterator.remove()
+            }
+        }
+        return removed
     }
 
     @Synchronized

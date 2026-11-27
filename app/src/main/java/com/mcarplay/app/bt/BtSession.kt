@@ -1,15 +1,35 @@
 package com.mcarplay.app.bt
 
 import android.content.Context
+import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverObservation
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
+import com.mcarplay.app.transport.DuplexStream
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DeviceIdentity
 import java.io.IOException
+
+/** 主动连接与车机回连共用当前手动车型预设得到的 iAP2 通道参数。 */
+internal fun createIap2BluetoothLinkChannel(
+    stream: DuplexStream,
+    name: String,
+    role: Iap2LinkChannel.Role,
+    log: (String) -> Unit,
+): Iap2LinkChannel {
+    val policy = ReceiverCompatibility.resolve(ReceiverProfile.Signals())
+    return Iap2LinkChannel(
+        stream,
+        name = name,
+        role = role,
+        initialMaxOutgoing = policy.iap2InitialMaxOutgoing,
+        waitForPeerMarker = policy.waitForIap2PeerMarker,
+        log = log,
+    )
+}
 
 /**
  * BT 控制会话核心流程（Server/Client 共用，此前两份近乎复制）：

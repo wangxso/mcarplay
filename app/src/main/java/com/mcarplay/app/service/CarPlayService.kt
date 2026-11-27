@@ -72,7 +72,13 @@ class CarPlayService : Service() {
             if (SessionController.bluetoothDisconnectAction() == ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION) {
                 val frames = SessionController.videoSender?.framesSentTotal ?: 0
                 Bg.run("bt-handoff-log") {
-                    SessionController.appendLog("AUTO: 蓝牙已断开，兼容策略保留已接入的网络会话（已发送 $frames 帧）")
+                    SessionController.appendLog(
+                        if (SessionController.currentClient?.setupHandoffStarted == true) {
+                            ">>> AUTO: GS3 蓝牙已交接给 AirPlay TCP——保留网络会话，继续等待 RECORD"
+                        } else {
+                            "AUTO: 蓝牙已断开，兼容策略保留已接入的网络会话（已发送 $frames 帧）"
+                        },
+                    )
                 }
                 return START_STICKY
             }

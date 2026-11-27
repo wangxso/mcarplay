@@ -26,6 +26,53 @@ class Iap2LinkEngineTest {
         assertTrue(phone.peerSynchronization?.sessions?.any { it.id == Iap2LinkEngine.SESSION_CONTROL } == true)
     }
 
+    @Test
+    fun probeFirstWaitsForACompleteMarkerBeforeSendingSyn() {
+        val phone = Iap2LinkEngine(maxOutgoing = 0x7F, waitForPeerMarker = true)
+        val accessory = Iap2LinkEngine()
+        val marker = Iap2LinkEngine.MARKER
+        var markerCount = 0
+        phone.onPeerMarkerReceived = { markerCount++ }
+        phone.start(0)
+        assertArrayEquals(marker, phone.takeOutput())
+
+        phone.advanceTime(500)
+        assertTrue(phone.takeOutput().isEmpty())
+        phone.advanceTime(1_000)
+        assertArrayEquals(marker, phone.takeOutput())
+        phone.feed(marker.copyOfRange(0, 2) + byteArrayOf(0, 0, 0, 0), 1_010)
+        phone.feed(marker.copyOfRange(0, 3), 1_020)
+        assertTrue(phone.takeOutput().isEmpty())
+        assertEquals(0, markerCount)
+
+        phone.feed(marker.copyOfRange(3, marker.size), 1_030)
+        assertEquals(1, markerCount)
+        val syn = phone.takeOutput()
+        assertEquals(0x80, parseFrames(syn).single().control)
+        phone.feed(marker, 1_040)
+        assertTrue(phone.takeOutput().isEmpty())
+        assertEquals(1, markerCount)
+
+        accessory.enterNegotiating()
+        accessory.feed(syn, 1_050)
+        assertEquals(0x7F, accessory.peerSynchronization?.maxOutgoing)
+        phone.feed(accessory.takeOutput(), 1_060)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+    }
+
+    @Test
+    fun probeFirstRepliesToPeerSynArrivingWithMarker() {
+        val phone = Iap2LinkEngine(waitForPeerMarker = true)
+        phone.start(0)
+        phone.takeOutput()
+
+        phone.feed(synFrame(peerSequence = 191), 20)
+        val reply = parseFrames(phone.takeOutput()).single()
+        assertEquals(0xC0, reply.control)
+        assertEquals(191, reply.ack)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+    }
+
     /**
      * 事件通道形态：车机只反复发 marker、一条同步包都不发（Honda HFT 2026-10-20 实测
      * 60 秒 60 个 marker），说明它卡在探测态、在等**我们**的会话表。
@@ -174,6 +221,33 @@ class Iap2LinkEngineTest {
         assertArrayEquals(echo, phone.takeOutput())
         phone.feed(ackFrame(ack = frame.sequence), 7_005)
         assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+    }
+
+    @Test
+    fun gs3ResponderCombinesMarkerFirstWithTheWideInitialWindow() {
+        val phone = Iap2LinkEngine(maxOutgoing = 0x7F, waitForPeerMarker = true)
+        phone.startBluetoothResponder()
+        assertTrue(phone.takeOutput().isEmpty())
+
+        phone.feed(Iap2LinkEngine.MARKER, 1)
+        assertArrayEquals(Iap2LinkEngine.MARKER, phone.takeOutput())
+        assertEquals(Iap2LinkEngine.State.NEGOTIATING, phone.state)
+
+        phone.feed(synFrame(peerSequence = 77).drop(Iap2LinkEngine.MARKER.size).toByteArray(), 2)
+        val echo = phone.takeOutput()
+        val synAck = parseFrames(echo).single()
+        assertEquals(0xC0, synAck.control)
+        assertEquals(77, synAck.ack)
+        assertEquals(Iap2LinkEngine.State.NEGOTIATING, phone.state)
+
+        phone.feed(ackFrame(ack = synAck.sequence + 1), 3)
+        assertEquals(Iap2LinkEngine.State.NEGOTIATING, phone.state)
+
+        phone.feed(ackFrame(ack = synAck.sequence), 4)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+        assertEquals(4, phone.peerSynchronization?.maxOutgoing)
+        val advertisedMaxOutgoing = echo[Iap2LinkEngine.HEADER_BYTES + 1].toInt() and 0xFF
+        assertEquals(0x7F, advertisedMaxOutgoing)
     }
 
     /**

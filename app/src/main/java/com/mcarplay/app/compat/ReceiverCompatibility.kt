@@ -1,5 +1,6 @@
 package com.mcarplay.app.compat
 
+import com.mcarplay.app.iap2.Iap2LinkEngine
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.net.AirPlayFeatures
 import java.security.MessageDigest
@@ -86,6 +87,29 @@ object ReceiverCompatibility {
          * 其它接收端保持关闭，避免一次改动同时影响所有车型。
          */
         val preferVehicleResolution: Boolean = false,
+        /** 手动车型实验覆盖的首个 iAP2 SYN 发送窗口；协议默认值为 4。 */
+        val iap2InitialMaxOutgoing: Int = Iap2LinkEngine.DEFAULT_MAX_OUTGOING,
+        /** 手动实验预设要求先等到对端 marker 时，是否暂缓发起本方 SYN。 */
+        val waitForIap2PeerMarker: Boolean = false,
+        /**
+         * 车机在初始 AirPlay SETUP 写出后主动关闭蓝牙，并用已建立的 AirPlay TCP 继续会话。
+         *
+         * 2023 款传祺 GS3 的首轮实车日志中，RFCOMM 比 `SETUP 200` 早约 110 ms 关闭；
+         * 仅等待 [com.mcarplay.app.airplay.AirPlayClient.sessionSetupAccepted] 会错过交接窗口。
+         * 只允许手动 GS3 预设启用，其它接收端继续按原蓝牙断开策略收尾。
+         */
+        val keepNetworkSessionDuringSetupHandoffOnBluetoothLoss: Boolean = false,
+        /**
+         * 用户明确发起连接时，是否允许在初始 `/info` 车机持有主屏且约束不高于 userInitiated 时
+         * 由手机接管主屏。
+         *
+         * 2023 款传祺 GS3 影速偶发白屏（2026-11-26 报告 `36a2e771`）：CarWith 持续出帧、音频始终
+         * 正常，但 `/info modes` 以 500/500 把主屏交给车机，[com.mcarplay.app.video.ScreenOutputGate]
+         * 因主屏不归手机连续跳过 3016 / 2796 帧。车机之后发 `requestUI` 时现有请求路径能正常恢复，
+         * 故此开关只在用户点击连接后的首轮协商补一次同语义的主屏接管，且始终不接管主音频。
+         * 自动重连、CarWith 主动返回车机和 501/1000 约束保持原行为。
+         */
+        val claimScreenOnExplicitStart: Boolean = false,
     )
 
     data class PairingFallback(
@@ -136,6 +160,10 @@ object ReceiverCompatibility {
                     reconnectOnStreamingInvite = false,
                     usePanelVideoGeometry = false,
                     preferVehicleResolution = false,
+                    iap2InitialMaxOutgoing = Iap2LinkEngine.DEFAULT_MAX_OUTGOING,
+                    waitForIap2PeerMarker = false,
+                    keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = false,
+                    claimScreenOnExplicitStart = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -165,6 +193,20 @@ object ReceiverCompatibility {
                     family = Family.CLASSIC_MIB3,
                     linkGeneration = ReceiverProfile.LinkGeneration.CLASSIC_MIB3,
                     rules = policy.rules + "manual.classic-mib3",
+                )
+            // 2023 款传祺 GS3 影速：先等车机 marker，再用 0x7F 窗口发起 iAP2。
+            VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW ->
+                policy.copy(
+                    iap2InitialMaxOutgoing = Iap2LinkEngine.MAX_OUTGOING_LIMIT,
+                    waitForIap2PeerMarker = true,
+                    keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = true,
+                    claimScreenOnExplicitStart = true,
+                    rules =
+                        policy.rules +
+                            listOf(
+                                "manual.trumpchi-gs3.iap2-marker-first",
+                                "manual.trumpchi-gs3.explicit-start-screen-claim",
+                            ),
                 )
             // 奔驰 MB_E-P / 2025 GLC（issue #62）：先验证「CarWith 是否按车机尺寸出流」。
             // HyperCar 日志已给出同车机的 A/B：请求 1624x1278 时，未声明 DISABLE_RESOLUTION_OPTION
@@ -296,8 +338,14 @@ object ReceiverCompatibility {
         networkHandoffReady: Boolean,
         /** 本会话已请求车机关蓝牙（disableBluetooth）：随后的蓝牙断开是预期结果，不收会话。 */
         bluetoothReleased: Boolean = false,
+        /** GS3 初始 SETUP 已写出但应答尚未返回时，车机可能先关闭蓝牙。 */
+        setupHandoffStarted: Boolean = false,
     ): BluetoothLossAction =
-        if (bluetoothReleased || videoRunning || (policy.bluetoothRole == BluetoothRole.NETWORK_HANDOFF && networkHandoffReady)) {
+        if (bluetoothReleased ||
+            videoRunning ||
+            (policy.bluetoothRole == BluetoothRole.NETWORK_HANDOFF && networkHandoffReady) ||
+            (policy.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss && setupHandoffStarted)
+        ) {
             BluetoothLossAction.KEEP_NETWORK_SESSION
         } else {
             BluetoothLossAction.END_SESSION

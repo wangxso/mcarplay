@@ -3,7 +3,7 @@ package com.mcarplay.app.iap2
 import java.io.ByteArrayOutputStream
 
 /** 手机端回显 SYN|ACK 时声明的发送窗口（真机 iPhone / AADisplay 同值 0x7F）。 */
-private const val PHONE_DECLARED_MAX_OUTGOING = 0x7F
+private const val PHONE_DECLARED_MAX_OUTGOING = Iap2LinkEngine.MAX_OUTGOING_LIMIT
 
 /**
  * iAP2 链路引擎（发送端实现；链路层协议对称，本实现按「发起方」工作）。
@@ -23,9 +23,10 @@ private const val PHONE_DECLARED_MAX_OUTGOING = 0x7F
  * 发送窗口与重传计时。
  */
 class Iap2LinkEngine(
-    private val maxOutgoing: Int = 4,
+    private val maxOutgoing: Int = DEFAULT_MAX_OUTGOING,
     private val retransmissionTimeoutMillis: Long = 4_000L,
     private val maxRetransmissions: Int = 4,
+    private val waitForPeerMarker: Boolean = false,
 ) {
     enum class State { IDLE, NEGOTIATING, NORMAL, DEAD }
 
@@ -163,6 +164,9 @@ class Iap2LinkEngine(
     /** 诊断：每个出向链路帧的摘要（仅链路层帧，用于对照真车协商时序）。 */
     var onFrameSent: ((control: Int, sequence: Int, ack: Int, sessionId: Int, size: Int) -> Unit)? = null
 
+    /** 首次收到完整的探测 marker，仅探测优先模式使用。 */
+    var onPeerMarkerReceived: (() -> Unit)? = null
+
     private var unknownSessionDropped = 0
 
     private val unacknowledged = ArrayList<Packet>()
@@ -174,6 +178,7 @@ class Iap2LinkEngine(
     private var markerDeadline: Long? = null
     private var syncDeadline: Long? = null
     private var retransmitDeadline: Long? = null
+    private var peerMarkerReceived = false
 
     /** 上一次回显 SYN 时对端的 SYN 序号与我方序号（重传同一 SYN 时原样重放）。 */
     private var lastEchoPeerSequence: Int? = null
@@ -194,15 +199,11 @@ class Iap2LinkEngine(
      */
     private var declaredMaxOutgoing = maxOutgoing
 
-    /** 进入协商：发 marker + 同步包（发送端=发起方，不等待对端 marker）。 */
+    /** 进入协商。默认连续发送 marker 与 SYN，实验模式等对端 marker 后才发起 SYN。 */
     fun start(nowMillis: Long) {
         if (state != State.IDLE) return
-        originatedSyn = true
-        state = State.NEGOTIATING
-        appendOutput(MARKER)
-        markerDeadline = nowMillis + MARKER_RESEND_MILLIS
-        sendSynchronization()
-        syncDeadline = nowMillis + SYNC_RESEND_MILLIS
+        startResponder(nowMillis)
+        if (!waitForPeerMarker) originateSynchronization(nowMillis)
     }
 
     /**
@@ -217,10 +218,14 @@ class Iap2LinkEngine(
      */
     fun initiate(nowMillis: Long) {
         if (state == State.DEAD) return
-        originatedSyn = true
         if (state == State.IDLE) state = State.NEGOTIATING
         appendOutput(MARKER)
         markerDeadline = nowMillis + MARKER_RESEND_MILLIS
+        originateSynchronization(nowMillis)
+    }
+
+    private fun originateSynchronization(nowMillis: Long) {
+        originatedSyn = true
         sendSynchronization()
         syncDeadline = nowMillis + SYNC_RESEND_MILLIS
     }
@@ -287,6 +292,16 @@ class Iap2LinkEngine(
             while (parseAvailable(nowMillis) && state != State.DEAD) {
                 // 排空所有完整帧
             }
+        }
+        // 探测模式的 SYN 必须在本批完整控制数据处理完之后再发。若同一批里
+        // 已有车机 SYN，响应方分支会直接回显并完成协商，不能额外制造我方 SYN。
+        if (!bluetoothResponder &&
+            waitForPeerMarker &&
+            peerMarkerReceived &&
+            !originatedSyn &&
+            state == State.NEGOTIATING
+        ) {
+            originateSynchronization(nowMillis)
         }
     }
 
@@ -356,15 +371,26 @@ class Iap2LinkEngine(
     // ---- 接收解析 ----
 
     private fun parseAvailable(nowMillis: Long): Boolean {
-        // RFCOMM 响应方回显探测标记，其它模式仍只扫描 FF5A 帧。
+        // 扫描帧头，探测优先模式和已配对 RFCOMM 响应方都识别可能拆包的 FF55 marker。
         while (receive.size >= 2 &&
             !(receive[0] == 0xFF.toByte() && receive[1] == 0x5A.toByte())
         ) {
-            if (bluetoothResponder && state == State.NEGOTIATING && receive[0] == MARKER[0] && receive[1] == MARKER[1]) {
-                if (receive.size < MARKER.size) return false
-                if (receive.peek(MARKER.size).contentEquals(MARKER)) {
+            if (state == State.NEGOTIATING &&
+                receive[0] == MARKER[0] &&
+                receive[1] == MARKER[1]
+            ) {
+                val available = minOf(receive.size, MARKER.size)
+                if ((0 until available).all { receive[it] == MARKER[it] }) {
+                    if (available < MARKER.size) return false
                     receive.discard(MARKER.size)
-                    appendOutput(MARKER)
+                    if (waitForPeerMarker && !peerMarkerReceived) {
+                        peerMarkerReceived = true
+                        markerDeadline = null
+                        onPeerMarkerReceived?.invoke()
+                    }
+                    // 已配对链路的车机通常是发起方：原样回探测 marker，随后等它的 SYN。
+                    // 未配对/GS3 探测模式则由 feed() 在完整解析后主动补发本表 SYN。
+                    if (bluetoothResponder) appendOutput(MARKER)
                     continue
                 }
             }
@@ -810,6 +836,9 @@ class Iap2LinkEngine(
     }
 
     companion object {
+        const val DEFAULT_MAX_OUTGOING = 4
+        const val MAX_OUTGOING_LIMIT = 0x7F
+
         const val SESSION_CONTROL = 10
         const val SESSION_EA = 11
         const val SESSION_FILE_TRANSFER = 12
