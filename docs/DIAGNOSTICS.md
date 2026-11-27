@@ -270,7 +270,8 @@ The offline tool summarizes the last five retained attempts. `python3 tools/comp
 compares two reports of the same scenario (timeline order and normalised log lines per tag) and exits non-zero on a difference;
 see `docs/ARCHITECTURE-REFACTOR.md` section 6. The QQ bot in
 [`tools/logbot/`](../tools/logbot/README.md) builds a user-facing diagnosis on top of it;
-update its `rules.py` when adding a `DiagnosticCode`. Correlate `process`,
+update its `rules.py` when adding a `DiagnosticCode`. Its network-timeout rule excludes
+`BT-DIAG` lines so RFCOMM dial timeouts do not produce hotspot advice. Correlate `process`,
 `attempt`, `stage`, `elapsedMs`, `code` and counters with logs and user observations.
 `track` separates CarPlay attempts (`carplay`) from CarWith self-tests (`self_test`);
 the two never supersede each other. Showing a permission dialog is not recorded;
