@@ -371,8 +371,9 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 “收到源数据”“已发送”“接收端显示/有声”是不同证据层级；分享前仍需检查自由文本中的隐私。
 
 
-目标蓝牙 SDP 摘要中的“接收端 iAP2(…caff) 服务”仅表示该出站 RFCOMM UUID 是否存在，
-不代表无线 CarPlay 的完整能力判定。未声明它的车机仍可能主动回连手机 `…cafe` 服务；
+指定目标实际发起 RFCOMM 拨号后，每轮启动记录一次 SDP 缓存摘要，拨号失败或超时也会记录；门闸拒绝而未拨号时不记录。
+摘要中的“接收端 iAP2(…caff) 服务=有”仅表示系统缓存中包含该 UUID；缓存为空或未发现它时，服务是否存在仍未确定。
+缓存摘要不代表无线 CarPlay 的完整能力判定。未声明它的车机仍可能主动回连手机 `…cafe` 服务；
 例如 2026-10-31 奇瑞实测。手机正常连接期间同时公告 CarPlay 能力 UUID，停止监听时一并撤销。
 
 连接/源端排查包使用上面的构建命令，版本为 `0.1.3-rd-diag3-debug`，沿用 remote 调试桥。

@@ -188,14 +188,10 @@ class Iap2BluetoothClient(
             }
 
         /**
-         * 目标设备 SDP 声明的服务摘要：已知蓝牙标准服务写简称，其余（含厂商私有 UUID）写全称，
-         * 并单列出站使用的 …caff 服务。即使未声明它，车机仍可能主动连接手机的 …cafe 服务。
-         * `completed=false` 表示 SDP 未在等待窗内返回，此时列表只是系统缓存。
+         * 目标设备 SDP 缓存摘要：已知蓝牙标准服务写简称，其余（含厂商私有 UUID）写全称。
+         * 缓存未发现 …caff 不能证明服务不存在，车机也可能主动连接手机的 …cafe 服务。
          */
-        fun describeServices(
-            uuids: List<UUID>,
-            completed: Boolean,
-        ): String {
+        fun describeServices(uuids: List<UUID>): String {
             val names =
                 uuids.distinct().map { uuid ->
                     val text = uuid.toString().lowercase()
@@ -209,15 +205,9 @@ class Iap2BluetoothClient(
                         else -> text
                     }
                 }
-            val iap2 =
-                when {
-                    ACCESSORY_IAP2_UUID in uuids -> "有"
-                    completed -> "无"
-                    else -> "未确定（SDP 未返回）"
-                }
-            return "声明 ${names.size} 个服务${if (completed) "" else "（SDP 未在 ${SDP_PROBE_TIMEOUT_MILLIS}ms 内返回，仅为系统缓存）"}：" +
-                (names.joinToString(" / ").ifEmpty { "无" }) + "；接收端 iAP2(…caff) 服务=$iap2" +
-                if (completed && ACCESSORY_IAP2_UUID !in uuids) "（仍可由车机回连，不代表不支持无线 CarPlay）" else ""
+            val services = if (names.isEmpty()) "缓存为空" else "缓存 ${names.size} 个服务：${names.joinToString(" / ")}"
+            val iap2 = if (ACCESSORY_IAP2_UUID in uuids) "有" else "缓存未发现，服务是否存在未确定"
+            return "$services；接收端 iAP2(…caff) 服务=$iap2"
         }
     }
 
@@ -357,7 +347,7 @@ class Iap2BluetoothClient(
     ) {
         val uuids = cachedUuids(device)
         if (uuids.contains(ACCESSORY_IAP2_UUID)) iap2ServiceCache[device.address] = true
-        log("BT-C: 目标「$name」SDP 缓存：${describeServices(uuids, completed = true)}")
+        log("BT-C: 目标「$name」SDP ${describeServices(uuids)}")
     }
 
     /** 出站探测窗口（车机 ACL 离线且无会话时停止探测，见 [OutboundProbePolicy]）。 */
@@ -620,9 +610,6 @@ class Iap2BluetoothClient(
                 // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起（connect() 可阻塞数十秒）
                 val socket = selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch, boundedDial) }
                 try {
-                    if (selectedTarget && running && generation.get() == myGeneration && targetServicesReported.add(device.address)) {
-                        reportTargetServices(device, name)
-                    }
                     if (socket != null) {
                         if (!running || generation.get() != myGeneration) return
                         if (BtSessionGate.sessionActive || wifiHandoffDetached()) break
@@ -738,6 +725,7 @@ class Iap2BluetoothClient(
         val pending = AtomicBoolean(true)
         var timeout: ScheduledFuture<*>? = null
         var connected = false
+        var dialed = false
         var failure: Exception? = null
         try {
             if (running && generation.get() == myGeneration && BtSessionGate.beginOutbound(socket, wifiHandoffDetached())) {
@@ -749,7 +737,10 @@ class Iap2BluetoothClient(
                             TimeUnit.MILLISECONDS,
                         )
                 }
-                BtSessionGate.connectOutbound(pending) { socket.connect() }
+                BtSessionGate.connectOutbound(pending) {
+                    dialed = true
+                    socket.connect()
+                }
                 if (running && generation.get() == myGeneration) {
                     diagnostics.connectFinished(trace)
                     inboundWait.connected(device.address)
@@ -765,6 +756,10 @@ class Iap2BluetoothClient(
             pending.set(false)
             if (!connected) closeOutbound(socket)
             timeout?.cancel(false)
+
+            if (dialed && target != null && running && generation.get() == myGeneration && targetServicesReported.add(device.address)) {
+                reportTargetServices(device, name)
+            }
         }
         val cancelled = failure == null || !running || generation.get() != myGeneration
         diagnostics.connectFinished(trace, error = failure, cancelled = cancelled)
