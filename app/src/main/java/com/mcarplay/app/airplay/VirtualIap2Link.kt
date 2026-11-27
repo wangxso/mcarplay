@@ -812,7 +812,7 @@ class VirtualIap2Link(
                 mib3WirelessSessionId = it
             }
         sendCsmLocked(
-            WIRELESS_SESSION_ID,
+            DEVICE_UUID_OR_SESSION,
             Iap2Csm.param(0, sessionId.toByteArray(Charsets.UTF_8)),
         )
         sendCsmLocked(AUX_STATUS_NOTIFICATION, Iap2Csm.param(0x0006, ByteArray(0)))
@@ -978,7 +978,9 @@ class VirtualIap2Link(
 
         // ---- MIB3 消息号（无正式名/未入 Iap2MessageIds 的小集合） ----
         const val MFI_AUTH_SERIAL = 0xAA06
-        const val WIRELESS_SESSION_ID = 0x4E0C
+
+        // 隧道侧载荷是随机值，与 Iap2MessageIds.DEVICE_UUID_UPDATE（MAC 派生 UUID）语义是否相同未确认。
+        const val DEVICE_UUID_OR_SESSION = 0x4E0C
         const val DEVICE_TIME = 0x4E0B
         const val DEVICE_LANGUAGE = 0x4E0A
         const val DEVICE_INFORMATION_UPDATE = 0x4E09
