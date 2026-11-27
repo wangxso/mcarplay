@@ -1697,6 +1697,10 @@ object SessionController {
         nativeAudioBridge?.setDuckDb(duckDb.toFloat())
     }
 
+    fun applyMusicAttenuationDb(db: Int) {
+        nativeAudioBridge?.setMusicAttenuationDb(db.toFloat())
+    }
+
     /**
      * 设置面板切「连接时真息屏」：会话中立即收放（没有会话时什么都不做）。
      *
@@ -2541,7 +2545,10 @@ object SessionController {
 
                     override fun startExternal(sender: AudioSender) = sender.startExternalSource()
 
-                    override fun startBridge(bridge: CarLifeAudioBridge) = bridge.start()
+                    override fun startBridge(bridge: CarLifeAudioBridge) {
+                        appContext?.let { bridge.initializeMusicAttenuationDb(AudioDuckingPrefs.musicAttenuationDb(it).toFloat()) }
+                        bridge.start()
+                    }
 
                     override fun stopSender(sender: AudioSender) = sender.stop()
 
