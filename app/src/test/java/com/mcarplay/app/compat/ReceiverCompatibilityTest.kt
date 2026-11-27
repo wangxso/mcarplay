@@ -119,6 +119,7 @@ class ReceiverCompatibilityTest {
         ) = ReceiverCompatibility.prefersOra03DirectDiscovery(signals, model, firmware, sourceVersion, preset)
 
         assertTrue(prefersDirect())
+        assertTrue(prefersDirect(sourceVersion = " 365.10.2 "))
         assertFalse(prefersDirect(signals = ora.copy(manufacturer = null)))
         assertFalse(prefersDirect(signals = ora.copy(model = "Other")))
         assertFalse(prefersDirect(signals = ora.copy(sendIds = ora.sendIds.orEmpty() + 0x4301)))
@@ -135,11 +136,37 @@ class ReceiverCompatibilityTest {
         val generic = ReceiverCompatibility.ReceiverIdentity.GENERIC
         val other = ReceiverCompatibility.ReceiverIdentity.OTHER
         assertEquals(expected, ReceiverCompatibility.classifyReceiverIdentity("GWM", "ORA ES11", "N220346.2", "365.10.2"))
+        assertEquals(expected, ReceiverCompatibility.classifyReceiverIdentity("GWM", "ORA ES11", "N220346.2", " 365.10.2 "))
         assertEquals(generic, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", "0.0.1", "365.10.2"))
+        assertEquals(generic, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", "0.0.1", " 365.10.2 "))
         assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", "0.0.1", "365.10.3"))
         assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", null, "365.10.2"))
         assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity("OEM", "Other", "0.0.1", "365.10.2"))
         assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity(null, "OEM MODEL", "0.0.1", "365.10.2"))
+    }
+
+    @Test
+    fun genericIdentityWarnsOnlyAfterConfirmationAndClearsOnNewEvidence() {
+        val expected = ReceiverCompatibility.ReceiverIdentity.EXPECTED
+        val generic = ReceiverCompatibility.ReceiverIdentity.GENERIC
+        val other = ReceiverCompatibility.ReceiverIdentity.OTHER
+        var known = false
+
+        fun observe(identity: ReceiverCompatibility.ReceiverIdentity?): ReceiverCompatibility.ReceiverIdentityDecision =
+            ReceiverCompatibility.receiverIdentityDecision(known, identity).also { known = known || it.rememberExpected }
+
+        assertFalse(observe(generic).showWarning)
+        assertFalse(known)
+        val confirmation = observe(expected)
+        assertTrue(confirmation.rememberExpected)
+        assertFalse(confirmation.showWarning)
+        assertTrue(observe(generic).showWarning)
+        assertFalse(observe(expected).showWarning)
+        assertTrue(observe(generic).showWarning)
+        assertFalse(observe(other).showWarning)
+        assertTrue(observe(generic).showWarning)
+        assertFalse(observe(null).showWarning)
+        assertTrue(known)
     }
 
     @Test

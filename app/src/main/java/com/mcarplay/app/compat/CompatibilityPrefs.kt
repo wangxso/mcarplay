@@ -28,10 +28,9 @@ object CompatibilityPrefs {
         if (identity == ReceiverCompatibility.ReceiverIdentity.OTHER) return false
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val key = KEY_KNOWN_ORA03 + binding
-        val known = prefs.getBoolean(key, false)
-        if (identity == ReceiverCompatibility.ReceiverIdentity.GENERIC) return known
-        if (!known) prefs.edit().putBoolean(key, true).apply()
-        return false
+        val decision = ReceiverCompatibility.receiverIdentityDecision(prefs.getBoolean(key, false), identity)
+        if (decision.rememberExpected) prefs.edit().putBoolean(key, true).apply()
+        return decision.showWarning
     }
 
     /** 配对失败（非 403）但 RTSP 连上过时，再试一次 et=NONE 明文会话。 */

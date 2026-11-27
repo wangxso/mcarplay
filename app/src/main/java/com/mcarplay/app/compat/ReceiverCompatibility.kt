@@ -262,7 +262,7 @@ object ReceiverCompatibility {
         model: String?,
         firmware: String?,
         sourceVersion: String?,
-    ): Boolean = normalize(model) == "ora es11" && normalize(firmware) == "n220346.2" && sourceVersion == "365.10.2"
+    ): Boolean = normalize(model) == "ora es11" && normalize(firmware) == "n220346.2" && normalize(sourceVersion) == "365.10.2"
 
     internal enum class ReceiverIdentity { EXPECTED, GENERIC, OTHER }
 
@@ -278,9 +278,24 @@ object ReceiverCompatibility {
             normalize(manufacturer) == "oem" &&
                 normalize(model) == "oem model" &&
                 normalize(firmware) == "0.0.1" &&
-                sourceVersion == "365.10.2" -> ReceiverIdentity.GENERIC
+                normalize(sourceVersion) == "365.10.2" -> ReceiverIdentity.GENERIC
             else -> ReceiverIdentity.OTHER
         }
+
+    internal data class ReceiverIdentityDecision(
+        val showWarning: Boolean,
+        val rememberExpected: Boolean,
+    )
+
+    /** A missing or different identity clears the current warning, not the remembered confirmation. */
+    internal fun receiverIdentityDecision(
+        known: Boolean,
+        identity: ReceiverIdentity?,
+    ): ReceiverIdentityDecision =
+        ReceiverIdentityDecision(
+            showWarning = known && identity == ReceiverIdentity.GENERIC,
+            rememberExpected = !known && identity == ReceiverIdentity.EXPECTED,
+        )
 
     private fun resolveDetected(
         signals: ReceiverProfile.Signals,

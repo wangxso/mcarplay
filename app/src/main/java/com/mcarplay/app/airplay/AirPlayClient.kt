@@ -6,7 +6,6 @@ import com.mcarplay.app.audio.AudioCodec
 import com.mcarplay.app.audio.AudioProfile
 import com.mcarplay.app.audio.AudioSender
 import com.mcarplay.app.audio.AudioTuning
-import com.mcarplay.app.compat.CompatibilityPrefs
 import com.mcarplay.app.compat.InfoRequest
 import com.mcarplay.app.compat.ReceiverCapabilities
 import com.mcarplay.app.compat.ReceiverCompatibility
@@ -265,19 +264,14 @@ class AirPlayClient(
     /** 会话已激活且控制通道仍在：只有这时 [stopLikeIphone] 的 TEARDOWN 才有对象。 */
     val sessionActive: Boolean get() = recordAccepted && socket?.isClosed == false
 
-    internal fun genericReceiverIdentityWarning(
-        context: Context,
-        binding: String,
-    ): Boolean? {
+    internal fun negotiatedReceiverIdentity(): ReceiverCompatibility.ReceiverIdentity? {
         val info = negotiatedInfo ?: return null
-        val identity =
-            ReceiverCompatibility.classifyReceiverIdentity(
-                info["manufacturer"] as? String,
-                info["model"] as? String,
-                info["firmwareRevision"] as? String,
-                info["sourceVersion"] as? String ?: endpoint.sourceVersion,
-            )
-        return CompatibilityPrefs.genericReceiverIdentityWarning(context, binding, identity)
+        return ReceiverCompatibility.classifyReceiverIdentity(
+            info["manufacturer"] as? String,
+            info["model"] as? String,
+            info["firmwareRevision"] as? String,
+            info["sourceVersion"] as? String ?: endpoint.sourceVersion,
+        )
     }
 
     fun receiverCompatibility(): ReceiverCompatibility.Policy {

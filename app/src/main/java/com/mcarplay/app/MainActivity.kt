@@ -1460,7 +1460,6 @@ class MainActivity : AppCompatActivity() {
         val diagnosis = ConnectionDiagnostics.timeline.snapshot()
         val latest = ConnectionDiagnostics.latestSnapshot()
         val selected = TargetDevicePrefs.get(this)
-        val showReceiverIdentityWarning = SessionController.hasGenericReceiverIdentityWarning(selected?.address)
         // 还没有连接记录时不占首页空间：提示语与导出入口都等有报告后再出现（诊断页另有导出入口）。
         val diagnosticStatus = findViewById<TextView>(R.id.diagnosticStatus)
         diagnosticStatus.text = latest?.let { DiagnosticText.summary(this, it) }.orEmpty()
@@ -1475,6 +1474,7 @@ class MainActivity : AppCompatActivity() {
                     HeroState.CONNECTING
                 else -> HeroState.IDLE
             }
+        val showReceiverIdentityWarning = s != HeroState.IDLE && SessionController.hasGenericReceiverIdentityWarning(selected?.address)
         if (s != heroState || showReceiverIdentityWarning != receiverIdentityWarningShown) {
             if (s == HeroState.CONNECTED && s != heroState) connectedAt = SystemClock.elapsedRealtime()
             heroState = s

@@ -168,6 +168,38 @@ class AttemptScopeWiringTest {
     }
 
     @Test
+    fun receiverIdentityWarningStaysWithTheCurrentConnection() {
+        requireOrder(
+            functionBody(controllerCode, "fun startConnection("),
+            "attemptRegistry.supersedeAll()",
+            "genericReceiverIdentityWarningPeer = null",
+        )
+        requireOrder(
+            functionBody(controllerCode, "fun disconnect("),
+            "connectCancelled = true",
+            "genericReceiverIdentityWarningPeer = null",
+        )
+        requireOrder(
+            endpointBody,
+            "attemptRegistry.activate(realScope)",
+            "genericReceiverIdentityWarningPeer = null",
+            "updateGenericReceiverIdentityWarning(context, client, peerAddress, realScope)",
+        )
+        requireOrder(
+            functionBody(controllerCode, "private fun updateGenericReceiverIdentityWarning("),
+            "!realScope.isActive",
+            "attemptRegistry.activeScope() !== realScope",
+            "genericReceiverIdentityWarningPeer = peerAddress",
+        )
+        val activity = KotlinSource.scan(SourceTree.mainKotlinFiles.getValue("MainActivity.kt").readText()).code
+        requireOrder(
+            functionBody(activity, "private fun tickHero("),
+            "s != HeroState.IDLE && SessionController.hasGenericReceiverIdentityWarning(selected?.address)",
+            "receiverIdentityWarningShown = showReceiverIdentityWarning",
+        )
+    }
+
+    @Test
     fun migrationCountIsSixCurrentAndSixteenActiveIncludingHelper() {
         val current = Regex("""(?<![A-Za-z0-9_.])scope\.isCurrent\b""").findAll(controllerCode).count()
         val negatedActive = Regex("""!scope\.isActive\b""").findAll(controllerCode).count()

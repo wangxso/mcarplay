@@ -1290,16 +1290,23 @@ object SessionController {
             bluetoothClient?.isRunning == true
 
     internal fun hasGenericReceiverIdentityWarning(selectedPeer: String?): Boolean =
-        (selectedPeer ?: activePeerAddress)?.equals(genericReceiverIdentityWarningPeer, ignoreCase = true) == true
+        !connectCancelled &&
+            (selectedPeer ?: activePeerAddress)?.equals(genericReceiverIdentityWarningPeer, ignoreCase = true) == true
 
     private fun updateGenericReceiverIdentityWarning(
         context: Context,
         client: AirPlayClient,
         peerAddress: String?,
+        realScope: RealAttemptScope,
     ) {
-        val binding = ReceiverDetectionRuntime.binding(peerAddress) ?: return
-        val warning = client.genericReceiverIdentityWarning(context, binding) ?: return
-        genericReceiverIdentityWarningPeer = peerAddress.takeIf { warning }
+        val identity = client.negotiatedReceiverIdentity()
+        val binding = ReceiverDetectionRuntime.binding(peerAddress)
+        val warning = identity != null && binding != null && CompatibilityPrefs.genericReceiverIdentityWarning(context, binding, identity)
+        synchronized(this) {
+            // 不让已取消或被替换的 SETUP 结果覆盖新一轮的提示。
+            if (connectCancelled || !realScope.isActive || attemptRegistry.activeScope() !== realScope) return
+            genericReceiverIdentityWarningPeer = peerAddress.takeIf { warning }
+        }
         if (warning) appendLog("AIRPLAY: 已识别的欧拉 03 返回 OEM MODEL / 0.0.1（车机界面可能无法切入）")
     }
 
@@ -1407,6 +1414,7 @@ object SessionController {
             bluetoothDiagnostics.begin(diagnosticAttempt)
             ReceiverDetectionRuntime.connectionStarted(diagnosticAttempt)
             attemptRegistry.supersedeAll()
+            genericReceiverIdentityWarningPeer = null
         }
         sessionCancelSignal.reset()
         connectCancelled = false
@@ -1491,6 +1499,7 @@ object SessionController {
         connectCancelled = true
         sessionCancelSignal.cancel()
         attemptRegistry.cancelActive(reason)
+        genericReceiverIdentityWarningPeer = null
         // 先读本轮 attempt：retireSession 后时间线仍保留结果，但这里尽早固定标识
         val autoAttempt = ConnectionDiagnostics.timeline.snapshot()?.id
         if (reason == DiagnosticCode.USER_STOP) {
@@ -3395,6 +3404,9 @@ object SessionController {
                 observation = endpoint.observation,
             )
         attemptRegistry.activate(realScope)
+        synchronized(this) {
+            if (attemptRegistry.activeScope() === realScope) genericReceiverIdentityWarningPeer = null
+        }
         val scope: AttemptScope =
             DualCheckAttemptScope(
                 legacy =
@@ -3792,7 +3804,7 @@ object SessionController {
                             client.close()
                             return@run
                         }
-                        updateGenericReceiverIdentityWarning(context, client, peerAddress)
+                        updateGenericReceiverIdentityWarning(context, client, peerAddress, realScope)
                         if (setup != null && client.controlChannelClosed) {
                             // 帕萨特 2025（VW4211）：没等到新鲜 ctrl 邀请就连入时，初始 SETUP 照回 200
                             // 但随即关控制通道；继续往下走只会得到假会话（/info、事件通道、屏幕流全失败）。
