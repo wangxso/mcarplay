@@ -29,6 +29,8 @@ internal interface RoundActions<C, S, A, B, K> {
 
     fun quiesceSender(sender: S)
 
+    fun closeDashboard() {}
+
     fun releaseWifiLock()
 
     fun stopScreenMonitor(context: K)
@@ -70,6 +72,7 @@ internal class RoundRetirement<C : Any, S : Any, A : Any, B : Any, K : Any>(
         } else {
             retiringSender?.let(actions::stopSender)
         }
+        actions.closeDashboard()
         actions.releaseWifiLock()
         val context = slots.context
         context?.let(actions::stopScreenMonitor)

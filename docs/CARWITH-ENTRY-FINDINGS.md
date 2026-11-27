@@ -1,5 +1,11 @@
 # CarWith 公开入口调查（2026-10-25）
 
+## 2026-11-22 至 23：自绘车机 UI（此前分支的实车记录）
+
+- 小米 15，HyperOS 4.0.4.0 / Android 17、CarWith 4.0.23-20261016、小米 CarLife 8.8.5；接收端为欧拉 03（GWM ORA ES11，固件 N220346.2）。启动 Shizuku，选择自绘车机 UI，通过蓝牙及车机热点连接。
+- 此前版本观察到地图和音乐分屏、触控和 Google Maps 搜索；高德、Google Maps 和 Waze 均有导航播报，其中 Waze 需要在应用内调整声音输出。后续分支确认「返回车机」可用，并通过 1920×1080 分屏修复的测试。
+- 上述是原分支的验证，不代表将自绘 UI 移植到 `dev` 并补充资源收尾与音频回退后的版本已完成实车回归。
+
 ## 2026-11-26–27 Phase 3b（`dev` @ `9ac1b4c`）对照 `main`（`df4c81d`）T2 实车与台架验收
 
 - **测试环境：** 手机 Xiaomi `2509FPN0BC` / Android `17` / HyperOS `V816`；CarWith `4.0.23-20261016`，小米 CarLife `8.8.5 (274)`。对比构建均使用同签名本机 debug 包：`main` @ `df4c81d`（`apkSha256=b3479555…`）与 `dev` @ `9ac1b4c`（`apkSha256=2b57844b…`，含 Phase 2/3a/3b 重构及 `#127` CarWith 尺寸协商）。离线门禁：`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 及 standard 1,859 项 / remote bridge 25 项 / Python 87 项 / Node 20 项单测均全通过。16 份 `dev` 脱敏报告（均保留在仓库外 `~/mcarplay-regression/2026-11-26-*/`）中 `SESSION: SCOPE_MISMATCH` 均为 **0 条**。

@@ -136,6 +136,11 @@ still-redacted recent runtime history.
   observations, not a diagnosis. Private consent preferences and actual other-app
   activity/process execution cannot be verified by these fields. `entry=REQUESTED`
   means the local `startActivity()` returned, not that CarWith received it.
+- `videoSource` and `permission.READ_PHONE_STATE` record the selected display
+  source and permission grant at export, not SIM or subscriber data. The
+  `VIDEO_SOURCE` timeline note identifies the source used for the session.
+  A dashboard display startup failure closes the attempt as `SETUP_FAILED`
+  with a local display-start detail.
 - `POWER` notes record screen-off, screen-on, unlock and Doze transitions while
   streaming: interactive, keyguard locked/secure, Doze and battery-optimization
   exemption flags only. `STREAM_END_SCREEN_OFF afterScreenOffMs=…` marks a stream

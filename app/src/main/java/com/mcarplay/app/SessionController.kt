@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Network
 import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.Surface
 import androidx.annotation.StringRes
 import com.mcarplay.app.airplay.AirPlayClient
 import com.mcarplay.app.airplay.DisplaySurfaceReport
@@ -43,6 +44,7 @@ import com.mcarplay.app.bt.AutoReconnectGuard
 import com.mcarplay.app.bt.BluetoothDiagnostics
 import com.mcarplay.app.bt.BtProfiles
 import com.mcarplay.app.bt.BtSessionGate
+import com.mcarplay.app.bt.DashboardA2dpGuard
 import com.mcarplay.app.bt.Iap2BluetoothClient
 import com.mcarplay.app.bt.Iap2BluetoothServer
 import com.mcarplay.app.bt.TargetDevicePrefs
@@ -104,6 +106,7 @@ import com.mcarplay.app.service.StreamingWifiLock
 import com.mcarplay.app.session.AttemptRegistry
 import com.mcarplay.app.session.AttemptScope
 import com.mcarplay.app.session.CarLifeStreamPorts
+import com.mcarplay.app.session.DashboardScreenRecovery
 import com.mcarplay.app.session.DualCheckAttemptScope
 import com.mcarplay.app.session.EventCommandRouter
 import com.mcarplay.app.session.LegacyAttemptScope
@@ -118,15 +121,20 @@ import com.mcarplay.app.session.SessionLog
 import com.mcarplay.app.session.SessionUiPort
 import com.mcarplay.app.session.StreamPipeline
 import com.mcarplay.app.session.attemptHandoffCancelled
+import com.mcarplay.app.settings.DashboardMaps
 import com.mcarplay.app.settings.DisplayPrefs
 import com.mcarplay.app.settings.InternetNetwork
 import com.mcarplay.app.settings.InternetNetworkPolicy
 import com.mcarplay.app.settings.InternetNetworkPrefs
 import com.mcarplay.app.settings.MediaPrefs
 import com.mcarplay.app.settings.PhoneModeSystemWifiDecision
+import com.mcarplay.app.settings.VideoSource
+import com.mcarplay.app.settings.VideoSourcePrefs
+import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.ui.ScreenDimmer
+import com.mcarplay.app.ui.car.DashboardProjection
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 import com.mcarplay.app.video.ExternalVideoSource
@@ -483,6 +491,7 @@ object SessionController {
     }
 
     private fun routeCarNavigationKey(keyCode: Int) {
+        if (dashboardProjection.get()?.key(keyCode) == true) return
         val name = HidNavigation.nameOf(keyCode)
         val hardKey = CarLifeProtocol.navigationHardKeyFor(keyCode)
         if (hardKey == null) {
@@ -656,6 +665,34 @@ object SessionController {
 
     private val currentCarLifeSession: CarLifeSession?
         get() = streamPipeline.currentFormalSession()
+
+    @Volatile
+    private var sessionVideoSource = VideoSource.CAR_WITH
+
+    private val dashboardProjection = AtomicReference<DashboardProjection?>()
+
+    internal fun dashboardFor(displayId: Int): DashboardProjection? = dashboardProjection.get()?.takeIf { it.ownsDisplay(displayId) }
+
+    internal fun dashboardDisplayIds(): Set<Int> = dashboardProjection.get()?.displayIds().orEmpty()
+
+    @Synchronized
+    internal fun returnDashboardToCar(source: DashboardProjection): Boolean {
+        val client = currentClient ?: return false
+        if (dashboardProjection.get() !== source || connectCancelled || !client.sessionActive) return false
+        val note = client.modes.onUserReturnedToCar()
+        enqueueModesAssert(client, "自绘 UI 返回车机（→ $note）", requestKeyFrame = false)
+        return true
+    }
+
+    @Synchronized
+    internal fun selectVideoSource(
+        context: Context,
+        source: VideoSource,
+    ): Boolean {
+        if (isSessionRunning() || sessionStarting.get() || isDisconnecting()) return false
+        VideoSourcePrefs.set(context, source)
+        return true
+    }
 
     private fun createStreamPipeline(): StreamPipeline =
         StreamPipeline(
@@ -1551,6 +1588,16 @@ object SessionController {
         val alreadyRunning = isSessionRunning()
         val previousAttempt = ConnectionDiagnostics.timeline.snapshot()
         if (!alreadyRunning) {
+            val selectedSource = VideoSourcePrefs.get(context)
+            if (selectedSource == VideoSource.DASHBOARD) {
+                if (ShizukuGate.state(context) != ShizukuGate.State.READY) {
+                    appendLog("DASHBOARD: Shizuku 尚未就绪")
+                    ui.hint { t(R.string.car_dashboard_unavailable) }
+                    return
+                }
+                CarInputClient.ensure(context)
+            }
+            sessionVideoSource = selectedSource
             // 新一轮从已知对端起步；手动连接不沿用上一台车机的地址，避免失败记到别人头上。
             val selected = TargetDevicePrefs.get(context)?.address
             activePeerAddress = if (automatic) automaticPeerAddress ?: selected else selected
@@ -1840,13 +1887,15 @@ object SessionController {
             log = ::appendLog,
         )
 
-    /** 「导航时音乐音量」在会话中调整：交给正在运行的 CarWith 原生音频桥（没有则下次连接生效）。 */
+    /** 「导航时音乐音量」在会话中调整：交给当前音频源。 */
     fun applyDuckDb(duckDb: Int) {
         nativeAudioBridge?.setDuckDb(duckDb.toFloat())
+        audioSender?.setNavigationDuckDb(duckDb.toFloat())
     }
 
     fun applyMusicAttenuationDb(db: Int) {
         nativeAudioBridge?.setMusicAttenuationDb(db.toFloat())
+        audioSender?.setMusicAttenuationDb(db.toFloat())
     }
 
     /**
@@ -1938,6 +1987,10 @@ object SessionController {
 
                 override fun quiesceSender(sender: VideoSender) {
                     sender.quiesceForOrderlyStop()
+                }
+
+                override fun closeDashboard() {
+                    dashboardProjection.getAndSet(null)?.close()
                 }
 
                 override fun releaseWifiLock() {
@@ -2704,7 +2757,8 @@ object SessionController {
                 object : AudioSourcePort<Context, android.media.projection.MediaProjection, AudioSender, CarLifeAudioBridge> {
                     override fun projection() = CarPlayService.mediaProjection
 
-                    override fun nativeAvailable(context: Context) = CarLifeLauncher.isAvailable(context)
+                    override fun nativeAvailable(context: Context) =
+                        sessionVideoSource == VideoSource.CAR_WITH && CarLifeLauncher.isAvailable(context)
 
                     override fun applicationContext(context: Context): Context = context.applicationContext
 
@@ -2715,8 +2769,11 @@ object SessionController {
                         context: Context,
                         log: (String) -> Unit,
                         onPacketSent: () -> Unit,
-                    ): AudioSender =
-                        AudioSender(
+                    ): AudioSender {
+                        val dashboard = sessionVideoSource == VideoSource.DASHBOARD
+                        val peer = currentClient?.currentEndpoint?.peerAddress ?: activePeerAddress
+                        val guard = peer?.takeIf { dashboard }?.let { DashboardA2dpGuard(context, it, log) }
+                        return AudioSender(
                             host = spec.host,
                             dataPort = spec.dataPort,
                             streamKey = spec.streamKey,
@@ -2728,7 +2785,12 @@ object SessionController {
                             adtsFrames = spec.adtsFrames,
                             controlPort = spec.controlPort,
                             onPacketSent = onPacketSent,
+                            mapAudioUids = if (dashboard) DashboardMaps.installedUids(context) else intArrayOf(),
+                            navigationDucking = if (dashboard) AudioDuckingPrefs.config(context) else null,
+                            onCaptureStarting = guard?.let { it::start },
+                            onStopped = guard?.let { it::close },
                         )
+                    }
 
                     override fun createBridge(
                         sender: AudioSender,
@@ -4242,11 +4304,14 @@ object SessionController {
                             return@run
                         }
                         if (setup != null) {
-                            fun failMediaStartup(code: DiagnosticCode) {
+                            fun failMediaStartup(
+                                code: DiagnosticCode,
+                                detail: String = "",
+                            ) {
                                 val sender =
                                     synchronized(this) {
                                         if (currentClient !== client) return
-                                        ConnectionDiagnostics.timeline.finish(diagnosticAttempt, code, true)
+                                        ConnectionDiagnostics.timeline.finish(diagnosticAttempt, code, true, detail)
                                         if (scope.isActive && recordAutoReconnectOutcome(diagnosticAttempt, code, peerAddress)) {
                                             disconnect(context, code)
                                             return
@@ -4272,6 +4337,10 @@ object SessionController {
                             currentSharedSecret = sessionKey
                             currentAudioHost =
                                 client.activeHost ?: EndpointHosts.candidates(client.currentEndpoint.ipAddresses).firstOrNull()
+                            val videoSource = sessionVideoSource
+                            val useDashboard = videoSource == VideoSource.DASHBOARD
+                            val dashboard = AtomicReference<DashboardProjection?>()
+                            ConnectionDiagnostics.timeline.note(diagnosticAttempt, "VIDEO_SOURCE ${videoSource.id}")
                             // 每通道一个 router；媒体键边沿与旧轮隔离。
                             val eventCommandRouter =
                                 EventCommandRouter(
@@ -4326,8 +4395,13 @@ object SessionController {
                                                 label: String,
                                             ) = this@SessionController.routeCarMediaKey(keyCode, label)
 
-                                            override fun injectNavigationKey(keyCode: Int) =
-                                                this@SessionController.routeCarNavigationKey(keyCode)
+                                            override fun injectNavigationKey(keyCode: Int) {
+                                                if (useDashboard) {
+                                                    dashboard.get()?.takeIf { dashboardProjection.get() === it }?.key(keyCode)
+                                                } else {
+                                                    this@SessionController.routeCarNavigationKey(keyCode)
+                                                }
+                                            }
 
                                             override fun onSiriButtonPressed() {
                                                 val sent =
@@ -4380,19 +4454,23 @@ object SessionController {
                                         }
                                     },
                                     currentTouchTarget = {
-                                        currentCarLifeSession?.let { carLife ->
-                                            object : EventCommandRouter.TouchTarget {
-                                                override val videoWidth: Int
-                                                    get() = carLife.videoWidth
+                                        if (useDashboard) {
+                                            dashboard.get()?.takeIf { dashboardProjection.get() === it }
+                                        } else {
+                                            currentCarLifeSession?.let { carLife ->
+                                                object : EventCommandRouter.TouchTarget {
+                                                    override val videoWidth: Int
+                                                        get() = carLife.videoWidth
 
-                                                override val videoHeight: Int
-                                                    get() = carLife.videoHeight
+                                                    override val videoHeight: Int
+                                                        get() = carLife.videoHeight
 
-                                                override fun sendTouch(
-                                                    x: Int,
-                                                    y: Int,
-                                                    down: Boolean,
-                                                ): Boolean = carLife.sendTouch(x, y, down)
+                                                    override fun sendTouch(
+                                                        x: Int,
+                                                        y: Int,
+                                                        down: Boolean,
+                                                    ): Boolean = carLife.sendTouch(x, y, down)
+                                                }
                                             }
                                         }
                                     },
@@ -4540,7 +4618,7 @@ object SessionController {
                                             targetFps = fps,
                                             keepAliveWithStats = setup.keepAliveSendStatsAsBody,
                                             receiverMaxFps = setup.maxFps,
-                                            externalVideoSource = carLifeSource,
+                                            externalVideoSource = carLifeSource.takeUnless { useDashboard },
                                             phoneOwnsScreen = { client.modes.phoneOwnsScreen },
                                             hooks =
                                                 object : ScreenSenderHooks {
@@ -4605,6 +4683,12 @@ object SessionController {
                                                                 override val attempt: String = diagnosticAttempt
 
                                                                 override val peerAddress: String? = peerAddress
+
+                                                                override fun closeDashboard() {
+                                                                    dashboard.get()?.let {
+                                                                        if (dashboardProjection.compareAndSet(it, null)) it.close()
+                                                                    }
+                                                                }
                                                             },
                                                         )
                                                         if (!connectCancelled &&
@@ -4633,6 +4717,23 @@ object SessionController {
                                         sessionKey = sessionKey,
                                         displayUuid = setup.displayUuid,
                                         diagnosticAttempt = diagnosticAttempt,
+                                        dashboard =
+                                            if (useDashboard) {
+                                                object : DashboardScreenRecovery {
+                                                    override fun isCurrent(): Boolean =
+                                                        dashboard.get()?.let { dashboardProjection.get() === it } == true
+
+                                                    override fun detachEncoder() {
+                                                        dashboard.get()?.detachEncoder()
+                                                    }
+
+                                                    override fun attach(surface: Surface) {
+                                                        checkNotNull(dashboard.get()).attach(surface)
+                                                    }
+                                                }
+                                            } else {
+                                                null
+                                            },
                                         port =
                                             object : ScreenRecoveryPort {
                                                 override fun isScopeActive(): Boolean = scope.isActive
@@ -4659,96 +4760,125 @@ object SessionController {
                                                 }
                                             },
                                     )
-                                    ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.CARWITH)
                                     val videoW = pendingVideoW
                                     val videoH = pendingVideoH
-                                    // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准。
-                                    // 实验（issue #62）：默认 1920 长边上限会把面板尺寸先压小（2288×1728 →
-                                    // 1920×1448），使实验连「请求正确尺寸」都做不到；命中面板时放开到面板长边，
-                                    // 但是否真的生效仍以实际返回尺寸为准（见 StreamPipeline.newFormalSession）。
-                                    val experimentalPanelWidth = setup.experimentalPanelGeometry?.first
-                                    val experimentalPanelHeight = setup.experimentalPanelGeometry?.second
-                                    val requestMaxLongSide =
-                                        if (experimentalPanelWidth != null && experimentalPanelHeight != null) {
-                                            maxOf(
-                                                CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE,
-                                                experimentalPanelWidth,
-                                                experimentalPanelHeight,
+                                    if (useDashboard) {
+                                        val projection = DashboardProjection(context.applicationContext, videoW, videoH, ::appendLog)
+                                        dashboard.set(projection)
+                                        synchronized(this) {
+                                            if (handoffCancelled() || currentClient !== client || videoSender !== sessionVideoSender) {
+                                                projection.close()
+                                                return@run
+                                            }
+                                            dashboardProjection.getAndSet(projection)?.close()
+                                        }
+                                        if (!sessionVideoSender.start(projection::attach)) {
+                                            ui.hint { t(R.string.car_dashboard_unavailable) }
+                                            failMediaStartup(DiagnosticCode.SETUP_FAILED, "Could not start custom dashboard display")
+                                            return@run
+                                        }
+                                        synchronized(this) {
+                                            if (handoffCancelled() || currentClient !== client || videoSender !== sessionVideoSender) {
+                                                return@run
+                                            }
+                                            StreamingWifiLock.acquire(context)
+                                            streamingDiagnosticAttempt = diagnosticAttempt
+                                            ScreenLockMonitor.start(
+                                                context,
+                                                log = ::appendLog,
+                                                note = { ConnectionDiagnostics.timeline.note(diagnosticAttempt, it) },
                                             )
-                                        } else {
-                                            CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE
                                         }
-                                    val compatibility = client.receiverCompatibility()
-                                    // issue #127：是否声明 DISABLE_RESOLUTION_OPTION=1 与请求尺寸统一由
-                                    // CarWithVideoNegotiation 决定；有合法 displays[0] 几何时按车机尺寸精确
-                                    // 请求（不再被 1920 长边压缩），否则回退 1920 请求且不声明该 key。
-                                    val negotiation =
-                                        CarWithVideoNegotiation.decide(
-                                            preferVehicleResolution = compatibility.preferVehicleResolution,
-                                            displayFromInfo = setup.displayFromInfo,
-                                            displayWidth = setup.displayWidth,
-                                            displayHeight = setup.displayHeight,
-                                            maxLongSide = requestMaxLongSide,
-                                        )
-                                    if (setup.experimentalPanelGeometry != null) {
-                                        appendLog(
-                                            "DISPLAY: 实验面板几何 ${experimentalPanelWidth}x$experimentalPanelHeight" +
-                                                " → 请求 CarWith ${negotiation.width}x${negotiation.height}" +
-                                                "（长边上限 $requestMaxLongSide）",
-                                        )
-                                    }
-                                    if (negotiation.declareDisableResolutionOption) {
-                                        val exactNote = if (negotiation.exactVehicleGeometry) "（精确几何）" else ""
-                                        appendLog(
-                                            "CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1，请求 CarWith 按车机显示尺寸 " +
-                                                "${negotiation.width}x${negotiation.height} 编码$exactNote",
-                                        )
-                                    } else if (compatibility.preferVehicleResolution) {
-                                        appendLog(
-                                            "CARLIFE: 未取得合法的 /info displays[0] 几何，不声明 DISABLE_RESOLUTION_OPTION，" +
-                                                "回退 1920 长边请求 ${negotiation.width}x${negotiation.height}",
-                                        )
-                                    }
-                                    val createdCarLife =
-                                        streamPipeline.newFormalSession(
-                                            context.applicationContext as android.app.Application,
-                                            negotiation.width to negotiation.height,
-                                            preferVehicleResolution = negotiation.declareDisableResolutionOption,
-                                        )
-                                    carLife = createdCarLife
-                                    val claimed = streamPipeline.claim(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)
-                                    val videoStarted = claimed && videoSender?.start {} == true
-                                    // 入网已完成，此时才拿低延迟锁（持锁会让入网所需的 Wi‑Fi 扫描失败）
-                                    if (videoStarted) StreamingWifiLock.acquire(context)
-                                    if (videoStarted) streamingDiagnosticAttempt = diagnosticAttempt
-                                    // 锁屏/息屏/Doze 迁移写进日志与时间线（锁屏退出的定位依据，只读不改状态）
-                                    if (videoStarted) {
-                                        ScreenLockMonitor.start(
-                                            context,
-                                            log = ::appendLog,
-                                            note = { ConnectionDiagnostics.timeline.note(diagnosticAttempt, it) },
-                                        )
-                                    }
-                                    if (videoStarted) streamPipeline.publishOutput(diagnosticAttempt, sessionVideoSender)
-                                    // 在 CarWith 启动前布防：CarWith 可能在 start() 内就恢复媒体，
-                                    // 启动后再取 nowPlaying 会把自动播放误当成“连接前已在播放”。
-                                    if (videoStarted) armAutoPlayBehavior(createdCarLife, scope)
-                                    val carLifeStarted = videoStarted && createdCarLife.start()
-                                    appendLog(
-                                        "MODE: CarWith ${if (carLifeStarted) "已请求连接，等待真实视频" else "连接请求失败"} " +
-                                            "${videoW}x$videoH（等待 CarLife 首帧，不代表已完成握手）",
-                                    )
-                                    if (carLifeStarted) {
-                                        appendLog("SCREEN: CarWith 尚未收到首帧，保持手机可见以完成原厂连接")
                                     } else {
-                                        if (!claimed) {
-                                            appendLog("MODE: CarWith 自检正在占用 CarWith，本次 CarPlay 不启动视频桥接")
+                                        ConnectionDiagnostics.timeline.stage(diagnosticAttempt, ConnectionStage.CARWITH)
+                                        // 按接收端屏幕比例请求，减少缩放/黑边；CarWith 不采纳时以其返回为准。
+                                        // 实验（issue #62）：默认 1920 长边上限会把面板尺寸先压小（2288×1728 →
+                                        // 1920×1448），使实验连「请求正确尺寸」都做不到；命中面板时放开到面板长边，
+                                        // 但是否真的生效仍以实际返回尺寸为准（见 StreamPipeline.newFormalSession）。
+                                        val experimentalPanelWidth = setup.experimentalPanelGeometry?.first
+                                        val experimentalPanelHeight = setup.experimentalPanelGeometry?.second
+                                        val requestMaxLongSide =
+                                            if (experimentalPanelWidth != null && experimentalPanelHeight != null) {
+                                                maxOf(
+                                                    CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE,
+                                                    experimentalPanelWidth,
+                                                    experimentalPanelHeight,
+                                                )
+                                            } else {
+                                                CarLifeProtocol.VIDEO_REQUEST_MAX_LONG_SIDE
+                                            }
+                                        val compatibility = client.receiverCompatibility()
+                                        // issue #127：是否声明 DISABLE_RESOLUTION_OPTION=1 与请求尺寸统一由
+                                        // CarWithVideoNegotiation 决定；有合法 displays[0] 几何时按车机尺寸精确
+                                        // 请求（不再被 1920 长边压缩），否则回退 1920 请求且不声明该 key。
+                                        val negotiation =
+                                            CarWithVideoNegotiation.decide(
+                                                preferVehicleResolution = compatibility.preferVehicleResolution,
+                                                displayFromInfo = setup.displayFromInfo,
+                                                displayWidth = setup.displayWidth,
+                                                displayHeight = setup.displayHeight,
+                                                maxLongSide = requestMaxLongSide,
+                                            )
+                                        if (setup.experimentalPanelGeometry != null) {
+                                            appendLog(
+                                                "DISPLAY: 实验面板几何 ${experimentalPanelWidth}x$experimentalPanelHeight" +
+                                                    " → 请求 CarWith ${negotiation.width}x${negotiation.height}" +
+                                                    "（长边上限 $requestMaxLongSide）",
+                                            )
                                         }
-                                        stopAutoPlayWatch()
-                                        streamPipeline.clearOutputIf(sessionVideoSender)
-                                        streamPipeline.release(createdCarLife)
-                                        failMediaStartup(if (claimed) DiagnosticCode.CARWITH_FAILED else DiagnosticCode.CARWITH_BUSY)
-                                        return@run
+                                        if (negotiation.declareDisableResolutionOption) {
+                                            val exactNote = if (negotiation.exactVehicleGeometry) "（精确几何）" else ""
+                                            appendLog(
+                                                "CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1，请求 CarWith 按车机显示尺寸 " +
+                                                    "${negotiation.width}x${negotiation.height} 编码$exactNote",
+                                            )
+                                        } else if (compatibility.preferVehicleResolution) {
+                                            appendLog(
+                                                "CARLIFE: 未取得合法的 /info displays[0] 几何，不声明 DISABLE_RESOLUTION_OPTION，" +
+                                                    "回退 1920 长边请求 ${negotiation.width}x${negotiation.height}",
+                                            )
+                                        }
+                                        val createdCarLife =
+                                            streamPipeline.newFormalSession(
+                                                context.applicationContext as android.app.Application,
+                                                negotiation.width to negotiation.height,
+                                                preferVehicleResolution = negotiation.declareDisableResolutionOption,
+                                            )
+                                        carLife = createdCarLife
+                                        val claimed = streamPipeline.claim(CarLifeSessionRegistry.Owner.FORMAL, createdCarLife)
+                                        val videoStarted = claimed && videoSender?.start {} == true
+                                        // 入网已完成，此时才拿低延迟锁（持锁会让入网所需的 Wi‑Fi 扫描失败）
+                                        if (videoStarted) StreamingWifiLock.acquire(context)
+                                        if (videoStarted) streamingDiagnosticAttempt = diagnosticAttempt
+                                        // 锁屏/息屏/Doze 迁移写进日志与时间线（锁屏退出的定位依据，只读不改状态）
+                                        if (videoStarted) {
+                                            ScreenLockMonitor.start(
+                                                context,
+                                                log = ::appendLog,
+                                                note = { ConnectionDiagnostics.timeline.note(diagnosticAttempt, it) },
+                                            )
+                                        }
+                                        if (videoStarted) streamPipeline.publishOutput(diagnosticAttempt, sessionVideoSender)
+                                        // 在 CarWith 启动前布防：CarWith 可能在 start() 内就恢复媒体，
+                                        // 启动后再取 nowPlaying 会把自动播放误当成“连接前已在播放”。
+                                        if (videoStarted) armAutoPlayBehavior(createdCarLife, scope)
+                                        val carLifeStarted = videoStarted && createdCarLife.start()
+                                        appendLog(
+                                            "MODE: CarWith ${if (carLifeStarted) "已请求连接，等待真实视频" else "连接请求失败"} " +
+                                                "${videoW}x$videoH（等待 CarLife 首帧，不代表已完成握手）",
+                                        )
+                                        if (carLifeStarted) {
+                                            appendLog("SCREEN: CarWith 尚未收到首帧，保持手机可见以完成原厂连接")
+                                        } else {
+                                            if (!claimed) {
+                                                appendLog("MODE: CarWith 自检正在占用 CarWith，本次 CarPlay 不启动视频桥接")
+                                            }
+                                            stopAutoPlayWatch()
+                                            streamPipeline.clearOutputIf(sessionVideoSender)
+                                            streamPipeline.release(createdCarLife)
+                                            failMediaStartup(if (claimed) DiagnosticCode.CARWITH_FAILED else DiagnosticCode.CARWITH_BUSY)
+                                            return@run
+                                        }
                                     }
                                     // 音频通道（可选）：SETUP type=100 → UDP RTP 推流。
                                     // 会话已激活（RECORD 完成）后再协商；失败不影响视频主链路。

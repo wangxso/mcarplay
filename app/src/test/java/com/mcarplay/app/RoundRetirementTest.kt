@@ -8,6 +8,18 @@ import org.junit.Test
 
 class RoundRetirementTest {
     @Test
+    fun manualDisconnectClosesDashboardBeforeReleasingWifi() {
+        val fixture = Fixture(recordDashboardClose = true)
+        fixture.slots.seed(sender = Token("sender"))
+        fixture.retirement.retire(closeClient = false, preserveScreenSocket = true)
+
+        val events = fixture.events
+        val close = events.indexOf("dashboard.close")
+        assertTrue("The sender is quiesced before its display is closed", events.indexOf("sender.quiesce") in 0 until close)
+        assertTrue("Display cleanup is synchronous", close in 0 until events.indexOf("wifi.release"))
+    }
+
+    @Test
     fun defaultRetirementCapturesAndStopsResources() {
         val fixture = Fixture()
         val client = Token("client")
@@ -618,7 +630,9 @@ class RoundRetirementTest {
 
     private class WorkerException : RuntimeException()
 
-    private class Fixture {
+    private class Fixture(
+        private val recordDashboardClose: Boolean = false,
+    ) {
         val events = mutableListOf<String>()
         val cancelledClients = mutableListOf<Token>()
         val closedClients = mutableListOf<Token>()
@@ -771,6 +785,10 @@ class RoundRetirementTest {
                 events.add("sender.quiesce")
                 fixture.quiescedSenders.add(sender)
                 after("sender.quiesce")
+            }
+
+            override fun closeDashboard() {
+                if (fixture.recordDashboardClose) events += "dashboard.close"
             }
 
             override fun releaseWifiLock() {

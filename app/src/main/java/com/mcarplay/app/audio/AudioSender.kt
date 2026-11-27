@@ -12,6 +12,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * CarPlay 主音频发送端（手机 → 车机，RTP over UDP）。
@@ -62,6 +63,10 @@ class AudioSender(
      */
     private val controlPort: Int = 0,
     private val onPacketSent: (() -> Unit)? = null,
+    private val mapAudioUids: IntArray = intArrayOf(),
+    private val navigationDucking: AudioDuckingConfig? = null,
+    private val onCaptureStarting: (() -> Unit)? = null,
+    private val onStopped: (() -> Unit)? = null,
 ) {
     companion object {
         const val CHANNELS = 2
@@ -110,7 +115,12 @@ class AudioSender(
     private val stopped = AtomicBoolean(false)
     private var socket: DatagramSocket? = null
     private var syncSocket: DatagramSocket? = null
-    private var record: AudioRecord? = null
+    private val record = AtomicReference<AudioRecord?>()
+    private val navigationAudio = AtomicReference<NavigationAudioPipe?>()
+
+    @Volatile private var navigationDuckDb = navigationDucking?.duckDb ?: AudioDuckingPrefs.DUCK_DB_DEFAULT.toFloat()
+
+    @Volatile private var musicAttenuationDb = navigationDucking?.musicAttenuationDb ?: 0f
     private var thread: Thread? = null
     private var syncThread: Thread? = null
 
@@ -154,6 +164,14 @@ class AudioSender(
     private val externalPcm = java.util.concurrent.LinkedBlockingQueue<ByteArray>(64)
 
     val isRunning: Boolean get() = running.get()
+
+    fun setNavigationDuckDb(duckDb: Float) {
+        navigationDuckDb = duckDb
+    }
+
+    fun setMusicAttenuationDb(db: Float) {
+        musicAttenuationDb = db
+    }
 
     /** 静音前的手机媒体音量 index（-1 = 未静音）。 */
     private var mutedOriginalVolume = -1
@@ -235,7 +253,7 @@ class AudioSender(
      */
     fun start(projection: MediaProjection): Boolean {
         if (running.get()) return true
-        stopped.set(false)
+        if (stopped.get()) return false
         return try {
             val client = DatagramSocket()
             client.connect(InetAddress.getByName(host), dataPort)
@@ -245,39 +263,39 @@ class AudioSender(
             if (codec == AudioCodec.AAC_LC) {
                 val encoder = AacLcEncoder(sampleRate, CHANNELS, wrapAdts = adtsFrames, log = log)
                 if (!encoder.start()) {
-                    client.close()
-                    socket = null
+                    stop()
                     return false
                 }
                 aacEncoder = encoder
             }
 
-            val captureConfig = buildCaptureConfig(projection)
-            val audioFormat =
-                AudioFormat
-                    .Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
-                    .build()
-            val recorder =
-                AudioRecord
-                    .Builder()
-                    .setAudioPlaybackCaptureConfig(captureConfig)
-                    .setAudioFormat(audioFormat)
-                    .setBufferSizeInBytes(framePcmBytes * 8)
-                    .build()
-            if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-                log("AUDIO: AudioRecord 初始化失败（state=${recorder.state}）")
-                runCatching { recorder.release() }
-                aacEncoder?.stop()
-                aacEncoder = null
-                client.close()
-                socket = null
+            onCaptureStarting?.invoke()
+            if (stopped.get()) return false
+            val guidance =
+                mapAudioUids.takeIf { it.isNotEmpty() }?.let {
+                    NavigationAudioPipe.open(sampleRate, framePcmBytes, it, log)
+                }
+            navigationAudio.set(guidance)
+            if (stopped.get()) {
+                navigationAudio.getAndSet(null)?.close()
                 return false
             }
-            record = recorder
+            val recorder =
+                try {
+                    buildPlaybackRecorder(projection, if (guidance == null) intArrayOf() else mapAudioUids)
+                } catch (error: Exception) {
+                    if (guidance == null) throw error
+                    navigationAudio.getAndSet(null)?.close()
+                    log("AUDIO: 无法分开采集地图和媒体，恢复普通播放捕获 - ${error.message}")
+                    buildPlaybackRecorder(projection)
+                }
+            record.set(recorder)
             running.set(true)
+            if (stopped.get()) {
+                running.set(false)
+                releaseRecorder(record.getAndSet(null))
+                return false
+            }
             mutePhoneMedia()
             log(
                 "AUDIO: 已启动（播放捕获 ${sampleRate}Hz 立体声 → $host:$dataPort，" +
@@ -297,14 +315,7 @@ class AudioSender(
                 {
                     // 息屏后 CPU 调度收紧，采集/发送线程必须按音频优先级运行，否则 UDP 节奏抖动 → 车机卡顿
                     android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
-                    try {
-                        recorder.startRecording()
-                    } catch (error: Exception) {
-                        log("AUDIO: 启动采集失败 - ${error.message}")
-                        stop()
-                        return@Thread
-                    }
-                    runCaptureLoop()
+                    runCaptureLoop(projection, recorder)
                 },
                 "audio-capture",
             ).apply {
@@ -331,9 +342,9 @@ class AudioSender(
         if (!stopped.compareAndSet(false, true)) return
         running.set(false)
         externalRunning.set(false)
-        runCatching { record?.stop() }
-        runCatching { record?.release() }
-        record = null
+        runCatching { onStopped?.invoke() }
+        navigationAudio.getAndSet(null)?.close()
+        releaseRecorder(record.getAndSet(null))
         aacEncoder?.stop()
         aacEncoder = null
         runCatching { socket?.close() }
@@ -530,8 +541,60 @@ class AudioSender(
         return true
     }
 
-    /** 捕获配置：媒体/游戏/导航等常见播放用途（逐项添加，个别用途被系统拒绝时跳过）。 */
-    private fun buildCaptureConfig(projection: MediaProjection): AudioPlaybackCaptureConfiguration {
+    private fun buildPlaybackRecorder(
+        projection: MediaProjection,
+        excludedUids: IntArray = intArrayOf(),
+    ): AudioRecord {
+        val format =
+            AudioFormat
+                .Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                .build()
+        val recorder =
+            AudioRecord
+                .Builder()
+                .setAudioPlaybackCaptureConfig(buildCaptureConfig(projection, excludedUids))
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(framePcmBytes * 8)
+                .build()
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            val state = recorder.state
+            releaseRecorder(recorder)
+            error("AudioRecord 初始化失败（state=$state）")
+        }
+        return recorder
+    }
+
+    private fun releaseRecorder(recorder: AudioRecord?) {
+        if (recorder == null) return
+        runCatching { recorder.stop() }
+        runCatching { recorder.release() }
+    }
+
+    private fun restoreGenericCapture(
+        projection: MediaProjection,
+        previous: AudioRecord,
+    ): AudioRecord? {
+        if (record.compareAndSet(previous, null)) releaseRecorder(previous)
+        navigationAudio.getAndSet(null)?.close()
+        if (!running.get()) return null
+        val fallback = buildPlaybackRecorder(projection)
+        record.set(fallback)
+        if (!running.get()) {
+            releaseRecorder(record.getAndSet(null))
+            return null
+        }
+        fallback.startRecording()
+        return fallback
+    }
+
+    /** 地图已由专用音轨采集时，普通媒体排除地图 UID，避免叠加或回声。 */
+    private fun buildCaptureConfig(
+        projection: MediaProjection,
+        excludedUids: IntArray,
+    ): AudioPlaybackCaptureConfiguration {
         val builder = AudioPlaybackCaptureConfiguration.Builder(projection)
         listOf(
             AudioAttributes.USAGE_MEDIA,
@@ -542,6 +605,7 @@ class AudioSender(
         ).forEach { usage ->
             runCatching { builder.addMatchingUsage(usage) }
         }
+        excludedUids.forEach(builder::excludeUid)
         return builder.build()
     }
 
@@ -606,15 +670,36 @@ class AudioSender(
 
     // ---- 采集循环 → 封包发送 ----
 
-    private fun runCaptureLoop() {
-        val recorder = record ?: return
+    private fun runCaptureLoop(
+        projection: MediaProjection,
+        initialRecorder: AudioRecord,
+    ) {
+        var recorder = initialRecorder
         val sendGate = UdpSendGate()
         val frameBytes = framePcmBytes
         val pcm = ByteArray(frameBytes)
+        var guidance = navigationAudio.get()
+        val navigationMixer = guidance?.let { NavigationAudioMixer(sampleRate, checkNotNull(navigationDucking)) }
+        val health = NavigationCaptureHealth(android.os.SystemClock.elapsedRealtime())
+        var duckingLogged = false
         // 诊断抽样节拍：PCM 约 125 包/s（每 20s 一次）；AAC 约 47 帧/s
         val diagnosticStride = if (codec == AudioCodec.AAC_LC) 600 else 1875
         try {
+            if (!running.get()) return
+            try {
+                recorder.startRecording()
+            } catch (error: Exception) {
+                if (guidance == null) throw error
+                log("AUDIO: 无法同时启动地图和媒体采集，恢复普通播放捕获 - ${error.message}")
+                recorder = restoreGenericCapture(projection, recorder) ?: return
+                guidance = null
+            }
             while (running.get()) {
+                if (guidance?.isClosed == true) {
+                    log("AUDIO: 地图独立音频采集已结束，恢复普通播放捕获")
+                    recorder = restoreGenericCapture(projection, recorder) ?: break
+                    guidance = null
+                }
                 val read =
                     try {
                         recorder.read(pcm, 0, pcm.size, AudioRecord.READ_BLOCKING)
@@ -633,6 +718,28 @@ class AudioSender(
                 }
                 if (read < frameBytes) continue // 残包（缓冲尾部）：丢弃，等下一个整包
                 readFailures = 0
+                if (guidance != null && navigationMixer != null) {
+                    val mapPcm = guidance.poll()
+                    if (health.shouldRestoreGenericCapture(mapPcm, android.os.SystemClock.elapsedRealtime(), guidance.playbackState)) {
+                        log("AUDIO: 地图独立采集未观察到非零样本，撤销地图排除并恢复普通播放捕获")
+                        recorder = restoreGenericCapture(projection, recorder) ?: break
+                        guidance = null
+                        continue
+                    }
+                    if (health.verified && guidance.probeEnabled) guidance.probeEnabled = false
+                    navigationMixer.mix(pcm, mapPcm, navigationDuckDb, musicAttenuationDb)
+                    val ducking = navigationMixer.ducking
+                    if (ducking != duckingLogged) {
+                        duckingLogged = ducking
+                        if (navigationMixer.duckDb < 0f) {
+                            if (ducking) {
+                                log("AUDIO: 自绘 UI 导航开始，音乐额外增益 ${navigationMixer.duckDb}dB")
+                            } else {
+                                log("AUDIO: 自绘 UI 导航结束，音乐淡回基础音量")
+                            }
+                        }
+                    }
+                }
 
                 // 内容诊断（2026-10-17）：播放捕获可能拿到全零（app 禁止捕获 / 音频路由
                 // 到蓝牙 / 无音频播放）。全零时车机静音但手机仍在响，用户会报「声音在

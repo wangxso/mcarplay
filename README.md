@@ -148,6 +148,12 @@ the [receiver compatibility design](docs/RECEIVER-COMPATIBILITY.md). Its policy 
 describes implementation and evidence boundaries, not a device support list.
 If pairing stalls after reinstalling, restart the test receiver to clear its previous session.
 
+### Custom dashboard (experimental)
+
+On the phone, choose **Display source → Custom dashboard** before connecting. Start Shizuku and grant mcarplay access. On wide screens, the dashboard opens the preferred map beside a music card. The left dock shows the phone's time, network and battery status, with shortcuts for navigation, apps and settings. The apps page opens installed copies of Google Maps, Waze, Amap, and Baidu Maps, along with music players. Amap uses its car-mode entry when available. The music card shows track information and artwork when the player exposes them and mcarplay has notification access.
+
+Choose **Enable audio** at connection time and grant recording and screen capture permission. Android's playback capture rules and each app's capture policy determine which audio reaches the car. Both display sources default to an app-only car hotspot connection, preserving the phone's internet route. **Prefer car network** overrides that default for the next connection. Disconnect before selecting a different display source.
+
 ## Interface
 
 The phone UI has three tabs: **Connect** (status, the start button and a readiness checklist), **Settings** (screen

@@ -24,6 +24,9 @@ import com.mcarplay.app.carlife.CarLifeSessionRegistry
 import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.diagnostics.DiagnosticCode
 import com.mcarplay.app.i18n.AppLanguage
+import com.mcarplay.app.settings.VideoSource
+import com.mcarplay.app.settings.VideoSourcePrefs
+import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DebugFileLog
 
@@ -120,6 +123,14 @@ class CarPlayService : Service() {
             return START_NOT_STICKY
         }
         if (intent?.action == ACTION_AUTO_START_SESSION) {
+            if (!SessionController.isSessionRunning() &&
+                VideoSourcePrefs.get(applicationContext) == VideoSource.DASHBOARD &&
+                ShizukuGate.state(applicationContext) != ShizukuGate.State.READY
+            ) {
+                fileLog("AUTO: 自绘车机 UI 需要启动并授权 Shizuku——暂不启动")
+                if (!CarLifeDiagnostics.isRunning()) stopSelfResult(startId)
+                return START_NOT_STICKY
+            }
             val autoPeer =
                 intent?.getStringExtra(EXTRA_PEER_ADDRESS)?.takeIf { it.isNotBlank() }
                     ?: TargetDevicePrefs.get(applicationContext)?.address
@@ -178,7 +189,11 @@ class CarPlayService : Service() {
                 // 触发的自动连接曾把 audioEnabledForSession 重新置 true，下一次车机发起的
                 // AirPlay 会话又带音频（issue #55）。
                 automaticAudioDefault(SessionController.isSessionRunning()) {
-                    CarLifeLauncher.isAvailable(app) || acquireProjectionSilently()
+                    if (VideoSourcePrefs.get(app) == VideoSource.DASHBOARD) {
+                        mediaProjection != null
+                    } else {
+                        CarLifeLauncher.isAvailable(app) || acquireProjectionSilently()
+                    }
                 }?.let { SessionController.audioEnabledForSession = it }
                 SessionController.startConnection(
                     app,

@@ -3,8 +3,10 @@ package com.mcarplay.app.shizuku
 import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.input.InputManager
+import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
 import android.view.InputDevice
@@ -13,7 +15,9 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceControl
+import com.mcarplay.app.audio.NavigationPlaybackState
 import java.lang.reflect.Method
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Shizuku UserService 实现：运行在常驻 shell 进程（uid 2000），
@@ -31,6 +35,42 @@ import java.lang.reflect.Method
 class CarInputServiceImpl(
     private val context: Context,
 ) : ICarInput.Stub() {
+    private val navigationAudio = ShellNavigationAudio(context)
+
+    override fun openNavigationAudio(
+        sampleRate: Int,
+        owner: IBinder,
+        mapUids: IntArray,
+    ): ParcelFileDescriptor? {
+        if (Binder.getCallingUid() != context.applicationInfo.uid) return null
+        val identity = Binder.clearCallingIdentity()
+        return try {
+            navigationAudio.open(sampleRate, owner, mapUids)
+        } finally {
+            Binder.restoreCallingIdentity(identity)
+        }
+    }
+
+    override fun closeNavigationAudio(owner: IBinder) {
+        if (Binder.getCallingUid() != context.applicationInfo.uid) return
+        val identity = Binder.clearCallingIdentity()
+        try {
+            navigationAudio.close(owner)
+        } finally {
+            Binder.restoreCallingIdentity(identity)
+        }
+    }
+
+    override fun navigationPlaybackState(owner: IBinder): Int {
+        if (Binder.getCallingUid() != context.applicationInfo.uid) return NavigationPlaybackState.UNKNOWN.wireValue
+        val identity = Binder.clearCallingIdentity()
+        return try {
+            navigationAudio.playbackState(owner).wireValue
+        } finally {
+            Binder.restoreCallingIdentity(identity)
+        }
+    }
+
     /**
      * 物理屏是否被我们置为 OFF。服务自尽（APK 升级导致的过期自清）前必须恢复，
      * 否则手机会停在一块「逻辑醒着、物理黑着」的屏上（按电源键两次可恢复）。
@@ -133,6 +173,7 @@ class CarInputServiceImpl(
     private fun inject(
         event: InputEvent,
         displayId: Int,
+        mode: Int = INJECT_WAIT_FOR_FINISH,
     ): Boolean {
         val inj = injector
         if (inj == null) {
@@ -144,9 +185,9 @@ class CarInputServiceImpl(
             val m = inj.method
             val result: Boolean =
                 when {
-                    m.parameterTypes.size == 2 -> m.invoke(inj.receiver, event, 2) as Boolean
-                    m.parameterTypes[2] == java.lang.Long.TYPE -> m.invoke(inj.receiver, event, 2, 0L) as Boolean
-                    else -> m.invoke(inj.receiver, event, 2, displayId) as Boolean
+                    m.parameterTypes.size == 2 -> m.invoke(inj.receiver, event, mode) as Boolean
+                    m.parameterTypes[2] == java.lang.Long.TYPE -> m.invoke(inj.receiver, event, mode, 0L) as Boolean
+                    else -> m.invoke(inj.receiver, event, mode, displayId) as Boolean
                 }
             if (!result && !injectFailLogged) {
                 injectFailLogged = true
@@ -177,11 +218,13 @@ class CarInputServiceImpl(
         displayId: Int,
         keyCode: Int,
     ): Boolean {
+        // Back can remove the only focused window on an app display.
+        val mode = if (keyCode == KeyEvent.KEYCODE_BACK) INJECT_ASYNC else INJECT_WAIT_FOR_FINISH
         val now = SystemClock.uptimeMillis()
         val down = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
-        if (!inject(down, displayId)) return false
+        if (!inject(down, displayId, mode)) return false
         val up = KeyEvent(now, now + 24, KeyEvent.ACTION_UP, keyCode, 0)
-        return inject(up, displayId)
+        return inject(up, displayId, mode)
     }
 
     @Suppress("DEPRECATION")
@@ -251,8 +294,8 @@ class CarInputServiceImpl(
         return inject(up, displayId)
     }
 
-    private var dragDownTime = 0L
-    private var dragDisplay = -1
+    // A projected touch is active on the dashboard and the app display at the same time.
+    private val pointerDownTimes = ConcurrentHashMap<Int, Long>()
 
     override fun pointerDown(
         displayId: Int,
@@ -260,10 +303,10 @@ class CarInputServiceImpl(
         y: Int,
     ): Boolean {
         val now = SystemClock.uptimeMillis()
-        dragDownTime = now
-        dragDisplay = displayId
         val down = build(now, now, MotionEvent.ACTION_DOWN, x.toFloat(), y.toFloat()) ?: return false
-        return inject(down, displayId)
+        if (!inject(down, displayId)) return false
+        pointerDownTimes[displayId] = now
+        return true
     }
 
     override fun pointerMove(
@@ -271,9 +314,9 @@ class CarInputServiceImpl(
         x: Int,
         y: Int,
     ): Boolean {
-        if (dragDisplay != displayId) return false
+        val downTime = pointerDownTimes[displayId] ?: return false
         val now = SystemClock.uptimeMillis()
-        val move = build(dragDownTime, now, MotionEvent.ACTION_MOVE, x.toFloat(), y.toFloat()) ?: return false
+        val move = build(downTime, now, MotionEvent.ACTION_MOVE, x.toFloat(), y.toFloat()) ?: return false
         return inject(move, displayId)
     }
 
@@ -282,17 +325,22 @@ class CarInputServiceImpl(
         x: Int,
         y: Int,
     ): Boolean {
-        if (dragDisplay != displayId) return false
-        dragDisplay = -1
+        val downTime = pointerDownTimes.remove(displayId) ?: return false
         val now = SystemClock.uptimeMillis()
-        val up = build(dragDownTime, now, MotionEvent.ACTION_UP, x.toFloat(), y.toFloat()) ?: return false
+        val up = build(downTime, now, MotionEvent.ACTION_UP, x.toFloat(), y.toFloat()) ?: return false
         return inject(up, displayId)
     }
 
     // ---- 受信虚拟屏 ----
 
     // VIRTUAL_DISPLAY_FLAG_TRUSTED = 1 << 30（@hide/@SystemApi，编译期不可引用，写原始值）
-    private val virtualDisplays = HashMap<Int, android.hardware.display.VirtualDisplay>()
+    private class OwnedDisplay(
+        val display: android.hardware.display.VirtualDisplay,
+        val owner: IBinder,
+        val death: IBinder.DeathRecipient,
+    )
+
+    private val virtualDisplays = HashMap<Int, OwnedDisplay>()
 
     // ---- IME 展示策略 ----
 
@@ -390,7 +438,10 @@ class CarInputServiceImpl(
         dpi: Int,
         surface: Surface,
         trusted: Boolean,
+        destroyContentOnRemoval: Boolean,
+        owner: IBinder,
     ): Int {
+        if (Binder.getCallingUid() != context.applicationInfo.uid) return -1
         return try {
             fileLog("createDisplay $name ${width}x$height@$dpi start")
             // 关键：必须用「shell 包的 Context」——系统检查 packageName 与调用 uid(2000) 匹配，
@@ -420,6 +471,7 @@ class CarInputServiceImpl(
             val baseFlags =
                 (if (trusted) FLAG_TRUSTED or android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC else 0) or
                     FLAG_SUPPORTS_TOUCH or
+                    (if (destroyContentOnRemoval) FLAG_DESTROY_CONTENT_ON_REMOVAL else 0) or
                     android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
             // 受信屏额外要「独立显示组 + 永远已解锁」：
             //  · OWN_DISPLAY_GROUP：手机主屏休眠时虚拟屏不跟着休眠（物理屏断电后仍出帧）；
@@ -516,10 +568,21 @@ class CarInputServiceImpl(
                 )
             }
             if (created == null || id < 0) {
+                runCatching { created?.release() }
                 Log.w(TAG, "createDisplay $name -> null")
                 return -1
             }
-            synchronized(virtualDisplays) { virtualDisplays[id] = created }
+            val death = IBinder.DeathRecipient { releaseDisplay(id, created) }
+            try {
+                synchronized(virtualDisplays) {
+                    // Serialise registration with binderDied so a client dying as we create the screen cannot leak it.
+                    owner.linkToDeath(death, 0)
+                    virtualDisplays[id] = OwnedDisplay(created, owner, death)
+                }
+            } catch (error: Exception) {
+                runCatching { created.release() }
+                throw error
+            }
             // 只有受信屏能设 IME 策略（WMS 对非受信屏抛 SecurityException），且正需要它：
             // dock 屏只承载自有 DockActivity，无输入场景
             if (trusted) applyImePolicyLocal(id)
@@ -538,7 +601,7 @@ class CarInputServiceImpl(
         height: Int,
         dpi: Int,
     ): Boolean {
-        val vd = synchronized(virtualDisplays) { virtualDisplays[displayId] } ?: return false
+        val vd = synchronized(virtualDisplays) { virtualDisplays[displayId]?.display } ?: return false
         return try {
             vd.resize(width, height, dpi)
             Log.i(TAG, "resizeDisplay id=$displayId -> ${width}x$height@$dpi")
@@ -549,16 +612,37 @@ class CarInputServiceImpl(
         }
     }
 
-    override fun releaseDisplay(displayId: Int): Boolean {
-        val vd = synchronized(virtualDisplays) { virtualDisplays.remove(displayId) }
-        if (vd == null) {
+    override fun setDisplaySurface(
+        displayId: Int,
+        surface: Surface?,
+    ): Boolean =
+        synchronized(virtualDisplays) {
+            val display = virtualDisplays[displayId]?.display ?: return@synchronized false
+            runCatching { display.surface = surface }.isSuccess
+        }
+
+    override fun releaseDisplay(displayId: Int): Boolean = releaseDisplay(displayId, expected = null)
+
+    private fun releaseDisplay(
+        displayId: Int,
+        expected: android.hardware.display.VirtualDisplay?,
+    ): Boolean {
+        val owned =
+            synchronized(virtualDisplays) {
+                val current = virtualDisplays[displayId] ?: return@synchronized null
+                if (expected != null && current.display !== expected) return@synchronized null
+                virtualDisplays.remove(displayId)
+            }
+        if (owned == null) {
             // 不在本进程 map：该屏由其它（旧版本）UserService 进程创建，只有创建者能释放。
             // 应用侧兜底见 CarInputClient.reapStaleUserServices（杀持有进程）。
             fileLog("releaseDisplay id=$displayId -> 非本进程持有（跨进程无法释放）")
             return false
         }
+        runCatching { owned.owner.unlinkToDeath(owned.death, 0) }
+        pointerDownTimes.remove(displayId)
         return try {
-            vd.release()
+            owned.display.release()
             Log.i(TAG, "releaseDisplay id=$displayId")
             true
         } catch (t: Throwable) {
@@ -742,6 +826,8 @@ class CarInputServiceImpl(
 
     companion object {
         private const val TAG = "CarInputSvc"
+        private const val INJECT_ASYNC = 0
+        private const val INJECT_WAIT_FOR_FINISH = 2
 
         /** 自清巡检周期：重装 APK 后旧进程最迟约 15s 内自行退出（成本仅一次 PM 查询）。 */
         private const val STALE_CHECK_INTERVAL_MS = 15_000L
@@ -751,6 +837,8 @@ class CarInputServiceImpl(
 
         /** VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH（@hide；AOSP 定义 = 1 << 6 = 0x40）。 */
         private const val FLAG_SUPPORTS_TOUCH = 1 shl 6
+
+        private const val FLAG_DESTROY_CONTENT_ON_REMOVAL = 1 shl 8
 
         /**
          * VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP（@hide；AOSP 定义 = 1 << 11 = 0x800）。

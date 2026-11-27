@@ -171,6 +171,7 @@ class VideoEndedHandlingTest {
             mediaObservation: String? = null,
             attempt: String = "attempt",
             peer: String? = null,
+            onCloseDashboard: () -> Unit = {},
         ): VideoEndCapture<String, String> =
             object : VideoEndCapture<String, String> {
                 override val senderIdentity: () -> String = { senderIdentity }
@@ -182,6 +183,8 @@ class VideoEndedHandlingTest {
                 override val attempt: String = attempt
 
                 override val peerAddress: String? = peer
+
+                override fun closeDashboard() = onCloseDashboard()
             }
 
         fun invoke(action: () -> Unit) {
@@ -197,6 +200,19 @@ class VideoEndedHandlingTest {
         fun run(capture: VideoEndCapture<String, String>) {
             invoke { handling.handle(capture) }
         }
+    }
+
+    @Test
+    fun staleVideoEndCannotCloseTheCurrentDashboard() {
+        val fixture = Fixture()
+        val close = { fixture.recorder.record("dashboard.close") }
+        fixture.run(fixture.capture(senderIdentity = "replaced", onCloseDashboard = close))
+        assertTrue(fixture.recorder.events.isEmpty())
+
+        fixture.run(fixture.capture(onCloseDashboard = close))
+        val events = fixture.recorder.events.toList()
+        assertTrue(events.indexOf("dashboard.close") in 0 until events.indexOf("release-wifi"))
+        assertEquals(1, events.count { it == "dashboard.close" })
     }
 
     private fun completeEvents(

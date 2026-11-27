@@ -76,6 +76,7 @@ private object SourceUiPortInventory {
 
     val HINT_WRITES =
         listOf(
+            UiWriteSite(CONTROLLER, "startConnection", "ui.hint { t(R.string.car_dashboard_unavailable) }"),
             UiWriteSite(CONTROLLER, "ensureSessionObjects", "ui.hint { t(R.string.sc_hotspot_lost_hint, ssid) }"),
             UiWriteSite(CONTROLLER, "ensureSessionObjects", "ui.hint { t(R.string.sc_tap_phone_on_receiver_hint, name) }"),
             UiWriteSite(JOINER, "waitForWifiEnabled", "ui.hint { t(R.string.sc_turn_on_wifi) }"),
@@ -88,6 +89,7 @@ private object SourceUiPortInventory {
                     "else { t(R.string.sc_audio_profile_rejected) } }",
             ),
             UiWriteSite(CONTROLLER, "onCarPlayEndpoint", "ui.hint { t(R.string.sc_record_unconfirmed) }"),
+            UiWriteSite(CONTROLLER, "onCarPlayEndpoint", "ui.hint { t(R.string.car_dashboard_unavailable) }"),
             UiWriteSite(CONTROLLER, "onCarPlayEndpoint", "ui.hint { t(R.string.sc_setup_rejected_hint) }"),
             UiWriteSite(JOINER, "waitForManualWifiThenContinue", "ui.hint { t(R.string.sc_not_joined_hint, wifi.ssid) }"),
             UiWriteSite(JOINER, "ensurePhoneModeSystemWifiSafe", "ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }"),
@@ -434,12 +436,12 @@ class SessionUiPortInventoryTest {
         assertEquals(46, SourceUiPortInventory.PHASE_WRITES.size)
         assertEquals(46, controllerProductionPhase + joinerProductionPhase)
 
-        assertEquals(6, controllerProductionHint)
+        assertEquals(8, controllerProductionHint)
         assertEquals(4, joinerProductionHint)
         assertEquals(1, controllerBridgeHint)
         assertEquals(0, joinerParenHint)
-        assertEquals(10, SourceUiPortInventory.HINT_WRITES.size)
-        assertEquals(10, controllerProductionHint + joinerProductionHint)
+        assertEquals(12, SourceUiPortInventory.HINT_WRITES.size)
+        assertEquals(12, controllerProductionHint + joinerProductionHint)
 
         assertEquals(2, controllerSsidCount)
         assertEquals(0, joinerSsidCount)

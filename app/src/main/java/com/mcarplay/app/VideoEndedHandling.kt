@@ -40,6 +40,8 @@ internal interface VideoEndCapture<S : Any, L : Any> {
     val attempt: String
 
     val peerAddress: String?
+
+    fun closeDashboard() {}
 }
 
 internal interface VideoEndActions<S : Any, L : Any, T : Any, B : Any, K : Any> {
@@ -100,6 +102,7 @@ internal class VideoEndedHandling<S : Any, L : Any, T : Any, B : Any, K : Any>(
             actions.releaseCarLife(carLife)
         }
         if (slots.outputSender === capture.senderIdentity()) slots.clearCarLifeOutput()
+        capture.closeDashboard()
         actions.releaseWifiLock()
         slots.context?.let(actions::stopScreenMonitor)
         slots.nativeBridge?.let(actions::stopNativeBridge)

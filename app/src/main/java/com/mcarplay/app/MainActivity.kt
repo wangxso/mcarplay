@@ -54,6 +54,8 @@ import com.mcarplay.app.service.ExternalHuService
 import com.mcarplay.app.settings.InternetNetwork
 import com.mcarplay.app.settings.InternetNetworkPrefs
 import com.mcarplay.app.settings.MediaPrefs
+import com.mcarplay.app.settings.VideoSource
+import com.mcarplay.app.settings.VideoSourcePrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
@@ -243,6 +245,17 @@ class MainActivity : AppCompatActivity() {
     private val audioPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             log("MODE: RECORD_AUDIO 授权: $granted（音频通道需要）")
+            if (granted) {
+                launchAudioProjection()
+            } else {
+                pendingStartAfterProjection.set(false)
+                snack(getString(R.string.car_dashboard_audio_denied))
+            }
+        }
+
+    private val dashboardSignalPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            showAudioChoiceDialog()
         }
 
     private val projectionLauncher =
@@ -250,8 +263,11 @@ class MainActivity : AppCompatActivity() {
             val data = result.data
             if (result.resultCode != RESULT_OK || data == null) {
                 log("MODE: 投屏权限被拒绝（车机侧声音不可用）")
+                pendingStartAfterProjection.set(false)
+                snack(getString(R.string.car_dashboard_audio_denied))
                 return@registerForActivityResult
             }
+            SessionController.audioEnabledForSession = true
             // Android 14+ 顺序：先把结果交给服务，由服务升级 FGS 类型后调 getMediaProjection
             CarPlayService.pendingProjectionResult =
                 result.resultCode to data
@@ -267,6 +283,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (CarPlayService.mediaProjection == null) {
                     log("MODE: 投影 5 秒未就绪（服务异常？），音频通道本次未启动")
+                    pendingStartAfterProjection.set(false)
                     return@run
                 }
                 SessionController.maybeStartAudioNow(applicationContext)
@@ -312,10 +329,10 @@ class MainActivity : AppCompatActivity() {
             title = getString(R.string.ma_audio_choice_title),
             message =
                 getString(R.string.ma_audio_choice_body) +
-                    if (CarLifeLauncher.isAvailable(this)) {
+                    if (usesCarWith()) {
                         getString(R.string.ma_audio_choice_carwith)
                     } else {
-                        getString(R.string.ma_audio_choice_projection)
+                        "\n\n" + getString(R.string.car_dashboard_audio)
                     },
             actions = actions,
         )
@@ -346,7 +363,7 @@ class MainActivity : AppCompatActivity() {
      * 任一不满足都弹窗引导（蓝牙关闭时可一键跳系统蓝牙设置），通过后回调继续。
      */
     private fun ensureBluetoothReady(onReady: () -> Unit) {
-        if (!CarLifeLauncher.isAvailable(this)) {
+        if (usesCarWith() && !CarLifeLauncher.isAvailable(this)) {
             ConnectionDiagnostics.precheck(DiagnosticCode.CARWITH_FAILED)
             DarkMessageDialog.show(
                 this,
@@ -359,6 +376,13 @@ class MainActivity : AppCompatActivity() {
                     ),
             )
             return
+        }
+        if (!usesCarWith()) {
+            val state = ShizukuGate.state(this)
+            if (state != ShizukuGate.State.READY) {
+                showShizukuGuidance(state)
+                return
+            }
         }
         val granted =
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) ==
@@ -504,7 +528,7 @@ class MainActivity : AppCompatActivity() {
             title = getString(R.string.ma_disconnect_title),
             message =
                 getString(R.string.ma_disconnect_body) +
-                    if (CarLifeLauncher.isAvailable(this)) {
+                    if (usesCarWith()) {
                         ""
                     } else {
                         getString(R.string.ma_disconnect_projection_note)
@@ -578,7 +602,7 @@ class MainActivity : AppCompatActivity() {
             startConnectionNow()
             return
         }
-        if (CarLifeLauncher.isAvailable(this) || CarPlayService.mediaProjection != null) {
+        if (usesCarWith() || CarPlayService.mediaProjection != null) {
             log("MODE: 已选择开启声音（音频来源已就绪）")
             startConnectionNow()
             return
@@ -586,13 +610,31 @@ class MainActivity : AppCompatActivity() {
         // 开启声音需要投屏权限（播放捕获的授权来源）：先申请，授权完成后再启动连接
         log("MODE: 开启声音需要投屏权限——先后申请（音频捕获依赖），授权后自动开始连接")
         pendingStartAfterProjection.set(true)
+        requestAudioProjection()
+    }
+
+    private fun requestAudioProjection() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            launchAudioProjection()
         }
-        val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
-        projectionLauncher.launch(manager.createScreenCaptureIntent())
+    }
+
+    private fun launchAudioProjection() {
+        val manager = checkNotNull(getSystemService(android.media.projection.MediaProjectionManager::class.java))
+        val intent =
+            if (Build.VERSION.SDK_INT >= 34) {
+                manager.createScreenCaptureIntent(
+                    android.media.projection.MediaProjectionConfig
+                        .createConfigForDefaultDisplay(),
+                )
+            } else {
+                manager.createScreenCaptureIntent()
+            }
+        projectionLauncher.launch(intent)
     }
 
     /**
@@ -639,7 +681,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun continueAfterBtIdentityCheck() {
         runOnUiThread {
-            if (CarLifeLauncher.isAvailable(this) && CarLifeLauncher.backgroundStartAllowed(this) == false) {
+            if (usesCarWith() && CarLifeLauncher.isAvailable(this) && CarLifeLauncher.backgroundStartAllowed(this) == false) {
                 log("CARLIFE: 未允许「后台弹出界面」，CarPlay 会话建立后可能无法打开 CarWith 入口")
                 showBackgroundStartGuidance()
             } else {
@@ -735,8 +777,27 @@ class MainActivity : AppCompatActivity() {
 
     private fun resumeConnectionChecks() {
         ensureBluetoothReady {
-            if (pendingDetectionTarget != null) beginWithAudio(enabled = true) else showAudioChoiceDialog()
+            if (pendingDetectionTarget != null) {
+                beginWithAudio(enabled = true)
+            } else if (!requestDashboardSignalPermission()) {
+                showAudioChoiceDialog()
+            }
         }
+    }
+
+    private fun requestDashboardSignalPermission(): Boolean {
+        if (usesCarWith() ||
+            !packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) ||
+            checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
+        val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val key = "dashboard_signal_permission_requested"
+        if (prefs.getBoolean(key, false)) return false
+        prefs.edit().putBoolean(key, true).apply()
+        dashboardSignalPermissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
+        return true
     }
 
     private fun vehiclePresetLabel(preset: VehiclePreset): String =
@@ -1114,9 +1175,50 @@ class MainActivity : AppCompatActivity() {
                 )
     }
 
-    /** onCreate 的 UI 初始化尾部：开关/按钮/折叠卡（会话逻辑不变，仅挂新界面）。 */
+    private fun usesCarWith(): Boolean = VideoSourcePrefs.get(this) == VideoSource.CAR_WITH
+
+    private fun updateVideoSource() {
+        val picker = findViewById<TextView>(R.id.btnVideoSource)
+        picker.text = getString(R.string.car_source_current, getString(VideoSourcePrefs.get(this).label))
+        refreshNetworkPreference()
+    }
+
+    private fun refreshNetworkPreference() {
+        val carPreferred = InternetNetworkPrefs.get(this) == InternetNetwork.CAR
+        switchCarNetwork.isChecked = carPreferred
+        networkPrefDesc.setText(
+            if (carPreferred) R.string.main_internet_network_car_desc else R.string.main_internet_network_phone_desc,
+        )
+    }
+
+    private fun showVideoSourcePicker() {
+        if (SessionController.isSessionRunning() || SessionController.sessionStarting.get() || SessionController.isDisconnecting()) {
+            snack(getString(R.string.car_source_disconnect_first))
+            return
+        }
+        DarkMessageDialog.show(
+            activity = this,
+            title = getString(R.string.car_source_title),
+            message = getString(R.string.car_source_description),
+            actions =
+                VideoSource.entries.map { source ->
+                    DarkMessageDialog.Action(getString(source.label)) {
+                        if (SessionController.selectVideoSource(this, source)) {
+                            updateVideoSource()
+                            updateReadyRow()
+                        } else {
+                            snack(getString(R.string.car_source_disconnect_first))
+                        }
+                    }
+                },
+        )
+    }
+
+    /** onCreate 的 UI 初始化尾部：开关/按钮/折叠卡。 */
     private fun setUpUiControls() {
         val preferences = getSharedPreferences("settings", Context.MODE_PRIVATE)
+        updateVideoSource()
+        findViewById<View>(R.id.btnVideoSource).setOnClickListener { showVideoSourcePicker() }
         findViewById<View>(R.id.btnCheckUpdates).setOnClickListener {
             startActivity(Intent(this, com.mcarplay.app.update.UpdateActivity::class.java))
         }
@@ -1189,23 +1291,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         // ---- 互联网网络：车机网络 / 手机流量（下次连接生效）----
-        var carNetworkPreferred = InternetNetworkPrefs.get(this) == InternetNetwork.CAR
-
-        fun refreshNetworkPreference(carPreferred: Boolean) {
-            switchCarNetwork.isChecked = carPreferred
-            networkPrefDesc.setText(
-                if (carPreferred) R.string.main_internet_network_car_desc else R.string.main_internet_network_phone_desc,
-            )
-        }
-
-        refreshNetworkPreference(carNetworkPreferred)
         switchCarNetwork.setOnCheckedChangeListener { _, checked ->
-            if (checked == carNetworkPreferred) return@setOnCheckedChangeListener
-            carNetworkPreferred = checked
+            if (checked == (InternetNetworkPrefs.get(this) == InternetNetwork.CAR)) return@setOnCheckedChangeListener
             InternetNetworkPrefs.set(this, if (checked) InternetNetwork.CAR else InternetNetwork.PHONE)
-            networkPrefDesc.setText(
-                if (checked) R.string.main_internet_network_car_desc else R.string.main_internet_network_phone_desc,
-            )
+            refreshNetworkPreference()
             val message =
                 if (checked && ShizukuGate.state(this) != ShizukuGate.State.READY) {
                     R.string.main_internet_network_needs_shizuku
@@ -1223,7 +1312,7 @@ class MainActivity : AppCompatActivity() {
                 // CarWith 路径不依赖 Shizuku；蓝牙/热点仍是车机 CarPlay 链路的前置
                 HeroState.IDLE -> {
                     pendingDetectionTarget = null
-                    ensureBluetoothReady { showAudioChoiceDialog() }
+                    resumeConnectionChecks()
                 }
                 // 连接中可取消：卡在错误网络/等待回连时用户主动脱身（弹窗防误触）
                 HeroState.CONNECTING -> promptCancelConnecting()
@@ -1278,20 +1367,19 @@ class MainActivity : AppCompatActivity() {
 
         // 车机侧声音授权（原「申请投屏权限」）：RECORD_AUDIO + MediaProjection 一起请求
         btnAudio.setOnClickListener {
-            if (CarLifeLauncher.isAvailable(this)) {
+            if (usesCarWith() && CarLifeLauncher.isAvailable(this)) {
                 SessionController.audioEnabledForSession = true
                 // 音频 SETUP 是控制通道上的网络请求，不能在主线程发
                 Bg.run("audio-native-start") { SessionController.maybeStartAudioNow(applicationContext) }
                 snack(getString(R.string.ma_native_audio_requested))
                 return@setOnClickListener
             }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            if (CarPlayService.mediaProjection != null) {
+                SessionController.audioEnabledForSession = true
+                Bg.run("audio-dashboard-start") { SessionController.maybeStartAudioNow(applicationContext) }
+            } else {
+                requestAudioProjection()
             }
-            val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
-            projectionLauncher.launch(manager.createScreenCaptureIntent())
         }
 
         // ---- 车机显示 ----
@@ -1769,7 +1857,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateReadyRow() {
         var ready = 0
         val shizukuState = ShizukuGate.state(this)
-        if (CarLifeLauncher.isAvailable(this)) ready++
+        val nativeAudio = usesCarWith() && CarLifeLauncher.isAvailable(this)
+        if (nativeAudio || (!usesCarWith() && shizukuState == ShizukuGate.State.READY)) ready++
         updateShizukuRow(shizukuState)
         updateBtIdentityRow(shizukuState)
         if (ssidInput.text
@@ -1794,7 +1883,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         if (bondedCount > 0) ready++
-        if (CarLifeLauncher.isAvailable(this) || CarPlayService.mediaProjection != null) ready++
+        if (nativeAudio || CarPlayService.mediaProjection != null) ready++
 
         btBadge.visibility = if (bondedCount >= 0) View.VISIBLE else View.GONE
         if (bondedCount >= 0) {
@@ -1840,7 +1929,7 @@ class MainActivity : AppCompatActivity() {
         }
         val projectionReady =
             CarPlayService.mediaProjection != null
-        if (CarLifeLauncher.isAvailable(this)) {
+        if (nativeAudio) {
             val enabled = SessionController.audioEnabledForSession
             btnAudio.text = getString(if (enabled) R.string.ma_audio_enabled else R.string.ma_audio_on)
             btnAudio.setTextColor(getColor(if (enabled) R.color.m3_ok else R.color.m3_primary))
@@ -2029,7 +2118,7 @@ class MainActivity : AppCompatActivity() {
      * 代次计数器而非显示屏 ID；真实 ID 在 "displayId=39, uniqueId='…'" 段里。
      */
     private fun parseCarPlayDisplays(dump: String): List<Pair<Int, String>> =
-        Regex("displayId=(\\d+), uniqueId='[^']*CarPlay(Dock|AppHi|App|Map)")
+        Regex("displayId=(\\d+), uniqueId='[^']*CarPlay(DashboardApp|Dashboard|Dock|AppHi|App|Map)")
             .findAll(dump)
             .map { it.groupValues[1].toInt() to "CarPlay${it.groupValues[2]}" }
             .distinctBy { it.first }
@@ -2131,8 +2220,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 当前会话持有的虚拟屏（不参与残留清理）。桌面已移除，本进程不再创建虚拟屏，所以恒为空。 */
-    private fun currentSessionDisplayIds(): Set<Int> = emptySet()
+    /** 当前会话持有的虚拟屏不参与残留清理。 */
+    private fun currentSessionDisplayIds(): Set<Int> = SessionController.dashboardDisplayIds()
 
     /** 启动检测到残留 CarPlay 虚拟屏：询问是否立即清理（上次会话异常退出遗留）。 */
     private fun promptResidualDisplays(residual: List<Pair<Int, String>>) {
