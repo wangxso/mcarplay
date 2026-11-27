@@ -141,7 +141,7 @@ class AirPlayRecordLifecycleTest {
                     List(8) {
                         executor.submit(
                             Callable {
-                                client.record(10_000).also { if (it) firstSuccess.countDown() }
+                                client.assertModes().also { if (it) firstSuccess.countDown() }
                             },
                         )
                     }
