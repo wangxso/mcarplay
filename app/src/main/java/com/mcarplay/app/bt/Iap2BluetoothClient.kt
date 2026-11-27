@@ -240,9 +240,6 @@ class Iap2BluetoothClient(
     /** 「无 iAP2 服务→跳过」日志去重（每地址一次即可，重复轮询不刷屏）。 */
     private val skippedNoService = java.util.Collections.synchronizedSet(HashSet<String>())
 
-    /** 指定目标的 SDP 诊断已记录的地址（每轮 start 每台一次）。 */
-    private val targetServicesReported = java.util.Collections.synchronizedSet(HashSet<String>())
-
     /** 拒绝主动连入的车机改为等回连（见 [InboundWaitPolicy]）。 */
     private val inboundWait = InboundWaitPolicy { SystemClock.elapsedRealtime() }
 
@@ -346,7 +343,6 @@ class Iap2BluetoothClient(
         name: String,
     ) {
         val uuids = cachedUuids(device)
-        if (uuids.contains(ACCESSORY_IAP2_UUID)) iap2ServiceCache[device.address] = true
         log("BT-C: 目标「$name」SDP ${describeServices(uuids)}")
     }
 
@@ -442,7 +438,6 @@ class Iap2BluetoothClient(
         // 每轮启动重置 SDP 结论与跳过日志（新配对/换固件后重新探测）
         iap2ServiceCache.clear()
         skippedNoService.clear()
-        targetServicesReported.clear()
         inboundWait.reset()
         profileOnlineCache.clear()
         probePaused = false
@@ -492,6 +487,8 @@ class Iap2BluetoothClient(
             } ?: return
         var lastFailureLogAt = 0L
         val profileTrials = HashSet<String>()
+        // 每轮独占摘要标记，旧拨号返回时不能消耗新轮的报告机会。
+        val targetServicesReported = HashSet<String>()
         while (running && generation.get() == myGeneration) {
             // 检查候选前取得信号，避免上车事件落在检查后、开始等待前。
             val wake = probeWake.get()
@@ -608,7 +605,10 @@ class Iap2BluetoothClient(
                     }
                 }
                 // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起（connect() 可阻塞数十秒）
-                val socket = selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch, boundedDial) }
+                val socket =
+                    selfLinkChange {
+                        tryConnect(device, name, myGeneration, diagnosticEpoch, boundedDial, targetServicesReported)
+                    }
                 try {
                     if (socket != null) {
                         if (!running || generation.get() != myGeneration) return
@@ -684,6 +684,7 @@ class Iap2BluetoothClient(
         myGeneration: Long,
         diagnosticEpoch: Long,
         boundedDial: Boolean,
+        targetServicesReported: MutableSet<String>,
     ): BluetoothSocket? {
         val target = targetProvider()
         val trace =
