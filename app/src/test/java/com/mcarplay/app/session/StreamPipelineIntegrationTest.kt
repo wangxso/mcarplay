@@ -45,7 +45,7 @@ class StreamPipelineIntegrationTest {
             assertTrue("重建后的发送端必须已启动", replacement!!.isRunning)
             assertSame("输出槽必须指向新发送端", replacement, pipeline.currentOutput()!!.sender)
             assertEquals(
-                listOf("teardown", "run", "record(force=true)", "restored"),
+                listOf("teardown", "run", "record", "restored"),
                 port.calls,
             )
             replacement.stop()
@@ -71,11 +71,11 @@ class StreamPipelineIntegrationTest {
                 listOf(
                     "teardown",
                     "run",
-                    "record(force=true)",
+                    "record",
                     "restored",
                     "teardown",
                     "run",
-                    "record(force=true)",
+                    "record",
                     "restored",
                 ),
                 port.calls,

@@ -325,9 +325,15 @@ class VideoEndNotificationTest {
         assertFalse("quiesce 不应通知 onEnded", quiesceBody.contains("onEnded"))
         requireOrder(
             externalBody,
-            "val output = socket?.getOutputStream() ?: return",
+            "try {",
+            "val client = socket ?: return",
+            "透传应在 try 内做 socket 判空",
+        )
+        requireOrder(
+            externalBody,
+            "val client = socket ?: return",
             "finally",
-            "透传仍保持 try 前早退边界",
+            "透传将 socket 判空保留在 try 内以触发 endNotification.afterDrain",
         )
         requireOrder(
             encoderBody,

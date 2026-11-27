@@ -150,7 +150,7 @@ class AirPlayRecordLifecycleTest {
     }
 
     @Test
-    fun otherReceiversRetainTheirExistingRepeatedRecordBehavior() {
+    fun unknownReceiverSendsOnlyOneRecordPerSession() {
         Peer().use { peer ->
             val client = client(peer.port, chery = false)
             try {
@@ -158,7 +158,7 @@ class AirPlayRecordLifecycleTest {
                 assertTrue(client.record())
                 assertTrue(client.record())
                 assertEquals("RECORD", peer.next()!!.method)
-                assertEquals("RECORD", peer.next()!!.method)
+                assertNull(peer.next(300))
             } finally {
                 client.close()
             }
@@ -166,13 +166,38 @@ class AirPlayRecordLifecycleTest {
     }
 
     @Test
-    fun rejectedRecordCannotBeRepeatedInTheSameSession() {
+    fun gs3PresetSendsOnlyOneRecordPerSession() {
+        // GS3 报告 5c1f76dc：首条 RECORD 成功后，音频 SETUP 后的第二条 RECORD 等待期间车机拆链。
+        val previousPreset = com.mcarplay.app.compat.VehiclePresetRuntime.current
+        com.mcarplay.app.compat.VehiclePresetRuntime.current =
+            com.mcarplay.app.compat.VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW
+        try {
+            Peer().use { peer ->
+                val client = client(peer.port, chery = false)
+                try {
+                    assertTrue(client.reconnect())
+                    assertTrue(client.record())
+                    assertTrue(client.record()) // 音频 SETUP 后或动态补启
+                    assertEquals("RECORD", peer.next()!!.method)
+                    assertNull(peer.next(300))
+                } finally {
+                    client.close()
+                }
+            }
+        } finally {
+            com.mcarplay.app.compat.VehiclePresetRuntime.current = previousPreset
+        }
+    }
+
+    @Test
+    fun rejectedRecordBlocksScreenSetupAndCannotBeRepeated() {
         Peer().use { peer ->
             peer.reply = { it.respond(500) }
             val client = client(peer.port)
             try {
                 assertTrue(client.reconnect())
                 assertFalse(client.record())
+                assertNull(client.runScreenStream(null, "display"))
                 assertFalse(client.record())
                 assertEquals("RECORD", peer.next()!!.method)
                 assertNull(peer.next(300))

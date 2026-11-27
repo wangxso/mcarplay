@@ -6,6 +6,7 @@ import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.WifiCredentialSource
 import com.mcarplay.app.iap2.WifiHandoffAction
 import com.mcarplay.app.iap2.WifiHandoffPolicy
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -110,6 +111,8 @@ internal class CarWifiHandoffRequest<N : Any>(
     val inviteNetwork: () -> N? = { null },
     val sleep: ((Long) -> Unit)? = null,
     val awaitLatch: ((CountDownLatch, Long) -> Boolean)? = null,
+    val detached: (() -> Boolean)? = null,
+    val earlyJoin: CompletableFuture<Boolean>? = null,
 )
 
 /**
@@ -220,8 +223,14 @@ internal class CarWifiJoiner<N : Any, T : Any>(
      *    热点不写入系统配置、不成为系统默认网络，其它应用继续用手机流量；首次加入会弹系统确认框。
      * 全失败时回退「系统 WLAN 手动加入」指引（密码可经「去连接」复制）。
      */
-    fun autoJoinCarWifi(wifi: Iap2SenderSession.WifiConfiguration) {
-        background("wifi-auto-join") {
+    fun autoJoinCarWifi(
+        wifi: Iap2SenderSession.WifiConfiguration,
+        cancelled: () -> Boolean = { connectCancelled },
+        canPrompt: () -> Boolean = { !cancelled() },
+        onResult: (Boolean) -> Unit = {},
+    ) {
+        fun run(): Boolean {
+            if (cancelled()) return false
             val internetNetwork = preferredInternetNetwork()
             val shellReady = shellWifiReady()
             appendLog(
@@ -230,55 +239,75 @@ internal class CarWifiJoiner<N : Any, T : Any>(
             )
             // 1) 首选静默路径：Shizuku 命令行连网（0 弹窗）
             if (useSystemWifi(internetNetwork, shellReady)) {
-                if (joinCarWifiSilently(wifi) is CarWifiLink.JoinResult.Joined) return@background
-                if (connectCancelled) return@background
+                val silent =
+                    synchronized(wifiBindLock) {
+                        if (cancelled()) return false
+                        joinCarWifiSilentlyLocked(wifi, isCancelled = cancelled)
+                    }
+                if (silent is CarWifiLink.JoinResult.Joined) return true
+                if (cancelled()) return false
                 // 热点已连上、只是 Network 通道没绑成：绝不能退回 specifier——那会重新
                 // 关联热点并弹系统确认框（用户看到「连上了又弹窗」）。
                 // 有核验句柄就只绑它；拿不到句柄时转用户确认，绝不发起通配绑定。
                 if (liveWifiSsid() == wifi.ssid) {
                     var bound = false
-                    bindVerifiedCarWifi(wifi.ssid, "静默入网") { bound = it }
-                    if (bound) return@background
+                    bindVerifiedCarWifi(wifi.ssid, "静默入网", isCancelled = cancelled) { bound = it }
+                    if (bound) return true
                     ui.phase(t(R.string.sc_bind_failed))
                     appendLog(
                         "WIFI: 已连在 \"${wifi.ssid}\" 但未能绑定唯一的 Network 句柄——本轮中止" +
                             "（不退回会弹窗的 specifier，也不发起通配绑定）",
                     )
-                    return@background
+                    return false
                 }
             }
             // 2) 回退：应用专属网络（不影响 4G/5G、不会保存为系统网络）
-            if (shellReady && shellWifiDisabled() && !waitForWifiEnabled()) return@background
-            if (connectCancelled) return@background
+            if (shellReady && shellWifiDisabled() && !waitForWifiEnabled(isCancelled = cancelled)) return false
+            if (cancelled()) return false
             if (
                 internetNetwork == CarWifiInternetPreference.PHONE &&
-                !ensurePhoneModeSystemWifiSafe(wifi, shellReady)
+                !ensurePhoneModeSystemWifiSafe(wifi, shellReady, isCancelled = cancelled)
             ) {
-                return@background
+                return false
             }
             if (internetNetwork == CarWifiInternetPreference.PHONE && shellReady) {
                 appendLog("NETWORK: 手机流量优先——跳过系统级存储与 connect-network 兜底")
             }
             val result =
-                joinCarWifiSpecifier(
-                    wifi,
-                    allowExistingSystemWifi = allowExistingSystemWifi(internetNetwork),
-                    allowSystemFallback = allowSystemFallback(internetNetwork),
-                )
+                synchronized(wifiBindLock) {
+                    if (cancelled()) return false
+                    joinCarWifiSpecifier(
+                        wifi,
+                        allowExistingSystemWifi = allowExistingSystemWifi(internetNetwork),
+                        allowSystemFallback = allowSystemFallback(internetNetwork),
+                        isCancelled = cancelled,
+                    )
+                }
+            if (cancelled()) return false
             when (result) {
-                is CarWifiLink.JoinResult.Joined -> Unit
+                is CarWifiLink.JoinResult.Joined -> return true
 
                 CarWifiLink.JoinResult.Unsupported -> {
                     if (internetNetwork == CarWifiInternetPreference.CAR) {
                         appendLog("WIFI: 热点安全类型 ${wifi.securityType} 无法用应用专属网络表达——退回系统级加入")
-                        legacyJoinCarWifi(wifi, shellReady)
+                        legacyJoinCarWifi(wifi, shellReady, isCancelled = cancelled)
                     } else {
                         appendLog("WIFI: 手机流量优先——该热点安全类型无法使用应用专属网络，请到 WLAN 手动加入")
-                        promptSpecifierFailed(wifi, shellReady)
+                        promptSpecifierFailed(wifi, shellReady, isCancelled = { !canPrompt() })
                     }
                 }
 
-                CarWifiLink.JoinResult.Unavailable -> promptSpecifierFailed(wifi, shellReady)
+                CarWifiLink.JoinResult.Unavailable -> promptSpecifierFailed(wifi, shellReady, isCancelled = { !canPrompt() })
+            }
+            return !cancelled() && boundCarSsid == wifi.ssid && wifiConnector?.currentNetwork != null
+        }
+
+        background("wifi-auto-join") {
+            var joined = false
+            try {
+                joined = run()
+            } finally {
+                onResult(joined)
             }
         }
     }
@@ -1107,7 +1136,7 @@ internal class CarWifiJoiner<N : Any, T : Any>(
      *
      * 上层只提供中性来源、实时 scope/邀请判定与续体；端点对象、缓存、配对与推流保持在上层。
      */
-    fun dispatchHandoff(request: CarWifiHandoffRequest<N>) {
+    fun dispatchHandoff(request: CarWifiHandoffRequest<N>): Boolean {
         val sourceKind = request.source
         val targetBinding = request.ssid
         val cachedWifi = request.cachedWifi
@@ -1146,16 +1175,48 @@ internal class CarWifiJoiner<N : Any, T : Any>(
         fun dispatchWifiAction(
             nextAction: WifiHandoffAction,
             cached: Iap2SenderSession.WifiConfiguration?,
-        ) {
+        ): Boolean =
             when (nextAction) {
-                WifiHandoffAction.JOIN_ACCESSORY ->
-                    joinAccessoryWifi(request.accessoryWifi!!, request.handoffCancelled, sleepFn, awaitLatchFn) { success ->
+                WifiHandoffAction.JOIN_ACCESSORY -> {
+                    val joined: (Boolean) -> Unit = { success ->
                         if (!success && request.scopeActive()) {
                             request.clearCachedCredentials()
                             appendLog("WIFI: 完整车机凭据入网失败——已清除凭据缓存")
                         }
                         request.continueWithNetwork(success)
                     }
+                    val early = request.earlyJoin
+                    val detached = request.detached
+                    if (early == null && detached == null) {
+                        joinAccessoryWifi(request.accessoryWifi!!, request.handoffCancelled, sleepFn, awaitLatchFn) {
+                            joined(it)
+                        }
+                    } else {
+                        val isDetached = detached ?: { false }
+                        val startFallback = {
+                            runJoinAccessoryWifi(
+                                request.accessoryWifi!!,
+                                request.handoffCancelled,
+                                sleepFn,
+                                awaitLatchFn,
+                                isDetached,
+                                joined,
+                            )
+                        }
+                        if (early == null) {
+                            startFallback()
+                        } else {
+                            early.thenAccept { success ->
+                                if (success || request.handoffCancelled() || isDetached()) {
+                                    joined(success)
+                                } else {
+                                    startFallback()
+                                }
+                            }
+                        }
+                    }
+                    true
+                }
 
                 WifiHandoffAction.JOIN_CACHED -> {
                     val cachedConfiguration = requireNotNull(cached)
@@ -1178,9 +1239,10 @@ internal class CarWifiJoiner<N : Any, T : Any>(
                             dispatchWifiAction(retry, null)
                         }
                     }
+                    true
                 }
 
-                WifiHandoffAction.BIND_KNOWN ->
+                WifiHandoffAction.BIND_KNOWN -> {
                     bindHandoffWifi(
                         ssid = targetBinding,
                         source = request.sourceLabel,
@@ -1193,8 +1255,10 @@ internal class CarWifiJoiner<N : Any, T : Any>(
                         inviteNetwork = request.inviteNetwork,
                         onResult = request.continueWithNetwork,
                     )
+                    true
+                }
 
-                WifiHandoffAction.BIND_CURRENT ->
+                WifiHandoffAction.BIND_CURRENT -> {
                     bindHandoffWifi(
                         ssid = targetBinding,
                         source = request.sourceLabel,
@@ -1209,8 +1273,10 @@ internal class CarWifiJoiner<N : Any, T : Any>(
                         inviteNetwork = request.inviteNetwork,
                         onResult = request.continueWithNetwork,
                     )
+                    true
+                }
 
-                WifiHandoffAction.ASK_CONFIRM_CURRENT ->
+                WifiHandoffAction.ASK_CONFIRM_CURRENT -> {
                     background("wifi-confirm-current") {
                         confirmCurrentWifiThenContinue(
                             rawSsid = targetBinding,
@@ -1222,8 +1288,10 @@ internal class CarWifiJoiner<N : Any, T : Any>(
                             onResult = request.continueWithNetwork,
                         )
                     }
+                    true
+                }
 
-                WifiHandoffAction.ASK_JOIN_KNOWN ->
+                WifiHandoffAction.ASK_JOIN_KNOWN -> {
                     background("wifi-manual-known") {
                         joinKnownWifiManually(
                             ssid = targetBinding,
@@ -1235,19 +1303,22 @@ internal class CarWifiJoiner<N : Any, T : Any>(
                             onResult = request.continueWithNetwork,
                         )
                     }
+                    true
+                }
 
                 WifiHandoffAction.WAIT -> {
                     appendLog("WIFI: 没有可验证的网络归属——保持等待，不绑定任意 Wi-Fi")
                     request.releaseHandoff()
+                    false
                 }
 
                 WifiHandoffAction.IGNORE -> {
                     appendLog("WIFI: 旧轮次/非目标端点的网络动作已忽略")
                     request.releaseHandoff()
+                    false
                 }
             }
-        }
-        dispatchWifiAction(action, cachedWifi)
+        return dispatchWifiAction(action, cachedWifi)
     }
 
     private fun CarWifiHandoffSource.toCredentialSource(): WifiCredentialSource =
@@ -1264,6 +1335,15 @@ internal class CarWifiJoiner<N : Any, T : Any>(
         isCancelled: () -> Boolean,
         sleepFn: (Long) -> Unit = sleep,
         awaitLatchFn: (CountDownLatch, Long) -> Boolean = awaitLatch,
+        onResult: (Boolean) -> Unit,
+    ) = runJoinAccessoryWifi(wifi, isCancelled, sleepFn, awaitLatchFn, detached = { false }, onResult = onResult)
+
+    private fun runJoinAccessoryWifi(
+        wifi: Iap2SenderSession.WifiConfiguration,
+        isCancelled: () -> Boolean,
+        sleepFn: (Long) -> Unit,
+        awaitLatchFn: (CountDownLatch, Long) -> Boolean,
+        detached: () -> Boolean,
         onResult: (Boolean) -> Unit,
     ) {
         if (boundCarSsid == wifi.ssid && wifiConnector?.currentNetwork != null) {
@@ -1284,6 +1364,7 @@ internal class CarWifiJoiner<N : Any, T : Any>(
                         }
 
                         CarWifiLink.JoinResult.Unsupported -> {
+                            if (detached()) return@background
                             // WEP 等无法用 specifier 表达：等用户在系统 WLAN 里连上后绑定
                             waitForManualWifiThenContinue(wifi, isCancelled, sleepFn, awaitLatchFn) { bound ->
                                 settled = true
@@ -1293,7 +1374,7 @@ internal class CarWifiJoiner<N : Any, T : Any>(
                         }
 
                         CarWifiLink.JoinResult.Unavailable -> {
-                            promptSpecifierFailed(wifi, shellReady, isCancelled, sleepFn, awaitLatchFn)
+                            promptSpecifierFailed(wifi, shellReady, { isCancelled() || detached() }, sleepFn, awaitLatchFn)
                             settled = true
                             val bound = boundCarSsid == wifi.ssid && wifiConnector?.currentNetwork != null
                             onResult(bound)

@@ -201,7 +201,7 @@ class StreamPipelineScreenTest {
 
             assertNull(pipeline.sender)
             assertNull(pipeline.currentOutput())
-            assertEquals(listOf("teardown", "run", "record(force=true)"), port.calls)
+            assertEquals(listOf("teardown", "run", "record"), port.calls)
             assertTrue("失败回滚必须经控制器锁端口", ports.lockCalls >= 2)
         }
     }

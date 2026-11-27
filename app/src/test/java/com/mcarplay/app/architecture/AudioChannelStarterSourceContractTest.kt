@@ -390,8 +390,7 @@ class AudioChannelStarterSourceContractTest {
         )
         contains(
             code(controller),
-            """startAudioAndRecord(context, client, sessionKey, host, "",
-            recordAfterSetup = !client.receiverCompatibility().skipRecordAfterInitialAudioSetup,)""",
+            """startAudioAndRecord( context, client, sessionKey, host, "", recordAfterSetup = false, )""",
         )
         contains(
             code(controller),

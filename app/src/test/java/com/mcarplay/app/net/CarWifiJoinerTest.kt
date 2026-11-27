@@ -1347,7 +1347,7 @@ class CarWifiJoinerTest {
         // 8 个同名薄转发保留在 SessionController
         val expectedForwarders =
             listOf(
-                "carWifiJoiner.autoJoinCarWifi(wifi)",
+                "carWifiJoiner.autoJoinCarWifi(",
                 "carWifiJoiner.joinCarWifi(wifi, shellReady)",
                 "carWifiJoiner.bindExistingCarWifi(connector, ssid, verifySsid)",
                 "carWifiJoiner.promptSpecifierFailed(wifi, shellReady, isCancelled)",

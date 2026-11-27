@@ -109,7 +109,7 @@ internal class AudioChannelStarter<C : Any, K : Any, P : Any, S : Any, B : Any>(
             return false
         }
         val connectionGeneration = clients.generation(client)
-        if (!clients.isConnectionCurrent(client, connectionGeneration)) return false
+        if (!clients.isSessionActive(client) || !clients.isConnectionCurrent(client, connectionGeneration)) return false
         val diagnosticAttempt = diagnostics.currentAttemptId()
         if (!session.enabled) {
             log("AUDIO: 本次连接未开启车机侧声音（「启动连接」弹窗选择）——仅推视频")
@@ -357,6 +357,8 @@ internal interface AudioClientPort<C : Any> {
         client: C,
         generation: Long,
     ): Boolean
+
+    fun isSessionActive(client: C): Boolean = true
 
     fun isStopping(client: C): Boolean
 

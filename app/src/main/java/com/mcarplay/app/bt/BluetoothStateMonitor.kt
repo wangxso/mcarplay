@@ -48,14 +48,18 @@ internal class BluetoothStateMonitor(
                         else -> BluetoothDiagnostics.PeerMatch.OTHER
                     }
                 when (intent.action) {
-                    BluetoothDevice.ACTION_BOND_STATE_CHANGED ->
+                    BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                        val before = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1)
+                        val after = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
+                        if (before != after) Iap2Pairings.current(context).bondChanged(address, after)
                         diagnostics.bondChanged(
                             epoch,
                             address,
                             match,
-                            intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1),
-                            intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1),
+                            before,
+                            after,
                         )
+                    }
                     BluetoothDevice.ACTION_ACL_CONNECTED -> diagnostics.acl(epoch, address, match, connected = true)
                     BluetoothDevice.ACTION_ACL_DISCONNECTED -> diagnostics.acl(epoch, address, match, connected = false)
                 }

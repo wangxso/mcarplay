@@ -26,6 +26,7 @@ private object SourceUiPortInventory {
             UiWriteSite(CONTROLLER, "onSenderLinkClosed", "ui.phase(closedHint)"),
             UiWriteSite(CONTROLLER, "ensureSessionObjects", "ui.phase(t(R.string.sc_hotspot_lost, ssid))"),
             UiWriteSite(CONTROLLER, "ensureSessionObjects", "ui.phase(t(R.string.sc_tap_phone_on_receiver, name))"),
+            UiWriteSite(CONTROLLER, "retryAfterWifiHandoff", "ui.phase(t(R.string.sc_bt_ready))"),
             UiWriteSite(CONTROLLER, "startConnection", "ui.phase(t(R.string.sc_bt_ready))"),
             UiWriteSite(CONTROLLER, "disconnect", "ui.phase(null)"),
             UiWriteSite(CONTROLLER, "onWifiCredentials", "ui.phase(t(R.string.sc_got_credentials))"),
@@ -427,11 +428,11 @@ class SessionUiPortInventoryTest {
         val controllerDismissCount = Regex("""\bui\.dismiss\(""").findAll(normalizedController).count()
         val joinerDismissCount = Regex("""\bui\.dismiss\(""").findAll(normalizedJoiner).count()
 
-        assertEquals(18, controllerProductionPhase)
+        assertEquals(19, controllerProductionPhase)
         assertEquals(27, joinerProductionPhase)
         assertEquals(1, controllerBridgePhase)
-        assertEquals(45, SourceUiPortInventory.PHASE_WRITES.size)
-        assertEquals(45, controllerProductionPhase + joinerProductionPhase)
+        assertEquals(46, SourceUiPortInventory.PHASE_WRITES.size)
+        assertEquals(46, controllerProductionPhase + joinerProductionPhase)
 
         assertEquals(6, controllerProductionHint)
         assertEquals(4, joinerProductionHint)

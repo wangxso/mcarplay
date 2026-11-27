@@ -50,6 +50,14 @@ class AttemptScopeWiringTest {
     private val migrationSites =
         listOf(
             MigrationSite(
+                "!wasCancelled()",
+                "(retry && scope.isActive && reconnectAttribution.block(peerAddress) != null)",
+            ),
+            MigrationSite(
+                "!wasCancelled()",
+                "retryBluetooth = { retry && scope.isActive && retryAfterWifiHandoff(endpoint.observation, diagnosticAttempt) },",
+            ),
+            MigrationSite(
                 "wasCancelled()",
                 "ConnectionDiagnostics.timeline.abandon(diagnosticAttempt, !scope.isActive, DiagnosticCode.WIFI_JOIN_FAILED)",
             ),
@@ -64,6 +72,7 @@ class AttemptScopeWiringTest {
             MigrationSite("wasCancelled()", "if (!scope.isActive) {"),
             MigrationSite("ownsConnection()", "if (scope.isCurrent) retireSession()"),
             MigrationSite("wasCancelled()", "if (!scope.isActive) {"),
+            MigrationSite("!wasCancelled()", "if (scope.isActive && recordAutoReconnectOutcome(diagnosticAttempt, code, peerAddress)) {"),
             // Phase 2g-2：恢复闭包的 10 处 scope 判据迁入 session/StreamPipeline，改为经 ScreenRecoveryPort
             // 的 isScopeActive()/isCurrentClient()/isClientCancelled() 读取，不再登记为控制器迁移点。
             MigrationSite("ownsConnection()", "if (scope.isCurrent && currentClient === client) {"),
@@ -73,7 +82,8 @@ class AttemptScopeWiringTest {
                 "!wasCancelled()",
                 "if (!airPlayConnected.get() && scope.isActive) DiagnosticCode.AIRPLAY_CONNECT_FAILED else null,",
             ),
-            MigrationSite("!wasCancelled()", "if (scope.isActive) {"),
+            MigrationSite("ownsConnection()", "scope.isCurrent && videoSender?.isRunning != true"),
+            MigrationSite("!wasCancelled()", "scope.isActive &&"),
             MigrationSite("!wasCancelled()", "if (pending != null && scope.isActive) {"),
             MigrationSite("ownsConnection()", "targetCurrent = { scope.isCurrent },"),
             MigrationSite("!wasCancelled()", "scopeActive = { scope.isActive },"),
@@ -148,7 +158,7 @@ class AttemptScopeWiringTest {
             endpointBody,
             "if (!ReceiverDetectionRuntime.isCurrent(endpoint.observation))",
             "rejectPreAcquired()",
-            "if (!handoffOwnership.begin(endpoint.observation)",
+            "handoffOwnership.beginOrRetain(",
             "if (!handoffOwnership.owns(endpoint.observation))",
         )
     }
@@ -200,24 +210,24 @@ class AttemptScopeWiringTest {
     }
 
     @Test
-    fun migrationCountIsSixCurrentAndSixteenActiveIncludingHelper() {
+    fun migrationCountIsSevenCurrentAndNineteenActiveIncludingHelper() {
         val current = Regex("""(?<![A-Za-z0-9_.])scope\.isCurrent\b""").findAll(controllerCode).count()
         val negatedActive = Regex("""!scope\.isActive\b""").findAll(controllerCode).count()
         val plainActive = Regex("""(?<![!A-Za-z0-9_.])scope\.isActive\b""").findAll(controllerCode).count()
-        assertEquals("SessionController 的 isCurrent 迁移点", 6, current)
+        assertEquals("SessionController 的 isCurrent 迁移点", 7, current)
         // Phase 2g-2：恢复闭包的 10 处 !scope.isActive 迁入组件，改经 ScreenRecoveryPort.isScopeActive()。
         assertEquals("SessionController 的取反 isActive 迁移点", 10, negatedActive)
-        // 5 处原迁移点 + 1 处 ScreenRecoveryPort 装配（scope.isActive → isScopeActive）。
-        assertEquals("SessionController 的直查 isActive 迁移点", 6, plainActive)
-        assertEquals("SessionController 活跃判断合计", 16, negatedActive + plainActive)
+        // 5 处原迁移点 + 1 处 ScreenRecoveryPort 装配 + #106 3 处（recoverHandoff 2 处 + failMediaStartup 1 处）。
+        assertEquals("SessionController 的直查 isActive 迁移点", 9, plainActive)
+        assertEquals("SessionController 活跃判断合计", 19, negatedActive + plainActive)
 
         val helperActive = Regex("""!scope\.isActive\b""").findAll(helperCode).count()
         assertEquals("第33处真实 helper 的活跃判断", 1, helperActive)
         val routerActive = Regex("""!scope\.isActive\b""").findAll(routerCode).count()
         assertEquals("事件 router 的活跃判断", 1, routerActive)
         assertEquals(
-            "24 处总计 = 6 current + 16 Controller active + router active + helper active",
-            24,
+            "28 处总计 = 7 current + 19 Controller active + router active + helper active",
+            28,
             current + negatedActive + plainActive + routerActive + helperActive,
         )
 
@@ -234,10 +244,10 @@ class AttemptScopeWiringTest {
 
     @Test
     fun everyControllerCallSiteKeepsItsLegacyPredicateMapping() {
-        assertEquals("控制器迁移点（恢复闭包已迁入组件）", 21, migrationSites.size)
-        assertEquals("current 点", 6, migrationSites.count { it.legacy == "ownsConnection()" })
+        assertEquals("控制器迁移点（恢复闭包已迁入组件）", 25, migrationSites.size)
+        assertEquals("current 点", 7, migrationSites.count { it.legacy == "ownsConnection()" })
         assertEquals("取消点", 10, migrationSites.count { it.legacy == "wasCancelled()" })
-        assertEquals("活跃点", 5, migrationSites.count { it.legacy == "!wasCancelled()" })
+        assertEquals("活跃点", 8, migrationSites.count { it.legacy == "!wasCancelled()" })
         var cursor = 0
         migrationSites.forEach { site ->
             val index =
@@ -300,17 +310,18 @@ class AttemptScopeWiringTest {
             endpointBody,
             "catch (error: Throwable)",
             "} finally {",
-            "releaseHandoff()",
             "if (scope.isCurrent && videoSender?.isRunning != true)",
             "ConnectionDiagnostics.timeline.abandon(",
             "!scope.isActive,",
             "if (!airPlayConnected.get() && scope.isActive)",
-            "recordAutoReconnectOutcome(",
+            "val abandonCode = ConnectionDiagnostics.timeline.snapshot()?.code",
+            "recovered = recoverHandoff(abandonCode, retry = !airPlayConnected.get())",
             "BtSessionGate.sessionActive = false",
-            "if (scope.isActive)",
-            "pendingEndpointUpdate.takeIf",
+            "pendingEndpointUpdate.takeIfAndRelease(",
+            "scope.isActive &&",
+            "release = ::releaseHandoff,",
             "if (pending != null && scope.isActive)",
-            "onCarPlayEndpoint(pending",
+            "onCarPlayEndpoint(",
         )
     }
 }

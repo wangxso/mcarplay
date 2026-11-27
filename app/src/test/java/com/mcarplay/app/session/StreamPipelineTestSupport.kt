@@ -250,11 +250,8 @@ internal class FakeRecoveryPort : ScreenRecoveryPort {
         return screenInfo
     }
 
-    override fun record(
-        client: AirPlayClient,
-        force: Boolean,
-    ): Boolean {
-        calls += "record(force=$force)"
+    override fun record(client: AirPlayClient): Boolean {
+        calls += "record"
         return recordResult
     }
 

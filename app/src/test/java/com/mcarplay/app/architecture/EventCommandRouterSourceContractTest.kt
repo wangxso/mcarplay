@@ -35,8 +35,8 @@ class EventCommandRouterSourceContractTest {
     @Test
     fun routerHasExactlyTheKnownCommandBranches() {
         assertEquals(
-            "事件路由只允许五个已知 opcode 与最外层 else",
-            listOf("hidSendReport", "iAPSendMessage", "forceKeyFrame", "changeModes", "requestUI", "else"),
+            "事件路由只允许六个已知 opcode 与最外层 else",
+            listOf("hidSendReport", "requestSiri", "iAPSendMessage", "forceKeyFrame", "changeModes", "requestUI", "else"),
             routerStructure.labels,
         )
         assertEquals("最外层 else 必须只有一个且最后出现", 1, routerStructure.labels.count { it == "else" })
@@ -76,7 +76,8 @@ class EventCommandRouterSourceContractTest {
         assertTrue("默认触摸格式仍调用旧 helper", allRouterCode.contains("TouchReports.formatFromDescriptor("))
         assertTrue("默认触摸解析仍调用旧 helper", allRouterCode.contains("TouchReports.parse("))
         assertTrue("Controller 媒体出口仍接旧方法", registration.contains("routeCarMediaKey(keyCode, label)"))
-        assertTrue("Controller 导航出口仍接旧方法", registration.contains("injectNavigationKey(keyCode)"))
+        assertTrue("Controller 导航出口仍接旧方法", registration.contains("routeCarNavigationKey(keyCode)"))
+        assertTrue("Controller 语音出口仍接 Siri 键回调", registration.contains("onSiriButtonPressed()"))
         assertTrue("触摸目标必须捕获 formal CarLife", registration.contains("currentCarLifeSession?.let"))
         assertTrue("触摸必须发往捕获实例", registration.contains("carLife.sendTouch(x, y, down)"))
         assertTrue("触摸成功仍读动态 endpoint", registration.contains("ReceiverDetectionRuntime.touch(client.currentEndpoint.observation)"))
@@ -216,6 +217,7 @@ class EventCommandRouterSourceContractTest {
         private val knownLabels =
             setOf(
                 "hidSendReport",
+                "requestSiri",
                 "iAPSendMessage",
                 "forceKeyFrame",
                 "changeModes",

@@ -56,6 +56,7 @@ internal class EndpointResolver(
     fun awaitCtrlInvite(
         endpoint: Iap2SenderSession.CarPlayEndpoint,
         timeoutMillis: Long,
+        isCancelled: () -> Boolean = isConnectCancelled,
         sleep: (Long) -> Unit = sleepMillis,
     ): Boolean {
         val advertiser = captureInviteView()
@@ -64,7 +65,7 @@ internal class EndpointResolver(
         var lastLogAt = startedAt
         var reannouncedAt = 0L
         while (uptimeMillis() < deadline) {
-            if (isConnectCancelled()) return false
+            if (isCancelled()) return false
             val invites = advertiser?.inviteCount ?: 0
             val now = uptimeMillis()
             val discovered = awaitEndpoint(0)
@@ -145,6 +146,7 @@ internal class EndpointResolver(
     fun resolveEndpointHost(
         endpoint: Iap2SenderSession.CarPlayEndpoint,
         source: String,
+        allowGatewayFallback: Boolean = true,
         onResolutionNeeded: () -> Unit = {},
     ): Iap2SenderSession.CarPlayEndpoint {
         var effective = endpoint
@@ -163,6 +165,7 @@ internal class EndpointResolver(
         // 网段过滤（防误连同网 macOS 接收器）由 browser 的 accept 统一做。
         val info =
             awaitEndpoint(resolveWaitMillis) ?: run {
+                if (!allowGatewayFallback) return effective
                 // 兜底：热点场景车机 IP = 网关（Audi 实测 .1，但取网关更通用）。
                 // mDNS 在部分网络/机型上不稳定（2026-10-11 实测车机 mDNS 时有时无）；
                 // 网关地址 + 默认端口 7000 直接连，AirPlay 端口是固定约定。

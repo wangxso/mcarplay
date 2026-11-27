@@ -1319,6 +1319,7 @@ class EventCommandRouterTest {
         val logs = mutableListOf<String>()
         val mediaKeys = mutableListOf<MediaCall>()
         val navigationKeys = mutableListOf<Int>()
+        val siriCommands = mutableListOf<Long>()
         val enqueues = mutableListOf<EnqueueCall>()
         val backgrounds = mutableListOf<PendingBackground>()
         val routeThreads = mutableListOf<Thread>()
@@ -1346,6 +1347,11 @@ class EventCommandRouterTest {
         override fun injectNavigationKey(keyCode: Int) {
             trace.add("navigation")
             navigationKeys += keyCode
+        }
+
+        override fun onSiriButtonPressed() {
+            trace.add("siri")
+            siriCommands += 1L
         }
 
         override fun enqueueModesAssert(

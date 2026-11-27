@@ -553,7 +553,7 @@ class EndAttemptTraceTest {
     fun carPlayEndpointQueriesReconnectAttributionSeam() {
         val body = scFunctionLast("onCarPlayEndpoint")
 
-        requireOrder(body, "reconnectAttribution.block(peerAddress)", "handoffOwnership.begin(", "熔断查询先于交接获取")
+        requireOrder(body, "reconnectAttribution.block(peerAddress)", "handoffOwnership.beginOrRetain(", "熔断查询先于交接获取")
         requireOrder(
             body,
             "ReceiverDetectionRuntime.isCurrent(endpoint.observation)",
@@ -927,12 +927,12 @@ class EndAttemptTraceTest {
         requireOrder(reconnect, "streamingDiagnosticAttempt = null", "retireSession()", "invite 默认参数")
         val startBody = scFunction("startConnection")
         val endpointBody = scFunction("onCarPlayEndpoint")
-        val pairingScope = lambdaAfter(endpointBody, "val airPlayConnected = AtomicBoolean(false) Bg.run(\"\")")
+        val pairingScope = lambdaAfter(endpointBody, "var inviteRetryScheduled = false Bg.run(\"\")")
         requireOrder(pairingScope, "if (scope.isCurrent) retireSession()", "BtSessionGate.sessionActive = true", "pair-start 默认参数")
         requireOrder(pairingScope, "if (scope.isCurrent) retireSession()", "appendLog(\"\")", "pair-cancel 默认参数")
         requireOrder(pairingScope, "if (scope.isCurrent) retireSession()", "releaseHandoff()", "pair-hack 默认参数")
         val recordScope = lambdaAfter(endpointBody, "if (!client.record())")
-        requireOrder(recordScope, "if (scope.isCurrent && currentClient === client)", "retireSession()", "record 默认参数")
+        requireContains(recordScope, "failMediaStartup(DiagnosticCode.SETUP_FAILED)", "record 失败委托 failMediaStartup")
     }
 
     @Test
@@ -969,11 +969,11 @@ class EndAttemptTraceTest {
     fun pendingStartSessionTimeoutDetachesOnlyAfterCas() {
         val body = scFunction("watchForPendingStartSession")
         requireContains(body, "PENDING_START_SESSION_WAIT_MS", "5 分钟观察窗口")
-        requireContains(body, "fun stillPending(): Boolean = pendingStartSessionEndpoint.get() === endpoint", "身份谓词")
-        requireOrder(body, "if (!connectCancelled &&", "pendingStartSessionEndpoint.compareAndSet(endpoint, null)", "取消、占用和 CAS 条件")
+        requireContains(body, "fun stillPending(): Boolean = pendingStartSessionEndpoint.get() === pending", "身份谓词")
+        requireOrder(body, "if (!connectCancelled &&", "pendingStartSessionEndpoint.compareAndSet(pending, null)", "取消、占用和 CAS 条件")
         requireOrder(
             body,
-            "pendingStartSessionEndpoint.compareAndSet(endpoint, null)",
+            "pendingStartSessionEndpoint.compareAndSet(pending, null)",
             "detachActiveBtSessions(eaStopReason =",
             "CAS 成功才拆链",
         )

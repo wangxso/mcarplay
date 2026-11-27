@@ -1,5 +1,6 @@
 package com.mcarplay.app
 
+import com.mcarplay.app.airplay.ExplicitStartScreenClaim
 import com.mcarplay.app.compat.ReceiverObservation
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -12,59 +13,140 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class SessionHandoffOwnership(
     private val active: AtomicBoolean,
 ) {
+    enum class BeginResult {
+        ACQUIRED,
+        RETAINED,
+        REJECTED,
+    }
+
     private val lock = Any()
     private var owner: ReceiverObservation? = null
+    private var ownerContext: ExplicitStartScreenClaim.Lease? = null
+    private var wifiPeer: String? = null
+    private var wifiDetached = false
     private var accepting = true
+    private var pendingRetry: (() -> Unit)? = null
 
     /**
      * 获取交接所有权；[onAcquired] 在同一锁内执行，供调用方清除旧的取消标志。
      * 断连先通过 [blockNewHandoffs] 关闭入口，因此不会在该回调之后再被旧端点覆盖。
+     * 交接正忙时保留最新的 [retryWhenReleased]，由正常释放的调用方在锁外执行。
      */
     fun begin(
         observation: ReceiverObservation?,
+        retryWhenReleased: (() -> Unit)? = null,
+        wifiPeer: String? = null,
+        ownerContext: ExplicitStartScreenClaim.Lease? = null,
         onAcquired: () -> Unit = {},
     ): Boolean =
         synchronized(lock) {
             if (!accepting) return@synchronized false
-            if (!active.compareAndSet(false, true)) return@synchronized false
+            if (!active.compareAndSet(false, true)) {
+                if (retryWhenReleased != null) pendingRetry = retryWhenReleased
+                return@synchronized false
+            }
             owner = observation
+            this.ownerContext = ownerContext
+            this.wifiPeer = wifiPeer
             onAcquired()
             true
         }
 
-    fun endIfOwnedBy(observation: ReceiverObservation?): Boolean =
+    /**
+     * 获取所有权，或在仍接受交接但已被另一条链路占用时，在同一把锁内暂存候选。
+     *
+     * [retainWhenBusy] 在 ownership 锁内执行。它返回 false 表示候选不应保留（例如属于
+     * 其它车机），调用方应把它视为明确拒绝。该锁顺序保证 owner 的释放和 pending 的
+     * 唤醒都不能插在「抢占失败 → 暂存」之间。
+     */
+    fun beginOrRetain(
+        observation: ReceiverObservation?,
+        ownerContext: ExplicitStartScreenClaim.Lease? = null,
+        wifiPeer: String? = null,
+        retainWhenBusy: () -> Boolean,
+        onAcquired: () -> Unit = {},
+    ): BeginResult =
         synchronized(lock) {
-            val currentOwner = owner
-            if (observation != currentOwner) return@synchronized false
-            if (!active.compareAndSet(true, false)) return@synchronized false
-            owner = null
-            true
+            if (!accepting) return@synchronized BeginResult.REJECTED
+            if (!active.compareAndSet(false, true)) {
+                return@synchronized if (retainWhenBusy()) BeginResult.RETAINED else BeginResult.REJECTED
+            }
+            owner = observation
+            this.ownerContext = ownerContext
+            this.wifiPeer = wifiPeer
+            onAcquired()
+            BeginResult.ACQUIRED
         }
+
+    fun endIfOwnedBy(observation: ReceiverObservation?): Boolean {
+        val retry =
+            synchronized(lock) {
+                if (observation != owner) return false
+                if (!active.compareAndSet(true, false)) return false
+                clearOwner()
+                pendingRetry.also { pendingRetry = null }
+            }
+        retry?.invoke()
+        return true
+    }
 
     fun owns(observation: ReceiverObservation?): Boolean =
         synchronized(lock) {
             active.get() && owner == observation
         }
 
+    fun setWifiPeer(
+        observation: ReceiverObservation?,
+        address: String,
+    ) {
+        synchronized(lock) {
+            if (active.get() && owner == observation) wifiPeer = address
+        }
+    }
+
+    fun keepWifiAfterLinkLoss(observation: ReceiverObservation?): Boolean =
+        synchronized(lock) {
+            if (wifiPeer == null || owner != observation) return@synchronized false
+            wifiDetached = true
+            true
+        }
+
+    fun keepWifiAfterAclLoss(address: String?): Boolean =
+        synchronized(lock) {
+            if (address == null || !address.equals(wifiPeer, ignoreCase = true)) return@synchronized false
+            wifiDetached = true
+            true
+        }
+
+    fun wifiDetached(): Boolean = synchronized(lock) { wifiDetached }
+
+    fun wifiDetached(observation: ReceiverObservation?): Boolean = detachedWifiPeer(observation) != null
+
+    fun detachedWifiPeer(observation: ReceiverObservation?): String? =
+        synchronized(lock) { wifiPeer.takeIf { wifiDetached && owner == observation } }
+
     /** 只有归属链路能取消交接；状态变更与回调在同一锁内完成。 */
     fun cancelIfOwnedBy(
         observation: ReceiverObservation?,
         isAlreadyCancelled: () -> Boolean = { false },
-        onCancel: () -> Unit,
+        onCancel: (ownerContext: ExplicitStartScreenClaim.Lease?) -> Unit,
     ): Boolean =
         synchronized(lock) {
             if (!active.get() || owner != observation) return@synchronized false
+            val endedContext = ownerContext
             active.set(false)
-            owner = null
+            clearOwner()
+            pendingRetry = null
             if (isAlreadyCancelled()) return@synchronized false
-            onCancel()
+            onCancel(endedContext)
             true
         }
 
     /** 取消/终止路径无条件释放，不依赖链路关闭通知或接收轮次是否仍为 current。 */
     fun release() {
         synchronized(lock) {
-            owner = null
+            clearOwner()
+            pendingRetry = null
             active.set(false)
         }
     }
@@ -73,7 +155,8 @@ internal class SessionHandoffOwnership(
     fun blockNewHandoffs() {
         synchronized(lock) {
             accepting = false
-            owner = null
+            clearOwner()
+            pendingRetry = null
             active.set(false)
         }
     }
@@ -83,5 +166,12 @@ internal class SessionHandoffOwnership(
         synchronized(lock) {
             accepting = true
         }
+    }
+
+    private fun clearOwner() {
+        owner = null
+        ownerContext = null
+        wifiPeer = null
+        wifiDetached = false
     }
 }

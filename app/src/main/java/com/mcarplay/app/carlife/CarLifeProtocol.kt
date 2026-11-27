@@ -59,7 +59,6 @@ object CarLifeProtocol {
     const val TOUCH_CAR_HARD_KEY_CODE = 0x68008
 
     // 百度 CarLife 车机端（MyMediaButtonReceiver）实际发送的值：媒体上一首 → 15、下一首 → 16。
-    // 其他键值各参考资料互相矛盾（旋钮/确认等），未经实机核对前不发送。
     const val HARD_KEY_SEEK_SUB = 15
     const val HARD_KEY_SEEK_ADD = 16
 
@@ -67,6 +66,17 @@ object CarLifeProtocol {
     // 与上一首/下一首（15/16）不同。自动起播用 31，避免切歌。
     const val HARD_KEY_MEDIA_START = 31
     const val HARD_KEY_MEDIA_STOP = 32
+    const val HARD_KEY_VR_START = 33
+
+    // CarLife 触摸通道的旋钮、返回和选择器按键。
+    const val HARD_KEY_KNOB_CLOCKWISE = 6
+    const val HARD_KEY_KNOB_COUNTERCLOCKWISE = 7
+    const val HARD_KEY_BACK = 14
+    const val HARD_KEY_SELECTOR_OK = 20
+    const val HARD_KEY_SELECTOR_LEFT = 21
+    const val HARD_KEY_SELECTOR_RIGHT = 22
+    const val HARD_KEY_SELECTOR_UP = 23
+    const val HARD_KEY_SELECTOR_DOWN = 24
     const val VIDEO_FRAME = 0x20001
     const val VIDEO_HEARTBEAT = 0x20002
     const val MEDIA_INIT = 196609
@@ -280,6 +290,19 @@ object CarLifeProtocol {
         when (androidKeyCode) {
             android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> HARD_KEY_SEEK_ADD
             android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> HARD_KEY_SEEK_SUB
+            else -> null
+        }
+
+    fun navigationHardKeyFor(androidKeyCode: Int): Int? =
+        when (androidKeyCode) {
+            android.view.KeyEvent.KEYCODE_NAVIGATE_NEXT -> HARD_KEY_KNOB_CLOCKWISE
+            android.view.KeyEvent.KEYCODE_NAVIGATE_PREVIOUS -> HARD_KEY_KNOB_COUNTERCLOCKWISE
+            android.view.KeyEvent.KEYCODE_BACK -> HARD_KEY_BACK
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER -> HARD_KEY_SELECTOR_OK
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> HARD_KEY_SELECTOR_LEFT
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> HARD_KEY_SELECTOR_RIGHT
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> HARD_KEY_SELECTOR_UP
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> HARD_KEY_SELECTOR_DOWN
             else -> null
         }
 

@@ -749,7 +749,7 @@ class MainActivity : AppCompatActivity() {
                 VehiclePreset.WINPLAY -> R.string.vehicle_preset_winplay
                 VehiclePreset.DIPLAY -> R.string.vehicle_preset_diplay
                 VehiclePreset.CLASSIC_MIB3 -> R.string.vehicle_preset_classic_mib3
-                VehiclePreset.MERCEDES_MB_DPP -> R.string.vehicle_preset_mercedes_mb_dpp
+                VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW -> R.string.vehicle_preset_trumpchi_gs3_iap2_window
                 VehiclePreset.MERCEDES_MB_E -> R.string.vehicle_preset_mercedes_mb_e
             },
         )

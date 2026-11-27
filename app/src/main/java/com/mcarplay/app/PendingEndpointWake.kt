@@ -11,8 +11,8 @@ package com.mcarplay.app
 internal class PendingEndpointWake<T : Any>(
     private val pending: PendingHandoffUpdate<T>,
     private val isActive: (T) -> Boolean,
-    private val isBusy: () -> Boolean,
     private val deliver: (T) -> Boolean,
+    private val discard: (T) -> Unit = {},
 ) {
     /**
      * @param prefer 优先投递的条目（通常为刚释放所有权的 observation 自己的
@@ -20,14 +20,14 @@ internal class PendingEndpointWake<T : Any>(
      * @return 是否成功接手了一条端点
      */
     fun wake(prefer: (T) -> Boolean): Boolean {
-        pending.retainIf(isActive)
+        pending.retainIf(isActive).forEach(discard)
         val candidate = pending.takeIf(prefer) ?: pending.takeIf { !prefer(it) } ?: return false
-        if (isBusy()) {
-            pending.requeue(candidate)
-            return false
-        }
         if (!deliver(candidate)) {
-            if (isActive(candidate)) pending.requeue(candidate)
+            if (isActive(candidate)) {
+                if (!pending.requeue(candidate)) discard(candidate)
+            } else {
+                discard(candidate)
+            }
             return false
         }
         return true

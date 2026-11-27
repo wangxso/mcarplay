@@ -349,7 +349,7 @@ class SessionUiPortSourceContractTest {
         requireContains(code, "if (endpoint.ssid != INVITED_WIFI_LABEL) ui.ssidChanged { endpoint.ssid }", "端点 SSID 必须排除占位标签后回填")
         requireContains(code, "ui.phase(t(R.string.sc_not_on_hotspot_endpoint, endpoint.ssid))", "交接网络不匹配必须写 phaseHint")
         requireContains(code, "ui.phase(t(R.string.sc_pairing))", "交接配对阶段必须写 phaseHint")
-        requireOrder(code, "ui.phase(t(R.string.sc_waiting_4301))", "watchForPendingStartSession(endpoint, source)", "端点无 AP 信息先写提示再进入等待")
+        requireOrder(code, "ui.phase(t(R.string.sc_waiting_4301))", "watchForPendingStartSession(pending, source)", "端点无 AP 信息先写提示再进入等待")
         requireOrder(
             code,
             "ui.phase(t(R.string.sc_resolving_hotspot))",

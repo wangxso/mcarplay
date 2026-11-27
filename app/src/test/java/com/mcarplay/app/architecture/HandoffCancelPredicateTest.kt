@@ -147,15 +147,24 @@ class HandoffCancelPredicateTest {
         }
     }
 
-    /** 现状快照：autoJoin 静默失败后仍查裸全局标志，不接收交接归属。 */
+    /** PR #106 合并后：autoJoinCarWifi 接收调用方的取消/弹窗谓词与结果回调，并用 wifiBindLock 串行静默与 specifier。 */
     @Test
-    fun autoJoinCarWifiStillUsesBareConnectCancelled() {
+    fun autoJoinCarWifiUsesCallersPredicatesAndResult() {
+        val signatureStart = joiner.indexOf("fun autoJoinCarWifi(")
+        val signatureEnd = joiner.indexOf(") {", signatureStart)
+        val signature = joiner.substring(signatureStart, signatureEnd)
+        assertTrue("autoJoinCarWifi 必须接收 cancelled 参数", signature.contains("cancelled: () -> Boolean"))
+        assertTrue("autoJoinCarWifi 必须接收 canPrompt 参数", signature.contains("canPrompt: () -> Boolean"))
+        assertTrue("autoJoinCarWifi 必须接收 onResult 参数", signature.contains("onResult: (Boolean) -> Unit"))
         val source = body("autoJoinCarWifi")
         val code = KotlinSource.scan(source).code
-        val bareChecks =
-            Regex("""(?<![A-Za-z0-9_.])connectCancelled(?![A-Za-z0-9_])""").findAll(code).count()
-        assertTrue("autoJoinCarWifi 应保留两处裸 connectCancelled 现状（快照钉住，不代表修复）", bareChecks == 2)
-        assertTrue("autoJoinCarWifi 没有 isCancelled 参数", !source.contains("isCancelled"))
+        assertTrue("autoJoinCarWifi 静默绑定必须传 cancelled", code.contains("joinCarWifiSilentlyLocked(wifi, isCancelled = cancelled)"))
+        assertTrue("autoJoinCarWifi 等待 WiFi 开启必须传 cancelled", code.contains("waitForWifiEnabled(isCancelled = cancelled)"))
+        assertTrue("autoJoinCarWifi 旧安全类型回退必须传 cancelled", code.contains("legacyJoinCarWifi(wifi, shellReady, isCancelled = cancelled)"))
+        assertTrue(
+            "autoJoinCarWifi 弹窗失败必须受 canPrompt 约束",
+            code.contains("promptSpecifierFailed(wifi, shellReady, isCancelled = { !canPrompt() })"),
+        )
         val joinerCode = KotlinSource.scan(joiner).code
         assertTrue(
             "CarWifiJoiner.connectCancelled 必须动态转发注入的 globalCancelled()",
@@ -166,16 +175,6 @@ class HandoffCancelPredicateTest {
             "SessionController 必须把 globalCancelled 接到 connectCancelled",
             controllerCode.contains("globalCancelled = { connectCancelled }"),
         )
-    }
-
-    /** 现状快照：autoJoin 兜底不传谓词，自动入网链路不查交接归属。 */
-    @Test
-    fun autoJoinFallbacksDoNotReceiveTheCallersPredicate() {
-        val source = body("autoJoinCarWifi")
-        val code = KotlinSource.scan(source).code
-        assertTrue("兜底调用必须保持 legacyJoinCarWifi(wifi, shellReady)", code.contains("legacyJoinCarWifi(wifi, shellReady)"))
-        assertTrue("兜底调用必须保持 promptSpecifierFailed(wifi, shellReady)", code.contains("promptSpecifierFailed(wifi, shellReady)"))
-        assertFalse("兜底调用不得传 isCancelled（现状未接归属）", code.contains("isCancelled"))
     }
 
     /** Phase 3b：快速兜底必须在发起绑定前查询调用方判据。 */

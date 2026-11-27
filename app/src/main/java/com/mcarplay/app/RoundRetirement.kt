@@ -13,6 +13,8 @@ internal interface RoundSlots<C, S, A, B, K> {
 
     fun clearAudioHost()
 
+    fun clearEndedScreen() {}
+
     fun markCancelled(client: C)
 
     fun setSessionInactive()
@@ -58,6 +60,7 @@ internal class RoundRetirement<C : Any, S : Any, A : Any, B : Any, K : Any>(
         preserveScreenSocket: Boolean,
     ) {
         slots.client?.let(actions::beginClient)
+        slots.clearEndedScreen()
         slots.clearRecovery()
         actions.stopAutoPlayWatch()
         val retiringSender = slots.sender

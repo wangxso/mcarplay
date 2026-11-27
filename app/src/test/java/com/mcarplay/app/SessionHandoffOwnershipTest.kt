@@ -1,13 +1,57 @@
 package com.mcarplay.app
 
+import com.mcarplay.app.airplay.ExplicitStartScreenClaim
 import com.mcarplay.app.compat.ReceiverObservation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicBoolean
 
 class SessionHandoffOwnershipTest {
+    @Test
+    fun completeCredentialsKeepTheHandoffAfterEitherBluetoothCloseNotification() {
+        val owner = ReceiverObservation("receiver", epoch = 1, session = 1)
+        val other = ReceiverObservation("other", epoch = 1, session = 2)
+        for (aclFirst in listOf(true, false)) {
+            val ownership = SessionHandoffOwnership(AtomicBoolean(false))
+            assertTrue(ownership.begin(owner, wifiPeer = "AA:BB:CC:DD:EE:FF"))
+            assertFalse(ownership.keepWifiAfterLinkLoss(other))
+            assertFalse(ownership.keepWifiAfterAclLoss("AA:BB:CC:DD:EE:00"))
+            assertFalse(ownership.wifiDetached())
+
+            if (aclFirst) {
+                assertTrue(ownership.keepWifiAfterAclLoss("aa:bb:cc:dd:ee:ff"))
+                assertTrue(ownership.keepWifiAfterLinkLoss(owner))
+            } else {
+                assertTrue(ownership.keepWifiAfterLinkLoss(owner))
+                assertTrue(ownership.keepWifiAfterAclLoss("aa:bb:cc:dd:ee:ff"))
+            }
+            assertTrue(ownership.wifiDetached(owner))
+            assertTrue(ownership.owns(owner))
+            assertFalse(ownership.begin(other))
+
+            assertTrue(ownership.endIfOwnedBy(owner))
+            assertFalse(ownership.wifiDetached())
+            assertTrue(ownership.begin(other))
+            assertFalse(ownership.keepWifiAfterLinkLoss(other))
+        }
+    }
+
+    @Test
+    fun explicitStopClearsIndependentWifiHandoff() {
+        val ownership = SessionHandoffOwnership(AtomicBoolean(false))
+        val owner = ReceiverObservation("receiver", epoch = 1, session = 1)
+        assertTrue(ownership.begin(owner, wifiPeer = "car"))
+        assertTrue(ownership.keepWifiAfterLinkLoss(owner))
+
+        ownership.blockNewHandoffs()
+        assertFalse(ownership.wifiDetached())
+        assertFalse(ownership.keepWifiAfterAclLoss("car"))
+        assertFalse(ownership.begin(owner, wifiPeer = "car"))
+    }
+
     @Test
     fun newerCandidateCannotCancelTheHandoffOwnedByAnotherLink() {
         val active = AtomicBoolean(false)
@@ -35,6 +79,19 @@ class SessionHandoffOwnershipTest {
         assertTrue(ownership.endIfOwnedBy(first))
         assertTrue(ownership.begin(second))
         assertTrue(ownership.endIfOwnedBy(second))
+    }
+
+    @Test
+    fun cancelledHandoffDiscardsDeferredInvite() {
+        val ownership = SessionHandoffOwnership(AtomicBoolean(false))
+        val owner = ReceiverObservation("receiver", epoch = 1, session = 1)
+        val reconnect = ReceiverObservation("receiver", epoch = 1, session = 2)
+
+        assertTrue(ownership.begin(owner))
+        assertFalse(ownership.begin(reconnect, retryWhenReleased = { error("Cancelled invite was retried") }))
+        assertTrue(ownership.cancelIfOwnedBy(owner) {})
+        assertTrue(ownership.begin(reconnect))
+        assertTrue(ownership.endIfOwnedBy(reconnect))
     }
 
     @Test
@@ -90,6 +147,20 @@ class SessionHandoffOwnershipTest {
     }
 
     @Test
+    fun ownerCancellationReturnsTheExactLeaseBeforeAPairingClientExists() {
+        val ownership = SessionHandoffOwnership(AtomicBoolean(false))
+        val owner = ReceiverObservation("receiver", epoch = 1, session = 12)
+        val claim = ExplicitStartScreenClaim().apply { manualStart() }
+        val lease = requireNotNull(claim.lease())
+        var endedContext: ExplicitStartScreenClaim.Lease? = null
+
+        assertTrue(ownership.begin(owner, ownerContext = lease))
+        assertTrue(ownership.cancelIfOwnedBy(owner) { context -> endedContext = context })
+
+        assertSame(lease, endedContext)
+    }
+
+    @Test
     fun alreadyCancelledOwnerIsReleasedWithoutRunningNewCancellation() {
         val active = AtomicBoolean(false)
         val ownership = SessionHandoffOwnership(active)
@@ -100,5 +171,49 @@ class SessionHandoffOwnershipTest {
         assertFalse(ownership.cancelIfOwnedBy(owner, isAlreadyCancelled = { true }) { cancelled++ })
         assertEquals(0, cancelled)
         assertFalse(active.get())
+    }
+
+    @Test
+    fun busyBeginRetainsTheCandidateBeforeTheOwnerCanRelease() {
+        val active = AtomicBoolean(false)
+        val ownership = SessionHandoffOwnership(active)
+        val owner = ReceiverObservation("receiver", epoch = 1, session = 13)
+        val candidate = ReceiverObservation("receiver", epoch = 1, session = 14)
+        var retainedBeforeRelease = false
+
+        assertTrue(ownership.begin(owner))
+        val result =
+            ownership.beginOrRetain(
+                observation = candidate,
+                retainWhenBusy = {
+                    retainedBeforeRelease = active.get() && ownership.owns(owner)
+                    true
+                },
+            )
+
+        assertEquals(SessionHandoffOwnership.BeginResult.RETAINED, result)
+        assertTrue(retainedBeforeRelease)
+        assertTrue(ownership.endIfOwnedBy(owner))
+        assertFalse(active.get())
+    }
+
+    @Test
+    fun closedHandoffRejectsWithoutRetainingTheCandidate() {
+        val ownership = SessionHandoffOwnership(AtomicBoolean(false))
+        val candidate = ReceiverObservation("receiver", epoch = 1, session = 15)
+        var attemptedRetention = false
+
+        ownership.blockNewHandoffs()
+        val result =
+            ownership.beginOrRetain(
+                observation = candidate,
+                retainWhenBusy = {
+                    attemptedRetention = true
+                    true
+                },
+            )
+
+        assertEquals(SessionHandoffOwnership.BeginResult.REJECTED, result)
+        assertFalse(attemptedRetention)
     }
 }

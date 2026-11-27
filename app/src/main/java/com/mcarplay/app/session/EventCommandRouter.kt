@@ -1,11 +1,13 @@
 package com.mcarplay.app.session
 
+import android.view.KeyEvent
 import com.mcarplay.app.airplay.AirPlayClient
 import com.mcarplay.app.airplay.ModeArbiter
 import com.mcarplay.app.carlife.mapCarLifeTouch
 import com.mcarplay.app.input.ConsumerKeys
 import com.mcarplay.app.input.HidNavigation
 import com.mcarplay.app.input.MediaKeyEdge
+import com.mcarplay.app.input.SiriButtonEdge
 import com.mcarplay.app.input.TouchReports
 import com.mcarplay.app.requestUiAudioDecision
 
@@ -32,6 +34,7 @@ internal class EventCommandRouter(
 ) {
     /** 每台媒体键 HID 设备一个边沿判定器；随本条 event 通道重建，旧轮按住状态不残留。 */
     private val mediaKeyEdges = HashMap<String, MediaKeyEdge>()
+    private val voiceButton = SiriButtonEdge()
 
     fun onCommand(command: Map<*, *>) {
         if (isStaleClient() || !scope.isActive) return
@@ -100,6 +103,10 @@ internal class EventCommandRouter(
                     if (consumerUsages.isEmpty()) counters.consumerReleaseCount++
                     val edge = mediaKeyEdges.getOrPut(uuid.orEmpty()) { MediaKeyEdge() }
                     for (usage in edge.onReport(consumerUsages, nowUptimeMillis())) {
+                        if (usage == ConsumerKeys.USAGE_AC_BACK) {
+                            output.injectNavigationKey(KeyEvent.KEYCODE_BACK)
+                            continue
+                        }
                         val label = "${ConsumerKeys.nameOf(usage)} uuid=$uuid usage=0x%02x".format(usage)
                         val keyCode = ConsumerKeys.keyCodeFor(usage)
                         if (keyCode != 0) {
@@ -143,6 +150,14 @@ internal class EventCommandRouter(
                         "EVENT: 其他 HID 报告 uuid=$uuid bytes=${report.size}" +
                             " hex=${report.joinToString(" ") { "%02x".format(it) }}",
                     )
+                }
+            }
+
+            "requestSiri" -> {
+                val params = command["params"] as? Map<*, *>
+                val action = params?.get("siriAction")
+                if (voiceButton.onAction(action, nowUptimeMillis())) {
+                    output.onSiriButtonPressed()
                 }
             }
 
@@ -281,6 +296,8 @@ internal class EventCommandRouter(
         )
 
         fun injectNavigationKey(keyCode: Int)
+
+        fun onSiriButtonPressed() {}
 
         fun enqueueModesAssert(
             reason: String,

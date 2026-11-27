@@ -63,6 +63,7 @@ class OutboundProbePolicy {
 
     private var armedAt = Long.MIN_VALUE
     private var armedUntil = Long.MIN_VALUE
+    private var armedPeer: String? = null
     private var selfLinkFrom = Long.MIN_VALUE
     private var selfLinkUntil = Long.MIN_VALUE
     private var selfLinkDepth = 0
@@ -72,10 +73,15 @@ class OutboundProbePolicy {
     fun arm(
         nowMillis: Long,
         durationMillis: Long,
+        peer: String? = null,
     ) {
         armedAt = nowMillis
         armedUntil = nowMillis + durationMillis
+        armedPeer = peer
     }
+
+    @Synchronized
+    fun hasOpenWindow(nowMillis: Long): Boolean = nowMillis < armedUntil
 
     /**
      * 本应用开始改动蓝牙链路（主动断配置文件、出站 RFCOMM 连接），与 [endSelfLinkChange] 成对调用。
@@ -104,9 +110,11 @@ class OutboundProbePolicy {
     fun shouldProbe(
         acl: BtAclTracker.Observation?,
         nowMillis: Long,
+        peer: String? = null,
     ): Boolean {
         if (acl?.connected == true) return true
         if (nowMillis >= armedUntil) return false
+        if (armedPeer != null && !armedPeer.equals(peer, ignoreCase = true)) return false
         if (acl == null || armedAt > acl.atMillis) return true
         // 本应用自己断开配置文件 / 出站尝试引起的 ACL 断开：不是车机离线，继续重试
         if (acl.atMillis in selfLinkFrom..selfLinkUntil) return true

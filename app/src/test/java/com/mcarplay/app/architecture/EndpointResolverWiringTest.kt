@@ -146,7 +146,7 @@ class EndpointResolverWiringTest {
     @Test
     fun controllerDelegatesSixFunctionsAndFourPreferCallSitesToEndpointResolver() {
         val awaitBody = normalizeWhitespace(functionBody(controllerCode, "private fun awaitCtrlInvite("))
-        assertEquals("= endpointResolver.awaitCtrlInvite(endpoint, timeoutMillis, sleep)", awaitBody)
+        assertEquals("= endpointResolver.awaitCtrlInvite(endpoint, timeoutMillis, isCancelled = isCancelled, sleep = sleep)", awaitBody)
 
         // resolveEndpointHost 必须保持块体薄包装，且内部唯一持有 sc_mdns UI 回调
         val resolveRawBody = functionBody(controllerCode, "private fun resolveEndpointHost(")
@@ -174,23 +174,30 @@ class EndpointResolverWiringTest {
             controllerCode.contains("fun mergeBrowserEndpoint("),
         )
 
-        // 四个 preferEndpoint 调用点（onLateEndpoint 两处、drainPendingEndpoint 一处、onCarPlayEndpoint 一处）
+        // onLateEndpoint / mergePendingEndpoints、drainPendingEndpoint 与 onCarPlayEndpoint 的 preferEndpoint 调用点
         val onLateBody = normalizeWhitespace(functionBody(controllerCode, "private fun onLateEndpoint("))
+        val mergePendingBody = normalizeWhitespace(functionBody(controllerCode, "private fun mergePendingEndpoints("))
         requireOrder(
             onLateBody,
-            "if (previous.observation === latest.observation) preferEndpoint(latest, previous) else latest",
+            "merge = ::mergePendingEndpoints,",
             "val merged = preferEndpoint(endpoint, client.currentEndpoint)",
         )
+        requireOrder(
+            mergePendingBody,
+            "preferEndpoint(previous.endpoint, latest.endpoint)",
+            "preferEndpoint(latest.endpoint, previous.endpoint)",
+        )
         assertEquals(
-            "onLateEndpoint 必须恰好有 2 处 preferEndpoint 调用",
-            2,
-            Regex("""\bpreferEndpoint\(""").findAll(onLateBody).count(),
+            "onLateEndpoint 必须恰好有 1 处 preferEndpoint 调用，mergePendingEndpoints 必须恰好有 2 处",
+            3,
+            Regex("""\bpreferEndpoint\(""").findAll(onLateBody).count() +
+                Regex("""\bpreferEndpoint\(""").findAll(mergePendingBody).count(),
         )
 
         val drainBody = normalizeWhitespace(functionBody(controllerCode, "private fun drainPendingEndpoint("))
         assertTrue(
-            "drainPendingEndpoint 必须调用 preferEndpoint(late, client.currentEndpoint)",
-            drainBody.contains("client.updateEndpoint(preferEndpoint(late, client.currentEndpoint),"),
+            "drainPendingEndpoint 必须调用 preferEndpoint(late.endpoint, client.currentEndpoint)",
+            drainBody.contains("client.updateEndpoint(preferEndpoint(late.endpoint, client.currentEndpoint),"),
         )
         assertEquals(
             "drainPendingEndpoint 必须恰好有 1 处 preferEndpoint 调用",
@@ -200,8 +207,8 @@ class EndpointResolverWiringTest {
 
         val onEndpointBody = normalizeWhitespace(functionBody(controllerCode, "private fun onCarPlayEndpoint("))
         assertTrue(
-            "onCarPlayEndpoint 必须调用 preferEndpoint(late, effectiveEndpoint)",
-            onEndpointBody.contains("effectiveEndpoint = preferEndpoint(late, effectiveEndpoint)"),
+            "onCarPlayEndpoint 必须调用 preferEndpoint(late.endpoint, effectiveEndpoint)",
+            onEndpointBody.contains("effectiveEndpoint = preferEndpoint(late.endpoint, effectiveEndpoint)"),
         )
         assertEquals(
             "onCarPlayEndpoint 必须恰好有 1 处 preferEndpoint 调用",
@@ -354,7 +361,7 @@ class EndpointResolverWiringTest {
             "var lastLogAt = startedAt",
             "var reannouncedAt = 0L",
             "while (uptimeMillis() < deadline)",
-            "if (isConnectCancelled()) return false",
+            "if (isCancelled()) return false",
             "val invites = advertiser?.inviteCount ?: 0",
             "val now = uptimeMillis()",
             "val discovered = awaitEndpoint(0)",
@@ -433,11 +440,11 @@ class EndpointResolverWiringTest {
             pairingBlock,
             "if (!scope.isActive) {",
             "if (endpointSelfContained) {",
-            "awaitCtrlInvite(endpoint, CTRL_INVITE_WAIT_MS) { ms ->",
+            "awaitCtrlInvite(endpoint, CTRL_INVITE_WAIT_MS, ::handoffCancelled) { ms ->",
             "if (!scope.sleep(ms)) throw InterruptedException(",
-            "var effectiveEndpoint = resolveEndpointHost(endpoint, source)",
-            "pendingEndpointUpdate.takeIf { it.observation === endpoint.observation }?.let { late ->",
-            "effectiveEndpoint = preferEndpoint(late, effectiveEndpoint)",
+            "var effectiveEndpoint = resolveEndpointHost(endpoint, source, allowGatewayFallback = !detachedWithoutInvite)",
+            "pendingEndpointUpdate.takeIf { it.endpoint.observation === endpoint.observation }?.let { late ->",
+            "effectiveEndpoint = preferEndpoint(late.endpoint, effectiveEndpoint)",
             "if (effectiveEndpoint.airPlayPort > 0 && EndpointHosts.hasUsable(effectiveEndpoint.ipAddresses)) {",
             "ConnectionDiagnostics.timeline.milestone( diagnosticAttempt, ConnectionMilestone.RECEIVER_RESOLVED,",
             "if (!scope.isActive) {",
@@ -447,8 +454,10 @@ class EndpointResolverWiringTest {
         // sleeper 自身的 scope.sleep 属于端口实参，不算门禁。
         val afterAwaitBeforeResolve =
             normalizeWhitespace(pairingBlock)
-                .substringAfter("awaitCtrlInvite(endpoint, CTRL_INVITE_WAIT_MS)")
-                .substringBefore("var effectiveEndpoint = resolveEndpointHost(endpoint, source)")
+                .substringAfter("awaitCtrlInvite(endpoint, CTRL_INVITE_WAIT_MS, ::handoffCancelled)")
+                .substringBefore(
+                    "var effectiveEndpoint = resolveEndpointHost(endpoint, source, allowGatewayFallback = !detachedWithoutInvite)",
+                )
         assertFalse(
             "awaitCtrlInvite 与 resolveEndpointHost 之间不得新增 scope.isActive 检查",
             afterAwaitBeforeResolve.contains("scope.isActive"),

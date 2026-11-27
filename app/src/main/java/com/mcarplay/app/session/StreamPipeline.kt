@@ -151,6 +151,7 @@ internal class StreamPipeline(
         // 实验（issue #62，PR #78 评审 P2）：只在 VideoConfig 真正写出后判定，且尺寸变化时重新判定。
         // 观察器按 sender 各取一份，保留「最近上报尺寸」的逐 sender 语义。
         plan.hooks.newVideoConfigObserver()?.let { observer -> created.onVideoConfigSent = observer }
+        plan.hooks.onSenderCreated(created)
         return created
     }
 
@@ -216,9 +217,7 @@ internal class StreamPipeline(
                     if (!published) return@recover ScreenRecoveryResult.ABORTED
                     if (!replacement.openDataPort() ||
                         !port.isScopeActive() ||
-                        // 屏幕流已 TEARDOWN/SETUP：单次 RECORD 车机也必须重发一次，
-                        // 否则新流没有激活（艾瑞泽 8 重进后触控/按键失效）。
-                        !port.record(client, force = true) ||
+                        !port.record(client) ||
                         !port.isScopeActive() ||
                         !replacement.start {} ||
                         !port.isScopeActive()
@@ -386,6 +385,9 @@ internal interface ScreenSenderHooks {
     /** 实验面板的 VideoConfig 上报观察器；未启用实验面板时返回 null（不挂回调）。 */
     fun newVideoConfigObserver(): ((width: Int, height: Int) -> Unit)?
 
+    /** 记录本次发送端实例建立时的网络与邀请基线，供 [onEnded] 判断断流重连。 */
+    fun onSenderCreated(sender: VideoSender) {}
+
     /** 推流自然结束；[sender] 是真正结束的发送端实例（陈旧判定依赖它）。 */
     fun onEnded(sender: VideoSender)
 }
@@ -413,10 +415,7 @@ internal interface ScreenRecoveryPort {
         displayUuid: String?,
     ): AirPlayClient.ScreenStreamInfo?
 
-    fun record(
-        client: AirPlayClient,
-        force: Boolean,
-    ): Boolean
+    fun record(client: AirPlayClient): Boolean
 
     fun onScreenStreamRestored(client: AirPlayClient)
 }
