@@ -1,7 +1,6 @@
 package com.mcarplay.app.bt
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
 
@@ -9,28 +8,30 @@ class Iap2BluetoothClientServicesTest {
     private fun short(id: Int): UUID = UUID.fromString(String.format("0000%04x-0000-1000-8000-00805f9b34fb", id))
 
     @Test
-    fun namesStandardServicesAndFlagsIap2() {
+    fun namesCachedServicesAndFlagsIap2() {
         val text =
             Iap2BluetoothClient.describeServices(
                 listOf(short(0x111F), short(0x110A), Iap2BluetoothClient.ACCESSORY_IAP2_UUID, short(0x1800)),
-                completed = true,
             )
-        assertEquals("声明 4 个服务：HFP网关 / A2DP源 / iAP2(…caff) / 0x1800；接收端 iAP2(…caff) 服务=有", text)
+        assertEquals("缓存 4 个服务：HFP网关 / A2DP源 / iAP2(…caff) / 0x1800；接收端 iAP2(…caff) 服务=有", text)
     }
 
     @Test
-    fun keepsVendorUuidsAndDistinguishesMissingFromUnknown() {
+    fun keepsVendorUuidsWithoutClaimingMissingIap2IsAbsent() {
         val vendor = UUID.fromString("5a3f0a2c-1b2c-4d5e-8f90-123456789abc")
-        assertTrue(
-            Iap2BluetoothClient
-                .describeServices(
-                    listOf(short(0x111F), vendor),
-                    completed = true,
-                ).endsWith("5a3f0a2c-1b2c-4d5e-8f90-123456789abc；接收端 iAP2(…caff) 服务=无（仍可由车机回连，不代表不支持无线 CarPlay）"),
+        val text = Iap2BluetoothClient.describeServices(listOf(short(0x111F), vendor))
+        assertEquals(
+            "缓存 2 个服务：HFP网关 / 5a3f0a2c-1b2c-4d5e-8f90-123456789abc；接收端 iAP2(…caff) 服务=缓存未发现，服务是否存在未确定",
+            text,
         )
-        val timedOut = Iap2BluetoothClient.describeServices(emptyList(), completed = false)
-        assertTrue(timedOut.contains("SDP 未在"))
-        assertTrue(timedOut.endsWith("服务=未确定（SDP 未返回）"))
+    }
+
+    @Test
+    fun emptyCacheLeavesServicePresenceUnknown() {
+        assertEquals(
+            "缓存为空；接收端 iAP2(…caff) 服务=缓存未发现，服务是否存在未确定",
+            Iap2BluetoothClient.describeServices(emptyList()),
+        )
     }
 
     /** 大众车机 SDP 不声明 …caff 但 RFCOMM 可连（2026-10-31）：自动模式不能只凭 SDP 跳过。 */
@@ -102,8 +103,44 @@ class Iap2BluetoothClientServicesTest {
             )
         assertEquals(
             listOf("old-receiver", "passat"),
-            Iap2BluetoothClient.autoCandidates(listOf("headset", "passat", "old-receiver")) { gates.getValue(it) },
+            Iap2BluetoothClient.autoCandidates(listOf("headset", "passat", "old-receiver"), online = { false }) { gates.getValue(it) },
         )
+    }
+
+    @Test
+    fun onlineHeadUnitPrecedesOfflineReceiverWithoutChangingSdpFilter() {
+        val gates =
+            mapOf(
+                "old-receiver" to Iap2BluetoothClient.SdpGate.CONNECT,
+                "headset" to Iap2BluetoothClient.SdpGate.SKIP,
+                "passat" to Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP,
+            )
+        val candidates =
+            Iap2BluetoothClient.autoCandidates(
+                listOf("old-receiver", "headset", "passat"),
+                online = { it != "old-receiver" },
+            ) { gates.getValue(it) }
+        assertEquals(listOf("passat", "old-receiver"), candidates)
+    }
+
+    @Test
+    fun onlineSortingPreservesOrderWithinEachGroup() {
+        val bonded = listOf("offline-a", "online-a", "offline-b", "online-b")
+        val candidates =
+            Iap2BluetoothClient.autoCandidates(bonded, online = { it.startsWith("online") }) {
+                Iap2BluetoothClient.SdpGate.CONNECT
+            }
+        assertEquals(listOf("online-a", "online-b", "offline-a", "offline-b"), candidates)
+    }
+
+    @Test
+    fun withoutCachedIap2OnlineDevicesStillComeFirst() {
+        val bonded = listOf("offline", "online")
+        val candidates =
+            Iap2BluetoothClient.autoCandidates(bonded, online = { it == "online" }) {
+                Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP
+            }
+        assertEquals(listOf("online", "offline"), candidates)
     }
 
     @Test
@@ -111,6 +148,6 @@ class Iap2BluetoothClientServicesTest {
         // 没有任何设备缓存了 …caff：沿用全部已配对设备，由连接循环里的 SDP 闸门逐台判断
         val bonded = listOf("headset", "passat")
         val gates = mapOf("headset" to Iap2BluetoothClient.SdpGate.SKIP, "passat" to Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP)
-        assertEquals(bonded, Iap2BluetoothClient.autoCandidates(bonded) { gates.getValue(it) })
+        assertEquals(bonded, Iap2BluetoothClient.autoCandidates(bonded, online = { false }) { gates.getValue(it) })
     }
 }

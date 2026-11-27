@@ -6,6 +6,10 @@
 
 ## 当前基线与结论
 
+- **11 月 27 日蓝牙拨号与回连等待（待实车复测）：** 入站或出站成功保存的 iAP2 配对记录均可启用 11 秒拨号超时，自动模式与指定目标一致。
+  配对记录不豁免快速失败后的回连等待；等待期间每 60 秒放行一次探测。自动候选在原 SDP 筛选后优先 ACL 在线设备，
+  均未在线时保持原顺序；没有应用内配对完成记录的候选仍使用系统拨号超时。单通道门闸与迟到结果隔离保持不变。
+
 - **11 月 26–27 日会话编排层重构 Phase 3b（`dev` @ `9ac1b4c` / #135，对照 `main` @ `df4c81d` 完成 T2 实车与台架验收）：**
   本地完整门禁通过：standard JVM 单测 1,859 项、remote bridge 单测 25 项、Python 工具 87 项、Node debug-bridge 20 项，`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 全部 0 失败 / 0 错误 / 0 跳过。
   使用同签名构建（`main` `b3479555` vs `dev` `2b57844b`）在 Xiaomi `2509FPN0BC`（Android 17 / HyperOS `V816` / CarWith `4.0.23-20261016` / CarLife `8.8.5`）完成跨接收端回归（报告脱敏归档在仓库外）：
