@@ -51,8 +51,8 @@ Phase 3a（本 PR，2026-11-25，基线 `dev` @ `9772b7f`，已合入 2h / #132�
 `session/DualCheckAttemptScope`（权威返回值 100% 取自 `LegacyAttemptScope`，分歧时去重记录 `SESSION: SCOPE_MISMATCH`）与
 `session/AttemptRegistry`（活跃轮次槽与对象身份 `client -> scope` 绑定）；在 `SessionController` 的 7 处精确生命周期点接线，
 严格保持 `retireSession()` 不取消当前活跃轮次、`EndAttemptTraceTest` 顺序不变、引擎包生产代码零改动、
-`SessionUiPort` 45/10/2/1/1 与 `ArchitectureRulesTest` 允许清单不变；未迁移阻塞等待（留待 3b），未删除旧归属判断（留待 3c），
-未做设备或实车验证。**
+`SessionUiPort` 45/10/2/1/1 与 `ArchitectureRulesTest` 允许清单不变；未迁移阻塞等待（留待 3b），未删除旧归属判断（留待 3c），未做设备或实车验证。
+Phase 3b（2026-11-26，已合入 `dev` @ `9ac1b4c` / #135）把阻塞等待迁移到可取消 `AttemptScope` 端口并完成 T0/T2 验收（2026-11-26–27，对照 `main` @ `df4c81d`）：16 份 `dev` 候选报告（DiPlay S1–S5、WinPlay S1–S5、艾瑞泽 8 S1–S6）全局 `SCOPE_MISMATCH = 0`；艾瑞泽 8 实车 S1–S6 通过且 S1/S2/S3 时间线 `tl_fails=0`；MacPlay `1.2.4` 仅测 `main` S1/S2 后跳过，30 分钟长测与空端点未测；已具备进入 Phase 3c 的设备前提。**
 2026-11-10 对照代码复查后修订过一次，改动见文末
 「修订记录」。本文仍是讨论稿：第 9 节的问题确认后再定稿、拆 PR。
 

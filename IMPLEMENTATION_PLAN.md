@@ -1,12 +1,20 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-11-25。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-11-27。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
 ## 当前基线与结论
 
-- **11 月 25 日会话编排层重构 Phase 3a（本 PR，基线 `dev` @ `9772b7f`，已合入 2h / #132，零行为变化，无设备或实车验证）：**
+- **11 月 26–27 日会话编排层重构 Phase 3b（`dev` @ `9ac1b4c` / #135，对照 `main` @ `df4c81d` 完成 T2 实车与台架验收）：**
+  本地完整门禁通过：standard JVM 单测 1,859 项、remote bridge 单测 25 项、Python 工具 87 项、Node debug-bridge 20 项，`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 全部 0 失败 / 0 错误 / 0 跳过。
+  使用同签名构建（`main` `b3479555` vs `dev` `2b57844b`）在 Xiaomi `2509FPN0BC`（Android 17 / HyperOS `V816` / CarWith `4.0.23-20261016` / CarLife `8.8.5`）完成跨接收端回归（报告脱敏归档在仓库外）：
+  - **Phase 3 双判门槛通过：** 全部 16 份 `dev` 候选报告（DiPlay S1–S5、WinPlay S1–S5、艾瑞泽 8 S1–S6）全局检索 `SCOPE_MISMATCH` 为 **0 条**，满足进入 Phase 3c 删除旧归属判断的前提；
+  - **艾瑞泽 8（实车 `CHERY / Tiggo / 320.17.7`）：** `main` 与 `dev` 的 S1–S6 全部通过；`S1`/`S2`/`S3` 经 `tools/compare_diagnostics.py` 对比时间线 `tl_fails=0`；S1 手动断开后静置观察车机 ≥ 60 s 未崩溃，S4 仅视频推流中动态开声音保持单次 `RECORD` 未拆链，S6 连续三次切回原车桌面并重进恢复正常（重进等待新 IDR 时偶有几秒黑屏、偶发声音卡顿）；手动断开后仍需在车机端断/重连蓝牙再起；
+  - **WinPlay（`1.2.5 / Roylyl`）与 DiPlay（`vivo Pad Air`）：** `main` S1–S6、`dev` S1–S5 通过（桌面端 S6 复现已知无 `requestUI` / Issue #51 行为）；WinPlay 上还观察到 `dev`（#127）设 `3000x2000` 时 CarWith 回 `VIDEO_INIT_DONE 3000x2000@30` 但实际 SPS 回退为 `1920x720`，设 `1920x1080` 正常；
+  - **边界与未测项：** 30 分钟持续推流与空端点晚到 `0x4301` 本轮未测；MacPlay `1.2.4` 仅跑 `main` S1（通过）及 S2（复现 `[cp-sock]` 拒连触发 8 s 断路器、错开 12 s 反连窗口），后续跳过。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+- **11 月 25 日会话编排层重构 Phase 3a（基线 `dev` @ `9772b7f`，已合入 2h / #132，零行为变化，无设备或实车验证）：**
   补全 `session/AttemptScope` 契约（`AttemptCancelled`、`cancelReason`/`cancel`/`checkActive`/`own`/`await`/`sleep`），
   新增 `session/RealAttemptScope`（单调取消、独立 `supersede`、锁外 LIFO 清理、无中断污染 `sleep`、Per-Waiter 叶锁 `await`）、
   `session/DualCheckAttemptScope`（权威返回恒等于 `LegacyAttemptScope`，分歧去重记录 `SESSION: SCOPE_MISMATCH`）与

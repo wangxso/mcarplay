@@ -1,5 +1,28 @@
 # CarWith 公开入口调查（2026-10-25）
 
+## 2026-11-26–27 Phase 3b（`dev` @ `9ac1b4c`）对照 `main`（`df4c81d`）T2 实车与台架验收
+
+- **测试环境：** 手机 Xiaomi `2509FPN0BC` / Android `17` / HyperOS `V816`；CarWith `4.0.23-20261016`，小米 CarLife `8.8.5 (274)`。对比构建均使用同签名本机 debug 包：`main` @ `df4c81d`（`apkSha256=b3479555…`）与 `dev` @ `9ac1b4c`（`apkSha256=2b57844b…`，含 Phase 2/3a/3b 重构及 `#127` CarWith 尺寸协商）。离线门禁：`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 及 standard 1,859 项 / remote bridge 25 项 / Python 87 项 / Node 20 项单测均全通过。16 份 `dev` 脱敏报告（均保留在仓库外 `~/mcarplay-regression/2026-11-26-*/`）中 `SESSION: SCOPE_MISMATCH` 均为 **0 条**。
+- **奇瑞艾瑞泽 8 实车（`CHERY / Tiggo / 320.17.7`，车机回连手机 iAP2）：**
+  - `main` 与 `dev` 均跑通 S1–S6，命中 `chery.tiggo.320.17.7.single-record`，`VIDEO_INIT_DONE 1920x720@30`、实际 SPS `1920x720`。
+  - **S1（冷启动带声音 + 断链观察）：** `main` 首帧 ~12.6 s / 首音频 ~33.6 s（`5991` 帧 / `4456` 音频包）；`dev` 首帧 ~16.3 s / 首音频 ~19.7 s（`6346` 帧 / `5623` 音频包）。两轮手动断开后静置观察车机 **≥ 60 s 均未崩溃**；`compare_diagnostics.py` 对比时间线 `tl_fails=0`。
+  - **S2（断开立即重连）：** 两版本现象一致——手机主动出站 `90ms READ_FAILED` 被拒，手动断开后需在车机端断开并重连蓝牙，随后第 2 轮连接、画面、声音与触控均正常（`tl_fails=0`）。
+  - **S3（Wi-Fi 入网中取消）：** 两版本均在 `WIFI_JOINED` 后出画前（约 `3.0–4.8 s`）收到 `USER_STOP` 干净取消，重连恢复正常（`tl_fails=0`）。
+  - **S4（仅视频 + 推流中动态开声音）：** `main` 于 ~69 s、`dev` 于 ~45.5 s 在推流中开启声音，均保持单次 `RECORD` 不拆链（`4556` / `3688` 帧）。实车观察到**偶发声音卡顿**：日志记录 UDP `AUDIO: 同步包` 偶有 `ECONNREFUSED` 重试，主 PCM 流报告 `补静音 0 帧，跳过 0 帧`。
+  - **S5（配对/建链中断开蓝牙）：** `dev` 在 `DISCOVERY`（`5.5 s`）与 `IAP2_IDENTIFIED`（`8.6 s`）阶段断蓝牙均立即以 `BT_LINK_CLOSED` 干净收尾，恢复蓝牙后重连正常（`2414` 帧）。
+  - **S6（回原车桌面再点 CarPlay 图标重进）：** `main`（2 轮）与 `dev`（连续 3 轮）均能响应 `requestUI` 重建主屏流、保持音频不断且恢复画面与触控。部分重进出现几秒黑屏后出画，日志确认为重建 `RECORD` 后等待 CarWith 下一个 IDR（如 `main` `20:46:44.596` 到 `20:46:49.875` 丢弃 65 个 P 帧、约 5.28 s；`dev` `21:02:19.389` 到 `21:02:21.574` 丢弃 22 帧、约 2.18 s），属编码器 GOP 间隔所致，非音频中断。
+- **WinPlay（`WinPlay / Roylyl / 1.2.5`，命中 `winplay.1.2.5.network-handoff`）：**
+  - `main` S1–S6 与 `dev` S1–S5 全部通过（网络交接后蓝牙释放、媒体推流保持正常）。
+  - **分辨率协商发现（`dev` #127）：** WinPlay 设为 `3000x2000` 时，`dev` 带 `DISABLE_RESOLUTION_OPTION=1` 请求 `3000x2000`，CarWith 回 `VIDEO_INIT_DONE 3000x2000@30`（日志记为“已采纳”），但 **CarWith 实际输出 SPS 为 `1920x720`** 导致画面比例异常；将 WinPlay 改设 `1920x1080` 后 `VIDEO_INIT_DONE` 与实际 SPS 均为 `1920x1080`，显示正常。
+  - **S6（桌面端）：** `main` 下点击 CarWith 内“返回车机”触发 `0x10021` 后 `modesChanged` 收到 `42B {}` 并按策略暂停视频（停在 550 帧），因桌面测试台无原生车机切换与 `requestUI` 回发（`requestUI=0`）导致画面定格，约 16 s 后 CarWith 自身停播。
+- **DiPlay（`vivo Pad Air`）：**
+  - `main` S1–S6 与 `dev` S1–S5 通过（网络交接与断蓝牙后保留已建网络流按预期工作）。
+  - `main` S6 复现已知 issue #51：触发 `0x10021` 让出主屏后视频暂停在 147 帧，平板未切换页面仍在回传触摸（`hidSendReport=78`）且 `requestUI=0`，画面定格。
+- **MacPlay（`1.2.4` / macOS `26.6.2`）：**
+  - `main` S1 冷启动带声音通过（首帧 ~8.3 s、首音频 ~13.0 s，`6700` 帧 / `6187` 音频包）。
+  - `main` S2 三次复测均失败（归档 3 份报告）：MacPlay 拒绝手机出站连接其 `channel=18`（`[cp-sock] bt bring-up failed`），导致手机在约 8 s 内触发 3 轮失败 180 s 断路器关闭监听，刚好错开 MacPlay 约 12 s 的 SDP 刷新与主动反连窗口；S3–S7 及 `dev` 对比跳过。
+- **范围边界：** 30 分钟持续推流（S7）与空端点晚到 `0x4301`（S8）本轮未执行；本记录仅代表上述已测手机与接收端组合在该构建下的实测结果，不扩大到其他车型或系统版本。
+
 ## 2026-11-14 issue #62：奔驰 MB_E-P-4「链路全通、视频 109 秒、车机无画面」（车主报告，未实车复测）
 
 - **来源：** `wangxso/mcarplay#62`，mcarplay `0.1.7` standard/release 的脱敏报告
