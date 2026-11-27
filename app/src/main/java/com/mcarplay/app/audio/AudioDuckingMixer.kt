@@ -134,10 +134,14 @@ class AudioDuckingMixer<K : Any>(
     }
 
     /**
-     * 一段音乐 PCM：返回同样帧数的混音结果（音乐 × 包络 + 已就绪的提示）。
+     * 一段音乐 PCM：返回同样帧数的混音结果（音乐 × 包络 + 已就绪的提示）。可原地写入 [pcm]。
      */
-    fun media(pcm: ByteArray): ByteArray {
+    fun media(
+        pcm: ByteArray,
+        output: ByteArray = ByteArray(pcm.size),
+    ): ByteArray {
         require(pcm.size % FRAME_BYTES == 0) { "Incomplete stereo PCM frame" }
+        require(output.size == pcm.size) { "The output must have the same size as the media" }
         val now = clockNanos()
         val target = if (hasPromptBuffered() || withinHold(now)) duckGain else 1f
         // 音乐刚从静止恢复：此前听不到音乐，增益可直接落到目标值，不必再淡入淡出。
@@ -147,7 +151,6 @@ class AudioDuckingMixer<K : Any>(
         }
         lastMediaAt = now
         val frames = pcm.size / FRAME_BYTES
-        val output = ByteArray(pcm.size)
         var mixedPrompt = false
         for (frame in 0 until frames) {
             gain =
