@@ -264,6 +264,16 @@ class AirPlayClient(
     /** 会话已激活且控制通道仍在：只有这时 [stopLikeIphone] 的 TEARDOWN 才有对象。 */
     val sessionActive: Boolean get() = recordAccepted && socket?.isClosed == false
 
+    internal fun negotiatedReceiverIdentity(): ReceiverCompatibility.ReceiverIdentity? {
+        val info = negotiatedInfo ?: return null
+        return ReceiverCompatibility.classifyReceiverIdentity(
+            info["manufacturer"] as? String,
+            info["model"] as? String,
+            info["firmwareRevision"] as? String,
+            info["sourceVersion"] as? String ?: endpoint.sourceVersion,
+        )
+    }
+
     fun receiverCompatibility(): ReceiverCompatibility.Policy {
         val current = endpoint
         val info = negotiatedInfo

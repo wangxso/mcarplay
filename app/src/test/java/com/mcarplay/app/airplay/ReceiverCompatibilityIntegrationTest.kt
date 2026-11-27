@@ -36,6 +36,21 @@ class ReceiverCompatibilityIntegrationTest {
         client.close()
     }
 
+    @Test
+    fun negotiatedReceiverIdentityRequiresInfoAndDoesNotNeedPreferences() {
+        val client = AirPlayClient(endpoint().copy(sourceVersion = " 365.10.2 "), log = {})
+        try {
+            assertNull(client.negotiatedReceiverIdentity())
+            val generic = mapOf("manufacturer" to "OEM", "model" to "OEM MODEL", "firmwareRevision" to "0.0.1")
+            field("negotiatedInfo").set(client, generic)
+            assertEquals(ReceiverCompatibility.ReceiverIdentity.GENERIC, client.negotiatedReceiverIdentity())
+            field("negotiatedInfo").set(client, generic + ("sourceVersion" to "365.10.3"))
+            assertEquals(ReceiverCompatibility.ReceiverIdentity.OTHER, client.negotiatedReceiverIdentity())
+        } finally {
+            client.close()
+        }
+    }
+
     private val signals =
         ReceiverProfile.Signals(
             model = "WinPlay",

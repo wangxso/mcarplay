@@ -76,6 +76,8 @@
     <string name="ma_hero_stats">Resolution %1$d%% · %2$d/%3$d fps</string>
     <string name="ma_hero_connecting">Connecting</string>
     <string name="ma_hero_connected">Connected</string>
+    <string name="ma_hero_ora03_identity_warning">ORA head unit issue</string>
+    <string name="ma_hero_ora03_identity_hint">The head unit reported OEM MODEL / 0.0.1. If CarPlay will not open, park and restart the head unit.</string>
     <string name="ma_hero_residual">The last session ended abnormally and left %1$d virtual displays to clean up</string>
     <string name="ma_cta_disconnect">Disconnect</string>
     <string name="ma_connected_subline">Connected · %1$s · %2$02d:%3$02d · streaming video</string>

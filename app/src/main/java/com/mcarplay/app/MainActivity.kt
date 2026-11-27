@@ -138,6 +138,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---- 英雄卡状态机（1s 轮询 SessionController 对账）----
     private var heroState: HeroState? = null
+    private var receiverIdentityWarningShown = false
 
     /** 首页是否正显示「自动重连已暂停」；熔断到期后需要恢复默认空闲文案。 */
     private var idleAutoPauseShown = false
@@ -1458,6 +1459,7 @@ class MainActivity : AppCompatActivity() {
     private fun tickHero() {
         val diagnosis = ConnectionDiagnostics.timeline.snapshot()
         val latest = ConnectionDiagnostics.latestSnapshot()
+        val selected = TargetDevicePrefs.get(this)
         // 还没有连接记录时不占首页空间：提示语与导出入口都等有报告后再出现（诊断页另有导出入口）。
         val diagnosticStatus = findViewById<TextView>(R.id.diagnosticStatus)
         diagnosticStatus.text = latest?.let { DiagnosticText.summary(this, it) }.orEmpty()
@@ -1472,9 +1474,11 @@ class MainActivity : AppCompatActivity() {
                     HeroState.CONNECTING
                 else -> HeroState.IDLE
             }
-        if (s != heroState) {
-            if (s == HeroState.CONNECTED) connectedAt = SystemClock.elapsedRealtime()
+        val showReceiverIdentityWarning = s != HeroState.IDLE && SessionController.hasGenericReceiverIdentityWarning(selected?.address)
+        if (s != heroState || showReceiverIdentityWarning != receiverIdentityWarningShown) {
+            if (s == HeroState.CONNECTED && s != heroState) connectedAt = SystemClock.elapsedRealtime()
             heroState = s
+            receiverIdentityWarningShown = showReceiverIdentityWarning
             applyHeroState(s)
         }
         // 连接中：副标题跟随阶段提示（英雄卡内即可见，不必划到底部看日志）
@@ -1512,14 +1516,18 @@ class MainActivity : AppCompatActivity() {
             heroSubline.text = getString(R.string.ma_hero_checking_residual)
             heroProgress.visibility = View.VISIBLE
         }
-        updateConnectedSubline()
+        if (showReceiverIdentityWarning) {
+            heroStateText.setText(R.string.ma_hero_ora03_identity_warning)
+            heroSubline.setText(R.string.ma_hero_ora03_identity_hint)
+        } else {
+            updateConnectedSubline()
+        }
         updateHeroStats()
         updateAudioTag()
         updateReadyRow()
         updateShizukuChip()
         updateCarLifeSelfTestRow()
         updateExternalHuRow()
-        val selected = TargetDevicePrefs.get(this)
         val binding = ReceiverDetectionRuntime.binding(selected?.address)
         val detectionState =
             ReceiverDetectionRuntime.detection
@@ -1667,10 +1675,11 @@ class MainActivity : AppCompatActivity() {
     private fun applyHeroState(s: HeroState) {
         heroDot.backgroundTintList =
             android.content.res.ColorStateList.valueOf(
-                when (s) {
-                    HeroState.IDLE -> getColor(R.color.ui_text_secondary)
-                    HeroState.CONNECTING -> getColor(R.color.m3_primary)
-                    HeroState.CONNECTED -> getColor(R.color.m3_ok_dot)
+                when {
+                    receiverIdentityWarningShown -> getColor(R.color.m3_error)
+                    s == HeroState.IDLE -> getColor(R.color.ui_text_secondary)
+                    s == HeroState.CONNECTING -> getColor(R.color.m3_primary)
+                    else -> getColor(R.color.m3_ok_dot)
                 },
             )
 

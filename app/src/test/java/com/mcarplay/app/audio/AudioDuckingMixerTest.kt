@@ -245,6 +245,74 @@ class AudioDuckingMixerTest {
     }
 
     @Test
+    fun baseAttenuationCombinesWithDuckingAndPreservesPromptVolume() {
+        val mixer = mixer(config.copy(attackMs = 0, releaseMs = 0, holdMs = 0, duckDb = -20f, musicAttenuationDb = -20f))
+        val music = constant(1, 10_000, -10_000)
+        assertEquals(listOf(1_000), left(mixer.media(music)))
+
+        mixer.prompt(TTS, constant(1, 1_000, 1_000))
+        val mixed = mixer.media(music)
+        assertEquals(listOf(1_100), left(mixed))
+        assertEquals(listOf(900), right(mixed))
+
+        assertEquals(listOf(1_000), left(mixer.media(music)))
+        mixer.mediaStopped()
+        mixer.prompt(TTS, constant(1, 700, 700))
+        assertEquals(listOf(700), left(mixer.drain()))
+    }
+
+    @Test
+    fun changingBaseAttenuationDuringPlaybackFadesToAndFromTheNewLevel() {
+        val mixer = mixer()
+        val music = constant(25, 10_000, 10_000)
+        mixer.media(music)
+
+        mixer.setMusicAttenuationDb(AudioDuckingPrefs.MUSIC_ATTENUATION_MIN_DB.toFloat())
+        val faded = left(mixer.media(music))
+        assertTrue(faded.first() in 1_001..9_999)
+        assertTrue(faded.zipWithNext().all { (before, after) -> before >= after })
+        assertEquals(1_000, faded.last())
+
+        mixer.setMusicAttenuationDb(0f)
+        val restored = left(mixer.media(music))
+        assertTrue(restored.first() in 1_001..9_999)
+        assertTrue(restored.zipWithNext().all { (before, after) -> before <= after })
+        assertEquals(10_000, restored.last())
+    }
+
+    @Test
+    fun runtimeBaseAttenuationClampsOutOfRangeValuesAndIgnoresNaN() {
+        val mixer = mixer()
+        val music = constant(25, 10_000, 10_000)
+        mixer.setMusicAttenuationDb(-40f)
+        assertEquals(-20f, mixer.config.musicAttenuationDb)
+        assertEquals(1_000, left(mixer.media(music)).last())
+
+        mixer.setMusicAttenuationDb(Float.NaN)
+        assertEquals(-20f, mixer.config.musicAttenuationDb)
+        assertEquals(1_000, left(mixer.media(music)).last())
+
+        mixer.setMusicAttenuationDb(6f)
+        assertEquals(0f, mixer.config.musicAttenuationDb)
+        assertEquals(10_000, left(mixer.media(music)).last())
+
+        mixer.setMusicAttenuationDb(Float.NEGATIVE_INFINITY)
+        assertEquals(-20f, mixer.config.musicAttenuationDb)
+        mixer.setMusicAttenuationDb(Float.POSITIVE_INFINITY)
+        assertEquals(0f, mixer.config.musicAttenuationDb)
+    }
+
+    @Test
+    fun musicAttenuationSettingsMapSliderProgressWithinSupportedRange() {
+        assertEquals(0, AudioDuckingPrefs.musicAttenuationDbOfProgress(Int.MIN_VALUE))
+        assertEquals(-12, AudioDuckingPrefs.musicAttenuationDbOfProgress(12))
+        assertEquals(-20, AudioDuckingPrefs.musicAttenuationDbOfProgress(Int.MAX_VALUE))
+        assertEquals(0, AudioDuckingPrefs.progressOfMusicAttenuationDb(6))
+        assertEquals(12, AudioDuckingPrefs.progressOfMusicAttenuationDb(-12))
+        assertEquals(20, AudioDuckingPrefs.progressOfMusicAttenuationDb(Int.MIN_VALUE))
+    }
+
+    @Test
     fun duckPrefsMapSliderProgressToNonPositiveDb() {
         assertEquals(-15, AudioDuckingPrefs.DUCK_DB_DEFAULT)
         assertEquals(0, AudioDuckingPrefs.dbOfProgress(0))

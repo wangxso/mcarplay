@@ -76,6 +76,8 @@
     <string name="ma_hero_stats">分辨率 %1$d%% · %2$d/%3$d fps</string>
     <string name="ma_hero_connecting">正在连接</string>
     <string name="ma_hero_connected">已连接</string>
+    <string name="ma_hero_ora03_identity_warning">欧拉车机状态异常</string>
+    <string name="ma_hero_ora03_identity_hint">车机返回 OEM MODEL / 0.0.1。若无法打开 CarPlay，请停稳后重启车机。</string>
     <string name="ma_hero_residual">上次会话异常退出，遗留 %1$d 个虚拟屏待清理</string>
     <string name="ma_cta_disconnect">断开连接</string>
     <string name="ma_connected_subline">已连接 · %1$s · %2$02d:%3$02d · 视频推流中</string>
