@@ -7,10 +7,11 @@ import org.junit.Test
 
 class InternetNetworkPrefsTest {
     @Test
-    fun missingOrUnknownValueUsesExistingCarBehaviour() {
-        assertEquals(InternetNetwork.CAR, InternetNetworkPrefs.parse(null))
-        assertEquals(InternetNetwork.CAR, InternetNetworkPrefs.parse(""))
-        assertEquals(InternetNetwork.CAR, InternetNetworkPrefs.parse("unexpected"))
+    fun missingOrUnknownValueDefaultsToPhone() {
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.DEFAULT)
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.parse(null))
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.parse(""))
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.parse("unexpected"))
     }
 
     @Test

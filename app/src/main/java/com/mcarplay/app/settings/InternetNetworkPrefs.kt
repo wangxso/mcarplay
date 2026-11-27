@@ -19,14 +19,14 @@ enum class PhoneModeSystemWifiDecision {
 /**
  * Internet routing preference for the next connection.
  *
- * `CAR` keeps the existing system-level Wi-Fi join, so Android may use the car
- * hotspot as its default network. `PHONE` forces the app-private Wi-Fi path:
- * the hotspot remains local to mcarplay and other apps keep using mobile data
- * (or any other system default network). It cannot change routing of an
+ * `PHONE` (default) forces the app-private Wi-Fi path: the hotspot remains local
+ * to mcarplay and other apps keep using mobile data (or any other system default
+ * network). `CAR` keeps the system-level Wi-Fi join, so Android may use the car
+ * hotspot as its default network. It cannot change routing of an
  * already-established session, hence "next connection".
  */
 object InternetNetworkPrefs {
-    val DEFAULT = InternetNetwork.CAR
+    val DEFAULT = InternetNetwork.PHONE
 
     private const val PREFS_NAME = "settings"
     private const val KEY_NETWORK = "internet_network"
