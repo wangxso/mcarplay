@@ -158,16 +158,23 @@ class Iap2BluetoothClient(
         /**
          * 自动模式候选：SDP 缓存带 …caff 的排前，再接 [sdpGateDecision] 放行的例外（帕萨特这类不声明
          * …caff 的车机）；两者都没有时退化为全部已配对设备，由连接循环里的 SDP 闸门逐台判断。
-         * 只留带 …caff 的设备会让离线的旧接收端挡住眼前的车机（2026-11-01 审查）。
+         * 筛选后优先尝试 ACL 在线设备；同组保持原顺序。
          */
         fun <T> autoCandidates(
             bonded: List<T>,
+            online: (T) -> Boolean,
             gate: (T) -> SdpGate,
         ): List<T> {
             val decisions = bonded.map { it to gate(it) }
             val withService = decisions.filter { it.second == SdpGate.CONNECT }.map { it.first }
-            if (withService.isEmpty()) return bonded
-            return withService + decisions.filter { it.second == SdpGate.CONNECT_DESPITE_SDP }.map { it.first }
+            val candidates =
+                if (withService.isEmpty()) {
+                    bonded
+                } else {
+                    withService +
+                        decisions.filter { it.second == SdpGate.CONNECT_DESPITE_SDP }.map { it.first }
+                }
+            return candidates.sortedByDescending(online)
         }
 
         private fun looksLikeHeadUnit(services: List<UUID>): Boolean =
@@ -504,7 +511,7 @@ class Iap2BluetoothClient(
             //    典型场景：连着 Redmi/DiPlay 时不再无脑探测车机 Audi（消除日志噪音与蓝牙churn）；
             //    会话结束（任一端 BT 会话终结 / 手动断开）时自动恢复。
             if (BtSessionGate.outboundPaused || wifiHandoffDetached()) {
-                sleepQuietly(2_000)
+                awaitProbe(wake, 2_000)
                 continue
             }
             val bonded = candidateDevices(adapter)
@@ -543,7 +550,8 @@ class Iap2BluetoothClient(
                 // 没有 iAP2 服务，连不上还白白被断 HFP/A2DP（设备级断开兜底更会波及
                 // 其它在线设备）——确认提供 …caff 才进入「断开+连接」流程。选定目标直接拨号。
                 val selectedTarget = targetProvider() != null
-                val boundedDial = selectedTarget && Iap2Pairings.current(context).canRespond(device.address, device.bondState)
+                // 配对记录包含入站成功，只限制单次拨号时长，不豁免回连等待策略。
+                val boundedDial = Iap2Pairings.current(context).canRespond(device.address, device.bondState)
                 if (!selectedTarget && !awaitIap2Service(device, diagnosticEpoch)) {
                     val deviceClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull()
                     val remembered = Iap2ReceiverMemory.contains(context, device.address)
@@ -583,7 +591,7 @@ class Iap2BluetoothClient(
                 // SDP 等待期间用户可能已停止或重启；旧轮不能再创建一个无法被 stop() 关闭的新 socket。
                 if (!running || generation.get() != myGeneration) return
                 // 已确认只接受车机回连：不再每 3 秒连一次（也不做下面的断开配置文件对照），只按间隔探测
-                if (!boundedDial && inboundWait.skipOutbound(device.address)) continue
+                if (inboundWait.skipOutbound(device.address)) continue
                 // 未知设备先保留 HFP/A2DP；只有已保存的本地策略或用户发起的一次对照才断开。
                 // 每次 start 对同一目标最多执行一次，失败后恢复保留连接的基线，避免 ACL 反复震荡。
                 if (ReceiverDetectionRuntime.bluetooth(device.address) == BluetoothBringup.DISCONNECT_PROFILES &&
@@ -671,7 +679,7 @@ class Iap2BluetoothClient(
             }
             return hit
         }
-        return autoCandidates(bonded) { device ->
+        return autoCandidates(bonded, online = { BtAclTracker.observe(it.address)?.connected == true }) { device ->
             val services = cachedUuids(device)
             sdpGateDecision(
                 hasIap2Service = ACCESSORY_IAP2_UUID in services,
@@ -760,7 +768,7 @@ class Iap2BluetoothClient(
         }
         val cancelled = failure == null || !running || generation.get() != myGeneration
         diagnostics.connectFinished(trace, error = failure, cancelled = cancelled)
-        if (!cancelled && !boundedDial && failure is IOException) {
+        if (!cancelled && failure is IOException) {
             noteConnectFailure(device, name, failure, SystemClock.elapsedRealtime() - connectStartedAt)
         }
         return null
@@ -893,13 +901,6 @@ class Iap2BluetoothClient(
     ) {
         try {
             wake.await(millis, TimeUnit.MILLISECONDS)
-        } catch (_: InterruptedException) {
-        }
-    }
-
-    private fun sleepQuietly(millis: Long) {
-        try {
-            Thread.sleep(millis)
         } catch (_: InterruptedException) {
         }
     }

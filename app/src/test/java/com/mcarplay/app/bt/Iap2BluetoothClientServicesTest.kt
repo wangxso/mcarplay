@@ -102,8 +102,44 @@ class Iap2BluetoothClientServicesTest {
             )
         assertEquals(
             listOf("old-receiver", "passat"),
-            Iap2BluetoothClient.autoCandidates(listOf("headset", "passat", "old-receiver")) { gates.getValue(it) },
+            Iap2BluetoothClient.autoCandidates(listOf("headset", "passat", "old-receiver"), online = { false }) { gates.getValue(it) },
         )
+    }
+
+    @Test
+    fun onlineHeadUnitPrecedesOfflineReceiverWithoutChangingSdpFilter() {
+        val gates =
+            mapOf(
+                "old-receiver" to Iap2BluetoothClient.SdpGate.CONNECT,
+                "headset" to Iap2BluetoothClient.SdpGate.SKIP,
+                "passat" to Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP,
+            )
+        val candidates =
+            Iap2BluetoothClient.autoCandidates(
+                listOf("old-receiver", "headset", "passat"),
+                online = { it != "old-receiver" },
+            ) { gates.getValue(it) }
+        assertEquals(listOf("passat", "old-receiver"), candidates)
+    }
+
+    @Test
+    fun onlineSortingPreservesOrderWithinEachGroup() {
+        val bonded = listOf("offline-a", "online-a", "offline-b", "online-b")
+        val candidates =
+            Iap2BluetoothClient.autoCandidates(bonded, online = { it.startsWith("online") }) {
+                Iap2BluetoothClient.SdpGate.CONNECT
+            }
+        assertEquals(listOf("online-a", "online-b", "offline-a", "offline-b"), candidates)
+    }
+
+    @Test
+    fun withoutCachedIap2OnlineDevicesStillComeFirst() {
+        val bonded = listOf("offline", "online")
+        val candidates =
+            Iap2BluetoothClient.autoCandidates(bonded, online = { it == "online" }) {
+                Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP
+            }
+        assertEquals(listOf("online", "offline"), candidates)
     }
 
     @Test
@@ -111,6 +147,6 @@ class Iap2BluetoothClientServicesTest {
         // 没有任何设备缓存了 …caff：沿用全部已配对设备，由连接循环里的 SDP 闸门逐台判断
         val bonded = listOf("headset", "passat")
         val gates = mapOf("headset" to Iap2BluetoothClient.SdpGate.SKIP, "passat" to Iap2BluetoothClient.SdpGate.CONNECT_DESPITE_SDP)
-        assertEquals(bonded, Iap2BluetoothClient.autoCandidates(bonded) { gates.getValue(it) })
+        assertEquals(bonded, Iap2BluetoothClient.autoCandidates(bonded, online = { false }) { gates.getValue(it) })
     }
 }

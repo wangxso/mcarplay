@@ -79,6 +79,14 @@ class BluetoothDiagnosticsTest {
     }
 
     @Test
+    fun busyTargetIsRejectedWithoutCountingAnAcceptedConnection() {
+        diagnostics.begin("1234abcd")
+        diagnostics.incoming(diagnostics.epoch(), BluetoothDiagnostics.Service.IAP2, address, target, busy = true)
+        assertTrue(diagnostics.summary().contains("incomingAccepted=0 incomingRejected=1 capabilityConnections=0"))
+        assertTrue(lines.any { "decision=REJECTED_BUSY" in it })
+    }
+
+    @Test
     fun repeatedFailuresAreCountedButThrottledAndChangedReasonIsImmediate() {
         diagnostics.begin("1234abcd")
         val epoch = diagnostics.epoch()
