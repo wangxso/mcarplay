@@ -63,4 +63,13 @@ class VideoSenderSourceGuardTest {
         assertTrue("转码发布必须仍持有 lifecycleLock", code.contains("synchronized(lifecycleLock)"))
         assertTrue("转码发布必须在锁内发布画布", code.contains("publishEncodedCanvas"))
     }
+
+    @Test
+    fun encoderReportsSuccessfulFramesWithoutRequiringAnExternalSource() {
+        val body = bodyOf(SourceTree.scan(sender).code, "private fun drainEncoder()")
+        val write = body.indexOf("sendVideoFrame(")
+        val notify = body.indexOf("if (sent > 0) runCatching { onVideoFrameSent?.invoke(sent) }")
+        val externalOnlyStats = body.indexOf("if (sent > 0 && externalVideoSource != null)")
+        assertTrue("编码帧成功写出后才回调，且不受外部源统计分支限制", write >= 0 && notify > write && externalOnlyStats > notify)
+    }
 }

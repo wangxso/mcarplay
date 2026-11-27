@@ -141,7 +141,7 @@ internal class StreamPipeline(
                 log = { line -> ports.log(line) },
                 keepAliveWithStats = plan.keepAliveWithStats,
                 externalVideoSource = plan.externalVideoSource,
-                onExternalFrameSent = plan.hooks.newExternalFrameObserver(),
+                onVideoFrameSent = plan.hooks.newVideoFrameObserver(),
                 receiverMaxFps = plan.receiverMaxFps,
                 // 车机拿走主屏（原车界面、倒车影像等）时暂停屏幕视频，归还后从新的 IDR 恢复
                 phoneOwnsScreen = plan.phoneOwnsScreen,
@@ -380,7 +380,7 @@ internal class ScreenSenderPlan(
 internal interface ScreenSenderHooks {
     fun onScreenOutputSuspended(suspended: Boolean)
 
-    fun newExternalFrameObserver(): (bytes: Int) -> Unit
+    fun newVideoFrameObserver(): (bytes: Int) -> Unit
 
     /** 实验面板的 VideoConfig 上报观察器；未启用实验面板时返回 null（不挂回调）。 */
     fun newVideoConfigObserver(): ((width: Int, height: Int) -> Unit)?

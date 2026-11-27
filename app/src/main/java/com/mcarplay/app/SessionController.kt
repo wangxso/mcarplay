@@ -4539,7 +4539,7 @@ object SessionController {
                                                         ConnectionDiagnostics.timeline.screenOutput(diagnosticAttempt, suspended)
                                                     }
 
-                                                    override fun newExternalFrameObserver(): (Int) -> Unit {
+                                                    override fun newVideoFrameObserver(): (Int) -> Unit {
                                                         val firstFrameSent = AtomicBoolean(false)
                                                         return { bytes ->
                                                             ConnectionDiagnostics.timeline.media(diagnosticAttempt, true, bytes)

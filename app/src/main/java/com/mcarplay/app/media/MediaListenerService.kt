@@ -155,6 +155,21 @@ class MediaListenerService : NotificationListenerService() {
                 val state = controller.playbackState
                 val playing = state?.state == PlaybackState.STATE_PLAYING
                 val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE)
+                val packageName = controller.packageName
+                val positionMs = state?.position ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN
+                val playbackSpeed = if (playing) (state?.playbackSpeed ?: 1f) else 0f
+                val durationMs = meta?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
+                val sampledAtMs = android.os.SystemClock.elapsedRealtime()
+                val previousAnchor =
+                    MediaSessionsState.nowPlaying
+                        ?.takeIf {
+                            it.pkg == packageName &&
+                                it.title == title &&
+                                it.durationMs == durationMs &&
+                                it.positionMs == positionMs &&
+                                it.playing == playing &&
+                                it.playbackSpeed == playbackSpeed
+                        }?.anchoredAtMs
                 MediaSessionsState.NowPlaying(
                     title = title,
                     artist =
@@ -162,11 +177,11 @@ class MediaListenerService : NotificationListenerService() {
                             ?: meta?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST),
                     playing = playing,
                     art = artFor(controller, meta, title),
-                    pkg = controller.packageName,
-                    positionMs = state?.position ?: 0L,
-                    playbackSpeed = if (playing) (state?.playbackSpeed ?: 1f) else 0f,
-                    durationMs = meta?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
-                    anchoredAtMs = android.os.SystemClock.elapsedRealtime(),
+                    pkg = packageName,
+                    positionMs = positionMs,
+                    playbackSpeed = playbackSpeed,
+                    durationMs = durationMs,
+                    anchoredAtMs = playbackPositionAnchor(state?.lastPositionUpdateTime, sampledAtMs, previousAnchor),
                 )
             }
         MediaSessionsState.publish(now)
@@ -235,6 +250,16 @@ class MediaListenerService : NotificationListenerService() {
     }
 }
 
+/** Reuse the local anchor for an unchanged sample from players that do not report a monotonic timestamp. */
+internal fun playbackPositionAnchor(
+    playerUpdateTimeMs: Long?,
+    sampledAtMs: Long,
+    previousAnchorMs: Long?,
+): Long =
+    playerUpdateTimeMs?.takeIf { it in 1..sampledAtMs }
+        ?: previousAnchorMs?.takeIf { it in 1..sampledAtMs }
+        ?: sampledAtMs
+
 /** 全局「正在播放」状态（本进程内共享）。 */
 object MediaSessionsState {
     /** 日志出口（界面启动时接到主界面日志）。 */
@@ -258,10 +283,10 @@ object MediaSessionsState {
     ) {
         /** 渲染时刻的推算播放位置（播放中按速度外推，钳制在时长内）。 */
         fun displayPositionAt(elapsedRealtimeMs: Long): Long {
-            if (durationMs <= 0) return 0
+            if (durationMs <= 0 || positionMs < 0) return 0
             val base =
                 if (playing && anchoredAtMs > 0) {
-                    positionMs + ((elapsedRealtimeMs - anchoredAtMs) * playbackSpeed).toLong()
+                    positionMs + ((elapsedRealtimeMs - anchoredAtMs).coerceAtLeast(0) * playbackSpeed).toLong()
                 } else {
                     positionMs
                 }
@@ -296,8 +321,7 @@ object MediaSessionsState {
     fun publish(value: NowPlaying?) {
         val old = nowPlaying
         nowPlaying = value
-        // 位置每秒都在变（1s 兜底轮询）——日志只看内容键，避免刷屏；
-        // listeners 仍每次通知（UI 据此刷新进度文本）
+        // 曲目和播放状态进入日志。Seek 也刷新界面，但不重复记录正在播放的曲目。
         val contentChanged =
             old?.title != value?.title ||
                 old?.artist != value?.artist ||
@@ -311,9 +335,13 @@ object MediaSessionsState {
                 ),
             )
         }
-        // 内容未变（仅位置锚点随轮询更新）不通知：进度走秒由 UI 侧 mediaTick 每秒自刷新
-        // ——此前 anchoredAtMs 恒变导致每秒全量通知监听者，与 mediaTick 形成双路重复渲染
-        if (!contentChanged) return
+        val progressChanged =
+            old?.pkg != value?.pkg ||
+                old?.positionMs != value?.positionMs ||
+                old?.anchoredAtMs != value?.anchoredAtMs ||
+                old?.playbackSpeed != value?.playbackSpeed ||
+                old?.durationMs != value?.durationMs
+        if (!contentChanged && !progressChanged) return
         listeners.forEach { runCatching { it() } }
     }
 

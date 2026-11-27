@@ -203,7 +203,7 @@ internal class RecordingScreenHooks : ScreenSenderHooks {
         this.suspended += suspended
     }
 
-    override fun newExternalFrameObserver(): (bytes: Int) -> Unit = { bytes -> frames += bytes }
+    override fun newVideoFrameObserver(): (bytes: Int) -> Unit = { bytes -> frames += bytes }
 
     override fun newVideoConfigObserver(): ((width: Int, height: Int) -> Unit)? = { width, height -> configs += width to height }
 
