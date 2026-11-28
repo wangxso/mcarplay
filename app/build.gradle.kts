@@ -251,6 +251,26 @@ androidComponents {
     }
 }
 
+// Keep one configuration per Android runtime. A single configuration would resolve the
+// two requested versions as a conflict and retain only the newest jar.
+val robolectricInstrumentedConfigurations =
+    listOf(
+        "5.0.2_r3-robolectric-r0-i7",
+        "15-robolectric-12650502-i7",
+    ).mapIndexed { index, version ->
+        configurations
+            .create("robolectricInstrumentedRuntime$index") {
+                isCanBeConsumed = false
+                isCanBeResolved = true
+                isTransitive = false
+            }.also { configuration ->
+                dependencies.add(
+                    configuration.name,
+                    "org.robolectric:android-all-instrumented:$version",
+                )
+            }
+    }
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
@@ -278,4 +298,19 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:monitor:1.7.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+}
+
+val robolectricRuntimeDir = layout.buildDirectory.dir("robolectric-runtime")
+
+val prepareRobolectricRuntime by tasks.registering(Sync::class) {
+    // Gradle resolves these once for this task. Robolectric otherwise downloads them
+    // in parallel inside the test JVM, where shared GitHub runner egress can receive
+    // HTTP 429 from Maven Central.
+    from(robolectricInstrumentedConfigurations)
+    into(robolectricRuntimeDir)
+}
+
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    dependsOn(prepareRobolectricRuntime)
+    systemProperty("robolectric.dependency.dir", robolectricRuntimeDir.get().asFile.absolutePath)
 }
