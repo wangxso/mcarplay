@@ -457,6 +457,80 @@ class Iap2LinkEngineTest {
         assertEquals(emitted.sorted(), emitted)
     }
 
+    /**
+     * 对端 SYN 声明短重传超时（如有线 USB 车机常见的 500 ms × 3 = 1.5 s）时，
+     * 可靠流（RFCOMM / TCP 虚拟链路）仍保持本端 4_000 ms × 4 预算：否则 MFi 慢应答（3–6 s）
+     * 或与 RTSP 控制通道共锁的慢音频 SETUP（2.7–3.2 s）会在重传耗尽时误杀健康链路。
+     */
+    @Test
+    fun shortPeerSynRetransmissionTimeoutKeepsConfiguredStreamBudget() {
+        val phone = Iap2LinkEngine()
+        phone.start(0)
+        phone.takeOutput()
+        phone.feed(
+            synFrameWithParams(
+                peerSequence = 50,
+                retransmissionTimeoutMillis = 500L,
+                maxRetransmissions = 3,
+            ),
+            10,
+        )
+        phone.takeOutput()
+        phone.feed(ackFrame(), 20)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+        assertEquals(500, phone.peerSynchronization?.retransmissionTimeoutMillis)
+        assertEquals(3, phone.peerSynchronization?.maxRetransmissions)
+
+        assertTrue(phone.sendControl(Iap2Csm.encode(0xAA02), 100))
+        val initialTx = parseFrames(phone.takeOutput()).single()
+
+        for (elapsed in listOf(600L, 1_200L, 2_000L, 3_500L)) {
+            phone.advanceTime(elapsed)
+            assertTrue("未满 4_000 ms 本端预算前不得重传（t=$elapsed）", phone.takeOutput().isEmpty())
+            assertFalse("慢应答窗口内链路不得自杀（t=$elapsed）", phone.isDead)
+        }
+
+        phone.advanceTime(4_100L)
+        val retransmitTx = parseFrames(phone.takeOutput()).single()
+        assertEquals("到 4_000 ms 本端预算后原序号重传", initialTx.sequence, retransmitTx.sequence)
+        assertFalse(phone.isDead)
+    }
+
+    /** 发后不管（0x4E0E / 0x4300 / 0xEA01）在对端不回 ACK 时永不重传、永不因超时杀链。 */
+    @Test
+    fun fireAndForgetControlPacketNeverRetransmitsOrKillsLink() {
+        val phone = normalHandshake().phone
+        assertTrue(phone.sendControl(Iap2Csm.encode(0x4E0E), 100, awaitAck = false))
+        assertEquals(1, parseFrames(phone.takeOutput()).size)
+
+        for (step in 1..6) {
+            phone.advanceTime(100L + step * 5_000L)
+            assertTrue(phone.takeOutput().isEmpty())
+            assertFalse(phone.isDead)
+        }
+    }
+
+    /** AirPlay type=130 隧道对端声明 maxRetransmissions=0 时，出站帧不挂重传计时器。 */
+    @Test
+    fun zeroMaxRetransmissionsFromPeerDisablesRetransmitTracking() {
+        val phone = Iap2LinkEngine()
+        phone.start(0)
+        phone.takeOutput()
+        phone.feed(synFrameWithParams(peerSequence = 60, maxRetransmissions = 0), 10)
+        phone.takeOutput()
+        phone.feed(ackFrame(), 20)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+
+        assertTrue(phone.sendControl(Iap2Csm.encode(0x1D00), 100))
+        assertEquals(1, parseFrames(phone.takeOutput()).size)
+
+        for (step in 1..6) {
+            phone.advanceTime(100L + step * 5_000L)
+            assertTrue(phone.takeOutput().isEmpty())
+            assertFalse(phone.isDead)
+        }
+    }
+
     // ---- 工具 ----
 
     private class ParsedFrame(
@@ -510,8 +584,20 @@ class Iap2LinkEngineTest {
     private fun synFrameWithMaxOutgoing(
         peerSequence: Int,
         maxOutgoing: Int,
+    ): ByteArray = synFrameWithParams(peerSequence = peerSequence, maxOutgoing = maxOutgoing)
+
+    private fun synFrameWithParams(
+        peerSequence: Int,
+        maxOutgoing: Int = 4,
+        retransmissionTimeoutMillis: Long = 4_000L,
+        maxRetransmissions: Int = 4,
     ): ByteArray {
-        val engine = Iap2LinkEngine(maxOutgoing = maxOutgoing)
+        val engine =
+            Iap2LinkEngine(
+                maxOutgoing = maxOutgoing,
+                retransmissionTimeoutMillis = retransmissionTimeoutMillis,
+                maxRetransmissions = maxRetransmissions,
+            )
         engine.start(0)
         val raw = engine.takeOutput()
         val synOffset = 6 // 前置 marker 6 字节

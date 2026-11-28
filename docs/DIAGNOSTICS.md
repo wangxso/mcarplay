@@ -264,9 +264,13 @@ A capture shows only what was on the air during that run; it is not vehicle-comp
 
 ```bash
 python3 tools/analyze_diagnostics.py /path/to/mcarplay-log-...-diagnostics.txt
+python3 tools/analyze_diagnostics.py --align-end report-1.txt report-2.txt report-3.txt
 ```
 
-The offline tool summarizes the last five retained attempts. `python3 tools/compare_diagnostics.py baseline.txt candidate.txt`
+The offline tool summarizes the last five retained attempts per report. Passing `--align-end` (or multiple report files)
+additionally computes `T_end - T_anchor` across all non-benign ended `carplay` attempts and ranks milestones and stages by
+lowest variance (`stddevMs`, `spreadMs`), helping locate candidate hidden receiver watchdogs; pass `--include-benign` to
+include `USER_STOP`/`SUPERSEDED`/`NONE`/`ENDPOINT_PENDING`. `python3 tools/compare_diagnostics.py baseline.txt candidate.txt`
 compares two reports of the same scenario (timeline order and normalised log lines per tag) and exits non-zero on a difference;
 see `docs/ARCHITECTURE-REFACTOR.md` section 6. The QQ bot in
 [`tools/logbot/`](../tools/logbot/README.md) builds a user-facing diagnosis on top of it;
