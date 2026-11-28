@@ -1,6 +1,6 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-11-27。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-11-28。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
@@ -13,6 +13,27 @@
 - **11 月 27 日蓝牙拨号与回连等待（待实车复测）：** 入站或出站成功保存的 iAP2 配对记录均可启用 11 秒拨号超时，自动模式与指定目标一致。
   配对记录不豁免快速失败后的回连等待；等待期间每 60 秒放行一次探测。自动候选在原 SDP 筛选后优先 ACL 在线设备，
   均未在线时保持原顺序；没有应用内配对完成记录的候选仍使用系统拨号超时。单通道门闸与迟到结果隔离保持不变。
+
+- **11 月 28 日 HyperCar 增量洁净室复盘与蓝牙/转码适配落地（无新增设备或实车验证）：**
+  对 `fw867/hypercar`（GPL-3.0，严格洁净室对照，不克隆仓库、不复制任何代码/注释/文档原文）完成增量复盘并归档于
+  `docs/HYPERCAR-REVIEW-2026-11-28.md`，同步落地三项工程改进：
+  ① 修复 `bt/CarBluetoothReceiver` 在关闭「上车自动连接」时提前短路 `ACTION_ACL_DISCONNECTED` 的缺陷（抽出纯函数 `decideAclBroadcastAction` 与
+  `CarBluetoothReceiverPolicyTest`），确保手动发起的会话在车机熄火断蓝牙时仍向 `CarPlayService` 投递 `ACTION_AUTO_STOP_SESSION`；
+  ② 优化蓝牙出入站仲裁与秒断退避：`BtSessionGate` 允许真实入站抢占仍在 `connect()` 阻塞中的在途出站拨号（已连通出站仍受保护），`InboundWaitPolicy`
+  将 `connected` 重置移至端点真正交付时，并对「RFCOMM 连通后 5 s 内无端点快速关闭」连续 2 次的出站尝试（含 `boundedDial=true`）退避 30 s 以让出无竞争回连窗口，
+  避免 8 s 内连败 3 轮误触 180 s 熔断关停入站监听（保持 60 s/90 s 慢协商超时的原有 3 轮熔断不变）；
+  ③ 新增默认关闭的兼容实验开关「实验：源画面尺寸不符时直接转码」（`CompatibilityPrefs.transcodeOnGeometryMismatch` →
+  `ReceiverCompatibility.Policy.transcodeOnGeometryMismatch` → `ScreenSenderPlan` → `VideoSender`，手动「通用」预设关闭），在拿到合法 `/info displays[0]`
+  几何但 CarWith 首个源帧 SPS 尺寸仍不符时不等 `forceKeyFrame` 风暴直接启动手机端转码，避免写出错误尺寸的透传 `VideoConfig`；同步更新中英文 `README` 与
+  `docs/RECEIVER-COMPATIBILITY.md`。网络隧道非 MIB3 脉冲等缺乏自有实车证据的改动暂不合入。
+  本地门禁通过：standard JVM 单测 1,977 项、remote bridge 单测 25 项、Python 工具 90 项，`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug`
+  全部 0 失败 / 0 错误 / 0 跳过；离线测试不构成任何车型兼容性结论。
+
+- **11 月 28 日 OrangeCar（有线 CarPlay 发射端）洁净室调研与离线诊断增强（未改 APK 生产代码，无新增设备或实车验证）：**
+  对 `sbuysse/orangecar`（GPL-3.0，只做公开协议现象与机制对照，不克隆仓库、不复制代码/注释/文档原文）完成逐层评估并归档于
+  `docs/ORANGECAR-RESEARCH-2026-11-28.md`：明确有线 USB OTG 角色翻转与内核 `cdc_ncm`/LPM 补丁不适用于免 root 安卓手机；梳理本仓库已覆盖的共享层机制（`0xAA05` 免芯片自报、`et=1` + AES-128-CTR 零密钥连续流、已存信任优先 `pair-verify` 与 `MAX_PEERS` 熔断、RTSP 按 `CSeq` 异步派发、`TimingServer` 早于 `SETUP` 启动、`ModeArbiter` 资源仲裁、HID 描述符动态解析及大端 PCM）以及不可照搬到无线场景的 4 条单车/有线结论（仅走 `fe80::`、`_carplay-ctrl` `srcvers=566.25.21` 与不等邀请、`0x0007` 硬门控、固定 32B MFi 挑战）。
+  离线改进评估与落地：① `Iap2LinkEngine` 在可靠流（RFCOMM / TCP）且与慢 MFi/慢 RTSP `SETUP` 共用写锁的架构下不能照搬对端 SYN 的 `500 ms` 短重传预算，保持 `4_000 ms × 4` 不变，并在 `Iap2LinkEngineTest` 新增 3 项回归单测锁死边界；② `tools/analyze_diagnostics.py` 新增 `--align-end` 多报告断链反向对齐与最小方差分析（默认剔除 `USER_STOP`/`SUPERSEDED`/`NONE`/`ENDPOINT_PENDING`，单报告无参数输出结构不变），同步更新 `tools/test_analyze_diagnostics.py`（+3 项）与 `docs/DIAGNOSTICS.md`；③ 多地址 Happy Eyeballs 竞速与非 MIB3 额外订阅应答留待自有支持报告确认同款现象后再评估。
+  本地门禁通过：standard JVM 单测 1,968 项、remote bridge 单测 25 项、Python 工具 90 项，`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 全部 0 失败 / 0 错误 / 0 跳过；外部项目实车观察不作为本项目兼容性证据。
 
 - **11 月 26–27 日会话编排层重构 Phase 3b（`dev` @ `9ac1b4c` / #135，对照 `main` @ `df4c81d` 完成 T2 实车与台架验收）：**
   本地完整门禁通过：standard JVM 单测 1,859 项、remote bridge 单测 25 项、Python 工具 87 项、Node debug-bridge 20 项，`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 全部 0 失败 / 0 错误 / 0 跳过。

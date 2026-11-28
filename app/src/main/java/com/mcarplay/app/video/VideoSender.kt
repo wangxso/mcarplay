@@ -70,6 +70,8 @@ class VideoSender(
     private val phoneOwnsScreen: () -> Boolean = { true },
     /** 主屏归属导致的屏幕视频暂停/恢复；用于让诊断层区分“主动暂停”和“传输停滞”。 */
     private val onScreenOutputSuspended: (Boolean) -> Unit = {},
+    /** 实验开关：源帧 SPS 尺寸与车机流尺寸不符时，首个源帧即启动手机端转码（无需等要帧风暴）。 */
+    private val transcodeOnGeometryMismatch: Boolean = false,
     private val uptimeMs: () -> Long = { android.os.SystemClock.uptimeMillis() },
 ) {
     /**
@@ -121,6 +123,7 @@ class VideoSender(
 
     /** 转码只尝试一次：事件线程与控制动作线程都可能触发，原子认领。 */
     private val transcodeClaimed = AtomicBoolean(false)
+    private val transcodeInitializing = AtomicBoolean(false)
     private val keyFrameStorm = KeyFrameStorm()
     private val sustainedStormNoted = AtomicBoolean(false)
 
@@ -1166,7 +1169,10 @@ class VideoSender(
      * 失败则保持透传。
      */
     @Synchronized
-    private fun startTranscoding(storm: KeyFrameStorm.Level) {
+    private fun startTranscoding(
+        storm: KeyFrameStorm.Level?,
+        initialFrame: ExternalVideoFrame? = null,
+    ) {
         if (!running.get() || quiescing.get()) return
         val fps = TranscodePolicy.cappedFps(targetFps, receiverMaxFps)
         val reason =
@@ -1175,11 +1181,17 @@ class VideoSender(
             } else {
                 "CarWith ${sourceWidth}x$sourceHeight 与车机流尺寸一致，"
             }
-        val cadence = if (storm == KeyFrameStorm.Level.SUSTAINED) "持续" else "密集"
-        log(
-            "VIDEO: $reason" + "且车机${cadence}要关键帧（透传解不出画）——切换为手机端转码 ${streamWidth}x$streamHeight@$fps" +
-                "\n  ↳ 切换前透传统计：${streamStats.summary()}",
-        )
+        if (storm != null) {
+            val cadence = if (storm == KeyFrameStorm.Level.SUSTAINED) "持续" else "密集"
+            log(
+                "VIDEO: $reason" + "且车机${cadence}要关键帧（透传解不出画）——切换为手机端转码 ${streamWidth}x$streamHeight@$fps" +
+                    "\n  ↳ 切换前透传统计：${streamStats.summary()}",
+            )
+        } else {
+            log(
+                "VIDEO: $reason" + "已启用尺寸不符即转码——直接启动手机端转码 ${streamWidth}x$streamHeight@$fps",
+            )
+        }
         var codec: MediaCodec? = null
         var surface: Surface? = null
         var pipeline: CarWithTranscoder? = null
@@ -1212,6 +1224,9 @@ class VideoSender(
                 log("VIDEO: 转码初始化期间会话已停止，释放转码资源")
                 return
             }
+            if (initialFrame != null && !screenFeedPaused()) {
+                pipeline.submit(initialFrame)
+            }
             Thread({ drainEncoder() }, "video-transcode-drain").apply {
                 isDaemon = true
                 start()
@@ -1219,7 +1234,21 @@ class VideoSender(
         } catch (error: Exception) {
             log("VIDEO: 转码启动失败，保持透传 - ${error.message}")
         } finally {
+            transcodeInitializing.set(false)
             if (!published) releaseVideoResources(pipeline, codec, surface)
+        }
+    }
+
+    private fun launchGeometryMismatchTranscode(frame: ExternalVideoFrame) {
+        transcodeInitializing.set(true)
+        try {
+            Thread({ startTranscoding(storm = null, initialFrame = frame) }, "video-transcode-start").apply {
+                isDaemon = true
+                start()
+            }
+        } catch (error: Throwable) {
+            transcodeInitializing.set(false)
+            throw error
         }
     }
 
@@ -1228,6 +1257,11 @@ class VideoSender(
             val client = socket ?: return
             val output = client.getOutputStream()
             while (running.get() && !client.isClosed) {
+                if (transcodeInitializing.get()) {
+                    Thread.sleep(20)
+                    maybeSendKeepAlive(output)
+                    continue
+                }
                 val entry = externalQueue.poll(250)
                 // 转码中：帧改喂解码器，数据口（含 keepAlive）由编码线程独占
                 val pipeline = transcoder
@@ -1250,6 +1284,15 @@ class VideoSender(
                     continue
                 }
                 val frame = entry.frame
+                val sizeMismatch = TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)
+                if (TranscodePolicy.shouldTranscodeOnGeometryMismatch(sizeMismatch, transcodeOnGeometryMismatch) &&
+                    transcodeClaimed.compareAndSet(false, true)
+                ) {
+                    markSourceInput()
+                    launchGeometryMismatchTranscode(frame)
+                    maybeSendKeepAlive(output)
+                    continue
+                }
                 var nalUnits = splitAnnexB(frame.data)
                 if (nalUnits.isEmpty()) continue
                 markSourceInput()

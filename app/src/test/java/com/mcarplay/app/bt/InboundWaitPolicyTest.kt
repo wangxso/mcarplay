@@ -122,6 +122,35 @@ class InboundWaitPolicyTest {
         assertFalse(InboundWaitPolicy.isFastReadFailure(null, 10))
     }
 
+    @Test
+    fun twoPostConnectFastDropsPauseEvenBoundedOutboundForCallbackWindow() {
+        // 复现 MacPlay S2 形态：RFCOMM connect() 成功但 90ms 内在端点前被对端拆掉，且 boundedDial=true
+        assertFalse(policy.postConnectDroppedBeforeEndpoint(ADDRESS, 90))
+        assertFalse(policy.skipOutbound(ADDRESS, boundedDial = true))
+        assertTrue(policy.postConnectDroppedBeforeEndpoint(ADDRESS, 95))
+        assertTrue(policy.isWaiting(ADDRESS))
+        assertTrue(policy.skipOutbound(ADDRESS, boundedDial = true))
+        assertTrue(policy.skipOutbound(ADDRESS, boundedDial = false))
+
+        // 12s 回连窗口内保持静默，不打第 3 次出站去踩 180s 自动重连熔断
+        now += 12_000L
+        assertTrue(policy.skipOutbound(ADDRESS, boundedDial = true))
+
+        // 30s 静默窗口结束后若对端仍未回连，放行下一次出站探测
+        now += InboundWaitPolicy.POST_CONNECT_WAIT_MILLIS - 12_000L
+        assertFalse(policy.skipOutbound(ADDRESS, boundedDial = true))
+        assertFalse(policy.isWaiting(ADDRESS))
+    }
+
+    @Test
+    fun longNegotiationTimeoutsDoNotTriggerPostConnectCallbackPause() {
+        // 保时捷 bug #66 形态：60s/90s 协商超时不属于「秒断拒绝出站」，重置秒断计数并维持原有 3 轮熔断
+        assertFalse(policy.postConnectDroppedBeforeEndpoint(ADDRESS, 90))
+        assertFalse(policy.postConnectDroppedBeforeEndpoint(ADDRESS, 60_000L))
+        assertFalse(policy.postConnectDroppedBeforeEndpoint(ADDRESS, 90))
+        assertFalse(policy.skipOutbound(ADDRESS, boundedDial = true))
+    }
+
     private companion object {
         const val ADDRESS = "AA:BB:CC:DD:EE:FF"
     }

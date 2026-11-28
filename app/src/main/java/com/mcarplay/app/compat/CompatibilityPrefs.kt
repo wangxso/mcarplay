@@ -16,18 +16,26 @@ object CompatibilityPrefs {
     private const val KEY_SCREEN_RETURN = "compat_passat_return_strategy"
     private const val KEY_KNOWN_ORA03 = "compat_known_ora03_"
     private const val KEY_CHERY_DISABLE_BLUETOOTH = "compat_chery_disable_bluetooth"
+    private const val KEY_TRANSCODE_ON_GEOMETRY_MISMATCH = "compat_transcode_geometry_mismatch"
 
     const val PLAIN_FALLBACK_DEFAULT = false
     const val AUDIO_BASELINE_DEFAULT = false
     const val CHERY_DISABLE_BLUETOOTH_DEFAULT = false
+    const val TRANSCODE_ON_GEOMETRY_MISMATCH_DEFAULT = false
 
     /** 进程内缓存，供 [ReceiverCompatibility.resolve] 在无 Context 调用处读取；启动与设置变更时同步。 */
     @Volatile
     var cheryDisableBluetoothRuntime: Boolean = CHERY_DISABLE_BLUETOOTH_DEFAULT
         private set
 
+    /** 进程内缓存，供 [ReceiverCompatibility.resolve] 读取「尺寸不符即转码」实验开关。 */
+    @Volatile
+    var transcodeOnGeometryMismatchRuntime: Boolean = TRANSCODE_ON_GEOMETRY_MISMATCH_DEFAULT
+        private set
+
     fun loadRuntime(context: Context) {
         cheryDisableBluetoothRuntime = cheryDisableBluetooth(context)
+        transcodeOnGeometryMismatchRuntime = transcodeOnGeometryMismatch(context)
     }
 
     /** Recognize a generic identity only for a receiver previously confirmed by its normal identity. */
@@ -121,5 +129,26 @@ object CompatibilityPrefs {
             .putBoolean(KEY_CHERY_DISABLE_BLUETOOTH, enabled)
             .apply()
         cheryDisableBluetoothRuntime = enabled
+    }
+
+    /**
+     * 实验开关（默认关）：当已取得车机合法主屏几何但 CarWith 实际 SPS 尺寸仍与流尺寸不符时，
+     * 不等待车机 `forceKeyFrame` 风暴，直接切换手机端转码（下次连接起效）。
+     */
+    fun transcodeOnGeometryMismatch(context: Context): Boolean =
+        context
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_TRANSCODE_ON_GEOMETRY_MISMATCH, TRANSCODE_ON_GEOMETRY_MISMATCH_DEFAULT)
+
+    fun setTranscodeOnGeometryMismatch(
+        context: Context,
+        enabled: Boolean,
+    ) {
+        context
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_TRANSCODE_ON_GEOMETRY_MISMATCH, enabled)
+            .apply()
+        transcodeOnGeometryMismatchRuntime = enabled
     }
 }

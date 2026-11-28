@@ -24,6 +24,15 @@ internal object TranscodePolicy {
         sizeMismatch: Boolean,
     ): Boolean = sizeMismatch && storm != KeyFrameStorm.Level.NONE
 
+    /**
+     * 用户显式开启「尺寸不符即转码」实验开关时，一旦收到首个 CarWith 源帧且尺寸与车机流不符，
+     * 无需等待 `forceKeyFrame` 风暴即启动手机端转码；尺寸一致或尚未收到源帧（0×0）时不触发。
+     */
+    fun shouldTranscodeOnGeometryMismatch(
+        sizeMismatch: Boolean,
+        enabled: Boolean,
+    ): Boolean = enabled && sizeMismatch
+
     /** 转码编码帧率：不超过车机 /info 的 maxFPS（未声明时为 0，沿用目标帧率）。 */
     fun cappedFps(
         targetFps: Int,

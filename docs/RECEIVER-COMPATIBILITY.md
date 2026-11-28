@@ -59,7 +59,7 @@ WinPlay 的“网络交接完成”必须同时满足 RECORD 成功和网络 iAP
 - **CarWith 尺寸协商**：自动判定对所有接收端开启 `preferVehicleResolution`；是否真正在 `0x18052` 追加 `DISABLE_RESOLUTION_OPTION=1` 由 `carlife/CarWithVideoNegotiation` 按本轮 `/info displays[0]` 的合法几何统一决定（手机端兜底的 1080×2320 不算车机几何，不会触发）。取得合法几何时按车机尺寸精确请求，长边可超过默认 1920 上限（如 2560×1200），但仍受维度/像素安全边界约束；几何缺失或非法时回退 1920 长边请求且不声明该 key。手动「通用」（`GENERIC`）预设显式关闭该策略，作为回退出口。实际是否按车机尺寸编码仍以 `0x10008`/SPS 为准。
 - **输入**：继续按 HID 描述符、Usage 和报告结构解析触摸、旋钮与媒体键。描述符缺失只走已有明确回退，不因名称相似套用另一款接收端的布局。
 - **记忆隔离**：音频记忆键包含接收端实例标识（端点公钥/设备标识）、型号、制造商、固件、AirPlay 栈版本、features、EA 标识与音频能力指纹。持久化仅保存摘要；没有稳定实例和身份时不读写持久化记忆。切换接收端、固件或能力变化不会沿用旧档位结论。
-- **用户兜底开关**（默认关，`compat/CompatibilityPrefs`，界面在「车机设置 → 显示」）：「配对失败后尝试明文」在已连上 RTSP 的普通配对失败后恢复明文降级，403 与未连通 RTSP 仍禁止，且不影响断蓝牙重试许可；「音频格式未声明时仍尝试」在清单为空或无可用媒体格式时恢复协议基线与非媒体 PCM 档。两者是用户自担风险的旧行为，不改变默认策略矩阵。
+- **用户兜底开关**（默认关，`compat/CompatibilityPrefs`，界面在「车机设置 → 显示」）：「配对失败后尝试明文」在已连上 RTSP 的普通配对失败后恢复明文降级，403 与未连通 RTSP 仍禁止，且不影响断蓝牙重试许可；「音频格式未声明时仍尝试」在清单为空或无可用媒体格式时恢复协议基线与非媒体 PCM 档；「实验：源画面尺寸不符时直接转码」（`compat.transcode-on-geometry-mismatch`）在本轮取得合法 `/info displays[0]` 几何且 CarWith 首个 SPS 尺寸仍与车机流尺寸不符时，不等待 `forceKeyFrame` 风暴即启动手机端转码（手动「通用」预设显式关闭）。三者均为用户按需排查开关，不改变默认策略矩阵。
 - **定点恢复**：用户选择开启声音而旧记忆已禁用音频时，仅复位当前作用域；不清除其他接收端的记录。
 
 `COMPAT:` 日志与连接时间线只写固定的家族、策略和规则编号，不增加原始 SSID、MAC、序列号或配对材料。策略识别与实际验证分开记录，命中一条规则不代表视频、声音、触控均已验收。
@@ -82,3 +82,4 @@ WinPlay 的“网络交接完成”必须同时满足 RECORD 成功和网络 iAP
 2026-11-19：`v0.1.7-test.4` 实车已证明 32B 蓝牙/隧道认证、空 `0x5702`、`0x6800`/`0x5000`/`0x4157`/`0x4154`/`0x4170` 往返和 1995 帧长会话均成立，但车机仍无画面。同轮发现早到 `0x4301` 在 StartHID 等待窗口内被旧实现丢弃，随后才弹热点确认并回退网关；`v0.1.7-test.5` 仅改为暂存并消费该帧，仍不构成兼容声明，详见 `CARWITH-ENTRY-FINDINGS.md`。
 2026-11-18：新增 `preferVehicleResolution` 策略与 `DISABLE_RESOLUTION_OPTION` 单元覆盖；standard 单测 1250 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、debug/release lint 与 `assembleStandardDebug` 通过。WinPlay 台架复测边界见 `CARWITH-ENTRY-FINDINGS.md`。
 2026-11-25：`preferVehicleResolution` 改为所有接收端自动开启，`0x18052` 是否声明 `DISABLE_RESOLUTION_OPTION=1` 及请求尺寸统一由 `CarWithVideoNegotiation` 按 `/info displays[0]` 几何决定（含 2560×1200 等超过 1920 长边的精确请求）。仅离线验证：standard 单测 1746 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、`lintStandardDebug` 与 `assembleStandardDebug` 通过；未做超 1920 实车复测，车机实际采纳尺寸仍以 `0x10008`/SPS 为准。
+2026-11-28：新增默认关闭的用户实验开关 `compat.transcode-on-geometry-mismatch`（「实验：源画面尺寸不符时直接转码」，手动「通用」预设显式关闭）。仅离线验证：standard 单测 1977 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、`lintStandardDebug` 与 `assembleStandardDebug` 通过；未做实车复测。

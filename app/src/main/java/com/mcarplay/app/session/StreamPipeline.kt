@@ -146,6 +146,7 @@ internal class StreamPipeline(
                 // 车机拿走主屏（原车界面、倒车影像等）时暂停屏幕视频，归还后从新的 IDR 恢复
                 phoneOwnsScreen = plan.phoneOwnsScreen,
                 onScreenOutputSuspended = { suspended -> plan.hooks.onScreenOutputSuspended(suspended) },
+                transcodeOnGeometryMismatch = plan.transcodeOnGeometryMismatch,
                 onEnded = { plan.hooks.onEnded(created) },
             )
         // 实验（issue #62，PR #78 评审 P2）：只在 VideoConfig 真正写出后判定，且尺寸变化时重新判定。
@@ -385,6 +386,7 @@ internal class ScreenSenderPlan(
     val externalVideoSource: ExternalVideoSource,
     val phoneOwnsScreen: () -> Boolean,
     val hooks: ScreenSenderHooks,
+    val transcodeOnGeometryMismatch: Boolean = false,
 )
 
 /**

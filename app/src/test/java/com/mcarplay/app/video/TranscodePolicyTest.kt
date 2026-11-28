@@ -66,6 +66,31 @@ class TranscodePolicyTest {
     }
 
     @Test
+    fun proactiveGeometryMismatchTranscodeRequiresBothToggleAndActualMismatch() {
+        assertFalse(TranscodePolicy.shouldTranscodeOnGeometryMismatch(sizeMismatch = true, enabled = false))
+        assertFalse(TranscodePolicy.shouldTranscodeOnGeometryMismatch(sizeMismatch = false, enabled = true))
+        assertTrue(
+            TranscodePolicy.shouldTranscodeOnGeometryMismatch(
+                sizeMismatch = TranscodePolicy.needsTranscode(1920, 720, 3000, 2000),
+                enabled = true,
+            ),
+        )
+        // 源尺寸尚未解析（0x0）或与流尺寸一致时，即使打开开关也不误起转码
+        assertFalse(
+            TranscodePolicy.shouldTranscodeOnGeometryMismatch(
+                sizeMismatch = TranscodePolicy.needsTranscode(0, 0, 1624, 1278),
+                enabled = true,
+            ),
+        )
+        assertFalse(
+            TranscodePolicy.shouldTranscodeOnGeometryMismatch(
+                sizeMismatch = TranscodePolicy.needsTranscode(1624, 1278, 1624, 1278),
+                enabled = true,
+            ),
+        )
+    }
+
+    @Test
     fun droppedInputWaitsForNextIdr() {
         val resync = IdrResync(requestIntervalMillis = 1_000L)
         assertTrue(resync.admit(keyFrame = false))

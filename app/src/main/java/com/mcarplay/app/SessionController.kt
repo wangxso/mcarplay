@@ -4546,6 +4546,8 @@ object SessionController {
                                                 client.modes.phoneOwnsScreen &&
                                                     !(screenPolicy.rebuildScreenOnResourceReturn && client.modes.screenNeedsRebuild)
                                             },
+                                            transcodeOnGeometryMismatch =
+                                                client.receiverCompatibility().transcodeOnGeometryMismatch && setup.displayFromInfo,
                                             hooks =
                                                 object : ScreenSenderHooks {
                                                     override fun onScreenOutputSuspended(suspended: Boolean) {

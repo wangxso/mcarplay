@@ -169,6 +169,12 @@ object ReceiverCompatibility {
          * 再按用户点图标的同一条资源拿回路径声明主屏归手机。未实车回归前不影响其他车机。
          */
         val autoRequestCarplayUi: Boolean = false,
+        /**
+         * 实验开关（默认关）：当本轮拿到车机合法主屏几何（`displayFromInfo=true`），但 CarWith 实际输出的
+         * SPS 尺寸与车机流尺寸不符时，不等待 `forceKeyFrame` 风暴，首个源帧即启动手机端转码。
+         * 用于排查严格车机（零要帧静默黑屏）或 CarWith 口头确认尺寸却静默回退 SPS 的场景；手动「通用」预设关闭。
+         */
+        val transcodeOnGeometryMismatch: Boolean = false,
     )
 
     data class PairingFallback(
@@ -182,10 +188,17 @@ object ReceiverCompatibility {
         receiverInstance: String? = null,
         preset: VehiclePreset = VehiclePresetRuntime.current,
         cheryDisableBluetooth: Boolean = CompatibilityPrefs.cheryDisableBluetoothRuntime,
+        transcodeOnGeometryMismatch: Boolean = CompatibilityPrefs.transcodeOnGeometryMismatchRuntime,
     ): Policy {
         val policy =
             applyPreset(
-                resolveDetected(signals, mediaCapabilities, receiverInstance, cheryDisableBluetooth),
+                resolveDetected(
+                    signals,
+                    mediaCapabilities,
+                    receiverInstance,
+                    cheryDisableBluetooth,
+                    transcodeOnGeometryMismatch,
+                ),
                 preset,
                 signals,
                 cheryDisableBluetooth,
@@ -236,7 +249,8 @@ object ReceiverCompatibility {
                     keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = false,
                     claimScreenOnExplicitStart = false,
                     autoRequestCarplayUi = false,
-                    rules = policy.rules + "manual.generic",
+                    transcodeOnGeometryMismatch = false,
+                    rules = policy.rules.filterNot { it == "compat.transcode-on-geometry-mismatch" } + "manual.generic",
                 )
             VehiclePreset.CHERY ->
                 policy.copy(
@@ -408,6 +422,7 @@ object ReceiverCompatibility {
         mediaCapabilities: String,
         receiverInstance: String?,
         cheryDisableBluetooth: Boolean,
+        transcodeOnGeometryMismatch: Boolean = false,
     ): Policy {
         val profile = ReceiverProfile.classify(signals)
         val generation = ReceiverProfile.linkGenerationOf(signals)
@@ -467,6 +482,7 @@ object ReceiverCompatibility {
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
                 if (winPlay) add("winplay.vehicle-resolution")
                 if (bicvGseEv3) add("bicv.gse-ev3.475.8.3.auto-request-ui")
+                if (transcodeOnGeometryMismatch) add("compat.transcode-on-geometry-mismatch")
             }
         return Policy(
             family = family,
@@ -490,6 +506,7 @@ object ReceiverCompatibility {
             // 本轮 /info displays[0] 的合法几何门控（CarWithVideoNegotiation）。
             preferVehicleResolution = true,
             autoRequestCarplayUi = bicvGseEv3,
+            transcodeOnGeometryMismatch = transcodeOnGeometryMismatch,
         )
     }
 
