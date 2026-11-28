@@ -76,17 +76,10 @@ class CarWifiStateTest {
     }
 
     @Test
-    fun phoneModeBlockedForgetPromptAndShellFallbackCleanupFieldsPreserveOriginalSemantics() {
+    fun forgetPromptAndShellFallbackCleanupFieldsPreserveOriginalSemantics() {
         val state = CarWifiState()
-        assertNull(state.phoneModeBlockedSsid)
         assertTrue(state.forgetPromptHandled.isEmpty())
         assertNull(state.shellFallbackCleanupSsid)
-
-        // phoneModeBlockedSsid：按 SSID 记录并单次消费清空
-        state.phoneModeBlockedSsid = "CarHotspot-Phone"
-        assertEquals("CarHotspot-Phone", state.phoneModeBlockedSsid)
-        state.phoneModeBlockedSsid = null
-        assertNull(state.phoneModeBlockedSsid)
 
         // forgetPromptHandled：同一 SSID 在进程寿命内 add 仅首次返回 true
         assertTrue(state.forgetPromptHandled.add("SavedHotspot-1"))
@@ -107,7 +100,6 @@ class CarWifiStateTest {
         val state = SessionController.carWifiState
         val previousCredential = state.current()
         val previousBound = state.boundCarSsid
-        val previousBlocked = state.phoneModeBlockedSsid
         val previousCleanup = state.shellFallbackCleanupSsid
         try {
             assertSame(state, SessionController.carWifiState)
@@ -123,7 +115,6 @@ class CarWifiStateTest {
                 state.remember(previousCredential.ssid, previousCredential.passphrase)
             }
             state.boundCarSsid = previousBound
-            state.phoneModeBlockedSsid = previousBlocked
             state.shellFallbackCleanupSsid = previousCleanup
         }
     }
@@ -163,11 +154,6 @@ class CarWifiStateTest {
         assertTrue(
             "forgetPromptHandled 必须直接转发 carWifiState.forgetPromptHandled",
             controllerCode.contains("get() = carWifiState.forgetPromptHandled"),
-        )
-        assertTrue(
-            "phoneModeBlockedSsid 必须直接转发 carWifiState.phoneModeBlockedSsid",
-            controllerCode.contains("get() = carWifiState.phoneModeBlockedSsid") &&
-                controllerCode.contains("carWifiState.phoneModeBlockedSsid = value"),
         )
         assertTrue(
             "shellFallbackCleanupSsid 必须直接转发 carWifiState.shellFallbackCleanupSsid",

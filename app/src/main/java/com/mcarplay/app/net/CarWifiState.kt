@@ -6,7 +6,7 @@ import java.util.concurrent.ConcurrentHashMap
  * 车机 Wi-Fi 入网与绑定的进程级状态容器（Phase 2c-1）。
  *
  * 集中保存 [boundCarSsid]、最近一次车机热点凭据的原子快照（[Credential]）、
- * [phoneModeBlockedSsid]、[forgetPromptHandled] 与 [shellFallbackCleanupSsid]。
+ * [forgetPromptHandled] 与 [shellFallbackCleanupSsid]。
  * 沿用原有 volatile / 并发集合语义：不加新 CAS 或全状态锁，不带持久化、轮次重置或自动清理逻辑，
  * 也不混入按目标实例隔离的 `WifiCredentialCache`。
  */
@@ -34,10 +34,6 @@ internal class CarWifiState {
 
     val passphrase: String?
         get() = snapshot?.passphrase
-
-    /** 手机流量优先模式下因冲突或未确认而阻断的 SSID；同 SSID 消费后清 null。 */
-    @Volatile
-    var phoneModeBlockedSsid: String? = null
 
     /** 本次进程内已就「是否清除系统保存热点」询问过的 SSID（进程寿命，避免重试重复弹窗）。 */
     val forgetPromptHandled: MutableSet<String> = ConcurrentHashMap.newKeySet()

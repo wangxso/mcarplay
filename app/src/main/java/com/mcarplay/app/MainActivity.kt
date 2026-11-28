@@ -143,6 +143,8 @@ class MainActivity : AppCompatActivity() {
     /** 首页是否正显示「自动重连已暂停」；熔断到期后需要恢复默认空闲文案。 */
     private var idleAutoPauseShown = false
     private var connectedAt = 0L
+    private var lastInternetCheckAt = 0L
+    private var internetHint: Int? = null
 
     // 启动残留屏检查进行中（英雄卡显示「检查中」）；发现的残留暂缓清理时
     // 记在 pendingResidualDisplays，状态旁的「清理残留屏」按钮可再次发起
@@ -1476,7 +1478,11 @@ class MainActivity : AppCompatActivity() {
             }
         val showReceiverIdentityWarning = s != HeroState.IDLE && SessionController.hasGenericReceiverIdentityWarning(selected?.address)
         if (s != heroState || showReceiverIdentityWarning != receiverIdentityWarningShown) {
-            if (s == HeroState.CONNECTED && s != heroState) connectedAt = SystemClock.elapsedRealtime()
+            if (s == HeroState.CONNECTED && s != heroState) {
+                connectedAt = SystemClock.elapsedRealtime()
+                lastInternetCheckAt = connectedAt
+                internetHint = null
+            }
             heroState = s
             receiverIdentityWarningShown = showReceiverIdentityWarning
             applyHeroState(s)
@@ -1747,7 +1753,14 @@ class MainActivity : AppCompatActivity() {
                 .toString()
                 .trim()
                 .ifEmpty { getString(R.string.main_hotspot_title) }
-        heroSubline.text = getString(R.string.ma_connected_subline, ssid, mm, ss)
+        // Android may take a few seconds to validate a new default network.
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastInternetCheckAt >= 5_000L) {
+            lastInternetCheckAt = now
+            internetHint = SessionController.projectionInternetStatus(this).hint
+        }
+        val connected = getString(R.string.ma_connected_subline, ssid, mm, ss)
+        heroSubline.text = internetHint?.let { "$connected\n${getString(it)}" } ?: connected
     }
 
     private fun updateAudioTag() {

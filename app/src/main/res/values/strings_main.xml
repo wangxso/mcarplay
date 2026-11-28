@@ -28,7 +28,7 @@
     <string name="main_hotspot_go">去连接</string>
     <string name="main_internet_network_title">优先使用车机网络</string>
     <string name="main_internet_network_car_desc">开：允许系统使用车机热点上网（需 Shizuku）；车机无互联网时可能影响手机联网 · 下次连接生效</string>
-    <string name="main_internet_network_phone_desc">关：车机 Wi‑Fi 只供投屏，其他应用保持系统默认网络（通常是手机流量）；若系统已保存该热点，请先在 WLAN 中忘记 · 下次连接生效</string>
+    <string name="main_internet_network_phone_desc">关：车机 Wi‑Fi 只供投屏，其他应用保持系统默认网络（通常是手机流量）；没有外网也可连接 · 下次连接生效</string>
     <string name="main_internet_network_car_on">已切换为车机网络优先（下次连接生效）</string>
     <string name="main_internet_network_phone_on">已切换为手机流量优先（下次连接生效）</string>
     <string name="main_internet_network_needs_shizuku">车机网络优先需要 Shizuku；未就绪时会退回手机流量</string>
@@ -95,4 +95,10 @@
     <string name="vehicle_preset_classic_mib3">奥迪经典 MIB3</string>
     <string name="vehicle_preset_trumpchi_gs3_iap2_window">传祺 GS3 影速（蓝牙先探测再同步，实验）</string>
     <string name="vehicle_preset_mercedes_mb_e">奔驰 MB_E-P / GLC（实验：按车机显示尺寸，未验证）</string>
+    <string name="main_internet_car_default_offline">系统默认使用无外网的车机热点，仍可使用离线地图。</string>
+    <string name="main_internet_car_default">系统目前用车机热点上网，而不是手机流量。</string>
+    <string name="main_internet_cellular_offline">手机流量暂时未验证可上网，仍可使用离线地图。</string>
+    <string name="main_internet_default_offline">当前默认网络未验证可上网，仍可使用离线地图。</string>
+    <string name="main_internet_car_using_cellular">已选择车机网络，但系统目前仍用手机流量上网。</string>
+    <string name="main_internet_car_other_route">已选择车机网络，但系统目前用其他网络上网。</string>
 </resources>

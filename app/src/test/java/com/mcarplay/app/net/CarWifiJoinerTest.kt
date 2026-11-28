@@ -479,17 +479,12 @@ class CarWifiJoinerTest {
                     R.string.sc_cancelled -> "sc_cancelled"
                     R.string.sc_wifi_off -> "sc_wifi_off"
                     R.string.sc_join_failed_title -> "sc_join_failed_title"
+                    R.string.sc_phone_join_failed_body -> "sc_phone_join_failed_body"
+                    R.string.sc_phone_join_failed_retry -> "sc_phone_join_failed_retry"
                     R.string.sc_join_failed_body -> "sc_join_failed_body"
                     R.string.sc_retry -> "sc_retry"
                     R.string.sc_join_failed_manual -> "sc_join_failed_manual"
                     R.string.sc_join_failed_retry -> "sc_join_failed_retry"
-                    R.string.sc_phone_mode_wifi_title -> "sc_phone_mode_wifi_title"
-                    R.string.sc_phone_mode_wifi_body -> "sc_phone_mode_wifi_body"
-                    R.string.sc_phone_mode_wifi_unknown_title -> "sc_phone_mode_wifi_unknown_title"
-                    R.string.sc_phone_mode_wifi_unknown_body -> "sc_phone_mode_wifi_unknown_body"
-                    R.string.sc_phone_mode_wifi_confirm -> "sc_phone_mode_wifi_confirm"
-                    R.string.sc_phone_mode_wifi_blocked -> "sc_phone_mode_wifi_blocked"
-                    R.string.sc_phone_mode_wifi_blocked_hint -> "sc_phone_mode_wifi_blocked_hint"
                     R.string.sc_use_current_title -> "sc_use_current_title"
                     R.string.sc_use_current_body -> "sc_use_current_body"
                     R.string.sc_use_current -> "sc_use_current"
@@ -590,9 +585,8 @@ class CarWifiJoinerTest {
 
         harness.joiner.autoJoinCarWifi(wifi)
 
-        // autoJoin 开头读一次 + ensurePhoneModeSystemWifiSafe 内读一次
         assertEquals(
-            listOf(CarWifiInternetPreference.PHONE, CarWifiInternetPreference.PHONE),
+            listOf(CarWifiInternetPreference.PHONE),
             harness.preferenceReads,
         )
         assertTrue(
@@ -999,159 +993,51 @@ class CarWifiJoinerTest {
     }
 
     @Test
-    fun j10_phoneModeSystemWifiCartesianProductAndNullConnector() {
+    fun phoneModeDoesNotReadSavedNetworksOrBlockEitherPrivateJoinEntry() {
         val wifi = wifiConfig()
-        val systemStates =
-            listOf(
-                CarWifiLink.SystemWifiState.NONE,
-                CarWifiLink.SystemWifiState.TARGET,
-                CarWifiLink.SystemWifiState.OTHER,
-                CarWifiLink.SystemWifiState.UNKNOWN,
-            )
-        // saved: false (empty list), true (non-empty list), null (list-networks failed)
-        val savedConfigs = listOf<Boolean?>(false, true, null)
-
-        for (sysState in systemStates) {
-            for (saved in savedConfigs) {
-                val harness = Harness()
-                harness.preference = CarWifiInternetPreference.PHONE
-                harness.shellReady = true
-                harness.link.systemStateBySsid[wifi.ssid] = sysState
-                when (saved) {
-                    false -> {
-                        harness.shell.listNetworksExitCode = 0
-                        harness.shell.listNetworksOutput = "Network Id      SSID      Security type\n"
-                    }
-                    true -> {
-                        harness.shell.listNetworksExitCode = 0
-                        harness.shell.listNetworksOutput =
-                            "Network Id      SSID      Security type\n" +
-                            "12              ${wifi.ssid}   wpa2-psk\n"
-                    }
-                    null -> {
-                        harness.shell.listNetworksExitCode = 1
-                    }
+        for (system in CarWifiLink.SystemWifiState.entries) {
+            for (early in listOf(true, false)) {
+                val h = Harness()
+                h.preference = CarWifiInternetPreference.PHONE
+                h.link.systemStateBySsid[wifi.ssid] = system
+                h.shell.listNetworksOutput = "Network Id      SSID      Security type\n318      ${wifi.ssid}      WPA2\n"
+                h.link.nextJoinResult = CarWifiLink.JoinResult.Joined(WifiId("projection"))
+                if (early) {
+                    var joined = false
+                    h.joiner.autoJoinCarWifi(wifi, onResult = { joined = it })
+                    assertTrue(joined)
+                } else {
+                    assertTrue(h.joiner.joinCarWifi(wifi, true) is CarWifiLink.JoinResult.Joined)
                 }
-                // 默认给弹窗返回 false，观察触发了哪个弹窗（或直接 PROCEED）
-                harness.dialogAnswers.addLast(false)
-                val safe = harness.joiner.ensurePhoneModeSystemWifiSafe(wifi, shellReady = true)
-                val asks = harness.trace.filterIsInstance<Trace.Ask>()
-
-                val expectedConflict = sysState == CarWifiLink.SystemWifiState.TARGET || saved == true
-                val expectedConfirm = !expectedConflict && (sysState == CarWifiLink.SystemWifiState.UNKNOWN || saved == null)
-
-                when {
-                    expectedConflict -> {
-                        assertFalse("TARGET 或 saved=true 必须阻断 ($sysState, saved=$saved)", safe)
-                        assertEquals("sc_phone_mode_wifi_title", asks.single().prompt.title)
-                        assertEquals(wifi.ssid, harness.state.phoneModeBlockedSsid)
-                    }
-                    expectedConfirm -> {
-                        assertFalse("UNKNOWN 或 saved=null 选 false 必须阻断 ($sysState, saved=$saved)", safe)
-                        assertEquals("sc_phone_mode_wifi_unknown_title", asks.single().prompt.title)
-                        assertEquals(wifi.ssid, harness.state.phoneModeBlockedSsid)
-                    }
-                    else -> {
-                        assertTrue("NONE/OTHER 且 saved=false 必须直接放行 ($sysState, saved=$saved)", safe)
-                        assertTrue(asks.isEmpty())
-                        assertNull(harness.state.phoneModeBlockedSsid)
-                    }
-                }
+                val call = h.trace.filterIsInstance<Trace.JoinCarPlayNetwork>().single()
+                assertFalse(call.hasQuickFallback || call.hasDeepFallback)
+                assertTrue(h.trace.filterIsInstance<Trace.Ask>().isEmpty())
+                assertTrue(h.trace.filterIsInstance<Trace.ShellExec>().all { it.command == "cmd wifi status" })
             }
         }
-
-        // CAR 偏好下无论系统状态如何均直接 PROCEED，不查 savedNetworkIds、不弹窗
-        val hCar = Harness()
-        hCar.preference = CarWifiInternetPreference.CAR
-        hCar.link.systemStateBySsid[wifi.ssid] = CarWifiLink.SystemWifiState.TARGET
-        hCar.shell.listNetworksOutput = "Network Id      SSID      Security type\n1   ${wifi.ssid}   wpa2-psk\n"
-        assertTrue(hCar.joiner.ensurePhoneModeSystemWifiSafe(wifi, shellReady = true))
-        assertTrue(hCar.trace.filterIsInstance<Trace.Ask>().isEmpty())
-        assertTrue(hCar.trace.filterIsInstance<Trace.ShellExec>().isEmpty())
-
-        // wifiConnector 为 null 且 saved=false：现状 systemWifi == null 不等价 UNKNOWN，按 PROCEED 处理
-        val hNullConnector = Harness()
-        hNullConnector.preference = CarWifiInternetPreference.PHONE
-        hNullConnector.linkAvailable = false
-        hNullConnector.shell.listNetworksOutput = "Network Id      SSID      Security type\n"
-        assertTrue(hNullConnector.joiner.ensurePhoneModeSystemWifiSafe(wifi, shellReady = true))
-        assertTrue(hNullConnector.trace.filterIsInstance<Trace.Ask>().isEmpty())
     }
 
     @Test
-    fun j11_phoneModeDialogsBlockedSsidConsumptionAndPromptSpecifierFailed() {
+    fun activeSystemHotspotIsAdvisoryAfterPrivateJoinFailureAndNeverAdopted() {
         val wifi = wifiConfig()
+        val h = Harness()
+        h.preference = CarWifiInternetPreference.PHONE
+        h.link.systemStateBySsid[wifi.ssid] = CarWifiLink.SystemWifiState.TARGET
+        h.link.nextJoinResult = CarWifiLink.JoinResult.Unavailable
+        h.dialogAnswers.addLast(false)
 
-        // 1) CONFLICT 选 true：打开 WLAN 设置，但仍返回 false 并记录 phoneModeBlockedSsid、phase、hint、日志
-        val hConflictTrue = Harness()
-        hConflictTrue.preference = CarWifiInternetPreference.PHONE
-        hConflictTrue.link.systemStateBySsid[wifi.ssid] = CarWifiLink.SystemWifiState.TARGET
-        hConflictTrue.dialogAnswers.addLast(true)
-        assertFalse(hConflictTrue.joiner.ensurePhoneModeSystemWifiSafe(wifi, shellReady = false))
-        assertEquals(1, hConflictTrue.trace.filterIsInstance<Trace.OpenWlanSettings>().size)
-        assertEquals(wifi.ssid, hConflictTrue.state.phoneModeBlockedSsid)
-        assertEquals(listOf("sc_phone_mode_wifi_blocked(${wifi.ssid})"), hConflictTrue.phases)
-        assertEquals(listOf("sc_phone_mode_wifi_blocked_hint(${wifi.ssid})"), hConflictTrue.evaluatedHints)
-        assertTrue(
-            hConflictTrue.logs.contains("NETWORK: 手机流量优先需要先清除系统 WLAN 热点 \"${wifi.ssid}\"——本轮已停止"),
-        )
+        var joined = true
+        h.joiner.autoJoinCarWifi(wifi, onResult = { joined = it })
 
-        // 2) CONFIRM 选 true：记录确认日志、清 phoneModeBlockedSsid 并放行
-        val hConfirmTrue = Harness()
-        hConfirmTrue.preference = CarWifiInternetPreference.PHONE
-        hConfirmTrue.state.phoneModeBlockedSsid = wifi.ssid
-        hConfirmTrue.link.systemStateBySsid[wifi.ssid] = CarWifiLink.SystemWifiState.NONE
-        hConfirmTrue.dialogAnswers.addLast(true)
-        assertTrue(hConfirmTrue.joiner.ensurePhoneModeSystemWifiSafe(wifi, shellReady = false))
-        assertNull(hConfirmTrue.state.phoneModeBlockedSsid)
-        assertTrue(
-            hConfirmTrue.logs.contains("NETWORK: 系统 WLAN 连接或保存状态不可确认；用户确认无冲突，继续手机流量优先"),
-        )
-
-        // 3) 同 SSID 阻断标记单次消费：promptSpecifierFailed 入口消费后不弹第二次失败框；不同 SSID 不误消费
-        val hConsume = Harness()
-        hConsume.preference = CarWifiInternetPreference.PHONE
-        hConsume.state.phoneModeBlockedSsid = "Other-SSID"
-        hConsume.dialogAnswers.addLast(null)
-        hConsume.joiner.promptSpecifierFailed(wifi, shellReady = true)
-        assertEquals("不同 SSID 的阻断标记不得被误消费", "Other-SSID", hConsume.state.phoneModeBlockedSsid)
-        assertEquals(1, hConsume.trace.filterIsInstance<Trace.Ask>().size)
-
-        hConsume.trace.clear()
-        hConsume.state.phoneModeBlockedSsid = wifi.ssid
-        hConsume.joiner.promptSpecifierFailed(wifi, shellReady = true)
-        assertNull("同 SSID 阻断标记应被消费清 null", hConsume.state.phoneModeBlockedSsid)
-        assertTrue("消费阻断标记后不得再弹通用失败框", hConsume.trace.filterIsInstance<Trace.Ask>().isEmpty())
-
-        // 4) promptSpecifierFailed 点重试时：若重试在 PHONE 模式触发阻断，消费标记后不再写 sc_join_failed_manual
-        val hRetryBlocked = Harness()
-        hRetryBlocked.preference = CarWifiInternetPreference.PHONE
-        hRetryBlocked.link.systemStateBySsid[wifi.ssid] = CarWifiLink.SystemWifiState.TARGET
-        // 第 1 个框：失败重试框选 true（重试）；第 2 个框：joinCarWifi 内的 PHONE CONFLICT 框选 false
-        hRetryBlocked.dialogAnswers.addLast(true)
-        hRetryBlocked.dialogAnswers.addLast(false)
-        hRetryBlocked.joiner.promptSpecifierFailed(wifi, shellReady = false)
-        assertNull(hRetryBlocked.state.phoneModeBlockedSsid)
-        assertFalse(
-            "重试因 PHONE 冲突阻断后不得覆盖成 sc_join_failed_manual",
-            hRetryBlocked.phases.contains("sc_join_failed_manual"),
-        )
-        assertEquals("sc_phone_mode_wifi_blocked(${wifi.ssid})", hRetryBlocked.phases.last())
-
-        // 5) promptSpecifierFailed 点重试返回 Unsupported：PHONE 模式只转手动指引，不走 legacy
-        val hRetryUnsupportedPhone = Harness()
-        hRetryUnsupportedPhone.preference = CarWifiInternetPreference.PHONE
-        hRetryUnsupportedPhone.link.systemStateBySsid[wifi.ssid] = CarWifiLink.SystemWifiState.NONE
-        hRetryUnsupportedPhone.link.nextJoinResult = CarWifiLink.JoinResult.Unsupported
-        hRetryUnsupportedPhone.dialogAnswers.addLast(true)
-        // manualJoin 轮询第 1 次 sleep 后取消以结束测试
-        var cancelManual = false
-        hRetryUnsupportedPhone.onSleep = { _, _ -> cancelManual = true }
-        hRetryUnsupportedPhone.joiner.promptSpecifierFailed(wifi, shellReady = true, isCancelled = { cancelManual })
-        assertTrue(
-            hRetryUnsupportedPhone.logs.contains("NETWORK: 手机流量优先——无法使用应用专属网络，转手动 WLAN 指引"),
-        )
-        assertEquals(1, hRetryUnsupportedPhone.trace.filterIsInstance<Trace.CopyPassphrase>().size)
+        assertFalse(joined)
+        val attempt = h.trace.filterIsInstance<Trace.JoinCarPlayNetwork>().single()
+        val prompt = h.trace.filterIsInstance<Trace.Ask>().single()
+        assertTrue(h.trace.indexOf(attempt) < h.trace.indexOf(prompt))
+        assertEquals("sc_phone_join_failed_body(${wifi.ssid})", prompt.prompt.message)
+        assertEquals(1, h.trace.filterIsInstance<Trace.OpenWlanSettings>().size)
+        assertTrue(h.trace.filterIsInstance<Trace.CopyPassphrase>().isEmpty())
+        assertTrue(h.trace.filterIsInstance<Trace.BindVerifiedAndRegister>().isEmpty())
+        assertTrue(h.logs.contains("NETWORK: phone-private-join-failed systemOnCar=true"))
     }
 
     @Test
@@ -1373,7 +1259,6 @@ class CarWifiJoinerTest {
                 "promptForgetSavedNetworkIfAny",
                 "savedNetworkIds",
                 "waitForWifiEnabled",
-                "ensurePhoneModeSystemWifiSafe",
                 "manualJoinCarWifi",
                 "legacyJoinCarWifi",
                 "shellWifiStatus",
@@ -1422,7 +1307,6 @@ class CarWifiJoinerTest {
                 "InternetNetwork",
                 "InternetNetworkPrefs",
                 "InternetNetworkPolicy",
-                "PhoneModeSystemWifiDecision",
                 "ShizukuGate",
                 "SystemClock",
                 "Thread.sleep",
@@ -1462,12 +1346,11 @@ class CarWifiJoinerTest {
         var callerCancelled = true
 
         // caller isCancelled=true 而 globalCancelled=false 时：
-        // legacy / promptSpecifierFailed / ensurePhoneMode 在 askChoice 前即短路返回；
+        // legacy / promptSpecifierFailed 在 askChoice 前即短路返回；
         // waitForWifiEnabled 把 caller isCancelled 传给 askChoice（broker 入口立即判过期返回 null），随后在 when(open) 前直接返回 false；
         // manualJoin 在首次 sleep 前立即返回，全程 0 次 sleep。
         harness.joiner.legacyJoinCarWifi(wifi, shellReady = true, isCancelled = { callerCancelled })
         harness.joiner.promptSpecifierFailed(wifi, shellReady = true, isCancelled = { callerCancelled })
-        assertFalse(harness.joiner.ensurePhoneModeSystemWifiSafe(wifi, shellReady = true, isCancelled = { callerCancelled }))
         assertTrue(harness.trace.filterIsInstance<Trace.Ask>().isEmpty())
 
         assertFalse(harness.joiner.waitForWifiEnabled(isCancelled = { callerCancelled }))
@@ -1802,19 +1685,8 @@ class CarWifiJoinerTest {
                 Regex(Regex.escape(expected)).findAll(bodies.getValue(adapter)).count(),
             )
         }
-        val phoneMode = bodies.getValue("phoneModeDecision")
-        listOf(
-            "phoneModeSystemWifiDecision(",
-            "network = preference.toInternetNetwork(),",
-            "activeTarget = activeTarget,",
-            "activeIdentityUnknown = activeIdentityUnknown,",
-            "saved = saved,",
-            ").toCarWifiDecision()",
-        ).forEach { fragment ->
-            assertTrue("PHONE 策略适配器缺少 $fragment：$phoneMode", phoneMode.contains(fragment))
-        }
         assertFalse(
-            "不得绕过 InternetNetworkPolicy 直接按 PHONE/CAR 手写四路决策",
+            "不得绕过 InternetNetworkPolicy 直接按 PHONE/CAR 手写入网策略",
             useSystem.contains("preference == CarWifiInternetPreference.CAR"),
         )
     }
@@ -1849,7 +1721,6 @@ class CarWifiJoinerTest {
                 "useSystemWifi",
                 "allowExistingSystemWifi",
                 "allowSystemFallback",
-                "phoneModeDecision",
                 "bindVerifiedAndRegister",
             )
         val starts = adapters.map { adapter -> adapter to wiring.indexOf("$adapter = {") }

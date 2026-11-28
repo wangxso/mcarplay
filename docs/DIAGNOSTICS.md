@@ -338,6 +338,15 @@ A missing END may mean an active session, abrupt termination or truncated record
 No exit records does not prove no previous exit. Do not attribute an old low-memory
 record to a later reset without matching timestamps and receiver-side evidence.
 Local car Wi-Fi without Internet validation is not by itself a connection failure.
+At the first transmitted video frame, `NETWORK: default-route transport=… validated=… preference=… matches=…`
+samples Android's default Internet route independently of the projection binding.
+It contains no SSID, BSSID, IP or device ID. `matches=unknown` means the default
+route cannot be confidently identified (for example redacted Wi-Fi identity or a VPN).
+Validation may change after this snapshot; the connected homepage refreshes advisory notices
+while visible. In phone mode, `NETWORK: phone-private-join-failed systemOnCar=true`
+means the private join failed and the system was observed on the car hotspot; it
+does not establish that the system connection caused the failure. The application
+does not forget saved Wi-Fi or adopt that system connection from this failure prompt.
 Bluetooth may close normally after the network iAP session takes over (WinPlay
 1.2.4 does this). An ACL disconnect must not stop a running Wi-Fi video sender.
 The auto-stop path before video starts records `BT_LINK_CLOSED`; an explicit user

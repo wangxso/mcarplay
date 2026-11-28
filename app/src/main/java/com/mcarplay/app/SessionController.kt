@@ -86,7 +86,6 @@ import com.mcarplay.app.net.CarWifiInternetPreference
 import com.mcarplay.app.net.CarWifiJoiner
 import com.mcarplay.app.net.CarWifiLink
 import com.mcarplay.app.net.CarWifiPendingEndpointPort
-import com.mcarplay.app.net.CarWifiPhoneModeDecision
 import com.mcarplay.app.net.CarWifiShellPort
 import com.mcarplay.app.net.CarWifiShellResult
 import com.mcarplay.app.net.CarWifiState
@@ -123,7 +122,7 @@ import com.mcarplay.app.settings.InternetNetwork
 import com.mcarplay.app.settings.InternetNetworkPolicy
 import com.mcarplay.app.settings.InternetNetworkPrefs
 import com.mcarplay.app.settings.MediaPrefs
-import com.mcarplay.app.settings.PhoneModeSystemWifiDecision
+import com.mcarplay.app.settings.ProjectionInternetStatus
 import com.mcarplay.app.shizuku.Shell
 import com.mcarplay.app.shizuku.ShizukuGate
 import com.mcarplay.app.ui.ScreenDimmer
@@ -524,12 +523,6 @@ object SessionController {
     /** 本次进程内已就「是否清除系统保存热点」询问过的 SSID（避免重试时重复弹窗）。 */
     private val forgetPromptHandled: MutableSet<String>
         get() = carWifiState.forgetPromptHandled
-
-    private var phoneModeBlockedSsid: String?
-        get() = carWifiState.phoneModeBlockedSsid
-        set(value) {
-            carWifiState.phoneModeBlockedSsid = value
-        }
 
     /** WiFi 绑定互斥：auto-join 与端点交接两条路径可能同时绑定同一热点。 */
     private val wifiHandoffGuard = HandoffWifiGuard()
@@ -1551,6 +1544,7 @@ object SessionController {
         val alreadyRunning = isSessionRunning()
         val previousAttempt = ConnectionDiagnostics.timeline.snapshot()
         if (!alreadyRunning) {
+            sessionInternetNetwork = InternetNetworkPrefs.get(context)
             // 新一轮从已知对端起步；手动连接不沿用上一台车机的地址，避免失败记到别人头上。
             val selected = TargetDevicePrefs.get(context)?.address
             activePeerAddress = if (automatic) automaticPeerAddress ?: selected else selected
@@ -2253,15 +2247,6 @@ object SessionController {
             allowSystemFallback = { preference ->
                 InternetNetworkPolicy.allowSystemFallback(preference.toInternetNetwork())
             },
-            phoneModeDecision = { preference, activeTarget, activeIdentityUnknown, saved ->
-                InternetNetworkPolicy
-                    .phoneModeSystemWifiDecision(
-                        network = preference.toInternetNetwork(),
-                        activeTarget = activeTarget,
-                        activeIdentityUnknown = activeIdentityUnknown,
-                        saved = saved,
-                    ).toCarWifiDecision()
-            },
             bindVerifiedAndRegister = { ssid, verifiedNetwork, isCancelled, requiredCurrent ->
                 bindCarWifiAndRegister(
                     ssid = ssid,
@@ -2299,13 +2284,6 @@ object SessionController {
             CarWifiInternetPreference.CAR -> InternetNetwork.CAR
         }
 
-    private fun PhoneModeSystemWifiDecision.toCarWifiDecision(): CarWifiPhoneModeDecision =
-        when (this) {
-            PhoneModeSystemWifiDecision.PROCEED -> CarWifiPhoneModeDecision.PROCEED
-            PhoneModeSystemWifiDecision.CONFLICT -> CarWifiPhoneModeDecision.CONFLICT
-            PhoneModeSystemWifiDecision.CONFIRM -> CarWifiPhoneModeDecision.CONFIRM
-        }
-
     /** 校对真实 WiFi 并加入车机热点（Phase 2c-2 委托给 [carWifiJoiner]）。 */
     private fun autoJoinCarWifi(
         wifi: Iap2SenderSession.WifiConfiguration,
@@ -2322,7 +2300,14 @@ object SessionController {
         shellReady: Boolean,
     ): CarWifiLink.JoinResult<Network> = carWifiJoiner.joinCarWifi(wifi, shellReady)
 
-    private fun preferredInternetNetwork(): InternetNetwork = appContext?.let(InternetNetworkPrefs::get) ?: InternetNetworkPrefs.DEFAULT
+    @Volatile
+    private var sessionInternetNetwork: InternetNetwork? = null
+
+    private fun preferredInternetNetwork(): InternetNetwork =
+        sessionInternetNetwork ?: appContext?.let(InternetNetworkPrefs::get) ?: InternetNetworkPrefs.DEFAULT
+
+    internal fun projectionInternetStatus(context: Context): ProjectionInternetStatus =
+        ProjectionInternetStatus.read(context, preferredInternetNetwork(), wifiConnector?.currentNetwork, boundCarSsid)
 
     /**
      * 本轮 shell 兜底把热点存成了系统网络时记录的 SSID——会话终态（disconnect 与
@@ -4533,6 +4518,7 @@ object SessionController {
                                         java.util.Collections.synchronizedMap(
                                             java.util.IdentityHashMap<VideoSender, Pair<Network?, CtrlInviteEvidence<Network>?>>(),
                                         )
+                                    val defaultRouteLogged = AtomicBoolean(false)
                                     val screenPlan =
                                         ScreenSenderPlan(
                                             host = host,
@@ -4559,6 +4545,22 @@ object SessionController {
                                                             if (firstFrameSent.compareAndSet(false, true)) {
                                                                 // 真出画了：清空自动重连熔断计数（本轮已是健康会话）
                                                                 appContext?.let { app ->
+                                                                    if (defaultRouteLogged.compareAndSet(false, true)) {
+                                                                        val mode = preferredInternetNetwork()
+                                                                        val projection = wifiConnector?.currentNetwork
+                                                                        val carSsid = boundCarSsid
+                                                                        Bg.run("projection-internet") {
+                                                                            appendLog(
+                                                                                ProjectionInternetStatus
+                                                                                    .read(
+                                                                                        app,
+                                                                                        mode,
+                                                                                        projection,
+                                                                                        carSsid,
+                                                                                    ).logLine(),
+                                                                            )
+                                                                        }
+                                                                    }
                                                                     AutoReconnectGuard.recordHealthy(
                                                                         app,
                                                                         peerAddress,

@@ -140,7 +140,6 @@ class HandoffCancelPredicateTest {
             "manualJoinCarWifi",
             "promptSpecifierFailed",
             "waitForWifiEnabled",
-            "ensurePhoneModeSystemWifiSafe",
         ).forEach { name ->
             val source = body(name)
             assertTrue("$name 根本没有引用 isCancelled", source.contains("isCancelled"))

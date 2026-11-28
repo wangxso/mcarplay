@@ -48,13 +48,6 @@
     <string name="sc_saved_body">系统里保存过 \"%1$s\"。保留会让手机在进入范围时自动连接它，若该热点没有互联网，可能导致手机无法使用移动数据。\n\n「清除」只是不再自动连接，不影响本次使用；如果车机热点本身提供网络，选「保留」。</string>
     <string name="sc_saved_forget">清除保存</string>
     <string name="sc_saved_keep">保留</string>
-    <string name="sc_phone_mode_wifi_title">手机流量优先需要清除系统热点</string>
-    <string name="sc_phone_mode_wifi_body">系统已保存或正在连接 \"%1$s\"。若继续，其它应用可能仍走这个无互联网热点。\n\n请先在 WLAN 设置中忘记该热点，或改为「优先使用车机网络」后再连接。</string>
-    <string name="sc_phone_mode_wifi_unknown_title">无法确认系统 WLAN 状态</string>
-    <string name="sc_phone_mode_wifi_unknown_body">应用无法完整读取系统 WLAN 的连接或保存状态。请确认系统没有连接或保存车机热点 \"%1$s\"；若不确定，请打开 WLAN 设置检查。</string>
-    <string name="sc_phone_mode_wifi_confirm">确认无冲突并继续</string>
-    <string name="sc_phone_mode_wifi_blocked">手机流量优先已暂停：请确认系统 WLAN 未连接或保存车机热点 %1$s</string>
-    <string name="sc_phone_mode_wifi_blocked_hint">请确认系统 WLAN 未连接或保存 \"%1$s\"，或改用车机网络优先</string>
     <string name="sc_wifi_off_title">WiFi 未开启</string>
     <string name="sc_wifi_off_body">连接车机热点需要打开手机 WLAN。是否打开 WLAN 设置？</string>
     <string name="sc_open_wifi_settings">打开 WLAN 设置</string>
@@ -79,4 +72,6 @@
     <string name="sc_audio_all_incompatible">本车机音频不兼容，下次连接将自动只推视频</string>
     <string name="sc_audio_profile_rejected">该音频档位导致断开，已记录；重连会自动换档</string>
     <string name="ma_legacy_carwith_setup">请在 CarWith 中选择“百度 CarLife”及无线连接，完成后返回 mcarplay</string>
+    <string name="sc_phone_join_failed_body">未能以手机流量优先模式加入“%1$s”。若系统 WLAN 已自动连上这个热点，可在 WLAN 设置中忘记它后重试，或打开「优先使用车机网络」后重新连接。</string>
+    <string name="sc_phone_join_failed_retry">未能加入车机热点。检查系统 WLAN，或切换网络模式后重试。</string>
 </resources>
