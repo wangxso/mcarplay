@@ -573,6 +573,7 @@ class ReceiverCompatibilityTest {
             )
         for (signals in listOf(roeweIap2, roeweInfo)) {
             val policy = ReceiverCompatibility.resolve(signals)
+            assertFalse(policy.offerHevc)
             assertTrue(policy.transcodeFromStart)
             assertTrue(policy.rules.contains("saic.roewe.490.0.transcode-from-start"))
             assertEquals(ScreenReturnStrategy.NO_REBUILD, policy.screenReturn)

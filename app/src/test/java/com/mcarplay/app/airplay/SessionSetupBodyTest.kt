@@ -69,8 +69,6 @@ class SessionSetupBodyTest {
         assertTrue(features.contains("viewAreas"))
         assertTrue(features.contains("h.264Level5.1"))
         assertTrue(features.contains("videoPlayback"))
-        // 当前视频发送路径仅输出 AVC/H.264 avcC，不得提议未实现的 hevc
-        assertFalse(features.contains("hevc"))
         assertEquals(true, root["keepAliveLowPower"])
     }
 

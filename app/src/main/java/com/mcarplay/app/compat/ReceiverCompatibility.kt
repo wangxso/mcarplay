@@ -507,6 +507,7 @@ object ReceiverCompatibility {
             // 本轮 /info displays[0] 的合法几何门控（CarWithVideoNegotiation）。
             preferVehicleResolution = true,
             autoRequestCarplayUi = bicvGseEv3,
+            offerHevc = !roewe490,
             transcodeFromStart = roewe490,
             screenReturn = if (roewe490) ScreenReturnStrategy.NO_REBUILD else ScreenReturnStrategy.OFF,
         )
