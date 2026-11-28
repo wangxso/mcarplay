@@ -431,6 +431,17 @@ class VirtualIap2Link(
                     handleFrameLocked(event.bytes)
 
                 is Iap2LinkEngine.Event.Dead -> {
+                    val pendingLength = mfiCurrentLength
+                    if (!mfiFinished && pendingLength > 0 && pinnedMfiLength == null) {
+                        mfiIdentity?.let {
+                            MfiLengthMemory.recordHardRejected(mfiContext, it, pendingLength)
+                        }
+                        log(
+                            "IAPLINK: 隧道 MFi ${pendingLength}B 等待应答时链路断开" +
+                                "——记入硬拒绝，后续不再优先此档",
+                        )
+                        mfiCurrentLength = 0
+                    }
                     log("IAPLINK: 虚拟链路终止 - ${event.reason ?: "EOF"}")
                     return
                 }
@@ -454,6 +465,7 @@ class VirtualIap2Link(
 
     /** MFi 挑战静默超时：记入该车机的记忆并换下一档重试（节拍线程每 200ms 驱动一次）。 */
     private fun checkMfiTimeoutLocked() {
+        if (engine.isDead) return
         val identity = mfiIdentity ?: return
         if (mfiFinished || mfiCurrentLength == 0) return
         if (nowMillis() - mfiChallengeSentAtMs < mfiWindowMillis) return
@@ -660,8 +672,16 @@ class VirtualIap2Link(
             ids.MFI_RESPONSE -> {
                 val challenged = mib3AuthStage == 3
                 if (mib3) {
-                    mfiIdentity?.let { MfiLengthMemory.recordSuccess(mfiContext, it, mfiCurrentLength) }
-                    log("IAPLINK: 隧道 rx=0xaa03 签名 ${frame.body.size}B（${mfiCurrentLength}B 挑战成功，已记忆）")
+                    if (mfiFinished) return
+                    val succeededLength = mfiCurrentLength
+                    val remembered = succeededLength > 0 && mfiPosition == 0
+                    if (remembered) {
+                        mfiIdentity?.let { MfiLengthMemory.recordSuccess(mfiContext, it, succeededLength) }
+                    }
+                    log(
+                        "IAPLINK: 隧道 rx=0xaa03 签名 ${frame.body.size}B" +
+                            "（${succeededLength}B 挑战成功${if (remembered) "，已记忆" else "，迟到档位不训练"}）",
+                    )
                     mfiCurrentLength = 0
                     mfiFinished = true
                 }

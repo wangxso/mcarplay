@@ -27,6 +27,16 @@ class MfiLengthMemoryTest {
         assertEquals(MfiLengthMemory.Entry(rejected = setOf(32)), MfiLengthMemory.load(null, receiver))
     }
 
+    @Test
+    fun zeroLengthSuccessCannotReplaceARecordedLength() {
+        val receiver = "zero-length-success-test"
+        MfiLengthMemory.recordSuccess(null, receiver, 20)
+        MfiLengthMemory.recordSuccess(null, receiver, 0)
+        MfiLengthMemory.recordSuccess(null, receiver, -1)
+
+        assertEquals(MfiLengthMemory.Entry(succeeded = 20), MfiLengthMemory.load(null, receiver))
+    }
+
     private val baselineCar = listOf(20, 32, 16) // 真车系：20B 优先
     private val baselineTestBench = listOf(32, 20, 16) // 测试台：32B 优先
 
