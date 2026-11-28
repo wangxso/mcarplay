@@ -989,6 +989,49 @@ class Iap2SenderSessionTest {
     }
 
     /**
+     * 长城 B06（2026-11-27 车主报告）：纯旧协议（发 0xaa06/0x5703、收 0x5702/0x4e09..0x4e0e，
+     * 无 0x4300/0x4301、无 EA）。发送端必须在 0x5702 之前先发 0x4E0E（设备传输标识），
+     * 才能让依赖蓝牙 MAC 绑定的旧协议车机顺利下发 0x5703。
+     */
+    @Test
+    fun gwmB06ReceivesTransportIdentifierBeforeWifiRequest() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory")
+        val accessory =
+            MockAccessory(
+                accessoryChannel,
+                shape = MockAccessory.Shape.GWM_B06,
+                providesStartSession = false,
+            )
+
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+
+        val endpoint =
+            Iap2SenderSession(
+                phoneChannel,
+                log = { line -> println("PHONE $line") },
+                bluetoothMac = "34:86:DA:86:BB:96",
+                deviceName = "test-device",
+            ).run(timeoutMillis = 15_000L)
+
+        assertEquals("MockAP", endpoint.ssid)
+        assertTrue(accessory.sawWifiRequest)
+        assertEquals(
+            listOf(
+                Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER,
+                Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION,
+            ),
+            accessory.receivedOrder,
+        )
+
+        phoneChannel.close()
+        accessoryChannel.close()
+    }
+
+    /**
      * 0x5703 迟迟不答：发送端必须在等待窗口内**重发设备状态问候**、再**重发 0x5702**，
      * 而不是干等到车机拆链（BMW iD8.5 卡在 0x5703 的修复点）。
      */
@@ -1300,6 +1343,10 @@ class Iap2SenderSessionTest {
             // 收 {0x4e09, 0x4300}、发 {0xaa06, 0x4301}，完全不参与 0x57xx、也不开 EA。
             // 车机约在识别后 60 秒拆链；0x4300 必须在凭据窗口内发出才有意义。
             SAIC_AH4EM,
+
+            // 长城 B06（2026-11-27 车主报告）：发 {0xaa06, 0x5703}、
+            // 收 {0x5702, 0x4e09, 0x4e0a, 0x4e0b, 0x4e0c, 0x4e0d, 0x4e0e}，无 0x430x、无 EA。
+            GWM_B06,
         }
 
         /** 老式奥迪/测试台：不声明接收清单，也不发 StartHID。 */
@@ -1407,6 +1454,8 @@ class Iap2SenderSessionTest {
             // 若发送端在 BMW 形态下仍发 0x5702，下面第一个 expect(0x4e0d) 会立刻
             // 报「expected 0x4e0d got 0x5702」——分派错误无处可藏。
             if (shape == Shape.VW_PASSAT) {
+                // 纯旧协议且声明可收 0x4E0E：发送端在 0x5702 之前先发 0x4E0E
+                expect(Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER)
                 // 只收 0x5702、永不应答（链路层 ACK 由通道自动完成）
                 expect(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
                 sawWifiRequest = true
@@ -1414,6 +1463,23 @@ class Iap2SenderSessionTest {
                     // 车机收到凭据请求后直接拆链（#69 报告形态的压缩版）
                     channel.close()
                 }
+                return
+            }
+            if (shape == Shape.GWM_B06) {
+                expect(Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER)
+                receivedOrder += Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER
+                expect(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
+                receivedOrder += Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION
+                sawWifiRequest = true
+                send(
+                    Iap2MessageIds.ACCESSORY_WIFI_CONFIGURATION,
+                    Iap2Csm.string(1, wifiConfiguration.ssid),
+                    Iap2Csm.string(2, wifiConfiguration.passphrase),
+                    Iap2Csm.u8(3, wifiConfiguration.securityType),
+                    Iap2Csm.u8(4, wifiConfiguration.channel),
+                )
+                expect(Iap2MessageIds.CARPLAY_AVAILABILITY)
+                expect(Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER)
                 return
             }
             if (answersWifiRequest) {
@@ -1472,6 +1538,7 @@ class Iap2SenderSessionTest {
                 Shape.CT5_NEW_PROTOCOL -> "CADILLAC_2179"
                 Shape.VW_PASSAT -> "Volkswagen"
                 Shape.SAIC_AH4EM -> "AH4EM-ZXD END 01"
+                Shape.GWM_B06 -> "B06"
                 Shape.TEST_BENCH -> "MockCarPlay"
                 Shape.CHERY -> "Cloudrive"
             }
@@ -1537,6 +1604,11 @@ class Iap2SenderSessionTest {
                     arrayOf(
                         Iap2Csm.u16List(6, intArrayOf(0xaa06, 0x4301)),
                         Iap2Csm.u16List(7, intArrayOf(0x4e09, 0x4300)),
+                    )
+                Shape.GWM_B06 ->
+                    arrayOf(
+                        Iap2Csm.u16List(6, intArrayOf(0xaa06, 0x5703)),
+                        Iap2Csm.u16List(7, intArrayOf(0x5702, 0x4e09, 0x4e0a, 0x4e0b, 0x4e0c, 0x4e0d, 0x4e0e)),
                     )
             }
 

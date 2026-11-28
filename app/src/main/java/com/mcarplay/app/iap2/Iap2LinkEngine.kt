@@ -600,13 +600,26 @@ class Iap2LinkEngine(
 
     /**
      * 回显用的「我方参数」：会话表/超时沿用对端声明（手机端无特殊要求），
-     * 但 **maxOutgoing 提到 0x7F**——原样回显会把我们自己的发送窗口限死在对端的
-     * 小窗口（MIB3 突发 8 条在 maxOutgoing=4 下积压；真机 iPhone/AADisplay 均声明
-     * 0x7F）。maxLength 保持对端值（=我们的收包上限，勿放大）。
+     * 但当对端允许并发（maxOutgoing != 1）时将 **maxOutgoing 提到 0x7F**——原样回显会把
+     * 我们自己的发送窗口限死在对端的小窗口（MIB3 突发 8 条在 maxOutgoing=4 下积压；
+     * 真机 iPhone/AADisplay 均声明 0x7F）。
+     *
+     * 例外：当对端明确声明 **maxOutgoing == 1**（停等接收端，如长城 B06 2026-11-27 实车日志）
+     * 时必须尊重 1——背靠背连发 2 条以上会被车机直接丢弃并引发 4 秒重传雪崩。
+     * maxLength 保持对端值（=我们的收包上限，勿放大）。
      */
-    private fun ownSyncOf(peer: SynchronizationPayload): SynchronizationPayload =
-        peer.copy(maxOutgoing = PHONE_DECLARED_MAX_OUTGOING).also {
-            declaredMaxOutgoing = PHONE_DECLARED_MAX_OUTGOING
+    private fun ownSyncOf(peer: SynchronizationPayload): SynchronizationPayload {
+        val advertised = if (peer.maxOutgoing == 1) 1 else PHONE_DECLARED_MAX_OUTGOING
+        declaredMaxOutgoing = advertised
+        return peer.copy(maxOutgoing = advertised)
+    }
+
+    /** 有效发送窗口：对端声明停等（maxOutgoing == 1）时强制单包在途，否则按本方声明窗口。 */
+    private fun effectiveSendWindow(): Int =
+        if (peerSynchronization?.maxOutgoing == 1) {
+            1
+        } else {
+            declaredMaxOutgoing
         }
 
     private fun sendSynchronizationEcho(
@@ -646,7 +659,9 @@ class Iap2LinkEngine(
     ) {
         completeNegotiationIfPending(nowMillis)
         lastSentAcknowledged = acknowledgement
-        val window = (peerSynchronization?.maxOutgoing ?: maxOutgoing) + ACK_SLACK
+        val window =
+            (maxOf(effectiveSendWindow(), peerSynchronization?.maxOutgoing ?: maxOutgoing) + ACK_SLACK)
+                .coerceAtMost(0xF0)
         unacknowledged.removeAll { sequenceDistance(it.sequence, acknowledgement) !in 1..window }
         retransmitDeadline = unacknowledged.minOfOrNull { it.deadlineMillis }
         drainSendWindow(nowMillis)
@@ -680,10 +695,15 @@ class Iap2LinkEngine(
         while (sendBacklog.isNotEmpty()) {
             val packet = sendBacklog.first()
             val peer = peerSynchronization
-            val window = declaredMaxOutgoing
-            if (lastSentAcknowledged != null &&
-                sequenceDistance(sentSequence, lastSentAcknowledged!!) >= window
-            ) {
+            val window = effectiveSendWindow()
+            val windowFull =
+                if (window == 1) {
+                    unacknowledged.size >= 1
+                } else {
+                    lastSentAcknowledged != null &&
+                        sequenceDistance(sentSequence, lastSentAcknowledged!!) >= window
+                }
+            if (windowFull) {
                 return
             }
             sendBacklog.removeFirst()

@@ -467,6 +467,76 @@ class Iap2LinkEngineTest {
     )
 
     /** 解析一段输出里的所有 FF5A 帧（跳过前置 marker）。 */
+    @Test
+    fun peerMaxOutgoingOneEnforcesStopAndWaitAndEchoesOne() {
+        val phone = Iap2LinkEngine()
+        phone.start(0)
+        phone.takeOutput()
+
+        phone.feed(synFrameWithMaxOutgoing(peerSequence = 25, maxOutgoing = 1), 1)
+        val echo = phone.takeOutput()
+        val synAck = parseFrames(echo).single()
+        val advertisedMaxOutgoing = echo[Iap2LinkEngine.HEADER_BYTES + 1].toInt() and 0xFF
+        assertEquals("对端声明 maxOutgoing=1 时回显必须保持 1", 1, advertisedMaxOutgoing)
+
+        phone.feed(ackFrame(ack = synAck.sequence), 2)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+
+        // 连续排入 3 个控制包：窗口为 1 时只能立即发出第 1 个
+        assertTrue(phone.sendControl(Iap2Csm.encode(0x1D02), 10))
+        assertTrue(phone.sendControl(Iap2Csm.encode(0xAA00), 10))
+        assertTrue(phone.sendControl(Iap2Csm.encode(0x5702), 10))
+
+        val firstBatch = parseFrames(phone.takeOutput())
+        assertEquals("停等模式下未收 ACK 前只能发出 1 帧", 1, firstBatch.size)
+        val seq1 = firstBatch.single().sequence
+
+        // 收到第 1 帧 ACK 后才放行第 2 帧
+        phone.feed(ackFrame(ack = seq1), 20)
+        val secondBatch = parseFrames(phone.takeOutput())
+        assertEquals(1, secondBatch.size)
+        val seq2 = secondBatch.single().sequence
+        assertEquals((seq1 + 1) and 0xFF, seq2)
+
+        // 发后不管（awaitAck=false）不计入在途窗口，不会因为对端不 ACK 而永久锁死后续包
+        phone.feed(ackFrame(ack = seq2), 30)
+        val thirdBatch = parseFrames(phone.takeOutput())
+        assertEquals(1, thirdBatch.size)
+        val seq3 = thirdBatch.single().sequence
+        phone.feed(ackFrame(ack = seq3), 40)
+
+        assertTrue(phone.sendControl(Iap2Csm.encode(0x4E0E), 50, awaitAck = false))
+        assertTrue(phone.sendControl(Iap2Csm.encode(0x5702), 50, awaitAck = true))
+        val afterFireAndForget = parseFrames(phone.takeOutput())
+        assertEquals(2, afterFireAndForget.size)
+    }
+
+    @Test
+    fun acknowledgementWindowTracksEffectiveSendWindow() {
+        val phone = Iap2LinkEngine()
+        phone.start(0)
+        phone.takeOutput()
+
+        // 对端声明 maxOutgoing=4，我方回显 0x7F 并突发 16 个包（超过 4 + ACK_SLACK=14）
+        phone.feed(synFrameWithMaxOutgoing(peerSequence = 10, maxOutgoing = 4), 1)
+        val synAck = parseFrames(phone.takeOutput()).single()
+        phone.feed(ackFrame(ack = synAck.sequence), 2)
+        assertEquals(Iap2LinkEngine.State.NORMAL, phone.state)
+
+        repeat(16) { index ->
+            assertTrue(phone.sendControl(Iap2Csm.encode(0x5000 + index), 10))
+        }
+        val sent = parseFrames(phone.takeOutput())
+        assertEquals(16, sent.size)
+
+        // 仅确认第 1 个包：第 2..16 个包仍在有效发送窗口内，不得被误删
+        phone.feed(ackFrame(ack = sent.first().sequence), 20)
+        // 触发一次重传，应重传第 2 个包（而不是把后排包清空）
+        phone.advanceTime(4_010)
+        val retransmitted = parseFrames(phone.takeOutput())
+        assertTrue(retransmitted.any { it.sequence == sent[1].sequence })
+    }
+
     private fun parseFrames(bytes: ByteArray): List<ParsedFrame> {
         val frames = ArrayList<ParsedFrame>()
         var offset = 0
