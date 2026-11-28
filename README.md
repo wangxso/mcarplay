@@ -231,6 +231,10 @@ turn one on only for the symptom below, then reconnect. Open **Settings → 车�
 
 Turn the switch off again if it does not help. When reporting a problem, mention which
 switches were on; the diagnostic log records a `COMPAT:` line or an audio fallback line.
+When the head unit reports valid display geometry, a CarWith picture that is more than 10% wider
+than that geometry is transcoded automatically; touch coordinates follow the
+HID descriptor's logical range, which can be wider than `displays[0]`. The first touch log line
+`EVENT: 触摸坐标范围 ...` records the range actually used.
 
 ## Architecture
 

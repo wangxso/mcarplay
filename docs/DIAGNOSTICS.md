@@ -165,6 +165,8 @@ still-redacted recent runtime history.
   - `TIMING:` drift of the receiver's clock against the phone's monotonic clock, and the timesync request interval;
   - `EVENT: 首次收到车机命令` (the structure of each new command type, never its values), `EVENT: 本轮车机命令统计`,
     non-200 event replies, the `modesChanged` reply shape and the full `/info modes`;
+  - `EVENT: 触摸坐标范围 minX..maxX × minY..maxY` on the first mapped touch, showing whether the HID descriptor's
+    logical range or the `/info displays[0]` fallback is in use; followed by the existing throttled raw touch lines;
   - `SESSION: 本轮车机交互统计` (forceKeyFrame / requestUI / touch counts) and `CARLIFE: 入流门控` rejoin lines;
   - `AUTO:` manual-disconnect cooldown skips, including already queued service and controller starts. The 30 s cooldown is
     scoped to the selected receiver; a manual connection overrides it. A new connection waits for the previous teardown;

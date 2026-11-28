@@ -72,6 +72,9 @@
   - 仅在用户显式开启、且本轮取得合法 `/info displays[0]` 几何（`setup.displayFromInfo == true`，排除手机端 `1080×2320` 兜底）时生效；
   - [`VideoSender.drainExternalVideo`](../app/src/main/java/com/mcarplay/app/video/VideoSender.kt) 在向车机写出任何透传 `VideoConfig` 之前检查首个源帧尺寸，
     一旦不符立即在后台启动 `CarWithTranscoder` 并将首个含 SPS/PPS 的 IDR 帧无缝喂入解码器，期间保持屏幕流 keepAlive 且不向车机泄漏错误尺寸的 `VideoConfig`。
+- **同日追加（奇瑞 1280/1920 报告）：** 源画面比车机流宽超过 10% 时不再依赖这个默认关闭的开关，首个源帧自动转码；
+  触摸映射同时改为优先使用 HID 描述符 Logical Minimum/Maximum，而不是 `/info displays[0]`。详见
+  [`CARWITH-ENTRY-FINDINGS.md`](CARWITH-ENTRY-FINDINGS.md) 的 2026-11-28 条目。
 
 ---
 

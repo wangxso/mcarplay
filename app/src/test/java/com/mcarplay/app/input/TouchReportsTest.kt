@@ -195,6 +195,65 @@ class TouchReportsTest {
             0xc0.toByte(),
         )
 
+    /** 触摸逻辑范围 1920×720，但车机 /info 只声明 1280×720 的接收端样子。 */
+    private val physicalPanelTouchDescriptor =
+        byteArrayOf(
+            0x05,
+            0x0d,
+            0x09,
+            0x04,
+            0xa1.toByte(),
+            0x01,
+            0x05,
+            0x0d,
+            0x09,
+            0x22,
+            0xa1.toByte(),
+            0x02,
+            0x09,
+            0x42,
+            0x15,
+            0x00,
+            0x25,
+            0x01,
+            0x75,
+            0x01,
+            0x95.toByte(),
+            0x01,
+            0x81.toByte(),
+            0x02,
+            0x05,
+            0x01,
+            0x09,
+            0x30,
+            0x15,
+            0x00,
+            0x26,
+            0x7f,
+            0x07,
+            0x75,
+            0x10,
+            0x95.toByte(),
+            0x01,
+            0x81.toByte(),
+            0x02,
+            0x09,
+            0x31,
+            0x15,
+            0x00,
+            0x26,
+            0xcf.toByte(),
+            0x02,
+            0x75,
+            0x10,
+            0x95.toByte(),
+            0x01,
+            0x81.toByte(),
+            0x02,
+            0xc0.toByte(),
+            0xc0.toByte(),
+        )
+
     @Test
     fun audiSingleTouchDescriptorDetected() {
         assertEquals(
@@ -240,6 +299,54 @@ class TouchReportsTest {
                 0xc0.toByte(),
             )
         assertNull(TouchReports.formatFromDescriptor(consumer))
+        assertNull(TouchReports.coordinateRange(consumer))
+    }
+
+    @Test
+    fun touchRangeComesFromDescriptorNotAdvertisedDisplay() {
+        val range = TouchReports.coordinateRange(physicalPanelTouchDescriptor)!!
+        assertEquals(0, range.minX)
+        assertEquals(1919, range.maxX)
+        assertEquals(0, range.minY)
+        assertEquals(719, range.maxY)
+        assertTrue(range.isValid)
+    }
+
+    @Test
+    fun touchRangeFallsBackWhenDescriptorHasNoLogicalExtents() {
+        // 旧式描述符只有 Usage 没有 Logical Maximum：返回 null，由调用方按 displays[0] 回退。
+        val noExtents =
+            byteArrayOf(
+                0x05,
+                0x0d,
+                0x09,
+                0x04,
+                0xa1.toByte(),
+                0x01,
+                0x05,
+                0x0d,
+                0x09,
+                0x22,
+                0xa1.toByte(),
+                0x02,
+                0x05,
+                0x01,
+                0x09,
+                0x30,
+                0x75,
+                0x10,
+                0x95.toByte(),
+                0x01,
+                0x81.toByte(),
+                0x02,
+                0x09,
+                0x31,
+                0x81.toByte(),
+                0x02,
+                0xc0.toByte(),
+                0xc0.toByte(),
+            )
+        assertNull(TouchReports.coordinateRange(noExtents))
     }
 
     @Test

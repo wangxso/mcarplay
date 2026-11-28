@@ -332,7 +332,7 @@ class EventCommandRouterTest {
 
         val single = byteArrayOf(0x01, 0x0A, 0x00, 0x14, 0x00)
         harness.send(hidCommand(null, single))
-        assertEquals(listOf(Triple(20, 80, true)), target.sends)
+        assertEquals(listOf(Triple(20, 81, true)), target.sends)
         assertEquals(1, harness.output.touchSentCalls)
         assertEquals("EVENT: 触摸 #0(10,20)↓", harness.output.logs.last())
 
@@ -352,7 +352,7 @@ class EventCommandRouterTest {
                 0x00,
             )
         harness.send(hidCommand(null, multi))
-        assertEquals(Triple(20, 80, true), target.sends.last())
+        assertEquals(Triple(20, 81, true), target.sends.last())
         assertEquals(2, target.sendCalls)
     }
 
@@ -381,6 +381,26 @@ class EventCommandRouterTest {
         empty.send(hidCommand(null, ByteArray(5)))
         assertEquals(0, empty.touchTargetReads)
         assertEquals(0, empty.counters.touchLogCount)
+    }
+
+    @Test
+    fun h6HidDescriptorRangeDrivesTouchMappingWhenItDiffersFromDisplay() {
+        val inputs = FakeInputs()
+        inputs.contacts = listOf(TouchReports.Contact(0, 500, 500, true))
+        inputs.coordinateRange = TouchReports.CoordinateRange(0, 999, 0, 999)
+        val target = FakeTouchTarget(width = 200, height = 400)
+        // 有描述符才会调用 touchRange；内容本身由 FakeInputs 返回。
+        val harness = Harness(descriptors = mapOf("touch" to byteArrayOf(0)), inputs = inputs)
+        harness.touchTarget = target
+
+        harness.send(hidCommand("touch", ByteArray(5)))
+
+        assertEquals(Triple(100, 200, true), target.sends.single())
+        assertEquals(1, inputs.touchRangeCalls)
+        assertEquals(
+            "EVENT: 触摸坐标范围 0..999 × 0..999（HID 描述符；显示 100x100）",
+            harness.output.logs.first(),
+        )
     }
 
     @Test
@@ -1476,8 +1496,10 @@ class EventCommandRouterTest {
         var navigation = emptyList<Int>()
         var contacts: List<TouchReports.Contact>? = null
         var parseFailure: Throwable? = null
+        var coordinateRange: TouchReports.CoordinateRange? = null
         var handleCalls = 0
         var touchFormatCalls = 0
+        var touchRangeCalls = 0
         var touchParseCalls = 0
 
         override fun rawLogEnabled(): Boolean = raw
@@ -1501,6 +1523,11 @@ class EventCommandRouterTest {
         override fun touchFormat(descriptor: ByteArray): TouchReports.Format? {
             touchFormatCalls++
             return null
+        }
+
+        override fun touchRange(descriptor: ByteArray): TouchReports.CoordinateRange? {
+            touchRangeCalls++
+            return coordinateRange
         }
 
         override fun parseTouch(

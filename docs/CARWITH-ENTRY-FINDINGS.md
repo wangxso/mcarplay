@@ -1,5 +1,29 @@
 # CarWith 公开入口调查（2026-10-25）
 
+## 2026-11-28 奇瑞 `CHERY / Tiggo / 320.17.7`：1280×720 触摸偏移、CarWith 1920×720 显示不全（车主报告，离线修复待复测）
+
+- **来源：** 车主提供 `mcarplay-log-20261128-133727-1615e83a-diagnostics.txt` 与
+  `mcarplay-log-20261128-133959-04a8b2bb-diagnostics.txt`（均不入库）。应用 `0.1.7-debug (1070000)`，
+  APK SHA-256 `2b57844b…`；手机 Xiaomi 2210132C / Android 16，CarWith `4.0.21-20260929`，
+  小米 CarLife `8.8.5 (274)`。接收端 `/info` 自报 `CHERY / Tiggo / 320.17.7`，主屏
+  `displays[0]=1280×720@30`。车主未报告车型年款与车机固件，因此只按协议画像记录，不扩大车型结论。
+- **第一轮（默认 CarWith 1280×720）：** CarPlay 与 CarWith 均为 `1280x720`，`VIDEO: ✓ CarWith VideoConfig
+  已发送 ... 1280x720`，持续发帧；报告有 45 条 `EVENT: 触摸`。车主确认画面完整，但分辨率不对，且触摸位置错误。
+- **第二轮（CarWith 调到 1920×720）：** `/info` 仍是 `1280x720@30`，CarWith 实际返回并透传
+  `1920x720`；`VIDEO: ✓ CarWith VideoConfig 已发送 ... 1920x720`，42 秒发送 473 帧。车主确认画面右侧
+  显示不全，触摸仍错误。整轮没有 `forceKeyFrame` / 要帧风暴，已有的「尺寸不符 + 要帧风暴」转码策略不会触发；
+  另出现两次透传队满记录，但无 IDR 丢失证据。
+- **根因判断：** 车机把屏幕表面固定为 `1280×720`，1920×720 透传流无法完整落入该表面；同时旧触摸映射把
+  `displays[0]` 当成 HID 坐标范围。若触摸数字化仪按物理面板（本报告现象更符合 1920×720）上报，1280 与 1920
+  两轮都会出现同一方向的横向偏移。诊断报告把描述符十六进制脱敏为 `[wire payload omitted]`，本报告不能直接
+  读出逻辑范围；新构建会在首次触摸记录 `EVENT: 触摸坐标范围 minX..maxX × minY..maxY` 供下一轮确认。
+- **对应修改（未上车验证）：** ① 触摸优先使用 HID 描述符的 Logical Minimum/Maximum 映射到 CarWith；
+  描述符缺失或范围无效时才回退 `displays[0]`。② 取得合法 `/info` 几何且源画面比车机流宽超过 10% 时，
+  首个源帧直接启动手机端转码；1920×720 → 1280×720 命中，1920×1140 → 1280×720（约 5%）保持原透传策略。
+  默认关闭的「尺寸不符即转码」开关仍用于宽高比相同但需精确画布的严格接收端。
+- **验证：** standard JVM 单测 2,005 项、remote bridge 25 项，均 0 失败 / 0 跳过；`spotlessCheck`、
+  `lintStandardDebug`、`assembleStandardDebug` 通过。尚未在车上复测，不能据此声明车型兼容或问题已解决。
+
 ## 2026-11-26–27 Phase 3b（`dev` @ `9ac1b4c`）对照 `main`（`df4c81d`）T2 实车与台架验收
 
 - **测试环境：** 手机 Xiaomi `2509FPN0BC` / Android `17` / HyperOS `V816`；CarWith `4.0.23-20261016`，小米 CarLife `8.8.5 (274)`。对比构建均使用同签名本机 debug 包：`main` @ `df4c81d`（`apkSha256=b3479555…`）与 `dev` @ `9ac1b4c`（`apkSha256=2b57844b…`，含 Phase 2/3a/3b 重构及 `#127` CarWith 尺寸协商）。离线门禁：`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 及 standard 1,859 项 / remote bridge 25 项 / Python 87 项 / Node 20 项单测均全通过。16 份 `dev` 脱敏报告（均保留在仓库外 `~/mcarplay-regression/2026-11-26-*/`）中 `SESSION: SCOPE_MISMATCH` 均为 **0 条**。

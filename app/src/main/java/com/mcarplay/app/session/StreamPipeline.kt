@@ -147,6 +147,7 @@ internal class StreamPipeline(
                 phoneOwnsScreen = plan.phoneOwnsScreen,
                 onScreenOutputSuspended = { suspended -> plan.hooks.onScreenOutputSuspended(suspended) },
                 transcodeOnGeometryMismatch = plan.transcodeOnGeometryMismatch,
+                transcodeOnAspectMismatch = plan.transcodeOnAspectMismatch,
                 onEnded = { plan.hooks.onEnded(created) },
             )
         // 实验（issue #62，PR #78 评审 P2）：只在 VideoConfig 真正写出后判定，且尺寸变化时重新判定。
@@ -387,6 +388,7 @@ internal class ScreenSenderPlan(
     val phoneOwnsScreen: () -> Boolean,
     val hooks: ScreenSenderHooks,
     val transcodeOnGeometryMismatch: Boolean = false,
+    val transcodeOnAspectMismatch: Boolean = false,
 )
 
 /**

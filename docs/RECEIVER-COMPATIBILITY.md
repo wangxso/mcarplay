@@ -55,9 +55,9 @@ WinPlay 的“网络交接完成”必须同时满足 RECORD 成功和网络 iAP
 ## 媒体能力与记忆
 
 - **音频**：继续从 `/info` 的 `(type, audioType, audioOutputFormats)` 生成 AAC-LC/PCM 候选，按各自采样率与延迟协商。没有清单时保留协议基线探测；明确空清单、只有不支持的编码或只有通话档位时仅推视频，不强塞 PCM 媒体流。
-- **视频**：当前输入固定为 CarWith H.264，首帧由 IDR、SPS/PPS 门控，实际尺寸来自 SPS。接收端窗口、请求尺寸与实际视频尺寸分开记录；本层没有新增转码器，不能承诺接收端任意分辨率、HEVC 或高帧率。
+- **视频**：当前输入固定为 CarWith H.264，首帧由 IDR、SPS/PPS 门控，实际尺寸来自 SPS。接收端窗口、请求尺寸与实际视频尺寸分开记录；本层不能承诺接收端任意分辨率、HEVC 或高帧率。取得合法 `/info displays[0]` 几何时，若源画面比车机流宽超过 10%，首个源帧会自动切换手机端转码（如 1920×720 → 1280×720）；比例接近的 1920×1140 → 1280×720 仍先尝试透传，避免给 DiPlay/WinPlay 增加无谓开销。
 - **CarWith 尺寸协商**：自动判定对所有接收端开启 `preferVehicleResolution`；是否真正在 `0x18052` 追加 `DISABLE_RESOLUTION_OPTION=1` 由 `carlife/CarWithVideoNegotiation` 按本轮 `/info displays[0]` 的合法几何统一决定（手机端兜底的 1080×2320 不算车机几何，不会触发）。取得合法几何时按车机尺寸精确请求，长边可超过默认 1920 上限（如 2560×1200），但仍受维度/像素安全边界约束；几何缺失或非法时回退 1920 长边请求且不声明该 key。手动「通用」（`GENERIC`）预设显式关闭该策略，作为回退出口。实际是否按车机尺寸编码仍以 `0x10008`/SPS 为准。
-- **输入**：继续按 HID 描述符、Usage 和报告结构解析触摸、旋钮与媒体键。描述符缺失只走已有明确回退，不因名称相似套用另一款接收端的布局。
+- **输入**：继续按 HID 描述符、Usage 和报告结构解析触摸、旋钮与媒体键。触摸坐标优先使用描述符声明的 X/Y Logical Minimum/Maximum，而不是 `/info displays[0]`；两者可以不同（例如视频表面 1280×720、物理数字化仪 1920×720）。描述符缺失或范围无效时才回退 `displays[0]`。不因名称相似套用另一款接收端的布局。
 - **记忆隔离**：音频记忆键包含接收端实例标识（端点公钥/设备标识）、型号、制造商、固件、AirPlay 栈版本、features、EA 标识与音频能力指纹。持久化仅保存摘要；没有稳定实例和身份时不读写持久化记忆。切换接收端、固件或能力变化不会沿用旧档位结论。
 - **用户兜底开关**（默认关，`compat/CompatibilityPrefs`，界面在「车机设置 → 显示」）：「配对失败后尝试明文」在已连上 RTSP 的普通配对失败后恢复明文降级，403 与未连通 RTSP 仍禁止，且不影响断蓝牙重试许可；「音频格式未声明时仍尝试」在清单为空或无可用媒体格式时恢复协议基线与非媒体 PCM 档；「实验：源画面尺寸不符时直接转码」（`compat.transcode-on-geometry-mismatch`）在本轮取得合法 `/info displays[0]` 几何且 CarWith 首个 SPS 尺寸仍与车机流尺寸不符时，不等待 `forceKeyFrame` 风暴即启动手机端转码（手动「通用」预设显式关闭）。三者均为用户按需排查开关，不改变默认策略矩阵。
 - **定点恢复**：用户选择开启声音而旧记忆已禁用音频时，仅复位当前作用域；不清除其他接收端的记录。
@@ -83,3 +83,4 @@ WinPlay 的“网络交接完成”必须同时满足 RECORD 成功和网络 iAP
 2026-11-18：新增 `preferVehicleResolution` 策略与 `DISABLE_RESOLUTION_OPTION` 单元覆盖；standard 单测 1250 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、debug/release lint 与 `assembleStandardDebug` 通过。WinPlay 台架复测边界见 `CARWITH-ENTRY-FINDINGS.md`。
 2026-11-25：`preferVehicleResolution` 改为所有接收端自动开启，`0x18052` 是否声明 `DISABLE_RESOLUTION_OPTION=1` 及请求尺寸统一由 `CarWithVideoNegotiation` 按 `/info displays[0]` 几何决定（含 2560×1200 等超过 1920 长边的精确请求）。仅离线验证：standard 单测 1746 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、`lintStandardDebug` 与 `assembleStandardDebug` 通过；未做超 1920 实车复测，车机实际采纳尺寸仍以 `0x10008`/SPS 为准。
 2026-11-28：新增默认关闭的用户实验开关 `compat.transcode-on-geometry-mismatch`（「实验：源画面尺寸不符时直接转码」，手动「通用」预设显式关闭）。仅离线验证：standard 单测 1977 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、`lintStandardDebug` 与 `assembleStandardDebug` 通过；未做实车复测。
+2026-11-28：根据奇瑞 `1280×720`/`1920×720` 报告，新增 HID 描述符逻辑坐标范围映射与源画面明显更宽时自动转码。仅离线验证：standard 单测 2005 个、remote bridge 单测 25 个，均 0 失败，`spotlessCheck`、`lintStandardDebug` 与 `assembleStandardDebug` 通过；未做实车复测。

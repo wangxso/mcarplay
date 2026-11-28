@@ -72,6 +72,8 @@ class VideoSender(
     private val onScreenOutputSuspended: (Boolean) -> Unit = {},
     /** 实验开关：源帧 SPS 尺寸与车机流尺寸不符时，首个源帧即启动手机端转码（无需等要帧风暴）。 */
     private val transcodeOnGeometryMismatch: Boolean = false,
+    /** 自动路径：源帧明显比车机流更宽时，首个源帧即转码（固定画布车机会裁掉右侧）。 */
+    private val transcodeOnAspectMismatch: Boolean = false,
     private val uptimeMs: () -> Long = { android.os.SystemClock.uptimeMillis() },
 ) {
     /**
@@ -1172,77 +1174,84 @@ class VideoSender(
     private fun startTranscoding(
         storm: KeyFrameStorm.Level?,
         initialFrame: ExternalVideoFrame? = null,
+        firstFrameReason: String? = null,
     ) {
-        if (!running.get() || quiescing.get()) return
-        val fps = TranscodePolicy.cappedFps(targetFps, receiverMaxFps)
-        val reason =
-            if (TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)) {
-                "CarWith ${sourceWidth}x$sourceHeight 与车机流 ${streamWidth}x$streamHeight 不符，"
-            } else {
-                "CarWith ${sourceWidth}x$sourceHeight 与车机流尺寸一致，"
-            }
-        if (storm != null) {
-            val cadence = if (storm == KeyFrameStorm.Level.SUSTAINED) "持续" else "密集"
-            log(
-                "VIDEO: $reason" + "且车机${cadence}要关键帧（透传解不出画）——切换为手机端转码 ${streamWidth}x$streamHeight@$fps" +
-                    "\n  ↳ 切换前透传统计：${streamStats.summary()}",
-            )
-        } else {
-            log(
-                "VIDEO: $reason" + "已启用尺寸不符即转码——直接启动手机端转码 ${streamWidth}x$streamHeight@$fps",
-            )
-        }
-        var codec: MediaCodec? = null
-        var surface: Surface? = null
-        var pipeline: CarWithTranscoder? = null
-        var published = false
         try {
-            val created = createEncoder(streamWidth, streamHeight, fps, capEncoderFps = true, baselineProfile = true)
-            codec = created.first
-            surface = created.second
-            pipeline =
-                CarWithTranscoder(surface, streamWidth, streamHeight, sourceWidth, sourceHeight, log) {
-                    externalVideoSource?.requestKeyFrame()
+            if (!running.get() || quiescing.get()) return
+            val fps = TranscodePolicy.cappedFps(targetFps, receiverMaxFps)
+            val reason =
+                if (TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)) {
+                    "CarWith ${sourceWidth}x$sourceHeight 与车机流 ${streamWidth}x$streamHeight 不符，"
+                } else {
+                    "CarWith ${sourceWidth}x$sourceHeight 与车机流尺寸一致，"
                 }
-            pipeline.start()
-            // 初始化可能耗时数秒：期间断开的话 stop() 已收尾，资源不再发布到字段
-            published =
-                synchronized(lifecycleLock) {
-                    if (!running.get() || quiescing.get()) return@synchronized false
-                    synchronized(writeLock) {
-                        // 画布与「已转码」标记一起发布：与 setVideoDimensions() 同一把锁。
-                        canvas.publishEncodedCanvas(streamWidth, streamHeight)
-                        configSent = false
-                        cachedVideoConfig = null
-                        encoder = codec
-                        inputSurface = surface
-                        transcoder = pipeline
+            if (storm != null) {
+                val cadence = if (storm == KeyFrameStorm.Level.SUSTAINED) "持续" else "密集"
+                log(
+                    "VIDEO: $reason" + "且车机${cadence}要关键帧（透传解不出画）——切换为手机端转码 ${streamWidth}x$streamHeight@$fps" +
+                        "\n  ↳ 切换前透传统计：${streamStats.summary()}",
+                )
+            } else {
+                log(
+                    "VIDEO: $reason${firstFrameReason ?: "已启用尺寸不符即转码"}——直接启动手机端转码 ${streamWidth}x$streamHeight@$fps",
+                )
+            }
+            var codec: MediaCodec? = null
+            var surface: Surface? = null
+            var pipeline: CarWithTranscoder? = null
+            var published = false
+            try {
+                val created = createEncoder(streamWidth, streamHeight, fps, capEncoderFps = true, baselineProfile = true)
+                codec = created.first
+                surface = created.second
+                pipeline =
+                    CarWithTranscoder(surface, streamWidth, streamHeight, sourceWidth, sourceHeight, log) {
+                        externalVideoSource?.requestKeyFrame()
                     }
-                    true
+                pipeline.start()
+                // 初始化可能耗时数秒：期间断开的话 stop() 已收尾，资源不再发布到字段
+                published =
+                    synchronized(lifecycleLock) {
+                        if (!running.get() || quiescing.get()) return@synchronized false
+                        synchronized(writeLock) {
+                            // 画布与「已转码」标记一起发布：与 setVideoDimensions() 同一把锁。
+                            canvas.publishEncodedCanvas(streamWidth, streamHeight)
+                            configSent = false
+                            cachedVideoConfig = null
+                            encoder = codec
+                            inputSurface = surface
+                            transcoder = pipeline
+                        }
+                        true
+                    }
+                if (!published) {
+                    log("VIDEO: 转码初始化期间会话已停止，释放转码资源")
+                    return
                 }
-            if (!published) {
-                log("VIDEO: 转码初始化期间会话已停止，释放转码资源")
-                return
+                if (initialFrame != null && !screenFeedPaused()) {
+                    pipeline.submit(initialFrame)
+                }
+                Thread({ drainEncoder() }, "video-transcode-drain").apply {
+                    isDaemon = true
+                    start()
+                }
+            } catch (error: Exception) {
+                log("VIDEO: 转码启动失败，保持透传 - ${error.message}")
+            } finally {
+                if (!published) releaseVideoResources(pipeline, codec, surface)
             }
-            if (initialFrame != null && !screenFeedPaused()) {
-                pipeline.submit(initialFrame)
-            }
-            Thread({ drainEncoder() }, "video-transcode-drain").apply {
-                isDaemon = true
-                start()
-            }
-        } catch (error: Exception) {
-            log("VIDEO: 转码启动失败，保持透传 - ${error.message}")
         } finally {
             transcodeInitializing.set(false)
-            if (!published) releaseVideoResources(pipeline, codec, surface)
         }
     }
 
-    private fun launchGeometryMismatchTranscode(frame: ExternalVideoFrame) {
+    private fun launchFirstFrameTranscode(
+        frame: ExternalVideoFrame,
+        reason: String,
+    ) {
         transcodeInitializing.set(true)
         try {
-            Thread({ startTranscoding(storm = null, initialFrame = frame) }, "video-transcode-start").apply {
+            Thread({ startTranscoding(storm = null, initialFrame = frame, firstFrameReason = reason) }, "video-transcode-start").apply {
                 isDaemon = true
                 start()
             }
@@ -1285,11 +1294,26 @@ class VideoSender(
                 }
                 val frame = entry.frame
                 val sizeMismatch = TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)
-                if (TranscodePolicy.shouldTranscodeOnGeometryMismatch(sizeMismatch, transcodeOnGeometryMismatch) &&
+                val sourceWiderThanStream =
+                    TranscodePolicy.sourceWiderThanStream(sourceWidth, sourceHeight, streamWidth, streamHeight)
+                if (TranscodePolicy.shouldTranscodeOnFirstFrame(
+                        sizeMismatch = sizeMismatch,
+                        sourceWiderThanStream = sourceWiderThanStream,
+                        forceOnAnyMismatch = transcodeOnGeometryMismatch,
+                        autoOnAspectMismatch = transcodeOnAspectMismatch,
+                    ) &&
                     transcodeClaimed.compareAndSet(false, true)
                 ) {
                     markSourceInput()
-                    launchGeometryMismatchTranscode(frame)
+                    launchFirstFrameTranscode(
+                        frame = frame,
+                        reason =
+                            if (sourceWiderThanStream && transcodeOnAspectMismatch) {
+                                "源画面明显宽于车机流"
+                            } else {
+                                "已启用尺寸不符即转码"
+                            },
+                    )
                     maybeSendKeepAlive(output)
                     continue
                 }
