@@ -575,6 +575,13 @@ class ReceiverCompatibilityTest {
             val policy = ReceiverCompatibility.resolve(signals)
             assertTrue(policy.transcodeFromStart)
             assertTrue(policy.rules.contains("saic.roewe.490.0.transcode-from-start"))
+            assertEquals(ScreenReturnStrategy.NO_REBUILD, policy.screenReturn)
+            assertTrue(policy.rules.contains("saic.roewe.490.0.no-screen-rebuild"))
+            val overlaid =
+                ReceiverCompatibility.withScreenReturnPreference(policy, VehiclePreset.AUTO) {
+                    error("非手动大众不得读取回屏偏好")
+                }
+            assertEquals(ScreenReturnStrategy.NO_REBUILD, overlaid.screenReturn)
         }
         for (signals in listOf(
             roeweInfo.copy(srcvers = "490.1"),
@@ -585,7 +592,11 @@ class ReceiverCompatibilityTest {
             val other = ReceiverCompatibility.resolve(signals)
             assertFalse(other.transcodeFromStart)
             assertFalse(other.rules.contains("saic.roewe.490.0.transcode-from-start"))
+            assertEquals(ScreenReturnStrategy.OFF, other.screenReturn)
+            assertFalse(other.rules.contains("saic.roewe.490.0.no-screen-rebuild"))
         }
-        assertFalse(ReceiverCompatibility.resolve(roeweInfo, preset = VehiclePreset.GENERIC).transcodeFromStart)
+        val generic = ReceiverCompatibility.resolve(roeweInfo, preset = VehiclePreset.GENERIC)
+        assertFalse(generic.transcodeFromStart)
+        assertEquals(ScreenReturnStrategy.OFF, generic.screenReturn)
     }
 }

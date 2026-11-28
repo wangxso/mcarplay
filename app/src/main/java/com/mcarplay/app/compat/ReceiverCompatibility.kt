@@ -203,6 +203,7 @@ object ReceiverCompatibility {
                     claimScreenOnExplicitStart = false,
                     autoRequestCarplayUi = false,
                     transcodeFromStart = false,
+                    screenReturn = ScreenReturnStrategy.OFF,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -291,7 +292,7 @@ object ReceiverCompatibility {
                 if (preset == VehiclePreset.VOLKSWAGEN) {
                     readPreference()
                 } else {
-                    ScreenReturnStrategy.OFF
+                    policy.screenReturn
                 },
         )
 
@@ -428,6 +429,7 @@ object ReceiverCompatibility {
                 if (winPlay) add("winplay.vehicle-resolution")
                 if (bicvGseEv3) add("bicv.gse-ev3.475.8.3.auto-request-ui")
                 if (roewe490) add("saic.roewe.490.0.transcode-from-start")
+                if (roewe490) add("saic.roewe.490.0.no-screen-rebuild")
             }
         return Policy(
             family = family,
@@ -452,6 +454,7 @@ object ReceiverCompatibility {
             preferVehicleResolution = true,
             autoRequestCarplayUi = bicvGseEv3,
             transcodeFromStart = roewe490,
+            screenReturn = if (roewe490) ScreenReturnStrategy.NO_REBUILD else ScreenReturnStrategy.OFF,
         )
     }
 

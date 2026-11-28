@@ -7,8 +7,8 @@
   1. **基线（`0.1.7` release，报告 `cea82f66`，APK SHA-256 `4f545e5b…`）：** `DISABLE_RESOLUTION_OPTION=1` 已生效，CarWith 返回 `2560x1200@30`，主会话 `32ddd53f` 持续 44 s，发送 `2063` 帧（`screenSuspended=false`），但透传流实际为 `High Profile (100) + CABAC + 8x8 + level=51` 且实测帧率 `51–57 fps`（超车机 `maxFPS=30`）。车机有声、全白屏、点白屏无反应（`hidSendReport=0`、`车机要帧=0`）。手动切「通用」回退分辨率仍白屏。
   2. **实验 1（去掉 `SETUP` 未实现的 `hevc` 提议，`0.1.7-debug`，报告 `784e7318`，APK SHA-256 `20be60e0…`）：** `SETUP` 返回 `features` 不再含 `hevc`，`/info` 不再返回 `hevcInfo`。持续发送 `1563` 帧（实测 `fps=53`）与 `1366` 音频包；实拍确认车机有声、顶部系统栏与底部空调栏之间 `2560x1200` 区域仍为纯白屏、点击无 `hidSendReport`，排除 `hevc` 提议与 `displayPanels` 几何差为白屏主因。
   3. **实验 2（登记 `saic.roewe.490.0.transcode-from-start` 开局转码 + `EncoderFormatPolicy.avcLevelFor` 按宏块选 `AVCLevel5`，`0.1.7-debug`，报告 `218fc02e`，APK SHA-256 `d5015bb4…`）：** 手机端 `c2.mtk.avc.encoder` 在首帧即启动转码，输出 `profile=66 (Baseline) level=50 cabac=0 8x8=无 2560x1200@30`（实测 `fps=31–36`）。两轮会话（`7808b7f3` 69 s / `43cbe9db` 188 s，累计发送 `4014` 帧与 `8490` 音频包）**车机正常出画（全屏 2560×1200）、有声音、触控（点击与滑动 `hidSendReport`）正常**。
-- **遗留问题（另立 issue 跟踪）：** 在 `43cbe9db` 会话 121 s 处（`15:42:43.081`）点 CarWith 内「返回车机」（`0x10021`）交还主屏后，荣威未退出 CarPlay 页面导致画面停在最后一帧；随后点 CarPlay 图标触发 `requestUI` 重建主屏流时，每次发送 `TEARDOWN（屏幕流）` 后 16–96 ms 内车机都会反手下发 `changeModes(主屏=车机, 约束 500)`（连续 8 次），使新流刚建好就被门控再次暂停（`screenSuspended=true`）。
-- **验证边界：** 仅覆盖上述单台荣威 `490.0` 车机与 Xiaomi `2602BRT18C` 组合；长时稳定性与「返回车机后再进」尚未修复验证，不代表荣威全系车型兼容。
+- **遗留问题与对应修改（#150，未实车复测）：** 在 `43cbe9db` 会话 121 s 处（`15:42:43.081`）点 CarWith 内「返回车机」（`0x10021`）交还主屏后，荣威未退出 CarPlay 页面导致画面停在最后一帧；随后点 CarPlay 图标触发 `requestUI` 重建主屏流时，每次发送 `TEARDOWN（屏幕流）` 后 16–96 ms 内车机都会反手下发 `changeModes(主屏=车机, 约束 500)`（连续 8 次），使新流刚建好就被门控再次暂停（`screenSuspended=true`）。已对 `saic.roewe.490.0` 登记 `saic.roewe.490.0.no-screen-rebuild`（`ScreenReturnStrategy.NO_REBUILD`），`requestUI` 不再 `TEARDOWN` 重建主屏流，并在 `VideoSender` 转码路径补齐 `reprimeOnNextKeyFrame()` 重发 `VideoConfig` 与暂停跳帧时的断流通知；仍待实车复测确认。
+- **验证边界：** 仅覆盖上述单台荣威 `490.0` 车机与 Xiaomi `2602BRT18C` 组合；长时稳定性与 #150 的 `NO_REBUILD` 修复尚未实车复测，不代表荣威全系车型兼容。
 
 ## 2026-11-26–27 Phase 3b（`dev` @ `9ac1b4c`）对照 `main`（`df4c81d`）T2 实车与台架验收
 
