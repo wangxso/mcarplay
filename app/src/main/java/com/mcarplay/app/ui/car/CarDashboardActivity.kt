@@ -398,7 +398,11 @@ class CarDashboardActivity :
     private fun openNavigation(showSideMusic: Boolean) {
         appDrawer.visibility = View.GONE
         if (showSideMusic) {
-            homeMap?.takeIf { it != foregroundApp }?.let(::selectApp)
+            val map = homeMap
+            if (map != null && pendingApp != map) {
+                pendingApp = map
+                launchPendingApp(reuseVisibleApp = map == foregroundApp)
+            }
             updateAppInputBounds()
         } else {
             showHome()
@@ -561,12 +565,13 @@ class CarDashboardActivity :
         launchPendingApp()
     }
 
-    private fun launchPendingApp() {
+    private fun launchPendingApp(reuseVisibleApp: Boolean = false) {
         val component = pendingApp ?: return
         val texture = appView.surfaceTexture ?: return
         if (appView.width <= 0 || appView.height <= 0) return
         val generation = ++launchGeneration
-        projection.openApp(component, texture, appView.width, appView.height) { ok ->
+        val isMap = installedMaps.any { (_, map) -> map == component }
+        projection.openApp(component, texture, appView.width, appView.height, reuseVisibleApp, isMap) { ok ->
             runOnUiThread {
                 if (isDestroyed || isFinishing || generation != launchGeneration) return@runOnUiThread
                 if (ok) {
@@ -578,7 +583,7 @@ class CarDashboardActivity :
                     updateAppInputBounds()
                 } else {
                     showHome()
-                    notice(R.string.car_app_start_failed)
+                    notice(if (isMap) R.string.car_map_start_failed_retry else R.string.car_app_start_failed)
                 }
             }
         }

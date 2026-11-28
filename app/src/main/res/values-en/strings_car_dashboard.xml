@@ -41,4 +41,5 @@
     <string name="car_previous">Previous</string>
     <string name="car_next">Next</string>
     <string name="car_app_start_failed">Could not open the app on the car display.</string>
+    <string name="car_map_start_failed_retry">Could not open the map. Tap the map icon in the dock or reselect the map to retry.</string>
 </resources>

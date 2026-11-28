@@ -41,4 +41,5 @@
     <string name="car_previous">上一首</string>
     <string name="car_next">下一首</string>
     <string name="car_app_start_failed">应用未能在车机上打开。</string>
+    <string name="car_map_start_failed_retry">地图未能打开。可点 Dock 的地图图标或重新选择地图重试。</string>
 </resources>

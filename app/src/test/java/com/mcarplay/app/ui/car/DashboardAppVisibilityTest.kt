@@ -51,4 +51,32 @@ class DashboardAppVisibilityTest {
 
         assertNull(hasVisibleDashboardTask(snapshot, 234))
     }
+
+    @Test
+    fun dockReusesOnlyTheSelectedMapVisibleOnItsOwnDisplay() {
+        val snapshot =
+            """
+            RootTask id=32387 bounds=[0,0][1886,1074] displayId=305 userId=0
+              taskId=32387: com.waze/com.waze.FreeMapAppActivity userId=0 visible=false
+            RootTask id=32390 bounds=[0,0][1886,1074] displayId=305 userId=0
+              taskId=32390: com.waze/.MainActivity userId=0 visible=true topActivity=ComponentInfo{com.google.android.apps.maps/.MapsActivity}
+            RootTask id=32391 bounds=[0,0][1200,2670] displayId=0 userId=0
+              taskId=32391: com.waze/.MainActivity userId=0 visible=true
+            """.trimIndent()
+
+        assertEquals(false, hasVisibleDashboardTask(snapshot, 305, "com.waze"))
+        assertEquals(true, hasVisibleDashboardTask(snapshot, 305, "com.google.android.apps.maps"))
+        assertEquals(true, hasVisibleDashboardTask(snapshot, 0, "com.waze"))
+    }
+
+    @Test
+    fun unavailableMapIdentityDoesNotCauseAPotentiallyDisruptiveRelaunch() {
+        val snapshot =
+            """
+            RootTask id=32387 bounds=[0,0][1886,1074] displayId=305 userId=0
+              taskId=32387: null userId=0 visible=true
+            """.trimIndent()
+
+        assertNull(hasVisibleDashboardTask(snapshot, 305, "com.waze"))
+    }
 }

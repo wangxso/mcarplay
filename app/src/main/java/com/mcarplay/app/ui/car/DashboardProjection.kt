@@ -157,19 +157,54 @@ internal class DashboardProjection(
         texture: SurfaceTexture,
         width: Int,
         height: Int,
+        reuseVisibleApp: Boolean,
+        verifyMap: Boolean,
         completed: (Boolean) -> Unit,
     ) {
+        fun finish(success: Boolean) {
+            if (!success && !closed.get()) log("DASHBOARD: 应用打开失败 ${component.packageName}")
+            completed(success)
+        }
         if (!enqueue {
-                val success =
-                    !closed.get() &&
-                        runCatching {
-                            val display = ensureAppDisplay(texture, width, height)
-                            !closed.get() && launchApp(component, display.id)
-                        }.getOrDefault(false)
-                if (!success && !closed.get()) log("DASHBOARD: 应用打开失败 ${component.packageName}")
-                completed(success)
+                val previousDisplay = appDisplay?.id
+                val display =
+                    runCatching { ensureAppDisplay(texture, width, height) }.getOrNull()
+                if (display == null || closed.get()) return@enqueue finish(false)
+                if (reuseVisibleApp && previousDisplay == display.id && hasVisibleApp(display, component.packageName) != false) {
+                    return@enqueue finish(true)
+                }
+                if (!runCatching { launchApp(component, display.id) }.getOrDefault(false)) return@enqueue finish(false)
+                if (verifyMap) {
+                    // A successful am start can still be followed by the map immediately exiting.
+                    checkAfterMapLaunch(display, component.packageName, ::finish)
+                } else {
+                    finish(true)
+                }
             }
         ) {
+            finish(false)
+        }
+    }
+
+    private fun checkAfterMapLaunch(
+        display: AppDisplay,
+        packageName: String,
+        completed: (Boolean) -> Unit,
+        remaining: Int = 3,
+    ) {
+        try {
+            worker.schedule({
+                if (closed.get() || appDisplay?.id != display.id) {
+                    completed(false)
+                } else if (hasVisibleApp(display, packageName) != false) {
+                    completed(true)
+                } else if (remaining > 1) {
+                    checkAfterMapLaunch(display, packageName, completed, remaining - 1)
+                } else {
+                    completed(false)
+                }
+            }, 750L, TimeUnit.MILLISECONDS)
+        } catch (_: RejectedExecutionException) {
             completed(false)
         }
     }
@@ -221,9 +256,12 @@ internal class DashboardProjection(
         }
     }
 
-    private fun hasVisibleApp(display: AppDisplay): Boolean? {
+    private fun hasVisibleApp(
+        display: AppDisplay,
+        packageName: String? = null,
+    ): Boolean? {
         val snapshot = Shell.exec("cmd activity stack list", timeoutMs = 800L)
-        return if (snapshot.ok) hasVisibleDashboardTask(snapshot.output, display.id) else null
+        return if (snapshot.ok) hasVisibleDashboardTask(snapshot.output, display.id, packageName) else null
     }
 
     private fun returnToDashboardHome(onEmpty: () -> Unit) {
@@ -343,10 +381,14 @@ internal class DashboardProjection(
 private val rootDisplay = Regex("\\bdisplayId=(\\d+)\\b")
 private val taskVisibility = Regex("\\bvisible=(true|false)\\b")
 
+private val topActivityPackage = Regex("""\btopActivity=ComponentInfo\{([\w.]+)/""")
+private val taskPackage = Regex("""^taskId=\d+:\s+([\w.]+)/""")
+
 /** Null means the system did not return a task list we can safely interpret. */
 internal fun hasVisibleDashboardTask(
     snapshot: String,
     displayId: Int,
+    packageName: String? = null,
 ): Boolean? {
     var hasRootTask = false
     var onAppDisplay = false
@@ -363,7 +405,13 @@ internal fun hasVisibleDashboardTask(
             onAppDisplay = id == displayId
         } else if (onAppDisplay && line.startsWith("taskId=")) {
             when (taskVisibility.find(line)?.groupValues?.get(1)) {
-                "true" -> return true
+                "true" -> {
+                    if (packageName == null) return true
+                    val visiblePackage = topActivityPackage.find(line) ?: taskPackage.find(line)
+                    if (visiblePackage?.groupValues?.get(1) == packageName) return true
+                    if (visiblePackage == null) unknownTask = true
+                }
+
                 "false" -> Unit
                 else -> unknownTask = true
             }
