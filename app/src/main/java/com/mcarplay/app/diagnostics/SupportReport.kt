@@ -33,6 +33,10 @@ object SupportReport {
     @Volatile
     var rawEnvironmentProvider: ((Context) -> Map<String, String>)? = null
 
+    /** Set by the Application so the diagnostic engine need not depend on settings. */
+    @Volatile
+    internal var selectedVideoSource: ((Context) -> String)? = null
+
     fun create(
         context: Context,
         reportId: String,
@@ -182,6 +186,17 @@ object SupportReport {
             put("app.version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             put("app.variant", "${BuildConfig.FLAVOR}/${BuildConfig.BUILD_TYPE}")
             put("app.process", ConnectionDiagnostics.processId)
+            put("videoSource", value { selectedVideoSource?.invoke(context) ?: "unknown" })
+            put(
+                "permission.READ_PHONE_STATE",
+                value {
+                    (
+                        context.checkSelfPermission(
+                            Manifest.permission.READ_PHONE_STATE,
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ).toString()
+                },
+            )
             put(
                 "app.apk.sha256",
                 value {

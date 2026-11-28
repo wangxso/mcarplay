@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="car_source_title">Display source</string>
+    <string name="car_source_current">Display source · %1$s</string>
+    <string name="car_source_carwith">CarWith</string>
+    <string name="car_source_dashboard">Custom dashboard</string>
+    <string name="car_source_description">CarWith shows Xiaomi’s car interface. The custom dashboard opens Google Maps, Waze, Amap, Baidu Maps and music players on your phone. Start Shizuku and grant access to use it. Allow phone state access to show each SIM’s signal and network generation in the Dock.</string>
+    <string name="car_source_disconnect_first">Disconnect before changing the display source.</string>
+    <string name="car_dashboard_unavailable">Could not start the custom dashboard. Check Shizuku and reconnect.</string>
+    <string name="car_dashboard_audio">The custom dashboard needs recording and screen capture permission to send navigation and music audio to the car.</string>
+    <string name="car_dashboard_audio_denied">Audio capture permission was denied. Try again or connect with video only.</string>
+    <string name="car_google_maps">Google Maps</string>
+    <string name="car_waze">Waze</string>
+    <string name="car_amap">Amap</string>
+    <string name="car_baidu_map">Baidu Maps</string>
+    <string name="car_choose_map">Switch map</string>
+    <string name="car_no_maps">No supported map apps are installed on the phone.</string>
+    <string name="car_apps">Apps</string>
+    <string name="car_return_to_car">Return to vehicle</string>
+    <string name="car_return_to_car_unavailable">Could not return to the vehicle display.</string>
+    <string name="car_dashboard_settings">Settings</string>
+    <string name="car_battery">Battery %1$d%%</string>
+    <string name="car_battery_percent">%1$d%%</string>
+    <string name="car_battery_charging">Charging, battery %1$d%%</string>
+    <string name="car_battery_unknown">Battery level unavailable</string>
+    <string name="car_network_offline">Offline</string>
+    <string name="car_network_wifi">Wi‑Fi</string>
+    <string name="car_network_cell">Mobile data</string>
+    <string name="car_network_online">Online</string>
+    <string name="car_network_with_signal">%1$s, signal %2$d out of 4</string>
+    <string name="car_sim_network">SIM %1$d, %2$s</string>
+    <string name="car_status_unknown">—</string>
+    <string name="car_choose_player">Choose music player</string>
+    <string name="car_no_players">No launchable music players were found.</string>
+    <string name="car_music_idle">Nothing playing</string>
+    <string name="car_media_access">Grant notification access on the phone to show track details</string>
+    <string name="car_navigation">Map</string>
+    <string name="car_back">Back</string>
+    <string name="car_play">Play</string>
+    <string name="car_pause">Pause</string>
+    <string name="car_previous">Previous</string>
+    <string name="car_next">Next</string>
+    <string name="car_app_start_failed">Could not open the app on the car display.</string>
+    <string name="car_map_start_failed_retry">Could not open the map. Tap the map icon in the dock or reselect the map to retry.</string>
+</resources>

@@ -288,9 +288,10 @@ class AttemptScopeWiringTest {
         )
         assertTrue(
             component.contains(
-                "if (!port.isScopeActive() || !port.isCurrentClient(client) || sender !== replacement)",
+                "if (!port.isScopeActive() || !port.isCurrentClient(client) || sender !== replacement",
             ),
         )
+        assertTrue(component.contains("sender !== replacement || dashboard?.isCurrent() == false"))
         assertTrue(component.contains("!port.phoneOwnsScreen(client)"))
         assertEquals(
             "事件通道 guard 必须留在 router，且只保留一处",

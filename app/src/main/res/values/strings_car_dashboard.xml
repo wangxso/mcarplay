@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="car_source_title">画面来源</string>
+    <string name="car_source_current">画面来源 · %1$s</string>
+    <string name="car_source_carwith">CarWith</string>
+    <string name="car_source_dashboard">自绘车机 UI</string>
+    <string name="car_source_description">CarWith 使用小米车联界面。自绘车机 UI 可打开 Google Maps、Waze、高德地图、百度地图和手机音乐播放器，需要启动并授权 Shizuku。允许读取手机状态后，Dock 可显示每张 SIM 的信号与网络制式。</string>
+    <string name="car_source_disconnect_first">断开连接后可以切换画面来源。</string>
+    <string name="car_dashboard_unavailable">自绘车机 UI 未能启动。请检查 Shizuku 后重新连接。</string>
+    <string name="car_dashboard_audio">自绘模式需要录音和投屏授权，才能把地图语音和音乐送到车机。</string>
+    <string name="car_dashboard_audio_denied">未获取音频捕获权限，请重新开启声音或选择仅推视频。</string>
+    <string name="car_google_maps">Google Maps</string>
+    <string name="car_waze">Waze</string>
+    <string name="car_amap">高德地图</string>
+    <string name="car_baidu_map">百度地图</string>
+    <string name="car_choose_map">切换地图</string>
+    <string name="car_no_maps">手机上尚未安装可用的地图应用。</string>
+    <string name="car_apps">应用</string>
+    <string name="car_return_to_car">返回车机</string>
+    <string name="car_return_to_car_unavailable">当前无法返回车机。</string>
+    <string name="car_dashboard_settings">设置</string>
+    <string name="car_battery">电量 %1$d%%</string>
+    <string name="car_battery_percent">%1$d%%</string>
+    <string name="car_battery_charging">正在充电，电量 %1$d%%</string>
+    <string name="car_battery_unknown">电量未知</string>
+    <string name="car_network_offline">未联网</string>
+    <string name="car_network_wifi">Wi‑Fi</string>
+    <string name="car_network_cell">移动数据</string>
+    <string name="car_network_online">已联网</string>
+    <string name="car_network_with_signal">%1$s，信号 %2$d 格，共 4 格</string>
+    <string name="car_sim_network">SIM %1$d，%2$s</string>
+    <string name="car_status_unknown">—</string>
+    <string name="car_choose_player">选择音乐播放器</string>
+    <string name="car_no_players">没有检测到可打开的音乐播放器。</string>
+    <string name="car_music_idle">暂无播放</string>
+    <string name="car_media_access">在手机上授予通知使用权以显示歌曲信息</string>
+    <string name="car_navigation">导航</string>
+    <string name="car_back">返回</string>
+    <string name="car_play">播放</string>
+    <string name="car_pause">暂停</string>
+    <string name="car_previous">上一首</string>
+    <string name="car_next">下一首</string>
+    <string name="car_app_start_failed">应用未能在车机上打开。</string>
+    <string name="car_map_start_failed_retry">地图未能打开。可点 Dock 的地图图标或重新选择地图重试。</string>
+</resources>

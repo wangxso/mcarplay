@@ -6,6 +6,8 @@
 
 ## 当前基线与结论
 
+- **11 月 27 日自绘车机 UI（实验，移植至含 #140 的 `dev`）：** 复用媒体进度和混音，接入触控、返回车机及会话收尾；补上双虚拟屏释放、启动失败诊断和独立导航静音回退。1920×1080 分屏保留此前分支验证的调整；本次移植仍待实车复测。两种画面来源沿用 `dev` 的手机流量默认值。
+
 - **11 月 26–27 日会话编排层重构 Phase 3b（`dev` @ `9ac1b4c` / #135，对照 `main` @ `df4c81d` 完成 T2 实车与台架验收）：**
   本地完整门禁通过：standard JVM 单测 1,859 项、remote bridge 单测 25 项、Python 工具 87 项、Node debug-bridge 20 项，`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 全部 0 失败 / 0 错误 / 0 跳过。
   使用同签名构建（`main` `b3479555` vs `dev` `2b57844b`）在 Xiaomi `2509FPN0BC`（Android 17 / HyperOS `V816` / CarWith `4.0.23-20261016` / CarLife `8.8.5`）完成跨接收端回归（报告脱敏归档在仓库外）：

@@ -1,11 +1,13 @@
 package com.mcarplay.app.media
 
 import android.content.ComponentName
+import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.view.KeyEvent
 import com.mcarplay.app.carlife.CarWithNotificationProbe
 
 /**
@@ -351,5 +353,46 @@ object MediaSessionsState {
 
     fun requestResync() {
         resyncHook?.invoke()
+    }
+
+    /** Send controls to the session whose track is shown in the dashboard card. */
+    internal fun controlCurrentPlayer(
+        context: Context,
+        keyCode: Int,
+    ): Boolean {
+        val playerPackage = nowPlaying?.pkg ?: return false
+        return runCatching {
+            val sessions = context.getSystemService(MediaSessionManager::class.java) ?: return false
+            val controller =
+                sessions.getActiveSessions(MediaListenerService.componentName(context)).firstOrNull { it.packageName == playerPackage }
+                    ?: return false
+            val actions = controller.playbackState?.actions ?: return false
+            val controls = controller.transportControls
+            when (keyCode) {
+                KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                    if (actions and PlaybackState.ACTION_PLAY == 0L) return false
+                    controls.play()
+                }
+
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    if (actions and PlaybackState.ACTION_PAUSE == 0L) return false
+                    controls.pause()
+                }
+
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    if (actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS == 0L) return false
+                    controls.skipToPrevious()
+                }
+
+                KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                    if (actions and PlaybackState.ACTION_SKIP_TO_NEXT == 0L) return false
+                    controls.skipToNext()
+                }
+
+                else -> return false
+            }
+            logSink?.invoke("MEDIA: 车机音乐卡片指令 key=$keyCode → $playerPackage")
+            true
+        }.getOrDefault(false)
     }
 }

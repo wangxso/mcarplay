@@ -1,6 +1,7 @@
 package com.mcarplay.app.session
 
 import android.app.Application
+import android.view.Surface
 import com.mcarplay.app.airplay.AirPlayClient
 import com.mcarplay.app.audio.CarLifeAudioBridge
 import com.mcarplay.app.carlife.CarLifeAudioEvent
@@ -171,6 +172,7 @@ internal class StreamPipeline(
         displayUuid: String?,
         diagnosticAttempt: String,
         port: ScreenRecoveryPort,
+        dashboard: DashboardScreenRecovery? = null,
     ) {
         recovery =
             recover@{
@@ -182,12 +184,16 @@ internal class StreamPipeline(
                     }
                 val previousSender =
                     ports.withControllerLock {
-                        val previousOutput = output ?: return@withControllerLock null
                         val previous = sender ?: return@withControllerLock null
+                        val ownsSource =
+                            if (dashboard != null) {
+                                dashboard.isCurrent()
+                            } else {
+                                output?.sender === previous && currentFormalSession() === carLife()
+                            }
                         if (!port.isScopeActive() ||
                             !port.isCurrentClient(client) ||
-                            previousOutput.sender !== previous ||
-                            currentFormalSession() !== carLife() ||
+                            !ownsSource ||
                             !port.phoneOwnsScreen(client)
                         ) {
                             return@withControllerLock null
@@ -196,7 +202,12 @@ internal class StreamPipeline(
                         sender = null
                         previous
                     } ?: return@recover ScreenRecoveryResult.ABORTED
-                ports.log("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频")
+                if (dashboard == null) {
+                    ports.log("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频")
+                } else {
+                    ports.log("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留自绘 UI 与音频")
+                    dashboard.detachEncoder()
+                }
                 previousSender.stop()
                 if (!port.isScopeActive() || !port.teardownScreenStream(client)) return@recover failure()
                 if (!port.isScopeActive()) return@recover ScreenRecoveryResult.ABORTED
@@ -219,17 +230,21 @@ internal class StreamPipeline(
                         !port.isScopeActive() ||
                         !port.record(client) ||
                         !port.isScopeActive() ||
-                        !replacement.start {} ||
+                        !replacement.start { surface -> dashboard?.attach(surface) } ||
                         !port.isScopeActive()
                     ) {
                         return@recover failure()
                     }
                     val confirmed =
                         ports.withControllerLock {
-                            if (!port.isScopeActive() || !port.isCurrentClient(client) || sender !== replacement) {
+                            if (!port.isScopeActive() ||
+                                !port.isCurrentClient(client) ||
+                                sender !== replacement ||
+                                dashboard?.isCurrent() == false
+                            ) {
                                 false
                             } else {
-                                publishOutput(diagnosticAttempt, replacement)
+                                if (dashboard == null) publishOutput(diagnosticAttempt, replacement)
                                 true
                             }
                         }
@@ -368,7 +383,7 @@ internal class ScreenSenderPlan(
     val targetFps: Int,
     val keepAliveWithStats: Boolean,
     val receiverMaxFps: Int,
-    val externalVideoSource: ExternalVideoSource,
+    val externalVideoSource: ExternalVideoSource?,
     val phoneOwnsScreen: () -> Boolean,
     val hooks: ScreenSenderHooks,
 )
@@ -398,6 +413,14 @@ internal interface ScreenSenderHooks {
  * 全部由控制器按本轮 attempt 装配：`scope.isActive`、`currentClient === client`、`client.cancelled`、
  * `client.modes.phoneOwnsScreen`，以及 teardown/run/record/restored 四个屏幕流叶子。
  */
+internal interface DashboardScreenRecovery {
+    fun isCurrent(): Boolean
+
+    fun detachEncoder()
+
+    fun attach(surface: Surface)
+}
+
 internal interface ScreenRecoveryPort {
     fun isScopeActive(): Boolean
 

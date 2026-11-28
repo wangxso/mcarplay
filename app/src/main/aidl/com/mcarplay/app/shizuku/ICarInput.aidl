@@ -3,6 +3,7 @@
 package com.mcarplay.app.shizuku;
 
 import android.view.Surface;
+import android.os.ParcelFileDescriptor;
 
 interface ICarInput {
     boolean tap(int displayId, int x, int y);
@@ -23,7 +24,7 @@ interface ICarInput {
     // 解决「应用内跳转的任务被重定向到手机主屏」问题（AOSP 安全策略）。
     // trusted=false：不声明 FLAG_TRUSTED——第三方任务无法被系统安置到该屏
     // （dock 屏只承载自有 DockActivity，去掉受信可杜绝其它应用任务逃逸上来）。
-    int createDisplay(String name, int width, int height, int dpi, in Surface surface, boolean trusted);
+    int createDisplay(String name, int width, int height, int dpi, in Surface surface, boolean trusted, boolean destroyContentOnRemoval, IBinder owner);
     boolean releaseDisplay(int displayId);
 
     // 动态调整虚拟屏尺寸（创建者才可调）：屏上应用的配置变更由系统派发，
@@ -47,4 +48,12 @@ interface ICarInput {
     // 服务进程 PID：应用侧清理「非当前绑定进程」的陈旧 UserService 时用于排除自己
     // （旧进程持有的虚拟屏跨进程无法 release，杀进程是唯一释放途径，见 CarInputClient）。
     int pid();
+
+    // 屏幕流恢复时更换编码器输入，保留显示 ID 及正在导航的任务。null 暂停输出。
+    boolean setDisplaySurface(int displayId, in @nullable Surface surface);
+
+    @nullable ParcelFileDescriptor openNavigationAudio(int sampleRate, IBinder owner, in int[] mapUids);
+    void closeNavigationAudio(IBinder owner);
+    // -1 when Android does not expose playback ownership; otherwise 0 idle / 1 playing.
+    int navigationPlaybackState(IBinder owner);
 }
