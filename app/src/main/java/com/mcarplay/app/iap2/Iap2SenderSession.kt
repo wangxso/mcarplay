@@ -457,6 +457,25 @@ class Iap2SenderSession(
                 eaProtocols.isEmpty() &&
                 !declaresAnyEaMessage()
         val legacyWifiExchange = wifiGen != ReceiverProfile.WifiGen.NEW
+        // 纯旧协议车机（声明可收 0x4E0E + 走 0x5702/0x5703、不声明 0x4300/0x4301 且无 EA，
+        // 如长城 B06 2026-11-27 实车日志）没有 0x4301 阶段，在 0x5702 之前先发一次 0x4E0E
+        // （发后不管），避免车机在回复 0x5703 前等待设备蓝牙传输标识。
+        val earlyTransportIdentifier =
+            legacyWifiExchange &&
+                accessoryDeclaresReceive(Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER) == true &&
+                declaresReceiveWifi == true &&
+                declaresSendWifi == true &&
+                declaresReceiveCarPlayAvailability != true &&
+                declaresSendStartSession != true &&
+                eaProtocols.isEmpty() &&
+                !declaresAnyEaMessage()
+        if (earlyTransportIdentifier) {
+            sendFireAndForget(
+                Iap2MessageIds.DEVICE_TRANSPORT_IDENTIFIER,
+                Iap2Csm.string(0, bluetoothMac),
+            )
+            log("iap2 tx=0x4e0e 设备传输标识（纯旧协议车机声明可收，提前于 0x5702 发送）")
+        }
         if (!legacyWifiExchange) {
             log(
                 "iap2 车机画像判 NEW（BMW iD9 形态）——跳过 0x5702，AP 信息由 0x4301 提供" +
