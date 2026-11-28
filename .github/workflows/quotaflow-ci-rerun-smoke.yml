@@ -1,0 +1,21 @@
+name: QuotaFlow CI rerun smoke
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/quotaflow-ci-rerun-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  controlled-infrastructure-failure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Emit controlled runner failure
+        shell: bash
+        run: |
+          echo "Controlled infrastructure smoke: runner lost communication with the server." >&2
+          echo "::error::runner lost communication with the server"
+          exit 1
