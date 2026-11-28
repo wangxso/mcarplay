@@ -53,61 +53,65 @@ class CarBluetoothReceiver : BroadcastReceiver() {
         }
         // ACL 状态无论是否开启自动连接都要记：出站探测据此在车机离线后停下（见 OutboundProbePolicy）
         BtAclTracker.record(address, action == BluetoothDevice.ACTION_ACL_CONNECTED, SystemClock.elapsedRealtime())
-        // 「上车自动连接」开关（设置 → 显示，默认开）
-        if (!AutoConnectPrefs.enabled(app)) return
+        val autoConnectEnabled = AutoConnectPrefs.enabled(app)
+        if (action == BluetoothDevice.ACTION_ACL_CONNECTED && !autoConnectEnabled) return
         val name = runCatching { device.name }.getOrNull()
         val deviceClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull()
 
         val target = TargetDevicePrefs.get(app)
-        if (!CarDeviceClassifier.isCarDevice(target?.address, address, name, deviceClass)) {
-            DebugFileLog.append(
-                app,
-                "AUTO: 忽略非车机蓝牙 ${name ?: "?"}（$address，class=${CarDeviceClassifier.describeClass(deviceClass)}）",
-            )
-            return
-        }
-
-        if (action == BluetoothDevice.ACTION_ACL_CONNECTED) {
-            if (runCatching { device.bondState }.getOrNull() == BluetoothDevice.BOND_BONDING) {
-                Iap2Pairings.current(app).bondChanged(address, BluetoothDevice.BOND_BONDING)
-            }
-            if (AutoConnectPrefs.isManualStopCoolingDown(app, address)) {
-                DebugFileLog.append(app, "AUTO: 手动断开后的 30 秒冷却期——忽略蓝牙回连")
-                return
-            }
-            AutoReconnectGuard.block(app, address)?.let { block ->
+        val isCarDevice = CarDeviceClassifier.isCarDevice(target?.address, address, name, deviceClass)
+        when (decideAclBroadcastAction(action, autoConnectEnabled, isCarDevice)) {
+            AclBroadcastAction.IGNORE -> return
+            AclBroadcastAction.IGNORE_NON_CAR_LOG -> {
                 DebugFileLog.append(
                     app,
-                    "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
-                        "（可在 App 内手动连接）",
+                    "AUTO: 忽略非车机蓝牙 ${name ?: "?"}（$address，class=${CarDeviceClassifier.describeClass(deviceClass)}）",
                 )
                 return
             }
-            DebugFileLog.append(app, "AUTO: 车机蓝牙已连上 ${name ?: "?"}（$address）——自动拉起会话")
-            runCatching {
-                context.startForegroundService(
-                    Intent(context, CarPlayService::class.java)
-                        .setAction(CarPlayService.ACTION_AUTO_START_SESSION)
-                        // 未选定目标车机（自动模式）时，熔断仍按这条 ACL 的对端地址隔离。
-                        .putExtra(CarPlayService.EXTRA_PEER_ADDRESS, address),
-                )
-            }.onFailure { error ->
-                DebugFileLog.append(
-                    app,
-                    "AUTO: 自动启动被系统拦截（${error.javaClass.simpleName}: ${error.message}）" +
-                        "——请授予「显示在其他应用上层」后重试，或手动打开 App 连接一次",
-                )
+            AclBroadcastAction.AUTO_START -> {
+                if (runCatching { device.bondState }.getOrNull() == BluetoothDevice.BOND_BONDING) {
+                    Iap2Pairings.current(app).bondChanged(address, BluetoothDevice.BOND_BONDING)
+                }
+                if (AutoConnectPrefs.isManualStopCoolingDown(app, address)) {
+                    DebugFileLog.append(app, "AUTO: 手动断开后的 30 秒冷却期——忽略蓝牙回连")
+                    return
+                }
+                AutoReconnectGuard.block(app, address)?.let { block ->
+                    DebugFileLog.append(
+                        app,
+                        "AUTO: 连续 ${block.failures} 次会话在出画前被车机断开——暂停自动重连 ${block.remainingSeconds} 秒" +
+                            "（可在 App 内手动连接）",
+                    )
+                    return
+                }
+                DebugFileLog.append(app, "AUTO: 车机蓝牙已连上 ${name ?: "?"}（$address）——自动拉起会话")
+                runCatching {
+                    context.startForegroundService(
+                        Intent(context, CarPlayService::class.java)
+                            .setAction(CarPlayService.ACTION_AUTO_START_SESSION)
+                            // 未选定目标车机（自动模式）时，熔断仍按这条 ACL 的对端地址隔离。
+                            .putExtra(CarPlayService.EXTRA_PEER_ADDRESS, address),
+                    )
+                }.onFailure { error ->
+                    DebugFileLog.append(
+                        app,
+                        "AUTO: 自动启动被系统拦截（${error.javaClass.simpleName}: ${error.message}）" +
+                            "——请授予「显示在其他应用上层」后重试，或手动打开 App 连接一次",
+                    )
+                }
             }
-        } else {
-            DebugFileLog.append(app, "AUTO: 车机蓝牙已断开 ${name ?: "?"}（$address）——检查是否需要结束会话")
-            // 会话在跑时服务就是前台进程，startService 允许；不在跑说明本来就没有会话
-            runCatching {
-                context.startService(
-                    Intent(context, CarPlayService::class.java)
-                        .setAction(CarPlayService.ACTION_AUTO_STOP_SESSION)
-                        // 只有断开的就是本轮车机时才收摊/记账，见 CarPlayService 的地址校验。
-                        .putExtra(CarPlayService.EXTRA_PEER_ADDRESS, address),
-                )
+            AclBroadcastAction.AUTO_STOP -> {
+                DebugFileLog.append(app, "AUTO: 车机蓝牙已断开 ${name ?: "?"}（$address）——检查是否需要结束会话")
+                // 会话在跑时服务就是前台进程，startService 允许；不在跑说明本来就没有会话
+                runCatching {
+                    context.startService(
+                        Intent(context, CarPlayService::class.java)
+                            .setAction(CarPlayService.ACTION_AUTO_STOP_SESSION)
+                            // 只有断开的就是本轮车机时才收摊/记账，见 CarPlayService 的地址校验。
+                            .putExtra(CarPlayService.EXTRA_PEER_ADDRESS, address),
+                    )
+                }
             }
         }
     }
@@ -120,3 +124,37 @@ class CarBluetoothReceiver : BroadcastReceiver() {
             intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
         }
 }
+
+internal enum class AclBroadcastAction {
+    IGNORE,
+    IGNORE_NON_CAR_LOG,
+    AUTO_START,
+    AUTO_STOP,
+}
+
+/**
+ * ACL 广播分流（纯函数，单测钉死）：
+ * - 「上车自动连接」只控制 [BluetoothDevice.ACTION_ACL_CONNECTED] 的自动拉起；
+ * - 即使关闭了自动连接，手动发起的会话在车机熄火断开蓝牙（[BluetoothDevice.ACTION_ACL_DISCONNECTED]）时
+ *   仍须投递 [CarPlayService.ACTION_AUTO_STOP_SESSION]，由前台服务校验本轮地址与媒体状态后收摊。
+ */
+internal fun decideAclBroadcastAction(
+    action: String,
+    autoConnectEnabled: Boolean,
+    isCarDevice: Boolean,
+): AclBroadcastAction =
+    when (action) {
+        BluetoothDevice.ACTION_ACL_CONNECTED ->
+            when {
+                !autoConnectEnabled -> AclBroadcastAction.IGNORE
+                !isCarDevice -> AclBroadcastAction.IGNORE_NON_CAR_LOG
+                else -> AclBroadcastAction.AUTO_START
+            }
+        BluetoothDevice.ACTION_ACL_DISCONNECTED ->
+            when {
+                isCarDevice -> AclBroadcastAction.AUTO_STOP
+                autoConnectEnabled -> AclBroadcastAction.IGNORE_NON_CAR_LOG
+                else -> AclBroadcastAction.IGNORE
+            }
+        else -> AclBroadcastAction.IGNORE
+    }

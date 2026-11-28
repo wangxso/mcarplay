@@ -165,6 +165,8 @@ still-redacted recent runtime history.
   - `TIMING:` drift of the receiver's clock against the phone's monotonic clock, and the timesync request interval;
   - `EVENT: 首次收到车机命令` (the structure of each new command type, never its values), `EVENT: 本轮车机命令统计`,
     non-200 event replies, the `modesChanged` reply shape and the full `/info modes`;
+  - `EVENT: 触摸坐标范围 minX..maxX × minY..maxY` on the first mapped touch, showing whether the HID descriptor's
+    logical range or the `/info displays[0]` fallback is in use; followed by the existing throttled raw touch lines;
   - `SESSION: 本轮车机交互统计` (forceKeyFrame / requestUI / touch counts) and `CARLIFE: 入流门控` rejoin lines;
   - `AUTO:` manual-disconnect cooldown skips, including already queued service and controller starts. The 30 s cooldown is
     scoped to the selected receiver; a manual connection overrides it. A new connection waits for the previous teardown;
@@ -264,9 +266,13 @@ A capture shows only what was on the air during that run; it is not vehicle-comp
 
 ```bash
 python3 tools/analyze_diagnostics.py /path/to/mcarplay-log-...-diagnostics.txt
+python3 tools/analyze_diagnostics.py --align-end report-1.txt report-2.txt report-3.txt
 ```
 
-The offline tool summarizes the last five retained attempts. `python3 tools/compare_diagnostics.py baseline.txt candidate.txt`
+The offline tool summarizes the last five retained attempts per report. Passing `--align-end` (or multiple report files)
+additionally computes `T_end - T_anchor` across all non-benign ended `carplay` attempts and ranks milestones and stages by
+lowest variance (`stddevMs`, `spreadMs`), helping locate candidate hidden receiver watchdogs; pass `--include-benign` to
+include `USER_STOP`/`SUPERSEDED`/`NONE`/`ENDPOINT_PENDING`. `python3 tools/compare_diagnostics.py baseline.txt candidate.txt`
 compares two reports of the same scenario (timeline order and normalised log lines per tag) and exits non-zero on a difference;
 see `docs/ARCHITECTURE-REFACTOR.md` section 6. The QQ bot in
 [`tools/logbot/`](../tools/logbot/README.md) builds a user-facing diagnosis on top of it;

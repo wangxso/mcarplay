@@ -66,6 +66,90 @@ class TranscodePolicyTest {
     }
 
     @Test
+    fun proactiveGeometryMismatchTranscodeRequiresBothToggleAndActualMismatch() {
+        assertFalse(TranscodePolicy.shouldTranscodeOnGeometryMismatch(sizeMismatch = true, enabled = false))
+        assertFalse(TranscodePolicy.shouldTranscodeOnGeometryMismatch(sizeMismatch = false, enabled = true))
+        assertTrue(
+            TranscodePolicy.shouldTranscodeOnGeometryMismatch(
+                sizeMismatch = TranscodePolicy.needsTranscode(1920, 720, 3000, 2000),
+                enabled = true,
+            ),
+        )
+        // 源尺寸尚未解析（0x0）或与流尺寸一致时，即使打开开关也不误起转码
+        assertFalse(
+            TranscodePolicy.shouldTranscodeOnGeometryMismatch(
+                sizeMismatch = TranscodePolicy.needsTranscode(0, 0, 1624, 1278),
+                enabled = true,
+            ),
+        )
+        assertFalse(
+            TranscodePolicy.shouldTranscodeOnGeometryMismatch(
+                sizeMismatch = TranscodePolicy.needsTranscode(1624, 1278, 1624, 1278),
+                enabled = true,
+            ),
+        )
+    }
+
+    @Test
+    fun widerSourceAutomaticallyTranscodesOnlyForLargeRatioChanges() {
+        // 2026-11-28 奇瑞：车辆声明 1280×720，CarWith 调到 1920×720。宽高比变化 50%；
+        // 透传时车机固定画布只显示左侧约三分之二，必须自动转码。
+        assertTrue(TranscodePolicy.sourceWiderThanStream(1920, 720, 1280, 720))
+        assertTrue(
+            TranscodePolicy.shouldTranscodeOnFirstFrame(
+                sizeMismatch = TranscodePolicy.needsTranscode(1920, 720, 1280, 720),
+                sourceWiderThanStream = TranscodePolicy.sourceWiderThanStream(1920, 720, 1280, 720),
+                forceOnAnyMismatch = false,
+                autoOnAspectMismatch = true,
+            ),
+        )
+
+        // 帕萨特 / DiPlay 的 1920×1140 → 1280×720 只差约 5%，维持原有「等待要帧风暴」策略。
+        assertFalse(TranscodePolicy.sourceWiderThanStream(1920, 1140, 1280, 720))
+        assertFalse(
+            TranscodePolicy.shouldTranscodeOnFirstFrame(
+                sizeMismatch = true,
+                sourceWiderThanStream = TranscodePolicy.sourceWiderThanStream(1920, 1140, 1280, 720),
+                forceOnAnyMismatch = false,
+                autoOnAspectMismatch = true,
+            ),
+        )
+
+        // 更窄/更高的源由接收端留边即可，不自动转码（如 1412×654 车机收到 1920×1140）。
+        assertFalse(TranscodePolicy.sourceWiderThanStream(1920, 1140, 1412, 654))
+
+        // 16:9 的 1920×1080 与 1280×720 比例一致：严格车机由手动开关覆盖，自动路径不转码。
+        assertFalse(TranscodePolicy.sourceWiderThanStream(1920, 1080, 1280, 720))
+        assertFalse(
+            TranscodePolicy.shouldTranscodeOnFirstFrame(
+                sizeMismatch = true,
+                sourceWiderThanStream = false,
+                forceOnAnyMismatch = false,
+                autoOnAspectMismatch = true,
+            ),
+        )
+        assertTrue(
+            TranscodePolicy.shouldTranscodeOnFirstFrame(
+                sizeMismatch = true,
+                sourceWiderThanStream = false,
+                forceOnAnyMismatch = true,
+                autoOnAspectMismatch = true,
+            ),
+        )
+
+        // 尺寸一致或尚未收到源帧时不启动。
+        assertFalse(
+            TranscodePolicy.shouldTranscodeOnFirstFrame(
+                sizeMismatch = false,
+                sourceWiderThanStream = true,
+                forceOnAnyMismatch = true,
+                autoOnAspectMismatch = true,
+            ),
+        )
+        assertFalse(TranscodePolicy.sourceWiderThanStream(0, 0, 1280, 720))
+    }
+
+    @Test
     fun droppedInputWaitsForNextIdr() {
         val resync = IdrResync(requestIntervalMillis = 1_000L)
         assertTrue(resync.admit(keyFrame = false))

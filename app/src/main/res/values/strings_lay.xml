@@ -20,6 +20,8 @@
     <string name="lay_audio_fallback_desc">默认关。接收端没有声明可用的媒体音频格式时，仍按默认 PCM 48k 尝试出声。仅当车机能播声音却总是只推视频时打开；可能出现无声或断开，下次连接起效。</string>
     <string name="lay_chery_disable_bt">奇瑞：连接后请车机关蓝牙</string>
     <string name="lay_chery_disable_bt_desc">默认关。仅对奇瑞车机生效：会话建立后发送 disableBluetooth，模拟 iPhone 在连接期间关闭车机蓝牙。直接熄火下车时车机可能来不及恢复蓝牙，导致下次上车蓝牙处于关闭状态；平时建议保持关闭，仅排查蓝牙冲突时打开，下次连接起效。</string>
+    <string name="lay_transcode_mismatch">实验：源画面尺寸不符时直接转码</string>
+    <string name="lay_transcode_mismatch_desc">默认关。当已拿到车机主屏几何，但 CarWith 实际输出的 H.264 SPS 尺寸仍与流尺寸不符时，不等车机连续要关键帧，首个画面帧即切换手机端转码。仅用于排查车机黑屏或画面比例拉伸且不发要帧请求的情形；手机端转码会增加发热与耗电，下次连接起效。</string>
     <string name="lay_duck_level">导航时音乐音量</string>
     <string name="lay_duck_level_desc">导航或语音提示播报时，在平时音乐音量的基础上临时压低，播报结束后再淡回。往右拖压得更低，最左为不压低。默认 -15 dB。连接中调整立即生效。</string>
     <string name="lay_duck_level_value">%1$d dB</string>

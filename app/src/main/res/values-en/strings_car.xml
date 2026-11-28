@@ -12,6 +12,8 @@
     <string name="sf_audio_fallback_off">Off: video only when no audio format is declared</string>
     <string name="sf_chery_disable_bt_on">On: ask Chery head unit to turn off Bluetooth (applies on the next connection)</string>
     <string name="sf_chery_disable_bt_off">Off: keep Chery head unit Bluetooth on (applies on the next connection)</string>
+    <string name="sf_transcode_mismatch_on">On: transcode immediately on size mismatch (applies on the next connection)</string>
+    <string name="sf_transcode_mismatch_off">Off: transcode only on key-frame storm (applies on the next connection)</string>
     <string name="sf_scale_running">Applies on the next connection; the current one runs at %1$d%%</string>
     <string name="sf_scale_saved">Resolution %1$d%% saved; applies on the next connection</string>
     <string name="sf_duck_saved">Music lowered to %1$d dB during navigation</string>

@@ -146,4 +146,72 @@ class BtSessionGateTest {
             BtSessionGate.outboundFinished(socket)
         }
     }
+
+    @Test
+    fun inFlightOutboundDialYieldsToLiveInboundAndClosesDialingSocket() {
+        val pending = AtomicBoolean(true)
+        val preempted = AtomicBoolean(false)
+        val dialing = CountDownLatch(1)
+        val unblockConnect = CountDownLatch(1)
+        var closed = false
+        val socket =
+            Closeable {
+                // 关闭完成前不允许重入放行第二条入站
+                assertFalse(pending.get())
+                assertTrue(preempted.get())
+                assertFalse(BtSessionGate.admitInbound())
+                closed = true
+                unblockConnect.countDown()
+            }
+        val workerDone =
+            FutureTask {
+                try {
+                    assertThrows(SocketTimeoutException::class.java) {
+                        BtSessionGate.connectOutbound(pending, preempted) {
+                            dialing.countDown()
+                            check(unblockConnect.await(5, TimeUnit.SECONDS))
+                        }
+                    }
+                } finally {
+                    BtSessionGate.outboundFinished(socket)
+                }
+            }
+        assertTrue(BtSessionGate.beginOutbound(socket))
+        val worker = thread(isDaemon = true) { workerDone.run() }
+        try {
+            assertTrue(dialing.await(5, TimeUnit.SECONDS))
+            // 出站仍在 connect() 阻塞时，真实入站连接抢占成功并关闭出站 socket
+            assertTrue(BtSessionGate.admitInbound())
+            assertTrue(closed)
+            assertTrue(preempted.get())
+            // 超时器随后触发不应误伤已接管的入站状态
+            assertFalse(BtSessionGate.expireOutbound(socket, pending))
+            workerDone.get(5, TimeUnit.SECONDS)
+            assertTrue(BtSessionGate.outboundPaused)
+            assertFalse(BtSessionGate.admitInbound())
+        } finally {
+            unblockConnect.countDown()
+            worker.join(5_000)
+            BtSessionGate.inboundFinished()
+            BtSessionGate.outboundFinished(socket)
+        }
+        assertFalse(BtSessionGate.outboundPaused)
+    }
+
+    @Test
+    fun completedOutboundDialStillRejectsInbound() {
+        val pending = AtomicBoolean(true)
+        val preempted = AtomicBoolean(false)
+        var closed = false
+        val socket = Closeable { closed = true }
+        assertTrue(BtSessionGate.beginOutbound(socket))
+        try {
+            BtSessionGate.connectOutbound(pending, preempted) { }
+            assertFalse(BtSessionGate.admitInbound())
+            assertFalse(closed)
+            assertFalse(preempted.get())
+        } finally {
+            BtSessionGate.outboundFinished(socket)
+        }
+    }
 }

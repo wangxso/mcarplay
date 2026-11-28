@@ -34,6 +34,7 @@ internal class EventCommandRouter(
 ) {
     /** 每台媒体键 HID 设备一个边沿判定器；随本条 event 通道重建，旧轮按住状态不残留。 */
     private val mediaKeyEdges = HashMap<String, MediaKeyEdge>()
+    private val loggedTouchRangeUuids = HashSet<String>()
     private val voiceButton = SiriButtonEdge()
     private val consoleBackMasks = setup.hidDescriptors.mapValues { (_, descriptor) -> HidNavigation.consoleBackMask(descriptor) }
     private val pressedBackDevices = HashSet<String>()
@@ -130,6 +131,28 @@ internal class EventCommandRouter(
                         }
                     }
                 } else if (!contacts.isNullOrEmpty()) {
+                    val target = currentTouchTarget()
+                    // 触摸坐标不一定覆盖 displays[0]：部分车机对外声明 1280×720 视频面，
+                    // 数字化仪却按物理 1920×720 面板报绝对值。优先使用描述符逻辑范围。
+                    val hidRange = descriptor?.let(inputs::touchRange)
+                    val sourceRange =
+                        hidRange
+                            ?: TouchReports.CoordinateRange(
+                                minX = 0,
+                                maxX = (setup.displayWidth - 1).coerceAtLeast(1),
+                                minY = 0,
+                                maxY = (setup.displayHeight - 1).coerceAtLeast(1),
+                            )
+                    if (target != null && loggedTouchRangeUuids.add(uuid.orEmpty())) {
+                        output.appendLog(
+                            "EVENT: 触摸坐标范围 ${sourceRange.describe()}" +
+                                if (hidRange != null) {
+                                    "（HID 描述符；显示 ${setup.displayWidth}x${setup.displayHeight}）"
+                                } else {
+                                    "（无可用描述符，按 displays[0] 回退）"
+                                },
+                        )
+                    }
                     if (counters.touchLogCount <= 30 || counters.touchLogCount % 50 == 0) {
                         output.appendLog(
                             "EVENT: 触摸 " +
@@ -139,7 +162,6 @@ internal class EventCommandRouter(
                         )
                     }
                     counters.touchLogCount++
-                    val target = currentTouchTarget()
                     if (target != null) {
                         val contact =
                             contacts.firstOrNull { it.slot == 0 }
@@ -148,8 +170,7 @@ internal class EventCommandRouter(
                             mapCarLifeTouch(
                                 x = contact.xPixels,
                                 y = contact.yPixels,
-                                sourceWidth = setup.displayWidth,
-                                sourceHeight = setup.displayHeight,
+                                source = sourceRange,
                                 targetWidth = target.videoWidth,
                                 targetHeight = target.videoHeight,
                             )
@@ -363,6 +384,8 @@ internal class EventCommandRouter(
 
         fun touchFormat(descriptor: ByteArray): TouchReports.Format?
 
+        fun touchRange(descriptor: ByteArray): TouchReports.CoordinateRange?
+
         fun parseTouch(
             report: ByteArray,
             format: TouchReports.Format?,
@@ -381,6 +404,8 @@ internal class EventCommandRouter(
         override fun navigationName(keyCode: Int): String = HidNavigation.nameOf(keyCode)
 
         override fun touchFormat(descriptor: ByteArray): TouchReports.Format? = TouchReports.formatFromDescriptor(descriptor)
+
+        override fun touchRange(descriptor: ByteArray): TouchReports.CoordinateRange? = TouchReports.coordinateRange(descriptor)
 
         override fun parseTouch(
             report: ByteArray,

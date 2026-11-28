@@ -4546,6 +4546,11 @@ object SessionController {
                                                 client.modes.phoneOwnsScreen &&
                                                     !(screenPolicy.rebuildScreenOnResourceReturn && client.modes.screenNeedsRebuild)
                                             },
+                                            transcodeOnGeometryMismatch =
+                                                client.receiverCompatibility().transcodeOnGeometryMismatch && setup.displayFromInfo,
+                                            // 宽高比变化时车机固定画布无法等比消化；只在本轮 /info
+                                            // 确实给出显示几何时启用，避免把 1080×2320 兜底当成目标。
+                                            transcodeOnAspectMismatch = setup.displayFromInfo,
                                             hooks =
                                                 object : ScreenSenderHooks {
                                                     override fun onScreenOutputSuspended(suspended: Boolean) {

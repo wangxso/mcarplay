@@ -577,8 +577,8 @@ class Iap2BluetoothClient(
                 }
                 // SDP 等待期间用户可能已停止或重启；旧轮不能再创建一个无法被 stop() 关闭的新 socket。
                 if (!running || generation.get() != myGeneration) return
-                // 已确认只接受车机回连：不再每 3 秒连一次（也不做下面的断开配置文件对照），只按间隔探测
-                if (!boundedDial && inboundWait.skipOutbound(device.address)) continue
+                // 已确认只接受车机回连，或刚被对端连续秒断出站：暂停每 3 秒重拨，给入站监听留出无竞争窗口
+                if (inboundWait.skipOutbound(device.address, boundedDial = boundedDial)) continue
                 // 未知设备先保留 HFP/A2DP；只有已保存的本地策略或用户发起的一次对照才断开。
                 // 每次 start 对同一目标最多执行一次，失败后恢复保留连接的基线，避免 ACL 反复震荡。
                 if (ReceiverDetectionRuntime.bluetooth(device.address) == BluetoothBringup.DISCONNECT_PROFILES &&
@@ -724,6 +724,7 @@ class Iap2BluetoothClient(
         currentSocket.set(socket)
         val connectStartedAt = SystemClock.elapsedRealtime()
         val pending = AtomicBoolean(true)
+        val preempted = AtomicBoolean(false)
         var timeout: ScheduledFuture<*>? = null
         var connected = false
         var dialed = false
@@ -738,19 +739,23 @@ class Iap2BluetoothClient(
                             TimeUnit.MILLISECONDS,
                         )
                 }
-                BtSessionGate.connectOutbound(pending) {
+                BtSessionGate.connectOutbound(pending, preempted) {
                     dialed = true
                     socket.connect()
                 }
                 if (running && generation.get() == myGeneration) {
                     diagnostics.connectFinished(trace)
-                    inboundWait.connected(device.address)
                     connected = true
                     return socket
                 }
             }
         } catch (error: IOException) {
-            failure = if (pending.getAndSet(false)) error else SocketTimeoutException("RFCOMM dial timeout")
+            failure =
+                when {
+                    pending.getAndSet(false) -> error
+                    preempted.get() -> null
+                    else -> SocketTimeoutException("RFCOMM dial timeout")
+                }
         } catch (error: SecurityException) {
             failure = error
         } finally {
@@ -761,6 +766,9 @@ class Iap2BluetoothClient(
             if (dialed && target != null && running && generation.get() == myGeneration && targetServicesReported.add(device.address)) {
                 reportTargetServices(device, name)
             }
+        }
+        if (preempted.get()) {
+            log("BT-C: 入站连接已接管，取消在途出站拨号")
         }
         val cancelled = failure == null || !running || generation.get() != myGeneration
         diagnostics.connectFinished(trace, error = failure, cancelled = cancelled)
@@ -808,7 +816,11 @@ class Iap2BluetoothClient(
         onAwaitingReceiverTap(name)
     }
 
+    @SuppressLint("MissingPermission")
     private fun runSession(socket: BluetoothSocket) {
+        val peerAddress = runCatching { socket.remoteDevice?.address }.getOrNull()
+        val sessionStartedAt = SystemClock.elapsedRealtime()
+        val endpointDelivered = AtomicBoolean(false)
         val pairing = Iap2Pairings.current(context).attempt(socket)
         log("BT-C: iAP2 RFCOMM 出站握手角色=${pairing.role}")
         val stream =
@@ -823,6 +835,8 @@ class Iap2BluetoothClient(
                 SESSION_TIMEOUT_MILLIS,
                 log,
                 {
+                    endpointDelivered.set(true)
+                    if (peerAddress != null) inboundWait.connected(peerAddress)
                     pairing.complete()
                     onEndpoint(it)
                 },
@@ -833,7 +847,7 @@ class Iap2BluetoothClient(
                 knownCarSsid,
                 receiverInvited,
                 onGeneration,
-                peerAddress = socket.remoteDevice?.address,
+                peerAddress = peerAddress,
                 onObservation = onObservation,
                 unverifiedInvitePending = unverifiedInvitePending,
                 onSession = { session -> if (activeChannel.get() === channel) activeSession.set(channel to session) },
@@ -846,6 +860,18 @@ class Iap2BluetoothClient(
             activeChannel.compareAndSet(channel, null)
             activeSession.get()?.takeIf { it.first === channel }?.let { activeSession.compareAndSet(it, null) }
             channel.close()
+            val sessionElapsedMs = SystemClock.elapsedRealtime() - sessionStartedAt
+            if (!endpointDelivered.get() &&
+                running &&
+                peerAddress != null &&
+                inboundWait.postConnectDroppedBeforeEndpoint(peerAddress, sessionElapsedMs)
+            ) {
+                log(
+                    "BT-C: 连续 ${InboundWaitPolicy.POST_CONNECT_DROP_THRESHOLD} 次主动连接在端点交付前被对端快速关闭" +
+                        "（${sessionElapsedMs}ms）——暂停主动拨号 ${InboundWaitPolicy.POST_CONNECT_WAIT_MILLIS / 1000} 秒，" +
+                        "保持入站监听等待接收端回连",
+                )
+            }
             log("BT-C: 本轮会话结束（客户端仍在运行，将自动重连）")
         }
     }
@@ -896,20 +922,54 @@ class Iap2BluetoothClient(
     }
 }
 
-/** 只有一条 RFCOMM 通道进入 iAP2。出站从调用 connect() 前持有登记，入站从 accept() 拿到 socket 后登记。 */
+/**
+ * 只有一条 RFCOMM 通道进入 iAP2。
+ * - 出站从调用 `connect()` 前持有登记；若 `connect()` 仍在途阻塞时收到真实入站连接，入站可抢占并关闭在途出站 socket；
+ * - 一旦出站 `connect()` 已建立，后续入站照旧拒绝且不拆已建出站会话。
+ */
 object BtSessionGate {
     private val lock = Any()
     private var inbound = false
+    private var preemptingInbound = false
     private var outbound: Closeable? = null
+    private var dialingPending: AtomicBoolean? = null
+    private var dialingPreempted: AtomicBoolean? = null
 
-    internal val outboundPaused: Boolean get() = synchronized(lock) { inbound || outbound != null || sessionActive }
+    internal val outboundPaused: Boolean
+        get() = synchronized(lock) { inbound || preemptingInbound || outbound != null || sessionActive }
 
-    internal fun admitInbound(): Boolean =
+    internal fun admitInbound(): Boolean {
+        val preemptTarget: Closeable
         synchronized(lock) {
-            if (inbound || outbound != null) return false
-            inbound = true
-            true
+            if (inbound || preemptingInbound) return false
+            val currentOutbound = outbound
+            if (currentOutbound == null) {
+                inbound = true
+                return true
+            }
+            val pending = dialingPending
+            val preempted = dialingPreempted
+            // 仅当出站仍在 connect() 阻塞中（pending 尚未被超时或完成消费）时才允许入站抢占；
+            // 已建立的出站会话或正在超时关闭的 socket 一律保持拒绝。
+            if (pending == null || !pending.getAndSet(false)) return false
+            preempted?.set(true)
+            preemptingInbound = true
+            preemptTarget = currentOutbound
         }
+        val closed = runCatching { preemptTarget.close() }.isSuccess
+        return synchronized(lock) {
+            preemptingInbound = false
+            if (!closed) {
+                false
+            } else {
+                if (outbound === preemptTarget) outbound = null
+                dialingPending = null
+                dialingPreempted = null
+                inbound = true
+                true
+            }
+        }
+    }
 
     internal fun inboundFinished() {
         synchronized(lock) { inbound = false }
@@ -920,22 +980,44 @@ object BtSessionGate {
         wifiHandoffDetached: Boolean = false,
     ): Boolean =
         synchronized(lock) {
-            if (inbound || outbound != null || sessionActive || wifiHandoffDetached) return false
+            if (inbound || preemptingInbound || outbound != null || sessionActive || wifiHandoffDetached) return false
             outbound = socket
+            dialingPending = null
+            dialingPreempted = null
             true
         }
 
     internal fun outboundFinished(socket: Closeable) {
         synchronized(lock) {
-            if (outbound === socket) outbound = null
+            if (outbound === socket) {
+                outbound = null
+                dialingPending = null
+                dialingPreempted = null
+            }
         }
     }
 
     internal fun connectOutbound(
         pending: AtomicBoolean,
+        preempted: AtomicBoolean? = null,
         connect: () -> Unit,
     ) {
-        connect()
+        synchronized(lock) {
+            if (outbound != null) {
+                dialingPending = pending
+                dialingPreempted = preempted
+            }
+        }
+        try {
+            connect()
+        } finally {
+            synchronized(lock) {
+                if (dialingPending === pending) {
+                    dialingPending = null
+                    dialingPreempted = null
+                }
+            }
+        }
         if (!pending.getAndSet(false)) throw SocketTimeoutException("RFCOMM dial timeout")
     }
 

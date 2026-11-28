@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 from pathlib import Path
 
+BENIGN_END_CODES = frozenset({"NONE", "USER_STOP", "SUPERSEDED", "ENDPOINT_PENDING"})
 
-def analyze_report(text: str) -> dict:
+
+def _parse_attempts(text: str) -> tuple[dict[tuple[str, str], list[dict]], set[str], int]:
     attempts: dict[tuple[str, str], list[dict]] = {}
-    processes = set()
+    processes: set[str] = set()
     invalid_events = 0
     in_timeline = False
     for line in text.splitlines():
@@ -33,7 +36,15 @@ def analyze_report(text: str) -> dict:
             attempts.setdefault((event["process"], event["attempt"]), []).append(event)
         except (ValueError, RecursionError):
             invalid_events += 1
+    return attempts, processes, invalid_events
 
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def analyze_report(text: str) -> dict:
+    attempts, processes, invalid_events = _parse_attempts(text)
     summaries = []
     for (process, attempt), events in list(attempts.items())[-5:]:
         last = {}
@@ -86,13 +97,120 @@ def analyze_report(text: str) -> dict:
     }
 
 
+def align_attempts_to_end(
+    texts: list[str],
+    *,
+    track: str = "carplay",
+    include_benign: bool = False,
+) -> dict:
+    """Measure T_end - T_anchor across ended attempts and rank anchors by lowest variance."""
+    deltas: dict[str, list[float]] = {}
+    qualifying = 0
+    excluded_benign = 0
+    incomplete = 0
+
+    for text in texts:
+        attempts, _, _ = _parse_attempts(text)
+        for events in attempts.values():
+            last: dict = {}
+            for event in events:
+                last.update(event)
+            if last.get("track", "carplay") != track:
+                continue
+            ended = next((event for event in reversed(events) if event.get("event") == "END"), None)
+            if ended is None or not _is_number(ended.get("elapsedMs")):
+                incomplete += 1
+                continue
+            code = ended.get("code", last.get("code", "NONE"))
+            if not include_benign and code in BENIGN_END_CODES:
+                excluded_benign += 1
+                continue
+
+            end_ms = float(ended["elapsedMs"])
+            qualifying += 1
+            anchors: dict[str, float] = {"BEGIN": 0.0}
+            for event in events:
+                milestone = event.get("milestone")
+                if isinstance(milestone, str) and _is_number(event.get("elapsedMs")):
+                    anchors.setdefault(f"MILESTONE:{milestone}", float(event["elapsedMs"]))
+                if event.get("event") == "STAGE" and isinstance(event.get("stage"), str) and _is_number(event.get("elapsedMs")):
+                    anchors.setdefault(f"STAGE:{event['stage']}", float(event["elapsedMs"]))
+            for anchor, anchor_ms in anchors.items():
+                if end_ms >= anchor_ms:
+                    deltas.setdefault(anchor, []).append(end_ms - anchor_ms)
+
+    summaries = []
+    for anchor, samples in deltas.items():
+        count = len(samples)
+        min_ms = round(min(samples), 1)
+        max_ms = round(max(samples), 1)
+        spread_ms = round(max_ms - min_ms, 1)
+        mean_ms = round(statistics.mean(samples), 1)
+        stddev_ms = round(statistics.pstdev(samples), 1) if count >= 2 else None
+        summaries.append({
+            "anchor": anchor,
+            "count": count,
+            "minMs": int(min_ms) if min_ms.is_integer() else min_ms,
+            "maxMs": int(max_ms) if max_ms.is_integer() else max_ms,
+            "spreadMs": int(spread_ms) if spread_ms.is_integer() else spread_ms,
+            "meanMs": mean_ms,
+            "stddevMs": stddev_ms,
+        })
+
+    summaries.sort(
+        key=lambda item: (
+            0 if item["count"] >= 2 else 1,
+            item["stddevMs"] if item["stddevMs"] is not None else float("inf"),
+            item["spreadMs"],
+            -item["count"],
+            item["anchor"],
+        )
+    )
+    best = next((item for item in summaries if item["count"] >= 2), None)
+    return {
+        "track": track,
+        "reportsAnalyzed": len(texts),
+        "qualifyingAttempts": qualifying,
+        "excludedBenignAttempts": excluded_benign,
+        "incompleteAttempts": incomplete,
+        "bestAnchor": best,
+        "anchors": summaries,
+        "limitations": (
+            "Statistical alignment only (T_end - T_anchor across ended attempts). "
+            "Low stddev suggests a candidate timer anchored near that step, not causal proof."
+        ),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("report", type=Path)
+    parser.add_argument("reports", nargs="+", type=Path, metavar="report")
+    parser.add_argument(
+        "--align-end",
+        action="store_true",
+        help="Align ended attempts backward from END and rank milestones/stages by lowest variance.",
+    )
+    parser.add_argument(
+        "--include-benign",
+        action="store_true",
+        help="Include USER_STOP/SUPERSEDED/NONE/ENDPOINT_PENDING attempts in --align-end.",
+    )
     args = parser.parse_args()
-    if args.report.stat().st_size > 16_000_000:
-        parser.error("Report exceeds the 16MB analysis limit")
-    result = analyze_report(args.report.read_text(encoding="utf-8", errors="replace"))
+    texts: list[str] = []
+    for path in args.reports:
+        if path.stat().st_size > 16_000_000:
+            parser.error(f"Report exceeds the 16MB analysis limit: {path.name}")
+        texts.append(path.read_text(encoding="utf-8", errors="replace"))
+    if len(texts) == 1 and not args.align_end:
+        result = analyze_report(texts[0])
+    else:
+        result = {
+            "reports": [
+                {"file": path.name, **analyze_report(text)}
+                for path, text in zip(args.reports, texts)
+            ],
+            "endAlignment": align_attempts_to_end(texts, include_benign=args.include_benign),
+        }
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

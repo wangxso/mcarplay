@@ -1,5 +1,7 @@
 package com.mcarplay.app.carlife
 
+import com.mcarplay.app.input.TouchReports
+
 enum class CarLifeTouchAction {
     DOWN,
     MOVE,
@@ -54,13 +56,23 @@ class CarLifeTouchState {
 internal fun mapCarLifeTouch(
     x: Int,
     y: Int,
-    sourceWidth: Int,
-    sourceHeight: Int,
+    source: TouchReports.CoordinateRange,
     targetWidth: Int,
     targetHeight: Int,
 ): Pair<Int, Int>? {
-    if (sourceWidth <= 0 || sourceHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) return null
-    val mappedX = (x.toLong() * targetWidth / sourceWidth).toInt().coerceIn(0, targetWidth - 1)
-    val mappedY = (y.toLong() * targetHeight / sourceHeight).toInt().coerceIn(0, targetHeight - 1)
-    return mappedX to mappedY
+    if (!source.isValid || targetWidth <= 0 || targetHeight <= 0) return null
+    return mapTouchAxis(x, source.minX, source.maxX, targetWidth) to
+        mapTouchAxis(y, source.minY, source.maxY, targetHeight)
+}
+
+private fun mapTouchAxis(
+    value: Int,
+    sourceMin: Int,
+    sourceMax: Int,
+    targetSize: Int,
+): Int {
+    val span = (sourceMax - sourceMin).coerceAtLeast(1)
+    val clamped = value.coerceIn(sourceMin, sourceMax)
+    val scaled = (clamped - sourceMin).toLong() * (targetSize - 1)
+    return ((scaled + span / 2) / span).toInt().coerceIn(0, targetSize - 1)
 }

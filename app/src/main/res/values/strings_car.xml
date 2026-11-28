@@ -12,6 +12,8 @@
     <string name="sf_audio_fallback_off">已关闭：未声明音频格式时只推视频</string>
     <string name="sf_chery_disable_bt_on">已开启：奇瑞连接后请车机关蓝牙（下次连接起效）</string>
     <string name="sf_chery_disable_bt_off">已关闭：奇瑞连接期间保持车机蓝牙开启（下次连接起效）</string>
+    <string name="sf_transcode_mismatch_on">已开启：尺寸不符时直接手机端转码（下次连接起效）</string>
+    <string name="sf_transcode_mismatch_off">已关闭：仅在车机连续要关键帧时转码（下次连接起效）</string>
     <string name="sf_scale_running">保存后下次连接起效；当前连接按 %1$d%% 运行</string>
     <string name="sf_scale_saved">分辨率 %1$d%% 已保存，下次连接起效</string>
     <string name="sf_duck_saved">导航时音乐压低到 %1$d dB</string>

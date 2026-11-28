@@ -558,4 +558,25 @@ class ReceiverCompatibilityTest {
         }
         assertFalse(ReceiverCompatibility.resolve(bicv, preset = VehiclePreset.GENERIC).autoRequestCarplayUi)
     }
+
+    @Test
+    fun transcodeOnGeometryMismatchIsOptInAndClearedByGenericPreset() {
+        val defaultPolicy = ReceiverCompatibility.resolve(ReceiverProfile.Signals())
+        assertFalse(defaultPolicy.transcodeOnGeometryMismatch)
+        assertFalse("compat.transcode-on-geometry-mismatch" in defaultPolicy.rules)
+
+        val enabled = ReceiverCompatibility.resolve(ReceiverProfile.Signals(), transcodeOnGeometryMismatch = true)
+        assertTrue(enabled.transcodeOnGeometryMismatch)
+        assertTrue("compat.transcode-on-geometry-mismatch" in enabled.rules)
+
+        val generic =
+            ReceiverCompatibility.resolve(
+                ReceiverProfile.Signals(),
+                preset = VehiclePreset.GENERIC,
+                transcodeOnGeometryMismatch = true,
+            )
+        assertFalse(generic.transcodeOnGeometryMismatch)
+        assertFalse("compat.transcode-on-geometry-mismatch" in generic.rules)
+        assertTrue("manual.generic" in generic.rules)
+    }
 }

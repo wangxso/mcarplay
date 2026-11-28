@@ -30,6 +30,24 @@ object TouchReports {
     enum class Format { MULTI_SLOT, SINGLE_ABSOLUTE }
 
     /**
+     * 描述符声明的 HID 逻辑坐标范围（两端都含）。
+     *
+     * CarPlay 车机的触摸数字化仪不一定按 `/info displays[0]` 上报：例如车机对外声明
+     * 1280×720 视频表面，触摸屏却按物理面板 1920×720 报绝对坐标。映射 CarWith 触摸时
+     * 必须用这份范围，不能拿视频表面尺寸当分母。
+     */
+    data class CoordinateRange(
+        val minX: Int,
+        val maxX: Int,
+        val minY: Int,
+        val maxY: Int,
+    ) {
+        val isValid: Boolean get() = maxX > minX && maxY > minY
+
+        fun describe(): String = "$minX..$maxX × $minY..$maxY"
+    }
+
+    /**
      * 按描述符判定触摸格式；非 Digitizer 页（触摸设备）返回 null。
      *
      * 识别依据：Digitizer 页（0x0D）出现且含 X/Y 的 16bit 输入 → 触摸设备；
@@ -74,6 +92,71 @@ object TouchReports {
         val fingerCollections = countOccurrences(descriptor, byteArrayOf(0x09, 0x22))
         return if (fingerCollections <= 1) Format.SINGLE_ABSOLUTE else Format.MULTI_SLOT
     }
+
+    /**
+     * 读取描述符中 X/Y 的逻辑最小/最大值。仅对确认是 Digitizer 的描述符返回。
+     *
+     * HID 全局项会一直生效到下一个同名项，因此按三个环节取值：记录当前 Logical Minimum/Maximum；
+     * 收集本主项前的 Usage；遇到 Input 时若 Usage 含 Generic Desktop X(0x30)/Y(0x31)，保存其范围。
+     * 多指描述符的多个 Finger Collection 通常声明相同范围，取第一条即可。
+     */
+    fun coordinateRange(descriptor: ByteArray): CoordinateRange? {
+        if (formatFromDescriptor(descriptor) == null) return null
+        var logicalMin = 0
+        var logicalMax = 0
+        var usagePage = 0
+        var xRange: Pair<Int, Int>? = null
+        var yRange: Pair<Int, Int>? = null
+        val usages = ArrayList<Int>()
+        var index = 0
+        while (index < descriptor.size) {
+            val prefix = descriptor[index].toInt() and 0xFF
+            val size = prefix and 0x03
+            val type = (prefix shr 2) and 0x03
+            val tag = (prefix shr 4) and 0x0F
+            val dataBytes =
+                when (size) {
+                    0 -> 0
+                    1 -> 1
+                    2 -> 2
+                    else -> 4
+                }
+            if (index + 1 + dataBytes > descriptor.size) break
+            var value = 0
+            for (offset in 0 until dataBytes) {
+                value = value or ((descriptor[index + 1 + offset].toInt() and 0xFF) shl (8 * offset))
+            }
+            index += 1 + dataBytes
+            when {
+                type == 1 && tag == 0x0 -> usagePage = value
+                type == 1 && tag == 0x1 -> logicalMin = signedValue(value, dataBytes)
+                type == 1 && tag == 0x2 -> logicalMax = value
+                type == 2 && tag == 0x0 -> usages += value
+                type == 0 && tag == 0x8 -> {
+                    if (usagePage == 0x01) {
+                        if (xRange == null && usages.any { it == 0x30 }) xRange = logicalMin to logicalMax
+                        if (yRange == null && usages.any { it == 0x31 }) yRange = logicalMin to logicalMax
+                    }
+                    usages.clear()
+                }
+                type == 0 -> usages.clear()
+            }
+        }
+        val x = xRange ?: return null
+        val y = yRange ?: return null
+        return CoordinateRange(x.first, x.second, y.first, y.second).takeIf { it.isValid }
+    }
+
+    private fun signedValue(
+        value: Int,
+        dataBytes: Int,
+    ): Int =
+        when (dataBytes) {
+            1 -> value.toByte().toInt()
+            2 -> value.toShort().toInt()
+            4 -> value
+            else -> 0
+        }
 
     private fun countOccurrences(
         haystack: ByteArray,
