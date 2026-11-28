@@ -4540,6 +4540,7 @@ object SessionController {
                                             targetFps = fps,
                                             keepAliveWithStats = setup.keepAliveSendStatsAsBody,
                                             receiverMaxFps = setup.maxFps,
+                                            transcodeFromStart = client.receiverCompatibility().transcodeFromStart,
                                             externalVideoSource = carLifeSource,
                                             phoneOwnsScreen = { client.modes.phoneOwnsScreen },
                                             hooks =

@@ -2196,7 +2196,8 @@ class AirPlayClient(
         /**
          * SETUP 里的 iPhone 能力清单（接收端按「车机支持 ∩ 提议」计算 enabledFeatures，
          * 缺失的能力整个功能被关——2026-10-11 奥迪实测：videoPlayback 单独提议时
-         * 视频管线未启用、屏幕流 400）。清单对照 catplay 真车发送端。
+         * 视频管线未启用、屏幕流 400）。清单对照 catplay 真车发送端；不提议未实现的
+         * `hevc`（当前视频路径仅发送 AVC/H.264 `avcC`，避免车机启用 HEVC 后静默白屏）。
          */
         val CONTROLLER_FEATURES =
             listOf(
@@ -2208,7 +2209,6 @@ class AirPlayClient(
                 "mainBuffered",
                 "altScreen",
                 "enhancedSiri",
-                "hevc",
                 "sessionManagement",
                 "logTransfer",
                 "iAPChannel",

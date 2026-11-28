@@ -2,6 +2,7 @@ package com.mcarplay.app.airplay
 
 import com.mcarplay.app.iap2.Iap2SenderSession
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -64,7 +65,12 @@ class SessionSetupBodyTest {
         val root = BinaryPlist.parse(body) as Map<*, *>
         // timingPort 是媒体时钟同步入口；features 决定 enabledFeatures（缺失即视频管线不启用）
         assertEquals(port.toLong(), root["timingPort"])
-        assertTrue((root["features"] as List<*>).contains("viewAreas"))
+        val features = root["features"] as List<*>
+        assertTrue(features.contains("viewAreas"))
+        assertTrue(features.contains("h.264Level5.1"))
+        assertTrue(features.contains("videoPlayback"))
+        // 当前视频发送路径仅输出 AVC/H.264 avcC，不得提议未实现的 hevc
+        assertFalse(features.contains("hevc"))
         assertEquals(true, root["keepAliveLowPower"])
     }
 

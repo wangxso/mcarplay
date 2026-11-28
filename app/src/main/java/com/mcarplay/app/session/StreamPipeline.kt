@@ -143,6 +143,7 @@ internal class StreamPipeline(
                 externalVideoSource = plan.externalVideoSource,
                 onVideoFrameSent = plan.hooks.newVideoFrameObserver(),
                 receiverMaxFps = plan.receiverMaxFps,
+                transcodeFromStart = plan.transcodeFromStart,
                 // 车机拿走主屏（原车界面、倒车影像等）时暂停屏幕视频，归还后从新的 IDR 恢复
                 phoneOwnsScreen = plan.phoneOwnsScreen,
                 onScreenOutputSuspended = { suspended -> plan.hooks.onScreenOutputSuspended(suspended) },
@@ -368,6 +369,7 @@ internal class ScreenSenderPlan(
     val targetFps: Int,
     val keepAliveWithStats: Boolean,
     val receiverMaxFps: Int,
+    val transcodeFromStart: Boolean = false,
     val externalVideoSource: ExternalVideoSource,
     val phoneOwnsScreen: () -> Boolean,
     val hooks: ScreenSenderHooks,

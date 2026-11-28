@@ -558,4 +558,34 @@ class ReceiverCompatibilityTest {
         }
         assertFalse(ReceiverCompatibility.resolve(bicv, preset = VehiclePreset.GENERIC).autoRequestCarplayUi)
     }
+
+    @Test
+    fun transcodeFromStartIsLimitedToObservedSaicRoewe490Receiver() {
+        val roeweIap2 =
+            ReceiverProfile.Signals(
+                manufacturer = "SAIC",
+                model = "ROEWE",
+                srcvers = "490.0",
+            )
+        val roeweInfo =
+            roeweIap2.copy(
+                manufacturer = "Saicmotor Passenger Vehicle Co. Ltd.",
+            )
+        for (signals in listOf(roeweIap2, roeweInfo)) {
+            val policy = ReceiverCompatibility.resolve(signals)
+            assertTrue(policy.transcodeFromStart)
+            assertTrue(policy.rules.contains("saic.roewe.490.0.transcode-from-start"))
+        }
+        for (signals in listOf(
+            roeweInfo.copy(srcvers = "490.1"),
+            roeweInfo.copy(model = "MG"),
+            roeweInfo.copy(manufacturer = "Other"),
+            winPlay,
+        )) {
+            val other = ReceiverCompatibility.resolve(signals)
+            assertFalse(other.transcodeFromStart)
+            assertFalse(other.rules.contains("saic.roewe.490.0.transcode-from-start"))
+        }
+        assertFalse(ReceiverCompatibility.resolve(roeweInfo, preset = VehiclePreset.GENERIC).transcodeFromStart)
+    }
 }

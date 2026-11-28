@@ -63,6 +63,8 @@ class VideoSender(
     private val onVideoFrameSent: ((Int) -> Unit)? = null,
     /** 车机 /info displays[0].maxFPS（0 = 未知）；只约束转码时的编码帧率。 */
     private val receiverMaxFps: Int = 0,
+    /** 首帧即走手机端转码（Baseline + 按 maxFPS 限帧），不等 forceKeyFrame 风暴。 */
+    private val transcodeFromStart: Boolean = false,
     /**
      * 主屏此刻是否归手机。归车机时暂停全部视频帧；归还后等新的 IDR 再恢复。
      * 默认 true = 调用方未提供资源仲裁状态时不改变原行为。
@@ -799,7 +801,7 @@ class VideoSender(
                 runCatching {
                     setInteger(
                         MediaFormat.KEY_LEVEL,
-                        MediaCodecInfo.CodecProfileLevel.AVCLevel4,
+                        EncoderFormatPolicy.avcLevelFor(encodeWidth, encodeHeight),
                     )
                 }
             }
@@ -1166,20 +1168,29 @@ class VideoSender(
      * 失败则保持透传。
      */
     @Synchronized
-    private fun startTranscoding(storm: KeyFrameStorm.Level) {
+    private fun startTranscoding(storm: KeyFrameStorm.Level?) {
         if (!running.get() || quiescing.get()) return
         val fps = TranscodePolicy.cappedFps(targetFps, receiverMaxFps)
-        val reason =
-            if (TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)) {
-                "CarWith ${sourceWidth}x$sourceHeight 与车机流 ${streamWidth}x$streamHeight 不符，"
-            } else {
-                "CarWith ${sourceWidth}x$sourceHeight 与车机流尺寸一致，"
-            }
-        val cadence = if (storm == KeyFrameStorm.Level.SUSTAINED) "持续" else "密集"
-        log(
-            "VIDEO: $reason" + "且车机${cadence}要关键帧（透传解不出画）——切换为手机端转码 ${streamWidth}x$streamHeight@$fps" +
-                "\n  ↳ 切换前透传统计：${streamStats.summary()}",
-        )
+        val srcWidth = sourceWidth.takeIf { it > 0 } ?: streamWidth
+        val srcHeight = sourceHeight.takeIf { it > 0 } ?: streamHeight
+        if (storm == null) {
+            log(
+                "VIDEO: 策略要求开局转码 ${srcWidth}x$srcHeight → ${streamWidth}x$streamHeight@$fps" +
+                    "（Baseline，限帧 maxFPS=$receiverMaxFps）",
+            )
+        } else {
+            val reason =
+                if (TranscodePolicy.needsTranscode(sourceWidth, sourceHeight, streamWidth, streamHeight)) {
+                    "CarWith ${sourceWidth}x$sourceHeight 与车机流 ${streamWidth}x$streamHeight 不符，"
+                } else {
+                    "CarWith ${sourceWidth}x$sourceHeight 与车机流尺寸一致，"
+                }
+            val cadence = if (storm == KeyFrameStorm.Level.SUSTAINED) "持续" else "密集"
+            log(
+                "VIDEO: $reason" + "且车机${cadence}要关键帧（透传解不出画）——切换为手机端转码 ${streamWidth}x$streamHeight@$fps" +
+                    "\n  ↳ 切换前透传统计：${streamStats.summary()}",
+            )
+        }
         var codec: MediaCodec? = null
         var surface: Surface? = null
         var pipeline: CarWithTranscoder? = null
@@ -1189,7 +1200,7 @@ class VideoSender(
             codec = created.first
             surface = created.second
             pipeline =
-                CarWithTranscoder(surface, streamWidth, streamHeight, sourceWidth, sourceHeight, log) {
+                CarWithTranscoder(surface, streamWidth, streamHeight, srcWidth, srcHeight, log) {
                     externalVideoSource?.requestKeyFrame()
                 }
             pipeline.start()
@@ -1248,6 +1259,16 @@ class VideoSender(
                     consumeHealthKeyFrameRequest()
                     maybeSendKeepAlive(output)
                     continue
+                }
+                if (transcodeFromStart && transcodeClaimed.compareAndSet(false, true)) {
+                    startTranscoding(storm = null)
+                    val started = transcoder
+                    if (started != null) {
+                        markSourceInput()
+                        if (entry.discontinuityBefore) started.notifyDiscontinuity()
+                        if (!screenFeedPaused()) started.submit(entry.frame)
+                        continue
+                    }
                 }
                 val frame = entry.frame
                 var nalUnits = splitAnnexB(frame.data)

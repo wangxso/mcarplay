@@ -1,5 +1,6 @@
 package com.mcarplay.app.video
 
+import android.media.MediaCodecInfo
 import android.media.MediaFormat
 
 /**
@@ -49,6 +50,24 @@ internal object EncoderFormatPolicy {
 
     /** 帧间隔（微秒）。帧率非法时按 1 处理，避免除零。 */
     fun microsPerFrame(fps: Int): Long = MICROS_PER_SECOND / fps.coerceAtLeast(1)
+
+    /**
+     * 按分辨率宏块数选取最小合法 H.264 Level（下限 4.0）：
+     * - `<= 8192` 宏块/帧（如 1920×1080）：Level 4.0（奥迪 DELPHI 拒绝 3.1/3.2，保持原行为）；
+     * - `8193..22080` 宏块/帧（如 2560×1200 = 12000 宏块）：Level 5.0（避免硬塞 4.0 被编码器拒绝并连带撤销 Baseline）；
+     * - `> 22080` 宏块/帧：Level 5.1。
+     */
+    fun avcLevelFor(
+        width: Int,
+        height: Int,
+    ): Int {
+        val macroblocks = ((width.coerceAtLeast(1) + 15) / 16).toLong() * ((height.coerceAtLeast(1) + 15) / 16).toLong()
+        return when {
+            macroblocks <= 8_192L -> MediaCodecInfo.CodecProfileLevel.AVCLevel4
+            macroblocks <= 22_080L -> MediaCodecInfo.CodecProfileLevel.AVCLevel5
+            else -> MediaCodecInfo.CodecProfileLevel.AVCLevel51
+        }
+    }
 
     /** 转码路径必定写入的两个键。 */
     data class TranscodeKeys(
