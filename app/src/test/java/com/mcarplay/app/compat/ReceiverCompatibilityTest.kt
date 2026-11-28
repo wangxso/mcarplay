@@ -558,4 +558,46 @@ class ReceiverCompatibilityTest {
         }
         assertFalse(ReceiverCompatibility.resolve(bicv, preset = VehiclePreset.GENERIC).autoRequestCarplayUi)
     }
+
+    @Test
+    fun transcodeFromStartIsLimitedToObservedSaicRoewe490Receiver() {
+        val roeweIap2 =
+            ReceiverProfile.Signals(
+                manufacturer = "SAIC",
+                model = "ROEWE",
+                srcvers = "490.0",
+            )
+        val roeweInfo =
+            roeweIap2.copy(
+                manufacturer = "Saicmotor Passenger Vehicle Co. Ltd.",
+            )
+        for (signals in listOf(roeweIap2, roeweInfo)) {
+            val policy = ReceiverCompatibility.resolve(signals)
+            assertFalse(policy.offerHevc)
+            assertTrue(policy.transcodeFromStart)
+            assertTrue(policy.rules.contains("saic.roewe.490.0.transcode-from-start"))
+            assertEquals(ScreenReturnStrategy.NO_REBUILD, policy.screenReturn)
+            assertTrue(policy.rules.contains("saic.roewe.490.0.no-screen-rebuild"))
+            val overlaid =
+                ReceiverCompatibility.withScreenReturnPreference(policy, VehiclePreset.AUTO) {
+                    error("非手动大众不得读取回屏偏好")
+                }
+            assertEquals(ScreenReturnStrategy.NO_REBUILD, overlaid.screenReturn)
+        }
+        for (signals in listOf(
+            roeweInfo.copy(srcvers = "490.1"),
+            roeweInfo.copy(model = "MG"),
+            roeweInfo.copy(manufacturer = "Other"),
+            winPlay,
+        )) {
+            val other = ReceiverCompatibility.resolve(signals)
+            assertFalse(other.transcodeFromStart)
+            assertFalse(other.rules.contains("saic.roewe.490.0.transcode-from-start"))
+            assertEquals(ScreenReturnStrategy.OFF, other.screenReturn)
+            assertFalse(other.rules.contains("saic.roewe.490.0.no-screen-rebuild"))
+        }
+        val generic = ReceiverCompatibility.resolve(roeweInfo, preset = VehiclePreset.GENERIC)
+        assertFalse(generic.transcodeFromStart)
+        assertEquals(ScreenReturnStrategy.OFF, generic.screenReturn)
+    }
 }

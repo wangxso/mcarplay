@@ -1,5 +1,6 @@
 package com.mcarplay.app.video
 
+import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -94,5 +95,17 @@ class EncoderFormatPolicyTest {
         assertTrue(attempts[0].withLevelAndProfile)
         assertFalse(attempts[1].withLevelAndProfile)
         assertNull(attempts[0].dropped)
+    }
+
+    @Test
+    fun avcLevelScalesUpForWideScreensWhileKeepingLevel4ForStandardSizes() {
+        // 1920x1080 = 120x68 = 8160 MBs <= 8192 → 保持 Level 4.0（奥迪 DELPHI 兼容）
+        assertEquals(MediaCodecInfo.CodecProfileLevel.AVCLevel4, EncoderFormatPolicy.avcLevelFor(1280, 720))
+        assertEquals(MediaCodecInfo.CodecProfileLevel.AVCLevel4, EncoderFormatPolicy.avcLevelFor(1920, 1080))
+        // 2560x1200 = 160x75 = 12000 MBs > 8192 → Level 5.0（避免硬塞 4.0 导致 Baseline 被连带撤销）
+        assertEquals(MediaCodecInfo.CodecProfileLevel.AVCLevel5, EncoderFormatPolicy.avcLevelFor(2560, 1200))
+        assertEquals(MediaCodecInfo.CodecProfileLevel.AVCLevel5, EncoderFormatPolicy.avcLevelFor(2560, 1440))
+        // 3840x2160 = 240x135 = 32400 MBs > 22080 → Level 5.1
+        assertEquals(MediaCodecInfo.CodecProfileLevel.AVCLevel51, EncoderFormatPolicy.avcLevelFor(3840, 2160))
     }
 }

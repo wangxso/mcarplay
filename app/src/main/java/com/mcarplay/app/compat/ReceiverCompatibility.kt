@@ -169,6 +169,14 @@ object ReceiverCompatibility {
          * 再按用户点图标的同一条资源拿回路径声明主屏归手机。未实车回归前不影响其他车机。
          */
         val autoRequestCarplayUi: Boolean = false,
+        /**
+         * 实验：首帧即走手机端转码（Baseline + 按车机 `maxFPS` 限帧），不等 `forceKeyFrame` 风暴。
+         *
+         * 上汽荣威（`SAIC / ROEWE / 490.0`）实车白屏排查：声音正常、几何 `2560x1200` 匹配，但 CarWith
+         * 透传输出 High Profile + CABAC + Level 5.1 且实测 53–57 fps（超 `maxFPS=30`），车机不发
+         * `forceKeyFrame` 且停在白屏占位层。仅对该身份启用单变量验证，未实车复测前不影响其他车机。
+         */
+        val transcodeFromStart: Boolean = false,
     )
 
     data class PairingFallback(
@@ -236,6 +244,8 @@ object ReceiverCompatibility {
                     keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = false,
                     claimScreenOnExplicitStart = false,
                     autoRequestCarplayUi = false,
+                    transcodeFromStart = false,
+                    screenReturn = ScreenReturnStrategy.OFF,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
@@ -336,7 +346,7 @@ object ReceiverCompatibility {
                 if (preset == VehiclePreset.VOLKSWAGEN) {
                     readPreference()
                 } else {
-                    ScreenReturnStrategy.OFF
+                    policy.screenReturn
                 },
         )
 
@@ -448,6 +458,11 @@ object ReceiverCompatibility {
                 normalize(signals.model) == "gse,ev3,suv" &&
                 normalize(signals.srcvers) == "475.8.3" &&
                 normalize(signals.firmwareVersion) == "mica3a01"
+        val normalizedManufacturer = normalize(signals.manufacturer)
+        val roewe490 =
+            (normalizedManufacturer == "saic" || normalizedManufacturer.startsWith("saicmotor")) &&
+                normalize(signals.model) == "roewe" &&
+                normalize(signals.srcvers) == "490.0"
         // 大众车机型号自报 VWxxxx（ID7 VW4131、帕萨特 2025 VW4211），厂商字段并不统一（帕萨特报 Toppower）
         val vwStreamingInvite = VW_MODEL.matches(normalize(signals.model))
         val rules =
@@ -467,6 +482,8 @@ object ReceiverCompatibility {
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
                 if (winPlay) add("winplay.vehicle-resolution")
                 if (bicvGseEv3) add("bicv.gse-ev3.475.8.3.auto-request-ui")
+                if (roewe490) add("saic.roewe.490.0.transcode-from-start")
+                if (roewe490) add("saic.roewe.490.0.no-screen-rebuild")
             }
         return Policy(
             family = family,
@@ -490,6 +507,9 @@ object ReceiverCompatibility {
             // 本轮 /info displays[0] 的合法几何门控（CarWithVideoNegotiation）。
             preferVehicleResolution = true,
             autoRequestCarplayUi = bicvGseEv3,
+            offerHevc = !roewe490,
+            transcodeFromStart = roewe490,
+            screenReturn = if (roewe490) ScreenReturnStrategy.NO_REBUILD else ScreenReturnStrategy.OFF,
         )
     }
 

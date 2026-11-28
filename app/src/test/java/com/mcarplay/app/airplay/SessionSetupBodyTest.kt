@@ -65,7 +65,10 @@ class SessionSetupBodyTest {
         val root = BinaryPlist.parse(body) as Map<*, *>
         // timingPort 是媒体时钟同步入口；features 决定 enabledFeatures（缺失即视频管线不启用）
         assertEquals(port.toLong(), root["timingPort"])
-        assertTrue((root["features"] as List<*>).contains("viewAreas"))
+        val features = root["features"] as List<*>
+        assertTrue(features.contains("viewAreas"))
+        assertTrue(features.contains("h.264Level5.1"))
+        assertTrue(features.contains("videoPlayback"))
         assertEquals(true, root["keepAliveLowPower"])
     }
 
