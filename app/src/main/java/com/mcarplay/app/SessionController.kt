@@ -3109,6 +3109,7 @@ object SessionController {
         Bg.run("pending-start-session-watch") {
             val endpoint = pending.endpoint
             var promptedSsid: String? = null
+            var loggedNoWifi = false
             var triedInvites = 0
             var tick = 0
             val deadline = android.os.SystemClock.uptimeMillis() + PENDING_START_SESSION_WAIT_MS
@@ -3134,8 +3135,14 @@ object SessionController {
                 if (connectCancelled) return@run
                 if (++tick % 5 != 0) continue
                 val ssid = liveWifiSsid()?.takeIf { it.isNotBlank() }
-                val network = wifiConnector?.currentWifiNetwork() ?: continue
-                if (ssid.isNullOrEmpty() && !hasRecentUnverifiedInvite()) continue
+                val network = wifiConnector?.currentWifiNetwork()
+                val shown = WifiNetworkToken(network, ssid)
+                if (!shown.hasIdentity) {
+                    if (!loggedNoWifi) appendLog(">>> [$source] 当前无 WiFi Network 句柄和 SSID，继续等待 0x4301/邀请")
+                    loggedNoWifi = true
+                    continue
+                }
+                loggedNoWifi = false
                 val label = ssid?.takeIf { it.isNotEmpty() } ?: INVITED_WIFI_LABEL
                 // 同一 SSID 只问一次（用户选「继续等待」后不再打扰）；换网络再问。
                 val promptKey = ssid ?: network.toString()
@@ -3156,10 +3163,11 @@ object SessionController {
                             negative = t(R.string.sc_keep_waiting),
                         ),
                         // 同一张网络只问一次；答案也只能在这张网络上复用。
-                        shownNetwork = WifiNetworkToken(network, ssid),
+                        shownNetwork = shown,
                     )
                 if (choice == true && !connectCancelled && !sessionStarting.get() && stillPending()) {
-                    if (wifiConnector?.currentWifiNetwork() != network) {
+                    val confirmedNetwork = wifiConnector?.currentWifiNetwork()
+                    if (confirmedNetwork == null || !shown.matches(confirmedNetwork, liveWifiSsid())) {
                         promptedSsid = null
                         appendLog(">>> [$source] 用户确认期间当前网络已变化——重新等待确认")
                         continue
@@ -3171,7 +3179,7 @@ object SessionController {
                             wifiCredentialSource = WifiCredentialSource.CURRENT_NETWORK,
                         ),
                         "$source/手动入网",
-                        verifiedCurrentNetwork = network,
+                        verifiedCurrentNetwork = confirmedNetwork,
                         claimLease = pending.claimLease,
                     )
                     return@run
@@ -3335,6 +3343,8 @@ object SessionController {
                     override fun isCancelled(client: AirPlayClient) = client.cancelled
 
                     override fun phoneOwnsScreen(client: AirPlayClient) = client.modes.phoneOwnsScreen
+
+                    override fun screenNeedsRebuild(client: AirPlayClient) = client.modes.screenNeedsRebuild
 
                     override fun modesDescription(client: AirPlayClient) = client.modes.describe()
 
@@ -4425,12 +4435,19 @@ object SessionController {
                                     }
                                 }
                             }
+                            val screenPolicy = client.receiverCompatibility()
                             // 资源声明（must）：真车对未声明资源的屏幕流 SETUP 直接 400
                             client.assertModes(acknowledgeInitialScreenClaim = true)
+                            if (screenPolicy.repeatScreenModesDeclaration) {
+                                appendLog("AIRPLAY: MBUX 屏幕 SETUP 前重申主屏资源")
+                                client.assertModes()
+                            }
                             // HID 输入模式武装：/info hidDevices（奥迪字符串 "0"/"1"，触摸="1"）。
                             // display features=0x08（高保真触摸）已声明，缺这步车机不发 hidSendReport。
-                            setup.hidDeviceUuids.forEach { uuid ->
-                                client.sendHidSetInputMode(uuid, mode = 0)
+                            if (!screenPolicy.skipScreenHidArming) {
+                                setup.hidDeviceUuids.forEach { uuid ->
+                                    client.sendHidSetInputMode(uuid, mode = 0)
+                                }
                             }
                             val screen = client.runScreenStream(sessionKey, setup.displayUuid)
                             if (screen != null) {
@@ -4445,22 +4462,6 @@ object SessionController {
                                     client.startKeepAlive(host, setup.keepAlivePort!!)
                                 }
                                 client.startFeedbackLoop()
-                                // iAP 隧道（type-130）：车机→手机的 iAP2 EA 数据（触摸 HID 载体）。
-                                // 建立失败不阻塞会话（触摸不可用但视频照常）。
-                                val tunnel = client.runIapTunnel(sessionKey)
-                                tunnel?.onIapMessage = { frame ->
-                                    // 触摸证据采集：先全量记录，格式确认后接 TouchRouter
-                                    if (frame.messageId != 0x0000) {
-                                        val hex = frame.body.joinToString(" ") { "%02x".format(it) }
-                                        appendLog(
-                                            "TUNNEL: rx 0x${frame.messageId.toString(16)} " +
-                                                "(${Iap2MessageIds.nameOf(
-                                                    frame.messageId,
-                                                )}) ${frame.body.size}B" +
-                                                if (frame.body.isNotEmpty()) " hex=${hex.take(120)}" else "",
-                                        )
-                                    }
-                                }
                                 var pendingVideoW = 0
                                 var pendingVideoH = 0
                                 var carLife: CarLifeSession? = null
@@ -4542,7 +4543,10 @@ object SessionController {
                                             receiverMaxFps = setup.maxFps,
                                             transcodeFromStart = client.receiverCompatibility().transcodeFromStart,
                                             externalVideoSource = carLifeSource,
-                                            phoneOwnsScreen = { client.modes.phoneOwnsScreen },
+                                            phoneOwnsScreen = {
+                                                client.modes.phoneOwnsScreen &&
+                                                    !(screenPolicy.rebuildScreenOnResourceReturn && client.modes.screenNeedsRebuild)
+                                            },
                                             hooks =
                                                 object : ScreenSenderHooks {
                                                     override fun onScreenOutputSuspended(suspended: Boolean) {
@@ -4594,6 +4598,17 @@ object SessionController {
                                                     override fun onEnded(sender: VideoSender) {
                                                         val (sessionNetwork, inviteBeforeStream) =
                                                             senderContext.remove(sender) ?: (null to null)
+                                                        if (screenPolicy.rebuildScreenOnResourceReturn &&
+                                                            client.modes.screenNeedsRebuild &&
+                                                            currentClient === client &&
+                                                            videoSender === sender &&
+                                                            client.sessionActive &&
+                                                            !client.controlChannelClosed &&
+                                                            scope.isActive
+                                                        ) {
+                                                            appendLog("SCREEN: 主屏让出后视频端口已关闭，等待车机归还主屏")
+                                                            return
+                                                        }
                                                         videoEndedHandling.handle(
                                                             object : VideoEndCapture<VideoSender, CarLifeSession> {
                                                                 override val senderIdentity: () -> VideoSender = { sender }
@@ -4627,6 +4642,17 @@ object SessionController {
                                         failMediaStartup(DiagnosticCode.SETUP_FAILED)
                                         return@run
                                     }
+                                    val tunnel = client.runIapTunnel(sessionKey)
+                                    tunnel?.onIapMessage = { frame ->
+                                        if (frame.messageId != 0x0000) {
+                                            val hex = frame.body.joinToString(" ") { "%02x".format(it) }
+                                            appendLog(
+                                                "TUNNEL: rx 0x${frame.messageId.toString(16)} " +
+                                                    "(${Iap2MessageIds.nameOf(frame.messageId)}) ${frame.body.size}B" +
+                                                    if (frame.body.isNotEmpty()) " hex=${hex.take(120)}" else "",
+                                            )
+                                        }
+                                    }
                                     streamPipeline.installRecovery(
                                         plan = screenPlan,
                                         client = client,
@@ -4634,6 +4660,7 @@ object SessionController {
                                         sessionKey = sessionKey,
                                         displayUuid = setup.displayUuid,
                                         diagnosticAttempt = diagnosticAttempt,
+                                        rebuildOnResourceReturn = screenPolicy.rebuildScreenOnResourceReturn,
                                         port =
                                             object : ScreenRecoveryPort {
                                                 override fun isScopeActive(): Boolean = scope.isActive

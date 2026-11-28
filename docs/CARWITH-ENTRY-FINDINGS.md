@@ -225,27 +225,243 @@
   若担心影响其他接收端，先只在手动 `MERCEDES_MB_E` 预设下启用。不要在同一轮改关键帧风暴转码、HEVC 偏好、
   1728 面板或 modesChanged/iAP2 时序；若 CarWith 真回 1624×1278，转码层根本不需要被触发。
   2560 与 mcarplay 当前 1920 长边上限的差异对本例无影响（1624 小于两者），可等本条验证后再单独评估。
-- **实现状态（2026-11-18，`v0.1.7-test.3` 预发布）：** 两个 P0 已按单变量落地：
+- **实现状态（2026-11-18，已发布 `v0.1.7-test.3`）：** 两个 P0 已按单变量落地：
   ① `ReceiverCompatibility.Policy.preferVehicleResolution` 控制 `0x18052` 是否加入
   `DISABLE_RESOLUTION_OPTION=1`；WinPlay 自动策略启用（台架验证），手动 `MERCEDES_MB_E` 启用，其他接收端保持关闭；
   ② `MERCEDES_MB_E` 预设不再取 `displayPanels` 的 1728 面板，保持 `displays[0]` 的 1624×1278，只打开功能协商。
   只有本轮 `/info` 真的带 `displays[0]` 时才发送该 feature（`displayFromInfo`）；兜底 1080×2320 不会触发。
   新增日志 `COMPAT: ... vehicleResolution=`、`CARLIFE: 功能协商 ...` 和
   `CARLIFE: 将声明 DISABLE_RESOLUTION_OPTION=1`，下一份报告可直接确认它是否真的发出。
-  WinPlay 1.2.4 的同日诊断只证明接收端按 1624×1278 收到 VideoConfig 和首帧（约 40 s 内 709 帧、5.4 MB，
-  `droppedFrames=0`），**不证明 CarWith 端也返回了 1624×1278**；仍需看手机日志里的 `0x10008`。
+  **WinPlay 1.2.4 台架已完成 A/B 闭环：** 14:48:48 轮 `0x18052` 为 26B，请求 1624×1278，但 CarWith 返回
+  `1280×720@30`；15:33:25 轮 `0x18052` 为 57B，功能协商含 `DISABLE_RESOLUTION_OPTION=1`，同样请求
+  1624×1278，CarWith 返回 **`1624×1278@30`**，随后 `VIDEO: ✓ CarWith VideoConfig ... avcC=34B 1624×1278`。
+  WinPlay 侧记录 `requestedWidth=1624 requestedHeight=1278 configBytes=34`，首帧 16147B；手机侧本轮发送 173 帧 /
+  3.8MB / 5 个 IDR，WinPlay 收到 160 帧且 `droppedFrames=0`；音频发送 264 包 / 141KB，接收端
+  `decryptErrors=0`。用户确认该轮 **画面、触控、声音均正常**。会话在 14.3s 后以 `USER_STOP` 结束，非崩溃。
+  本轮 APK SHA-256 与 `v0.1.7-test.3` 资产一致，诊断报告为 `920fd8df-472f-4e95-8836-c1bedc481e24`。
+  **边界：** 这是 WinPlay 模拟接收端，不是 2025 款奔驰 GLC / `MB_E-P-4` 实车；手动 `MERCEDES_MB_E`
+  预设仍需实车复测。
   本地门禁：`spotlessCheck`、`lintStandardDebug`、`lintStandardRelease`、`assembleStandardDebug` 通过；standard 单测 1250 个、
-  remote bridge 单测 25 个，均 0 失败。WinPlay 台架尚未在本构建上复测。
-- **Wi-Fi iAP2 的时序差异（待对照）：** HyperCar 在 06:32:13.036 经事件通道建立 `WIFI-IAP#1`，06:32:13.057
-  起完成 0x1d00/0x1d01、MFi，06:32:14.146 注册 `StartHID(0x6800)`，都早于首帧；#62 的 MIB3 突发后没有订阅
-  往返。这个时序也值得看，但应放在“几何/转码”单变量测试之后。
-- **下一步（单变量）：** 让 #62 车主用带上述 feature 开关的构建复现并导出报告，先确认两行：`0x18052`
-  的功能项是否包含 `DISABLE_RESOLUTION_OPTION`，以及 `VIDEO: CarWith ...`/`0x10008` 的实际尺寸是否从
-  1280×720 变为 1624×1278。若变为 1624×1278 后车机出画，再决定是否推广到所有已知几何的接收端；若仍为
-  1280×720，说明该 CarWith 版本不认这个键，下一轮才需要试“尺寸不符强制转码”；若尺寸正确但仍黑屏，
-  再查 Wi-Fi iAP2 时序。不要同时改 1728 面板、modesChanged 时序或 iAP2 订阅，否则无法归因。
-- **验证边界：** 本节只来自 HyperCar 日志、用户口述和仓库既有第三方记录；没有 mcarplay 在该车机上的新实车
-  结果，也没有音频实际出声证据（HyperCar 日志仅显示 PCM RTP 在发，`receiver_audio=unknown`）。不构成兼容性声明。
+  remote bridge 单测 25 个，均 0 失败。
+- **旧版实车失败对照（2026-11-18 06:29–06:30，报告 `afca67a7…`，非 test.3）：** 同一台 `MB_E-P-4` 车主用上一版
+  `0.1.7-debug`（旧 `MERCEDES_MB_E` 的 1728 面板实验）实车复现，三轮均未到首帧：
+  06:29:19 轮 `0x18052` 为 26B（无 `DISABLE_RESOLUTION_OPTION`），按 `displayPanels` 请求 1624×1728，
+  CarWith 仍返回 1280×720；屏幕流 SETUP 成功后，视频口在首个 RECORD 后约 362ms EOF（启用音频时还有第二次 RECORD），
+  CarWith 首帧在 RECORD 后约 882ms 才到，应用发送 0 帧并以 `Broken pipe` 结束。
+  06:29:38 轮控制通道被车机 reset，RECORD 未确认，6030 端口 `ECONNREFUSED`。
+  06:30:30 轮关闭音频、只发一次 RECORD，视频口仍在 RECORD 后约 120ms EOF；CarWith 首帧约 824ms 后到，
+  应用仍发送 0 帧。三轮分别以 `VIDEO_CLOSED` / `SETUP_FAILED` 结束。
+  HyperCar 成功轮按 `displays[0]` 1624×1278，RECORD 后约 953ms 才发首帧，车机没有因等待首帧而关闭视频口；
+  因此“首帧太慢”不能单独解释旧版失败，旧版的 1728 几何和缺失 feature 仍是主要差异。
+  这份报告只证明旧预设在该车机失败。
+- **test.3 实车复测（2026-11-18 15:48，报告 `cfe2b32e…`，issue #62 同车）：** 同一台
+  `Mercedes-Benz / MB_E-P-4 / 480.7.4`，手机 Xiaomi 24031PN0DC / Android 17 / `CP2A.260605.016`，
+  CarWith `4.0.23-20261016`、CarLife `8.8.5 (274)`。APK SHA-256
+  `86eef69e3210dc3c7fe58d888797065b8ba6709339419d13fbe3a4b707ea73d7`（`v0.1.7-test.3`）。
+  `0x18052` 已含 `DISABLE_RESOLUTION_OPTION=1`，`VIDEO_INIT_DONE 1624x1278@30`，CarWith 首帧同为
+  1624×1278；导出前 43 s 发送 542 帧、5 个 IDR，`队满丢帧 0`、`最慢写入 16 ms`。
+  **CarWith 尺寸与视频发送链路已排除。** 车机仍无画面，隧道认证暴露新的单点：
+  15:48:36.349 先发 20B 挑战，车机静默整整 6000 ms；15:48:42.500 改发 32B，438 ms 后签名成功。
+  此后 43 s 内车机没有 `StartHID(0x6800)`、`0x5000`、`0x4157/0x4154/0x4170` 任一订阅；
+  `modesChanged` 仍为 42B `{}`，但 HyperCar 成功轮同样如此，不能再用空回执解释黑屏。
+  对照 HyperCar 0.1.0.588 同车机成功轮：06:32:13.095 直接发 32B，463 ms 后签名成功，
+  06:32:14.146 收到 `StartHID`；其 `WifiIap2Protocol.greetings()` 在 `0x4e0c` 后固定发一条空 `0x5702`
+  （源码与单测均如此），mcarplay 的 MIB3 突发此前没有这条。test.3 的蓝牙 iAP2 已按记忆走 32B 并成功，
+  说明 32B 本身可用；失败只在隧道仍从 20B 起步。
+- **test.4 组合修复（实验，已实车复测，仍无画面）：** ① 手动 `MERCEDES_MB_E` 预设把隧道 MFi 固定为 32B，只发一次、
+  窗口 40 s，不再让 20B 占用 6 s；② MIB3/事件链路认证后突发在 `0x4e0c` 后补发空 `0x5702`，与 HyperCar
+  一致；`0x5703` 只作链路 ACK，不触发重新入网。32B 仅在该手动预设生效，`0x5702` 仅在 MIB3/事件链路
+  突发路径生效，蓝牙与 DiPlay 不变。两项合在一个包里，**无法单独归因**；若 test.4 仍无画面，下一轮只改
+  一个变量（优先排查 `StartHID`/显示会话激活），不再同时改编码、`modesChanged` 或面板几何。
+- **test.4 实车结果（2026-11-19）：** 同车 `MB_E-P-4 / 480.7.4` 已收到 32B 认证、空 `0x5702`、
+  `0x4157/0x4170/0x5000/0x4154` 与 `0x6800` 订阅，长会话发送 1995 帧 / 34 个 IDR / 19.1 MB，
+  车机仍无画面；详细时序与随后发现的早到 `0x4301` 丢弃问题见下一条。
+- **验证边界：** WinPlay 1.2.4 台架已经证明 `DISABLE_RESOLUTION_OPTION=1` 能让当前 CarWith 返回
+  1624×1278，且画面、触控、声音形成闭环；`MB_E-P-4 / 480.7.4` 的 test.3 实车已证明尺寸正确、542 帧无丢帧，
+  但车机仍无画面。test.4 是 32B 与 `0x5702` 的组合实验，不构成该车型兼容性声明。
+
+## 2026-11-19 issue #62：test.4 仍无画面；早到的 0x4301 在 StartHID 窗口内被丢弃（实车报告 + 单变量修复）
+
+- **来源与版本：** 车主提供的 `v0.1.7-test.4` 脱敏日志（导出 2026-11-19 06:39:20，日志文件名
+  `mcarplay-log-20261119-063920-a445f6ad-diagnostics.txt`；APK SHA-256
+  `9e3d0e2aeccfaf4e7e6ce9fbd136f964a741957ec62bad2cebf0a7a91d50183d`）。手机 Xiaomi 24031PN0DC /
+  Android 17；CarWith `4.0.23-20261016`、CarLife `8.8.5 (274)`；接收端 `Mercedes-Benz / MB_E-P-4 / 480.7.4`，
+  手动选择 `MERCEDES_MB_E`。截图显示入网时应用弹出「检测到已连接 MBUX 00081……是否把当前网络当车机热点，
+  直接尝试 mDNS/网关连接？」并选择了「按车机热点继续」——这条弹窗本身就是本轮的关键证据。
+- **test.4 两项修复均已生效，不能再归因于 MFi 或 0x5702：** 蓝牙 iAP2 于 06:36:12.463 直接发 32B，约 0.45 s
+  签名成功；隧道于 06:38:06.372 直接发 32B，441 ms 后成功；06:38:06.814 已发送空 `0x5702`。随后车机返回
+  `0x4157/0x4170/0x5000/0x4154`，会话订阅汇总也包含 `0x6800`。最终长会话从 06:38:05 持续到 06:39:14，
+  `VIDEO_INIT_DONE 1624x1278@30`，发送 1995 帧 / 34 个 IDR / 19.1 MB，`队满丢帧 0`、`最慢写入 17 ms`，
+  视频口直到用户停止才 EOF。CarWith 尺寸、视频发送链路、20B 空等、缺少认证后 `0x5702`、StartHID/订阅完全缺失
+  均已排除。本轮未开启车机侧声音，因此也不能用音频拆链解释黑屏。
+- **被忽略的时序矛盾：** 06:36:14.288 已经收到一条 165B `0x4301`（06:36:12.417 的 0x1D01 明确声明
+  `CarPlayStartSession=会发`），但 06:36:22.938 仍记录「0x4301 在 8s 窗口内未到」。原因是这条消息恰好落在
+  `awaitOptionalHid()` 的 2 秒 StartHID 等待窗口内：旧实现自己 `recvFrame()`，把非 `0x6800` 的帧只打一行日志
+  后丢弃，没有像 `expectOrNull()` 那样暂存。车机直到 06:36:48.824 才重发完整 `0x4301`（自带 AP、端口 7000、
+  仅 IPv6 地址），期间应用已经弹窗并回退。
+- **同一错误在最终长会话前再次发生：** 06:37:42.600 的 `0x4301` 同样落在 HID 窗口内被丢弃；06:37:52.551
+  再次按「窗口内未到」处理，只剩已知 SSID，06:38:05 最终改用 IPv4 网关 `<IP-1>:7000` / `6030` 建流。
+  06:37:14 另有一轮曾用晚到 `0x4301` 的 IPv6 端点建立会话，但 6 秒后就被下一次 0x4301 触发的重走打断，
+  只验证了 IPv6 端点可连通，不能据此判断它是黑屏根因。
+- **单变量修复（`v0.1.7-test.5`）：** `awaitOptionalHid()` 改为复用 `expectOrNull()`，等待 StartHID 时把所有
+  非预期帧放进 `pendingFrames`，后续 `0x5703` / `0x4301` 阶段按原顺序消费；超时文案与「链路已死」行为不变。
+  新增 `startSessionArrivingDuringHidWaitIsDeferredAndConsumed`：BMW iD9 / 奔驰同形的模拟车机在 HID 窗口内
+  先发订阅噪声和 0x4301，断言端点拿到 `MockAP`、端口 49152、两条地址，且日志不再出现「0x4301 在 8s 窗口内未到」。
+  这只是修复「有完整端点却回退网关」的错误路径，**不证明黑屏已解决**。
+- **仍未排除的候选：** ① 车机只在它自报的 IPv6 链路上激活显示资源；本次修复后第一次能得到
+  「完整 0x4301 端点 + 稳定长会话」的干净对照。② H.264 与 HEVC 的差异：HyperCar 0.1.0.588 在同车机成功轮
+  把 CarWith H.264 1624×1278 转成 HEVC 1624×1278@60，而同机其他 H.264 尝试曾失败；mcarplay 当前仍是
+  H.264 透传（SPS level 补到 4.0），本轮没有改编码。③ MBUX 对资源声明/显示激活的额外要求；本轮
+  `modesChanged` 仍为 42B `{}`，但 HyperCar 成功轮同样如此，不能单独作为失败证据。
+- **下一轮复测步骤（仍只改一个变量）：** 使用含本修复的包，手动 `MERCEDES_MB_E`，与本次一样先不开启车机侧
+  声音；入网时若仍弹热点确认，选择「按车机热点继续」并导出报告。重点检查 `0x4301` 是否不再出现「8s 窗口内未到」、
+  `AIRPLAY: TCP 已连通` 使用哪个地址族，以及稳定 30 秒以上是否有画面。若仍黑屏，再单独做 HEVC 转码实验，
+  不同时改 `modesChanged`、面板几何或音频。
+- **验证边界：** 本节来自一份车主报告与离线单测，没有 mcarplay 修复后的实车结果；不构成奔驰兼容声明。
+
+## 2026-11-19 issue #62：test.5 端点已完整仍黑屏；test.6 对照 HyperCar 请求形状（实车报告 + 未验证实验）
+
+- **来源与版本：** 车主提供的脱敏报告
+  `mcarplay-log-20261119-172246-39774cc1-diagnostics.txt`（导出 2026-11-19 17:22:46）。手机
+  Xiaomi 24031PN0DC / Android 17；CarWith `4.0.23-20261016`、CarLife `8.8.5 (274)`；接收端
+  `Mercedes-Benz / MB_E-P-4`、`firmwareRevision=E354.2_4221`、AirPlay `srcvers=480.7.4`，使用手动
+  `MERCEDES_MB_E` 预设。导出环境为 `ACCESS_FINE_LOCATION=false`、`network.active=WIFI`、
+  `network.bound=none`。
+- **test.5 已排除端点回退，但仍无画面：** 稳定会话 `f07b9ce6` 在 17:21:24.248 的 StartHID 窗口内收到
+  `0x4301`，17:21:26.175 得到完整端点（非只靠网关），17:21:26.817 直接配对，17:21:28.657
+  `VIDEO_INIT_DONE 1624x1278@30`。这轮发送 3546 帧、30 个 IDR、12,074,167 B，队满丢帧 0、
+  最慢写入 21 ms，最终由用户停止；车机仍无画面。因此「早到 `0x4301` 被丢弃、只剩网关端点」不再是
+  本轮的失败解释。
+- **test.5 与 HyperCar 成功轮的请求形状差异：** test.5 初始 SETUP 为 739 B，车机返回
+  `enabledFeatures=[hevc, h.264Level5.1, mainBuffered, viewAreas]`；时序为
+  `modesChanged 200`（17:21:26.925）→ HID 输入模式 → 屏幕 SETUP（17:21:26.927）→ RECORD 200
+  （17:21:27.026）。HyperCar 0.1.0.588 在同身份车机上的成功轮是 727 B SETUP、没有 `mainBuffered`，
+  RECORD 200 后声明资源再发 167 B 屏幕 SETUP，并且会话 SETUP、屏幕 SETUP、RECORD、TEARDOWN 共用一个
+  绝对 `rtsp://<host>/<sessionId>` URI。HyperCar 的成功视频为 HEVC；CarWith 源是 H.264，
+  HEVC 是手机端转码后的输出。
+- **热点弹窗不是本轮黑屏的充分解释：** 17:07:10.629 用户确实点击过一次「按车机热点继续」，但
+  17:20:53 之后的会话已经通过 `0x4301` 的 AP 信息直接入网，17:21 没有再次请求弹窗。报告里
+  `network.bound=none` 与无定位权限会影响应用读取当前网络的稳定性，却不足以解释完整端点、稳定推流
+  仍不出画。弹窗有时有、有时无更可能来自「Network 句柄可读但 SSID 不可读」与旧逻辑只在 SSID 非空时
+  询问的组合；test.6 改为有 Network 句柄就允许询问，并在确认后重新核验。
+- **test.6 实验改动（仅手动 `MERCEDES_MB_E`）：** ① 先 RECORD，再 `modesChanged`、HID 输入模式和
+  主屏 SETUP；② 会话级四个 RTSP 请求共用一个生成的绝对会话 URI；③ 撤回本端未实现的
+  `mainBuffered` 提议；④ 热点确认在 SSID 不可读但 Network 可用时仍可触发，并按 SSID/Network 去重。
+  前三项同时改变，属于请求形状组合实验，不能把结果单独归因给某一项；第四项只改连接提示，不影响视频
+  编码或显示协议。
+- **仍未处理的最大差异：** mcarplay 仍发送 H.264 透传，HyperCar 同车成功轮使用 HEVC 转码。另一个
+  BOX OFF 日志在同一车机用 H.264 出画，说明 H.264 不是绝对不可能，但不能排除 MBUX 480.x 在该发送端
+  的请求形状下更接受 HEVC。test.6 没有改编码，因此即使仍黑屏，也不能据此否定 HEVC 假设。
+- **复测边界：** 本条目没有任何 test.6 实车结果，也没有证明 `record-first`、绝对 URI 或撤回
+  `mainBuffered` 能修复黑屏。建议车主只跑一轮干净连接，保持视频-only 至少 60 秒；若仍黑屏，用该轮报告
+  确认四项改动均已生效，下一版再单独做 HEVC 转码实验。不要在 test.6 结果出来前同时改
+  `modesChanged`、面板几何或音频。
+
+## 2026-11-20 issue #62：test.6 在首帧前被 type-130 SETUP 拖死（实车报告 + 修复）
+
+- **来源与版本：** 车主提供的脱敏报告
+  `mcarplay-log-20261120-154932-47c98363-diagnostics.txt`（导出 2026-11-20 15:49:32），会话
+  `1d6ac3cf`，视频-only。手机 Xiaomi 24031PN0DC / Android 17；CarWith `4.0.3-20261016`、
+  CarLife `8.8.5 (274)`；接收端仍为 `Mercedes-Benz / MB_E-P-4 / 480.7.4`，手动 `MERCEDES_MB_E`。
+  截图停留在「等待 CarWith 首帧」/`CARWITH_FAILED`，CarPlay 图标只短暂由灰变绿后转灰。
+- **test.6 的四项请求形状改动均已生效：** 15:48:11.490 生成绝对会话 URI；11.492 初始 SETUP 为 723B；
+  11.551 车机接受的能力列表已不含 `mainBuffered`；11.601 提前 RECORD 返回 200；11.643 主屏 SETUP 返回
+  200、`dataPort=6030`。因此本轮不是绝对 URI、RECORD 顺序或 `mainBuffered` 提议被直接拒绝。
+- **直接失败点在首帧之前：** 11.687 之后控制通道上有一条等待应答的 type-130 `SETUP /`（CSeq=10）；
+  车机没有回包，15:48:13.020 reset 控制/事件通道，约 1.38 s 后 13.027 该 SETUP 才以「控制通道已关闭」
+  返回。视频口直到 13.042 才开始连接 `6030`，此时车机已拆会话，结果为 `ECONNREFUSED`。CarWith 随后
+  才尝试启动并报首帧等待失败，所以 `CARWITH_FAILED` 是下游结果，不是 CarWith 自身先失败。
+- **代码原因：** `SessionController` 在屏幕 SETUP 成功后同步调用 `runIapTunnel()`，然后才创建
+  `VideoSender` 并执行 `openDataPort()`。type-130 无应答时，这个可选隧道占住了唯一的连接线程，
+  主屏 dataPort 不能按车机约 2 s 的看门狗窗口及时连上。test.5 该隧道几乎立即返回
+  `streams=null`，所以同一顺序能侥幸连上；test.6 的超时暴露了顺序缺陷。
+- **HyperCar 对照：** 重新核对 HyperCar `f22844e` 源码，其成功路径不发送 type-130 DataStream；
+  `screen_session.rs` 在屏幕 SETUP 返回 200 后立即用返回的 `dataPort` 建 TCP，再继续 RECORD/媒体
+  流程。该仓库没有对应本项目的 type-130 隧道请求。车机对 type-130 的静默与 reset 与这一差异一致，
+  但在本车机上尚未做「只跳过 type-130」的实车 A/B。
+- **修复（未发布）：** ① 手动 `MERCEDES_MB_E` 预设登记 `skipIapTunnel=true`，不发 type-130；
+  ② 所有车型都把主屏 `openDataPort()` 放到可选 `runIapTunnel()` 之前，避免同类阻塞再次让视频口迟到；
+  ③ 新增 `VehiclePresetTest` 断言和源码顺序回归 `MediaPortOrderingTest`。其他车型的 type-130 路径保留。
+- **热点弹窗：** 本轮没有弹窗不是新故障。15:48:10.937 的 `0x4301` 已带完整 AP 凭据，
+  15:48:11.401 绑定到已核验的 Network 238 且 SSID 可读；当前网络已确认是目标热点，旧逻辑本就不应再问。
+  test.6 的「Network 可用但 SSID 不可读」修复仍未在实车触发。
+- **验证边界：** 本地只证明策略、顺序和编译回归；尚未在 `MB_E-P-4` 上复测，不能声称黑屏已修复。
+  下一轮应只验证这条 type-130 修复，保持视频-only、H.264 和既有面板几何不变；若视频口稳定连通但车机
+  仍无画面，再单独进入 HEVC/显示激活实验。
+
+## 2026-11-20 issue #62：MB_E 对齐 HyperCar 请求时序并固定 H.264（v0.1.7-test.7）
+
+- **HyperCar 成功轮（2026-11-18 06:32:13，`MB_E-P-4 / 480.7.4`）：** 初始 SETUP 后
+  `enabledFeatures=[hevc,h.264Level5.1,viewAreas]`，`mainBuffered_proposed=false`；控制通道顺序为
+  RECORD 200 → 第一次 `modesChanged`（383B，应答 42B `{}`）→ 第二次同形 `modesChanged`（383B）→
+  屏幕 SETUP（167B，`latencyMs=25`）→ 立即连接 `dataPort=6030`。该轮没有 type-130 DataStream，
+  也没有发送 AirPlay `hidSetInputMode`；首帧后车机仍正常发送 `hidSendReport`。
+- **与 mcarplay test.6 的差异：** test.6 在 RECORD 后只发一次 `modesChanged`，随后连发 4 条
+  `hidSetInputMode`，再发屏幕 SETUP。HyperCar 的第二次资源声明与屏幕资源生命周期绑定，且成功轮
+  不依赖 HID 武装。该差异可能影响 MBUX 是否把随后建立的屏幕流接入显示管线，但尚无实车 A/B。
+- **本轮实验（仅手动 `MERCEDES_MB_E`）：**
+  ① 会话 SETUP 不再提议 `hevc`，与本端固定发送 H.264 的能力一致；HyperCar 成功轮本身提议了 HEVC，
+  所以这不是「HEVC 导致黑屏」的结论，只是按用户要求固定编码路径。
+  ② 屏幕 SETUP 前补发第二次 `modesChanged`，对齐 HyperCar 的 RECORD → 声明 → 再声明 → 屏幕 SETUP。
+  ③ 跳过屏幕 SETUP 前的 4 条 `hidSetInputMode`；触摸仍由车机事件通道的 `hidSendReport` 驱动。
+  保留已有的 `skipIapTunnel`、提前 RECORD、绝对会话 URI、撤回 `mainBuffered`、32B MFi 和
+  `displays[0]` 几何，不改变其他车型的 type-130、资源声明或 HID 路径。
+- **验证边界：** 本地只验证 SETUP 能力集、车型策略和源码顺序回归；尚未在 `MB_E-P-4` 上复测。
+  下一轮应只验证这三项对齐（H.264-only、二次声明、无 HID 武装），不要同时改面板几何、音频或
+  CarWith 启动参数。若视频口稳定连通但仍无画面，需用报告中的 `enabledFeatures`、第二次
+  `modesChanged` 应答和首帧时间线继续定位，不能声称该车型已兼容。
+
+## 2026-11-21 issue #62：test.7 第二轮画面与触控正常，开启声音后掉画面仍待验证
+
+- 车主用 `v0.1.7-test.7` 手动选择奔驰 MB_E-P / GLC 预设，连续测试两轮。日志中手机为 Xiaomi
+  24031PN0DC，车机为 `Mercedes-Benz / MB_E-P-4`、固件 `E354.2_4221`、AirPlay `480.7.4`。
+  本轮日志未记录 HyperOS、CarWith 和 CarLife 的版本。
+- 两轮都使用仅视频模式。RECORD 与两次 `modesChanged` 均返回 200，协商能力为 `[h.264Level5.1, viewAreas]`，
+  主屏 SETUP 后约 11–12 ms 连上 dataPort，CarWith 两次均返回 1624×1278@30，并发送相同的首个视频配置。
+- 12:30 首轮车主未见画面。手机发送了 1362 帧、35 个 IDR，车机没有发送触控报告，约 69 秒后手动断开。
+  12:31 第二轮车主确认画面和触控正常，手机发送 1499 帧、38 个 IDR，收到 130 条 `hidSendReport`，
+  约 77 秒后手动断开。两轮屏幕口的 EOF 均发生在手动停止之后。首轮未显示的原因仍待定位。
+- 车主另反馈开启声音会断画面，这份 test.7 日志只包含两轮仅视频连接。11 月 19 日同一车机的旧日志有三轮
+  type-102 AAC-LC 音频 SETUP 返回 200 后补发 RECORD，事件通道在后续 30–66 ms 内 reset，
+  屏幕通道在后续 58–127 ms 内 EOF。HyperCar 同车成功轮先 RECORD，随后建立屏幕与 48 kHz PCM 音频，
+  音频加入后未补发 RECORD。音频档位也存在差异，重复 RECORD 是优先验证的触发点。
+- 后续本地实验为手动 MB_E 预设复用已有的单次 RECORD 策略。音频启动及仲裁重试沿用首次激活结果。
+  需分别验证开启声音后的画面、触控与声音，以及仅视频时的首轮出画率。
+
+## 2026-11-23 issue #62：HyperCar H.264 主屏重进、返回键与仪表对照
+
+- HyperCar `0.1.0.610` 在 Xiaomi 24031PN0DC、HyperOS `OS4.0.30.0.XEOCNXM`、CarWith
+  `4.0.23-20261016` 与奔驰 `MB_E-P-4 / 480.7.4` 上运行约 21 分钟。该报告未列 Xiaomi CarLife 版本。
+  会话协商撤回 HEVC 和 `mainBuffered`，主屏实际发送 1624×1278 H.264，音频协商为 type-100 PCM
+  48 kHz 立体声、每包 352 样本帧、`audioLatencyMs=300`。
+- 14:41:40 车机用 `changeModes` 借走主屏，HyperCar 只拆屏幕流。14:42:36 车机用 `changeModes`
+  归还主屏，HyperCar 重新声明资源、SETUP type-110、连新 TCP 并写出视频配置及 IDR，沿用原会话 RECORD，
+  PCM 继续送出。车主反馈 mcarplay 从车机主页重进时画面冻结。本地 MB_E 预设在收到资源归还后重建主屏，
+  重建前暂停旧流，保留原会话 RECORD，并复用原 CarWith 与音频。该重进路径待 mcarplay 实车验证。
+- 14:24:03 的返回键为 HID 设备描述符中的 Consumer AC Back（`0x0C:0x0224`），按下/松开分别为
+  `01`/`00`。HyperCar 源码将它转成 CarLife `0x68008` 的键值 14。本地按描述符定位该位，
+  仅在主屏归手机时将按下边沿交给 CarWith。方向盘切歌沿用现有媒体键通路。
+- 车主确认导航显示在仪表。14:21:57 车机在 Wi-Fi iAP2 上用 `0x5200` 订阅组件 1，14:30:48 起
+  HyperCar 从 CarWith 结构化导航源下发 `0x5202/0x5201`，车机回链路 ACK。mcarplay 的仪表链路仍需实现
+  导航源解析、订阅和更新下发。14:28:08 和 14:29:06 两次 `0xB5` 下一首派发走已有媒体键通路。
+- 媒体毛刺与导航切换按 HyperCar 的 PCM 日志分析。14:22:49 起拥塞丢包计数从 0 增至 188，14:22:59 后
+  维持 188。14:26:41 开始导航提示时该计数仍为 188，后续两条 `AUDIO-PACING` 各记录丢弃 352 和
+  704 个 TTS 样本帧，源码在错过发送期限时会丢弃到期样本并推进时间戳。这个样本支持优先排查调度迟到
+  与混音切换，听感根因还需与时间戳对照。本地改动覆盖 mcarplay 主屏与返回键。
+
+## 2026-11-28 issue #62：test.8 连通后黑屏，H.264 SPS 尺寸偏离 CarWith 协商
+
+- 车主使用 Xiaomi 24031PN0DC、CarWith `4.0.23-20261016`、CarLife `8.8.5 (274)`，选择奔驰 MB_E 手动预设并连接
+  `MB_E-P-4 / E354.2_4221 / AirPlay 480.7.4`。报告未列 HyperOS 版本。APK 的 SHA-256 与官方签名
+  `v0.1.7-test.8` 发布资产一致，对应 `2ce09bb`。
+- RECORD、主屏 SETUP 和视频 TCP 均成功。CarWith 的 `VIDEO_INIT_DONE` 回报 1624×1278@30，首个 H.264 SPS 和实际
+  `VideoConfig` 却为 1728×1920。手机发送 1778 帧（15 个 IDR），车主始终未见画面，报告未见触控事件。
+  约 70 秒后手动断开，屏幕数据口随后 EOF。
+- test.8 的预设只选中车机尺寸策略，仍提议 `hevc` 和 `mainBuffered`，主屏 SETUP 前只声明一次资源，
+  发送四次 `hidSetInputMode` 并请求 type-130。#117 恢复奔驰 MB_E 的 H.264 专用协商及归还资源后重建主屏，
+  仍需实车确认 SPS 和出画。test.7 的两轮里仅第二轮出画，两轮 SPS 均为 1624×1278。
+- 12:53:00 动态开启声音后音频 SETUP 返回 200，沿用首次 RECORD，视频持续发送到手动结束。
+  本轮音频媒体包为 0，车机实际发声待复测。
 
 ## 2026-11-13 issue #55：奔驰 MB_D-PP-4「开声音后 16–559 ms 拆链」（车主报告，未实车复测）
 

@@ -431,6 +431,17 @@ class VirtualIap2Link(
                     handleFrameLocked(event.bytes)
 
                 is Iap2LinkEngine.Event.Dead -> {
+                    val pendingLength = mfiCurrentLength
+                    if (!mfiFinished && pendingLength > 0 && pinnedMfiLength == null) {
+                        mfiIdentity?.let {
+                            MfiLengthMemory.recordHardRejected(mfiContext, it, pendingLength)
+                        }
+                        log(
+                            "IAPLINK: 隧道 MFi ${pendingLength}B 等待应答时链路断开" +
+                                "——记入硬拒绝，后续不再优先此档",
+                        )
+                        mfiCurrentLength = 0
+                    }
                     log("IAPLINK: 虚拟链路终止 - ${event.reason ?: "EOF"}")
                     return
                 }
@@ -454,6 +465,7 @@ class VirtualIap2Link(
 
     /** MFi 挑战静默超时：记入该车机的记忆并换下一档重试（节拍线程每 200ms 驱动一次）。 */
     private fun checkMfiTimeoutLocked() {
+        if (engine.isDead) return
         val identity = mfiIdentity ?: return
         if (mfiFinished || mfiCurrentLength == 0) return
         if (nowMillis() - mfiChallengeSentAtMs < mfiWindowMillis) return
@@ -660,8 +672,16 @@ class VirtualIap2Link(
             ids.MFI_RESPONSE -> {
                 val challenged = mib3AuthStage == 3
                 if (mib3) {
-                    mfiIdentity?.let { MfiLengthMemory.recordSuccess(mfiContext, it, mfiCurrentLength) }
-                    log("IAPLINK: 隧道 rx=0xaa03 签名 ${frame.body.size}B（${mfiCurrentLength}B 挑战成功，已记忆）")
+                    if (mfiFinished) return
+                    val succeededLength = mfiCurrentLength
+                    val remembered = succeededLength > 0 && mfiPosition == 0
+                    if (remembered) {
+                        mfiIdentity?.let { MfiLengthMemory.recordSuccess(mfiContext, it, succeededLength) }
+                    }
+                    log(
+                        "IAPLINK: 隧道 rx=0xaa03 签名 ${frame.body.size}B" +
+                            "（${succeededLength}B 挑战成功${if (remembered) "，已记忆" else "，迟到档位不训练"}）",
+                    )
                     mfiCurrentLength = 0
                     mfiFinished = true
                 }
@@ -812,9 +832,14 @@ class VirtualIap2Link(
                 mib3WirelessSessionId = it
             }
         sendCsmLocked(
-            WIRELESS_SESSION_ID,
+            DEVICE_UUID_OR_SESSION,
             Iap2Csm.param(0, sessionId.toByteArray(Charsets.UTF_8)),
         )
+        // 认证后的 AirPlay 端点会再请求一次配件 Wi-Fi 配置。HyperCar 0.1.0.588 在
+        // 同一台 MB_E-P-4（480.7.4）上固定发这条空 0x5702，随后收到 0x4301、0x5000
+        // 与 StartHID；我们此前跳过它，车机在突发后 43s 内没有任何订阅。0x5703 只作
+        // 链路 ACK，不触发重新入网。仅 MIB3/事件链路走这里，不影响蓝牙或 DiPlay。
+        sendCsmLocked(Iap2MessageIds.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
         sendCsmLocked(AUX_STATUS_NOTIFICATION, Iap2Csm.param(0x0006, ByteArray(0)))
         sendCsmLocked(
             DEVICE_LANGUAGE,
@@ -978,7 +1003,9 @@ class VirtualIap2Link(
 
         // ---- MIB3 消息号（无正式名/未入 Iap2MessageIds 的小集合） ----
         const val MFI_AUTH_SERIAL = 0xAA06
-        const val WIRELESS_SESSION_ID = 0x4E0C
+
+        // 隧道侧载荷是随机值，与 Iap2MessageIds.DEVICE_UUID_UPDATE（MAC 派生 UUID）语义是否相同未确认。
+        const val DEVICE_UUID_OR_SESSION = 0x4E0C
         const val DEVICE_TIME = 0x4E0B
         const val DEVICE_LANGUAGE = 0x4E0A
         const val DEVICE_INFORMATION_UPDATE = 0x4E09

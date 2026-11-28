@@ -137,7 +137,11 @@ internal class ScreenOwnership<C : Any>(
                 return@control
             }
             // 用户点图标时主屏本就归手机：车机停在原车界面却不认这个归属，先报让出、再报拿回
-            if (request.retakeScreen && clients.phoneOwnsScreen(client)) {
+            val rebuildOnResourceReturn = runtime.receiverPolicy(client).rebuildScreenOnResourceReturn
+            if (request.retakeScreen &&
+                clients.phoneOwnsScreen(client) &&
+                !(rebuildOnResourceReturn && clients.screenNeedsRebuild(client))
+            ) {
                 if (clients.assertModes(client, releaseScreen = true, expectedEpoch = connectionGeneration)) {
                     try {
                         scheduling.sleepFor(client, SCREEN_RETAKE_GAP_MS)
@@ -159,9 +163,11 @@ internal class ScreenOwnership<C : Any>(
             ) {
                 return@control
             }
-            val restoreScreen = request.requestKeyFrame && asserted && clients.phoneOwnsScreen(client)
+            val rebuildScreen = if (rebuildOnResourceReturn) clients.screenNeedsRebuild(client) else request.rebuildStream
+            val restoreScreen =
+                (request.requestKeyFrame || (rebuildOnResourceReturn && rebuildScreen)) && asserted && clients.phoneOwnsScreen(client)
             val recovery = runtime.readRecovery()
-            if (restoreScreen && request.rebuildStream && recovery != null) {
+            if (restoreScreen && rebuildScreen && recovery != null) {
                 when (recovery()) {
                     RecoveryOutcome.ABORTED -> return@control
                     RecoveryOutcome.FAILED -> {
@@ -314,6 +320,8 @@ internal interface ScreenOwnershipClient<C : Any> {
     fun isCancelled(client: C): Boolean
 
     fun phoneOwnsScreen(client: C): Boolean
+
+    fun screenNeedsRebuild(client: C): Boolean = false
 
     fun modesDescription(client: C): String
 

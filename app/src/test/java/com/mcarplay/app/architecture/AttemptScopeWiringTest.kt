@@ -210,24 +210,24 @@ class AttemptScopeWiringTest {
     }
 
     @Test
-    fun migrationCountIsSevenCurrentAndNineteenActiveIncludingHelper() {
+    fun controllerHasSevenCurrentAndTwentyActiveChecks() {
         val current = Regex("""(?<![A-Za-z0-9_.])scope\.isCurrent\b""").findAll(controllerCode).count()
         val negatedActive = Regex("""!scope\.isActive\b""").findAll(controllerCode).count()
         val plainActive = Regex("""(?<![!A-Za-z0-9_.])scope\.isActive\b""").findAll(controllerCode).count()
         assertEquals("SessionController 的 isCurrent 迁移点", 7, current)
         // Phase 2g-2：恢复闭包的 10 处 !scope.isActive 迁入组件，改经 ScreenRecoveryPort.isScopeActive()。
         assertEquals("SessionController 的取反 isActive 迁移点", 10, negatedActive)
-        // 5 处原迁移点 + 1 处 ScreenRecoveryPort 装配 + #106 3 处（recoverHandoff 2 处 + failMediaStartup 1 处）。
-        assertEquals("SessionController 的直查 isActive 迁移点", 9, plainActive)
-        assertEquals("SessionController 活跃判断合计", 19, negatedActive + plainActive)
+        // 9 处原判断 + 1 处让出主屏后视频端口关闭时的当前轮判断。
+        assertEquals("SessionController 的直查 isActive 判断", 10, plainActive)
+        assertEquals("SessionController 活跃判断合计", 20, negatedActive + plainActive)
 
         val helperActive = Regex("""!scope\.isActive\b""").findAll(helperCode).count()
         assertEquals("第33处真实 helper 的活跃判断", 1, helperActive)
         val routerActive = Regex("""!scope\.isActive\b""").findAll(routerCode).count()
         assertEquals("事件 router 的活跃判断", 1, routerActive)
         assertEquals(
-            "28 处总计 = 7 current + 19 Controller active + router active + helper active",
-            28,
+            "29 处总计 = 7 current + 20 Controller active + router active + helper active",
+            29,
             current + negatedActive + plainActive + routerActive + helperActive,
         )
 
@@ -283,15 +283,15 @@ class AttemptScopeWiringTest {
         // scope 活跃之外的独立判据，经 ScreenRecoveryPort 读取而不是折进 AttemptScope。
         assertTrue(
             component.contains(
-                "if (!port.isScopeActive() || port.isClientCancelled(client) || !port.isCurrentClient(client))",
+                "fun canRestore(): Boolean = port.isScopeActive() && !port.isClientCancelled(client) && " +
+                    "port.isCurrentClient(client) && port.phoneOwnsScreen(client)",
             ),
         )
         assertTrue(
             component.contains(
-                "if (!port.isScopeActive() || !port.isCurrentClient(client) || sender !== replacement)",
+                "if (!canRestore() || currentFormalSession() !== carLife() || sender !== replacement)",
             ),
         )
-        assertTrue(component.contains("!port.phoneOwnsScreen(client)"))
         assertEquals(
             "事件通道 guard 必须留在 router，且只保留一处",
             1,

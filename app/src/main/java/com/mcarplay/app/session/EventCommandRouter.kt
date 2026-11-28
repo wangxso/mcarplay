@@ -35,6 +35,8 @@ internal class EventCommandRouter(
     /** 每台媒体键 HID 设备一个边沿判定器；随本条 event 通道重建，旧轮按住状态不残留。 */
     private val mediaKeyEdges = HashMap<String, MediaKeyEdge>()
     private val voiceButton = SiriButtonEdge()
+    private val consoleBackMasks = setup.hidDescriptors.mapValues { (_, descriptor) -> HidNavigation.consoleBackMask(descriptor) }
+    private val pressedBackDevices = HashSet<String>()
 
     fun onCommand(command: Map<*, *>) {
         if (isStaleClient() || !scope.isActive) return
@@ -55,7 +57,7 @@ internal class EventCommandRouter(
                 // 本帧处于按下状态的 Consumer Usage；null = 不是媒体键设备。
                 // 位图（Variable，`81 02`）与 Array（`81 00`）都按描述符展开——
                 // 只读首字节当下标会让位图车机的「下一首 0x04」解码成无键。
-                val consumerUsages =
+                val mediaUsages =
                     when {
                         report == null -> null
                         // 有描述符：只有 Consumer 设备才解析（非 Consumer → null）
@@ -64,6 +66,18 @@ internal class EventCommandRouter(
                         // 值当 Usage ID 直读
                         report.size == 1 -> listOf(report[0].toInt() and 0xFF).filter { it != 0 }
                         else -> null
+                    }
+                val backMask = consoleBackMasks[uuid]
+                val consumerUsages =
+                    if (uuid != null && backMask != null && report?.size == 1) {
+                        if (report[0].toInt() and backMask == 0) {
+                            pressedBackDevices.remove(uuid)
+                        } else if (pressedBackDevices.add(uuid) && client.modes.phoneOwnsScreen) {
+                            output.injectNavigationKey(KeyEvent.KEYCODE_BACK)
+                        }
+                        mediaUsages.orEmpty().filterNot { it == ConsumerKeys.USAGE_AC_BACK }
+                    } else {
+                        mediaUsages
                     }
                 // 旋钮/四向拨杆（Generic Desktop 页的 Wheel/Hat）：
                 // 不是 Consumer 设备才走这里；输出 DPAD_* 注入虚拟屏。

@@ -37,6 +37,8 @@ object Iap2MessageIds {
     const val DEVICE_INFORMATION_UPDATE = 0x4E09 // 手机 → 配件：设备名
     const val DEVICE_LANGUAGE_UPDATE = 0x4E0A // 手机 → 配件：语言
     const val DEVICE_TIME_UPDATE = 0x4E0B // 手机 → 配件：时间（u64 epoch + u16 tz + u8 dst）
+
+    // 隧道侧同名报文的语义未确认：见 VirtualIap2Link.DEVICE_UUID_OR_SESSION。
     const val DEVICE_UUID_UPDATE = 0x4E0C // 手机 → 配件：UUID
 
     // ---- WiFi 配置交换 ----
@@ -54,7 +56,9 @@ object Iap2MessageIds {
     const val MFI_CERTIFICATE = 0xAA01 // 配件 → 手机（参数0=证书）
     const val MFI_REQUEST_CHALLENGE = 0xAA02 // 手机 → 配件（参数0=挑战 16B）
     const val MFI_RESPONSE = 0xAA03 // 配件 → 手机（参数0=签名）
-    const val MFI_AUTHENTICATION_FAILED = 0xAA04 // 手机 → 配件
+
+    // 本仓库只处理入站（车机拒绝本次挑战）；其他实现也可能出站，勿据此反向推断。
+    const val MFI_AUTHENTICATION_FAILED = 0xAA04 // 配件 → 手机（车机拒绝本次挑战）
     const val MFI_AUTHENTICATION_SUCCEEDED = 0xAA05 // 手机 → 配件（自报结果）
 
     // ---- 配件 bring-up 期间发来的订阅请求（接收并忽略即可）----
@@ -69,6 +73,43 @@ object Iap2MessageIds {
     const val EA_CLOSE_SESSION = 0xEA01 // 手机 → 配件
     const val EA_SESSION_STATUS = 0xEA03 // 配件 → 手机（奥迪发送清单明确声明）
 
+    /** 显式目录，供日志名回归测试遍历全部已定义常量。 */
+    val ALL_IDS =
+        listOf(
+            START_IDENTIFICATION,
+            IDENTIFICATION_INFORMATION,
+            IDENTIFICATION_ACCEPTED,
+            IDENTIFICATION_REJECTED,
+            CARPLAY_AVAILABILITY,
+            CARPLAY_START_SESSION,
+            WIRELESS_CARPLAY_UPDATE,
+            DEVICE_TRANSPORT_IDENTIFIER,
+            DEVICE_INFORMATION_UPDATE,
+            DEVICE_LANGUAGE_UPDATE,
+            DEVICE_TIME_UPDATE,
+            DEVICE_UUID_UPDATE,
+            REQUEST_ACCESSORY_WIFI_CONFIGURATION,
+            ACCESSORY_WIFI_CONFIGURATION,
+            START_HID,
+            DEVICE_HID_REPORT,
+            ACCESSORY_HID_REPORT,
+            STOP_HID,
+            MFI_REQUEST_CERTIFICATE,
+            MFI_CERTIFICATE,
+            MFI_REQUEST_CHALLENGE,
+            MFI_RESPONSE,
+            MFI_AUTHENTICATION_FAILED,
+            MFI_AUTHENTICATION_SUCCEEDED,
+            START_NOW_PLAYING_UPDATES,
+            START_ROUTE_GUIDANCE_UPDATES,
+            START_POWER_UPDATES,
+            START_COMMUNICATIONS_UPDATES,
+            START_CALL_STATE_UPDATES,
+            EA_OPEN_SESSION,
+            EA_CLOSE_SESSION,
+            EA_SESSION_STATUS,
+        )
+
     fun nameOf(messageId: Int): String =
         when (messageId) {
             START_IDENTIFICATION -> "StartIdentification"
@@ -79,12 +120,22 @@ object Iap2MessageIds {
             CARPLAY_START_SESSION -> "CarPlayStartSession"
             WIRELESS_CARPLAY_UPDATE -> "WirelessCarPlayUpdate"
             DEVICE_TRANSPORT_IDENTIFIER -> "DeviceTransportIdentifier"
+            DEVICE_INFORMATION_UPDATE -> "DeviceInformationUpdate"
+            DEVICE_LANGUAGE_UPDATE -> "DeviceLanguageUpdate"
+            DEVICE_TIME_UPDATE -> "DeviceTimeUpdate"
+            DEVICE_UUID_UPDATE -> "DeviceUuidUpdate"
             REQUEST_ACCESSORY_WIFI_CONFIGURATION -> "RequestAccessoryWiFiConfiguration"
             ACCESSORY_WIFI_CONFIGURATION -> "AccessoryWiFiConfiguration"
             START_HID -> "StartHID"
             DEVICE_HID_REPORT -> "DeviceHIDReport"
             ACCESSORY_HID_REPORT -> "AccessoryHIDReport"
             STOP_HID -> "StopHID"
+            MFI_REQUEST_CERTIFICATE -> "MfiRequestCertificate"
+            MFI_CERTIFICATE -> "MfiCertificate"
+            MFI_REQUEST_CHALLENGE -> "MfiRequestChallenge"
+            MFI_RESPONSE -> "MfiResponse"
+            MFI_AUTHENTICATION_FAILED -> "MfiAuthenticationFailed"
+            MFI_AUTHENTICATION_SUCCEEDED -> "MfiAuthenticationSucceeded"
             EA_OPEN_SESSION -> "StartEASession"
             EA_CLOSE_SESSION -> "StopEASession"
             EA_SESSION_STATUS -> "EASessionStatus"

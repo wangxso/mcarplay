@@ -80,6 +80,29 @@ class DiagnoseTest(unittest.TestCase):
         self.assertFalse(any("接收端端口" in t for t in found))
         self.assertTrue(any("CarWith 本地端口" in t for t in found))
 
+    def test_bluetooth_timeouts_do_not_report_network_timeout(self):
+        line = "[10:00:11.000] BT-DIAG: CONNECT_END outcome=FAILED error=SocketTimeoutException reason=TIMED_OUT"
+        found = titles(diagnose(report(log="\n".join([line] * 2))))
+        self.assertFalse(any("网络超时" in title for title in found))
+
+    def test_network_timeouts_still_report_hotspot_advice(self):
+        line = "[10:00:11.000] AIRPLAY: connect failed: SocketTimeoutException"
+        d = diagnose(report(log="\n".join([line] * 2)))
+        finding = next(f for f in d.findings if "网络超时" in f.title)
+        self.assertIn("2 次", finding.title)
+        self.assertIn("热点信号", finding.advice)
+
+    def test_bluetooth_timeouts_do_not_count_toward_network_threshold(self):
+        bluetooth = "[10:00:11.000] BT-DIAG: CONNECT_END outcome=FAILED error=SocketTimeoutException reason=TIMED_OUT"
+        network = "[10:00:12.000] AIRPLAY: connect failed: SocketTimeoutException"
+        log = "\n".join([bluetooth, network, bluetooth])
+        self.assertFalse(any("网络超时" in title for title in titles(diagnose(report(log=log)))))
+
+        d = diagnose(report(log=log + "\n" + network))
+        finding = next(f for f in d.findings if "网络超时" in f.title)
+        self.assertIn("2 次", finding.title)
+        self.assertNotIn("BT-DIAG", finding.evidence)
+
     def test_enonet_with_unknown_binding(self):
         log = "\n".join(["[10:00:01.000] AIRPLAY: connect failed: ENONET"] * 3)
         d = diagnose(report(env={"network.bound": "unknown"}, log=log))

@@ -157,9 +157,7 @@ internal class StreamPipeline(
     }
 
     /**
-     * 安装主屏流重建闭包（回原车界面后的 requestUI）。闭包内的身份判据与原实现逐点一致：
-     * `currentClient === client`、`currentFormalSession === carLife`、`output.sender === previous`、
-     * `sender === replacement`，任一不符即 `ABORTED`。
+     * 安装主屏流重建闭包。在同一正式 CarLife 会话内，允许资源归还策略接续被车机借屏打断的重建。
      *
      * 原实现 4 处 `synchronized(this)`（`this` = SessionController 单例）改经 [CarLifeStreamPorts.withControllerLock]，
      * 锁身份保持为控制器监视器。
@@ -172,43 +170,59 @@ internal class StreamPipeline(
         displayUuid: String?,
         diagnosticAttempt: String,
         port: ScreenRecoveryPort,
+        rebuildOnResourceReturn: Boolean = false,
     ) {
         recovery =
             recover@{
+                fun canRestore(): Boolean =
+                    port.isScopeActive() &&
+                        !port.isClientCancelled(client) &&
+                        port.isCurrentClient(client) &&
+                        port.phoneOwnsScreen(client)
+
                 fun failure(): ScreenRecoveryResult =
-                    if (!port.isScopeActive() || port.isClientCancelled(client) || !port.isCurrentClient(client)) {
+                    if (!canRestore()) {
                         ScreenRecoveryResult.ABORTED
                     } else {
                         ScreenRecoveryResult.FAILED
                     }
-                val previousSender =
+                var previousSender: VideoSender? = null
+                val detached =
                     ports.withControllerLock {
-                        val previousOutput = output ?: return@withControllerLock null
-                        val previous = sender ?: return@withControllerLock null
-                        if (!port.isScopeActive() ||
-                            !port.isCurrentClient(client) ||
-                            previousOutput.sender !== previous ||
-                            currentFormalSession() !== carLife() ||
-                            !port.phoneOwnsScreen(client)
+                        val session = carLife()
+                        val previous = sender
+                        if (!canRestore() ||
+                            session == null ||
+                            currentFormalSession() !== session ||
+                            output?.sender !== previous ||
+                            (previous == null && !rebuildOnResourceReturn)
                         ) {
-                            return@withControllerLock null
+                            return@withControllerLock false
                         }
                         output = null
                         sender = null
-                        previous
-                    } ?: return@recover ScreenRecoveryResult.ABORTED
-                ports.log("SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频")
-                previousSender.stop()
-                if (!port.isScopeActive() || !port.teardownScreenStream(client)) return@recover failure()
-                if (!port.isScopeActive()) return@recover ScreenRecoveryResult.ABORTED
+                        previousSender = previous
+                        true
+                    }
+                if (!detached) return@recover ScreenRecoveryResult.ABORTED
+                ports.log(
+                    if (rebuildOnResourceReturn) {
+                        "SCREEN: 回原车界面后拿回主屏——仅重建主屏流，保留 CarWith 与音频"
+                    } else {
+                        "SCREEN: 回原车界面后的 requestUI——仅重建主屏流，保留 CarWith 与音频"
+                    },
+                )
+                previousSender?.stop()
+                if (!canRestore() || !port.teardownScreenStream(client)) return@recover failure()
+                if (!canRestore()) return@recover ScreenRecoveryResult.ABORTED
                 val resumed = port.runScreenStream(client, sessionKey, displayUuid) ?: return@recover failure()
-                if (!port.isScopeActive()) return@recover ScreenRecoveryResult.ABORTED
+                if (!canRestore()) return@recover ScreenRecoveryResult.ABORTED
                 val replacement = newScreenSender(plan, resumed)
                 var restored = false
                 try {
                     val published =
                         ports.withControllerLock {
-                            if (!port.isScopeActive() || !port.isCurrentClient(client)) {
+                            if (!canRestore()) {
                                 false
                             } else {
                                 sender = replacement
@@ -217,17 +231,17 @@ internal class StreamPipeline(
                         }
                     if (!published) return@recover ScreenRecoveryResult.ABORTED
                     if (!replacement.openDataPort() ||
-                        !port.isScopeActive() ||
+                        !canRestore() ||
                         !port.record(client) ||
-                        !port.isScopeActive() ||
+                        !canRestore() ||
                         !replacement.start {} ||
-                        !port.isScopeActive()
+                        !canRestore()
                     ) {
                         return@recover failure()
                     }
                     val confirmed =
                         ports.withControllerLock {
-                            if (!port.isScopeActive() || !port.isCurrentClient(client) || sender !== replacement) {
+                            if (!canRestore() || currentFormalSession() !== carLife() || sender !== replacement) {
                                 false
                             } else {
                                 publishOutput(diagnosticAttempt, replacement)

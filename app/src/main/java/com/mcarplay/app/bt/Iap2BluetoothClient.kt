@@ -158,16 +158,23 @@ class Iap2BluetoothClient(
         /**
          * 自动模式候选：SDP 缓存带 …caff 的排前，再接 [sdpGateDecision] 放行的例外（帕萨特这类不声明
          * …caff 的车机）；两者都没有时退化为全部已配对设备，由连接循环里的 SDP 闸门逐台判断。
-         * 只留带 …caff 的设备会让离线的旧接收端挡住眼前的车机（2026-11-01 审查）。
+         * 筛选后优先尝试 ACL 在线设备；同组保持原顺序。
          */
         fun <T> autoCandidates(
             bonded: List<T>,
+            online: (T) -> Boolean,
             gate: (T) -> SdpGate,
         ): List<T> {
             val decisions = bonded.map { it to gate(it) }
             val withService = decisions.filter { it.second == SdpGate.CONNECT }.map { it.first }
-            if (withService.isEmpty()) return bonded
-            return withService + decisions.filter { it.second == SdpGate.CONNECT_DESPITE_SDP }.map { it.first }
+            val candidates =
+                if (withService.isEmpty()) {
+                    bonded
+                } else {
+                    withService +
+                        decisions.filter { it.second == SdpGate.CONNECT_DESPITE_SDP }.map { it.first }
+                }
+            return candidates.sortedByDescending(online)
         }
 
         private fun looksLikeHeadUnit(services: List<UUID>): Boolean =
@@ -181,14 +188,10 @@ class Iap2BluetoothClient(
             }
 
         /**
-         * 目标设备 SDP 声明的服务摘要：已知蓝牙标准服务写简称，其余（含厂商私有 UUID）写全称，
-         * 并单列出站使用的 …caff 服务。即使未声明它，车机仍可能主动连接手机的 …cafe 服务。
-         * `completed=false` 表示 SDP 未在等待窗内返回，此时列表只是系统缓存。
+         * 目标设备 SDP 缓存摘要：已知蓝牙标准服务写简称，其余（含厂商私有 UUID）写全称。
+         * 缓存未发现 …caff 不能证明服务不存在，车机也可能主动连接手机的 …cafe 服务。
          */
-        fun describeServices(
-            uuids: List<UUID>,
-            completed: Boolean,
-        ): String {
+        fun describeServices(uuids: List<UUID>): String {
             val names =
                 uuids.distinct().map { uuid ->
                     val text = uuid.toString().lowercase()
@@ -202,15 +205,9 @@ class Iap2BluetoothClient(
                         else -> text
                     }
                 }
-            val iap2 =
-                when {
-                    ACCESSORY_IAP2_UUID in uuids -> "有"
-                    completed -> "无"
-                    else -> "未确定（SDP 未返回）"
-                }
-            return "声明 ${names.size} 个服务${if (completed) "" else "（SDP 未在 ${SDP_PROBE_TIMEOUT_MILLIS}ms 内返回，仅为系统缓存）"}：" +
-                (names.joinToString(" / ").ifEmpty { "无" }) + "；接收端 iAP2(…caff) 服务=$iap2" +
-                if (completed && ACCESSORY_IAP2_UUID !in uuids) "（仍可由车机回连，不代表不支持无线 CarPlay）" else ""
+            val services = if (names.isEmpty()) "缓存为空" else "缓存 ${names.size} 个服务：${names.joinToString(" / ")}"
+            val iap2 = if (ACCESSORY_IAP2_UUID in uuids) "有" else "缓存未发现，服务是否存在未确定"
+            return "$services；接收端 iAP2(…caff) 服务=$iap2"
         }
     }
 
@@ -242,9 +239,6 @@ class Iap2BluetoothClient(
 
     /** 「无 iAP2 服务→跳过」日志去重（每地址一次即可，重复轮询不刷屏）。 */
     private val skippedNoService = java.util.Collections.synchronizedSet(HashSet<String>())
-
-    /** 指定目标的 SDP 诊断已记录的地址（每轮 start 每台一次）。 */
-    private val targetServicesReported = java.util.Collections.synchronizedSet(HashSet<String>())
 
     /** 拒绝主动连入的车机改为等回连（见 [InboundWaitPolicy]）。 */
     private val inboundWait = InboundWaitPolicy { SystemClock.elapsedRealtime() }
@@ -349,8 +343,7 @@ class Iap2BluetoothClient(
         name: String,
     ) {
         val uuids = cachedUuids(device)
-        if (uuids.contains(ACCESSORY_IAP2_UUID)) iap2ServiceCache[device.address] = true
-        log("BT-C: 目标「$name」SDP 缓存：${describeServices(uuids, completed = true)}")
+        log("BT-C: 目标「$name」SDP ${describeServices(uuids)}")
     }
 
     /** 出站探测窗口（车机 ACL 离线且无会话时停止探测，见 [OutboundProbePolicy]）。 */
@@ -445,7 +438,6 @@ class Iap2BluetoothClient(
         // 每轮启动重置 SDP 结论与跳过日志（新配对/换固件后重新探测）
         iap2ServiceCache.clear()
         skippedNoService.clear()
-        targetServicesReported.clear()
         inboundWait.reset()
         profileOnlineCache.clear()
         probePaused = false
@@ -495,6 +487,8 @@ class Iap2BluetoothClient(
             } ?: return
         var lastFailureLogAt = 0L
         val profileTrials = HashSet<String>()
+        // 每轮独占摘要标记，旧拨号返回时不能消耗新轮的报告机会。
+        val targetServicesReported = HashSet<String>()
         while (running && generation.get() == myGeneration) {
             // 检查候选前取得信号，避免上车事件落在检查后、开始等待前。
             val wake = probeWake.get()
@@ -504,7 +498,7 @@ class Iap2BluetoothClient(
             //    典型场景：连着 Redmi/DiPlay 时不再无脑探测车机 Audi（消除日志噪音与蓝牙churn）；
             //    会话结束（任一端 BT 会话终结 / 手动断开）时自动恢复。
             if (BtSessionGate.outboundPaused || wifiHandoffDetached()) {
-                sleepQuietly(2_000)
+                awaitProbe(wake, 2_000)
                 continue
             }
             val bonded = candidateDevices(adapter)
@@ -543,7 +537,8 @@ class Iap2BluetoothClient(
                 // 没有 iAP2 服务，连不上还白白被断 HFP/A2DP（设备级断开兜底更会波及
                 // 其它在线设备）——确认提供 …caff 才进入「断开+连接」流程。选定目标直接拨号。
                 val selectedTarget = targetProvider() != null
-                val boundedDial = selectedTarget && Iap2Pairings.current(context).canRespond(device.address, device.bondState)
+                // 配对记录包含入站成功，只限制单次拨号时长，不豁免回连等待策略。
+                val boundedDial = Iap2Pairings.current(context).canRespond(device.address, device.bondState)
                 if (!selectedTarget && !awaitIap2Service(device, diagnosticEpoch)) {
                     val deviceClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull()
                     val remembered = Iap2ReceiverMemory.contains(context, device.address)
@@ -610,11 +605,11 @@ class Iap2BluetoothClient(
                     }
                 }
                 // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起（connect() 可阻塞数十秒）
-                val socket = selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch, boundedDial) }
-                try {
-                    if (selectedTarget && running && generation.get() == myGeneration && targetServicesReported.add(device.address)) {
-                        reportTargetServices(device, name)
+                val socket =
+                    selfLinkChange {
+                        tryConnect(device, name, myGeneration, diagnosticEpoch, boundedDial, targetServicesReported)
                     }
+                try {
                     if (socket != null) {
                         if (!running || generation.get() != myGeneration) return
                         if (BtSessionGate.sessionActive || wifiHandoffDetached()) break
@@ -671,7 +666,7 @@ class Iap2BluetoothClient(
             }
             return hit
         }
-        return autoCandidates(bonded) { device ->
+        return autoCandidates(bonded, online = { BtAclTracker.observe(it.address)?.connected == true }) { device ->
             val services = cachedUuids(device)
             sdpGateDecision(
                 hasIap2Service = ACCESSORY_IAP2_UUID in services,
@@ -689,6 +684,7 @@ class Iap2BluetoothClient(
         myGeneration: Long,
         diagnosticEpoch: Long,
         boundedDial: Boolean,
+        targetServicesReported: MutableSet<String>,
     ): BluetoothSocket? {
         val target = targetProvider()
         val trace =
@@ -730,6 +726,7 @@ class Iap2BluetoothClient(
         val pending = AtomicBoolean(true)
         var timeout: ScheduledFuture<*>? = null
         var connected = false
+        var dialed = false
         var failure: Exception? = null
         try {
             if (running && generation.get() == myGeneration && BtSessionGate.beginOutbound(socket, wifiHandoffDetached())) {
@@ -741,7 +738,10 @@ class Iap2BluetoothClient(
                             TimeUnit.MILLISECONDS,
                         )
                 }
-                BtSessionGate.connectOutbound(pending) { socket.connect() }
+                BtSessionGate.connectOutbound(pending) {
+                    dialed = true
+                    socket.connect()
+                }
                 if (running && generation.get() == myGeneration) {
                     diagnostics.connectFinished(trace)
                     inboundWait.connected(device.address)
@@ -757,10 +757,14 @@ class Iap2BluetoothClient(
             pending.set(false)
             if (!connected) closeOutbound(socket)
             timeout?.cancel(false)
+
+            if (dialed && target != null && running && generation.get() == myGeneration && targetServicesReported.add(device.address)) {
+                reportTargetServices(device, name)
+            }
         }
         val cancelled = failure == null || !running || generation.get() != myGeneration
         diagnostics.connectFinished(trace, error = failure, cancelled = cancelled)
-        if (!cancelled && !boundedDial && failure is IOException) {
+        if (!cancelled && failure is IOException) {
             noteConnectFailure(device, name, failure, SystemClock.elapsedRealtime() - connectStartedAt)
         }
         return null
@@ -887,13 +891,6 @@ class Iap2BluetoothClient(
     ) {
         try {
             wake.await(millis, TimeUnit.MILLISECONDS)
-        } catch (_: InterruptedException) {
-        }
-    }
-
-    private fun sleepQuietly(millis: Long) {
-        try {
-            Thread.sleep(millis)
         } catch (_: InterruptedException) {
         }
     }

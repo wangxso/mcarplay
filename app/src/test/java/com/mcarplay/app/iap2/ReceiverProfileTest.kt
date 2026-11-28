@@ -1,5 +1,6 @@
 package com.mcarplay.app.iap2
 
+import com.mcarplay.app.compat.ReceiverFingerprint
 import com.mcarplay.app.net.AirPlayFeatures
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -182,6 +183,31 @@ class ReceiverProfileTest {
         assertTrue(text.contains("era=MODERN"))
         assertTrue(text.contains("wifiGen=LEGACY"))
         assertTrue(text.contains("srcvers=450.14.2"))
+    }
+
+    @Test
+    fun describeUsesTheExactMfiStorageKey() {
+        val signals =
+            ReceiverProfile.Signals(
+                name = "Audi_MMI_3315",
+                model = "AUDI 5163",
+                manufacturer = "DELPHI",
+                firmwareVersion = "1.0",
+                sendIds = setOf(0x4301, 0xea03),
+                receiveIds = setOf(0x5703, 0x4e09, 0x4e0b),
+                externalAccessoryProtocols = setOf("de.audi.mmicconnectdatatransfer"),
+            )
+        val profile = ReceiverProfile.classify(signals)
+        val storageKey =
+            ReceiverFingerprint
+                .handshake("binding", signals)
+                .let { requireNotNull(it) }
+                .let(MfiLengthMemory::receiverKey)
+
+        val text = ReceiverProfile.describe(profile, storageKey)
+
+        assertTrue(text.contains("mfiKey=$storageKey"))
+        assertTrue(text.contains("slug=audi_mmi_3315_audi_5163_delphi"))
     }
 
     // ---- 链路代际判定（linkGenerationOf）----

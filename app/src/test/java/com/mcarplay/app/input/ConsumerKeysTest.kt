@@ -31,6 +31,16 @@ class ConsumerKeysTest {
         )
 
     @Test
+    fun mercedesConsoleBackUsesItsOwnBitInTheMixedUsageReport() {
+        val descriptor = hex("05 01 09 05 a1 01 15 00 25 01 75 01 95 02 0b 24 02 0c 00 0b 01 00 09 00 81 02 75 06 95 01 81 03 c0")
+        assertEquals(0x01, HidNavigation.consoleBackMask(descriptor))
+        assertNull(HidNavigation.consoleBackMask(audiDescriptor))
+        assertNull(HidNavigation.consoleBackMask(descriptor.copyOf(24)))
+        assertNull(HidNavigation.consoleBackMask(hex("05 09 0a 24 02 75 01 95 01 81 02")))
+        assertNull(HidNavigation.consoleBackMask(hex("85 01") + descriptor))
+    }
+
+    @Test
     fun descriptorParsedAsArrayWithNineUsages() {
         val map = ConsumerKeys.parseDescriptor(audiDescriptor)
         assertNotNull("应能解析出 Consumer 映射", map)

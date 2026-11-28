@@ -40,6 +40,19 @@ private fun splitLinkFrames(chunk: ByteArray): List<ByteArray> {
     return out
 }
 
+/** 9B 纯 reset 帧：用于模拟车机在 MFi 挑战等待期拆掉链路。 */
+private fun resetLinkFrame(): ByteArray {
+    val frame = ByteArray(9)
+    frame[0] = 0xFF.toByte()
+    frame[1] = 0x5A.toByte()
+    frame[3] = 9
+    frame[4] = 0x10
+    var sum = 0
+    for (index in 0 until frame.size - 1) sum += frame[index].toInt() and 0xFF
+    frame[8] = (-sum and 0xFF).toByte()
+    return frame
+}
+
 class VirtualIap2LinkTest {
     private class Harness {
         val controlSent = ArrayList<ByteArray>()
@@ -257,11 +270,13 @@ class VirtualIap2LinkTest {
         assertEquals(20, challengeBody.value.size)
         assertEquals(0, authenticated)
 
-        // 0xAA03（签名应答）→ 0xAA05 + 突发（0x4E0C/0xA100/0x4E0A/0x4E0B/0x4E09/0xFFFA/0xFFF0）
+        // 0xAA03（签名应答）→ 0xAA05 + 突发（0x4E0C/0x5702/0xA100/0x4E0A/0x4E0B/0x4E09/0xFFFA/0xFFF0）
         assertEquals(
-            listOf(0xAA05, 0x4E0C, 0xA100, 0x4E0A, 0x4E0B, 0x4E09, 0xFFFA, 0xFFF0),
+            listOf(0xAA05, 0x4E0C, 0x5702, 0xA100, 0x4E0A, 0x4E0B, 0x4E09, 0xFFFA, 0xFFF0),
             h.carSends(0xAA03, Iap2Csm.param(0, ByteArray(96))),
         )
+        // HyperCar 0.1.0.588 的认证后问候里，0x5702 是空体；0x5703 只作链路 ACK。
+        assertEquals(6, h.lastRawFrameOf(0x5702)!!.size)
         assertEquals(1, authenticated)
 
         // 订阅应答：0x5000 → 0x5001 空态；0x4157 → 0x4158；0x4154 → 0x4155；0x4170 → 0x4171
@@ -314,12 +329,18 @@ class VirtualIap2LinkTest {
 
     @Test
     fun silentChallengeRetriesNextLengthWithinSession() {
+        val identity = "LateCar LateModel LateMfr tunnel"
         val h = Harness()
         h.link.setGeneration(ReceiverProfile.LinkGeneration.CLASSIC_MIB3)
         h.link.armMib3()
         h.car.start(0)
         h.exchangeUntilNormal()
-        h.carSends(0x1D01, Iap2Csm.string(0, "SilCar") + Iap2Csm.string(1, "SilMfr"))
+        h.carSends(
+            0x1D01,
+            Iap2Csm.string(0, "LateCar") +
+                Iap2Csm.string(1, "LateModel") +
+                Iap2Csm.string(2, "LateMfr"),
+        )
         h.carSends(0xAA01, Iap2Csm.param(0, ByteArray(642)))
         assertEquals(listOf(20), h.challengeLengths())
         // 20B 静默：推进时钟越过 6s 窗口，喂一个 marker 触发节拍检查（drainLocked）
@@ -337,6 +358,62 @@ class VirtualIap2LinkTest {
                 .map { it.second }
                 .containsAll(listOf(0xAA05, 0x4E0C, 0xFFFA)),
         )
+        assertEquals(
+            "迟到档位成功不得被训练为成功长度",
+            MfiLengthMemory.Entry(silent = setOf(20)),
+            MfiLengthMemory.load(null, identity),
+        )
+    }
+
+    @Test
+    fun tunnelLinkDropHardRejectsThePendingMfiLength() {
+        val identity = "DropCar DropModel DropMfr tunnel"
+        MfiLengthMemory.recordSuccess(null, identity, 20)
+        val h = Harness()
+        h.link.setGeneration(ReceiverProfile.LinkGeneration.CLASSIC_MIB3)
+        h.link.armMib3()
+        h.car.start(0)
+        h.exchangeUntilNormal()
+        h.carSends(
+            0x1D01,
+            Iap2Csm.string(0, "DropCar") +
+                Iap2Csm.string(1, "DropModel") +
+                Iap2Csm.string(2, "DropMfr"),
+        )
+        h.carSends(0xAA01, Iap2Csm.param(0, ByteArray(642)))
+        assertEquals(listOf(20), h.challengeLengths())
+
+        h.link.onCarBytes(resetLinkFrame())
+
+        assertEquals(
+            "断链后原成功档必须退出首选并进入硬拒绝",
+            MfiLengthMemory.Entry(rejected = setOf(20)),
+            MfiLengthMemory.load(null, identity),
+        )
+    }
+
+    @Test
+    fun duplicateMfiResponseAfterCompletionDoesNotOverwriteMemory() {
+        val identity = "RepeatCar RepeatModel RepeatMfr tunnel"
+        val h = Harness()
+        h.link.setGeneration(ReceiverProfile.LinkGeneration.CLASSIC_MIB3)
+        h.link.armMib3()
+        h.car.start(0)
+        h.exchangeUntilNormal()
+        h.carSends(
+            0x1D01,
+            Iap2Csm.string(0, "RepeatCar") +
+                Iap2Csm.string(1, "RepeatModel") +
+                Iap2Csm.string(2, "RepeatMfr"),
+        )
+        h.carSends(0xAA01, Iap2Csm.param(0, ByteArray(642)))
+        h.carSends(0xAA03, Iap2Csm.param(0, ByteArray(96)))
+        assertEquals(MfiLengthMemory.Entry(succeeded = 20), MfiLengthMemory.load(null, identity))
+
+        val duplicateFrames = h.carSends(0xAA03, Iap2Csm.param(0, ByteArray(96)))
+
+        assertEquals(emptyList<Int>(), duplicateFrames)
+        assertEquals(MfiLengthMemory.Entry(succeeded = 20), MfiLengthMemory.load(null, identity))
     }
 
     /** 固定长度：只发一次 32B，静默到窗口结束也不追加挑战，直接 0xAA05（不让车机排队多个认证）。 */
