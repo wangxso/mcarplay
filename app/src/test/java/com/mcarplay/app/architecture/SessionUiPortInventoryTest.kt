@@ -42,9 +42,13 @@ private object SourceUiPortInventory {
             UiWriteSite(JOINER, "waitForWifiEnabled", "ui.phase(t(R.string.sc_waiting_wifi))"),
             UiWriteSite(JOINER, "waitForWifiEnabled", "ui.phase(t(R.string.sc_cancelled))"),
             UiWriteSite(JOINER, "waitForWifiEnabled", "ui.phase(t(R.string.sc_wifi_off))"),
-            UiWriteSite(JOINER, "promptSpecifierFailed", "ui.phase(t(R.string.sc_join_failed_manual))"),
+            UiWriteSite(JOINER, "promptSpecifierFailed", "ui.phase(t(R.string.sc_phone_join_failed_retry))"),
+            UiWriteSite(
+                JOINER,
+                "promptSpecifierFailed",
+                "ui.phase(t(if (phoneMode) R.string.sc_phone_join_failed_retry else R.string.sc_join_failed_manual))",
+            ),
             UiWriteSite(JOINER, "promptSpecifierFailed", "ui.phase(t(R.string.sc_join_failed_retry))"),
-            UiWriteSite(JOINER, "ensurePhoneModeSystemWifiSafe", "ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))"),
             UiWriteSite(JOINER, "manualJoinCarWifi", "ui.phase(t(R.string.sc_bound_current))"),
             UiWriteSite(JOINER, "manualJoinCarWifi", "ui.phase(t(R.string.sc_connect_in_settings, wifi.ssid))"),
             UiWriteSite(JOINER, "manualJoinCarWifi", "ui.phase(t(R.string.sc_join_aborted, wifi.ssid))"),
@@ -90,7 +94,6 @@ private object SourceUiPortInventory {
             UiWriteSite(CONTROLLER, "onCarPlayEndpoint", "ui.hint { t(R.string.sc_record_unconfirmed) }"),
             UiWriteSite(CONTROLLER, "onCarPlayEndpoint", "ui.hint { t(R.string.sc_setup_rejected_hint) }"),
             UiWriteSite(JOINER, "waitForManualWifiThenContinue", "ui.hint { t(R.string.sc_not_joined_hint, wifi.ssid) }"),
-            UiWriteSite(JOINER, "ensurePhoneModeSystemWifiSafe", "ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }"),
         )
 
     val SSID_WRITES =
@@ -325,12 +328,6 @@ class SessionUiPortInventoryTest {
         )
         requireOrder(
             SourceUiPortInventory.JOINER,
-            "ensurePhoneModeSystemWifiSafe",
-            "ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))",
-            "ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }",
-        )
-        requireOrder(
-            SourceUiPortInventory.JOINER,
             "legacyJoinCarWifi",
             "ui.phase(t(R.string.sc_not_staying, wifi.ssid))",
             "ui.hint { t(R.string.sc_not_staying_hint, wifi.ssid) }",
@@ -435,11 +432,11 @@ class SessionUiPortInventoryTest {
         assertEquals(46, controllerProductionPhase + joinerProductionPhase)
 
         assertEquals(6, controllerProductionHint)
-        assertEquals(4, joinerProductionHint)
+        assertEquals(3, joinerProductionHint)
         assertEquals(1, controllerBridgeHint)
         assertEquals(0, joinerParenHint)
-        assertEquals(10, SourceUiPortInventory.HINT_WRITES.size)
-        assertEquals(10, controllerProductionHint + joinerProductionHint)
+        assertEquals(9, SourceUiPortInventory.HINT_WRITES.size)
+        assertEquals(9, controllerProductionHint + joinerProductionHint)
 
         assertEquals(2, controllerSsidCount)
         assertEquals(0, joinerSsidCount)

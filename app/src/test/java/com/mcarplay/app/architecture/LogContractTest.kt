@@ -22,6 +22,7 @@ class LogContractTest {
             "video_eof" to listOf("VIDEO: 车机关闭了屏幕数据口", "VIDEO: CarWith 参数集"),
             "screen_off" to listOf("STREAM_END_SCREEN_OFF"),
             "battery_opt" to listOf("POWER: 未豁免电池优化"),
+            "phone_hotspot_conflict" to listOf("NETWORK: phone-private-join-failed systemOnCar=true"),
             "transcode" to listOf("VIDEO: 转码统计"),
         )
 

@@ -42,7 +42,6 @@ class SessionUiPortSourceContractTest {
             "savedNetworkIds",
             "waitForWifiEnabled",
             "promptSpecifierFailed",
-            "ensurePhoneModeSystemWifiSafe",
             "manualJoinCarWifi",
             "legacyJoinCarWifi",
             "joinAccessoryWifi",
@@ -263,27 +262,9 @@ class SessionUiPortSourceContractTest {
     fun specifierFailurePromptPinsTheDialogContent() {
         val code = code("promptSpecifierFailed")
         requireContains(code, "t(R.string.sc_join_failed_title)", "specifier 失败弹窗标题")
-        requireContains(code, "t(R.string.sc_join_failed_body, wifi.ssid)", "specifier 失败弹窗正文")
+        requireContains(code, "R.string.sc_phone_join_failed_body else R.string.sc_join_failed_body", "按网络偏好选择失败说明")
         requireContains(code, "t(R.string.sc_retry)", "specifier 失败弹窗必须提供重试按钮")
         requireContains(code, "t(R.string.sc_open_wifi_settings)", "specifier 失败弹窗必须提供跳 WLAN 按钮")
-    }
-
-    @Test
-    fun phoneModeBlockedWritesPhaseThenHint() {
-        val code = code("ensurePhoneModeSystemWifiSafe")
-        requireContains(code, "t(R.string.sc_phone_mode_wifi_title)", "PHONE 已知冲突弹窗标题")
-        requireContains(code, "t(R.string.sc_phone_mode_wifi_body, wifi.ssid)", "PHONE 已知冲突弹窗正文")
-        requireContains(code, "t(R.string.sc_phone_mode_wifi_unknown_title)", "PHONE 未知状态确认弹窗标题")
-        requireContains(code, "t(R.string.sc_phone_mode_wifi_unknown_body, wifi.ssid)", "PHONE 未知状态确认弹窗正文")
-        requireContains(code, "t(R.string.sc_phone_mode_wifi_confirm)", "PHONE 未知状态确认按钮")
-        requireContains(code, "ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))", "PHONE 阻断必须写 phaseHint")
-        requireContains(code, "ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }", "PHONE 阻断必须弹惰性 uiHint")
-        requireOrder(
-            code,
-            "ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))",
-            "ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }",
-            "PHONE 阻断必须先写 phaseHint 后写 uiHint",
-        )
     }
 
     @Test

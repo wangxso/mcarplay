@@ -1,5 +1,20 @@
 # CarWith 公开入口调查（2026-10-25）
 
+## 2026-11-28：欧拉 03 手机流量优先断开重连（#143）
+
+- 环境：小米 15 / Android 17 / HyperOS `OS4.0.4.0.XOCCNXM`，CarWith `4.0.23-20261016`、
+  小米 CarLife `8.8.5`，Shizuku 就绪。接收端为此前实车记录中的欧拉 03 原车无线 CarPlay。
+  使用基于 `dev` @ `f4af92b` 的本地测试包 `0.1.7.29`（CarWith，不含 #142）。
+- 手机流量优先：首次连接出画；断开后系统仍保留车机热点。保留该条目直接从手机重连，成功出画，
+  无须忘记热点。两次首帧路由摘要都是 `transport=CELLULAR validated=true preference=PHONE matches=true`。
+- 推流中临时关闭移动数据：系统无默认网络，手机首页提示外网未验证，CarWith 视频帧仍连续发送。
+  恢复数据后 Android 默认网络重新为已验证的蜂窝网络。未专项验证离线地图数据或导航播报。
+- 车机网络优先：出画正常。该车机热点无可用外网，系统实际选了蜂窝；首页正确提示「仍用手机流量」，
+  摘要为 `transport=CELLULAR validated=true preference=CAR matches=false`。
+- 断开车机网络模式后，确认系统仍连着车机热点；恢复手机流量优先并连接。首窗 5 秒无回调，
+  重发应用专属网络请求后正常出画，默认外网仍是已验证的蜂窝。这台设备未触发最终超时，
+  因而失败后的 WLAN 引导只在单元测试验证。未做全面音频与车机触控回归。
+
 ## 2026-11-26–27 Phase 3b（`dev` @ `9ac1b4c`）对照 `main`（`df4c81d`）T2 实车与台架验收
 
 - **测试环境：** 手机 Xiaomi `2509FPN0BC` / Android `17` / HyperOS `V816`；CarWith `4.0.23-20261016`，小米 CarLife `8.8.5 (274)`。对比构建均使用同签名本机 debug 包：`main` @ `df4c81d`（`apkSha256=b3479555…`）与 `dev` @ `9ac1b4c`（`apkSha256=2b57844b…`，含 Phase 2/3a/3b 重构及 `#127` CarWith 尺寸协商）。离线门禁：`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 及 standard 1,859 项 / remote bridge 25 项 / Python 87 项 / Node 20 项单测均全通过。16 份 `dev` 脱敏报告（均保留在仓库外 `~/mcarplay-regression/2026-11-26-*/`）中 `SESSION: SCOPE_MISMATCH` 均为 **0 条**。

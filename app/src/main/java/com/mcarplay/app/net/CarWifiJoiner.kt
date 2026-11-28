@@ -59,15 +59,6 @@ internal enum class CarWifiInternetPreference {
     CAR,
 }
 
-/**
- * 手机流量优先模式下的系统 Wi-Fi 冲突检查决策（避免 `net/` 反向依赖 `settings/`）。
- */
-internal enum class CarWifiPhoneModeDecision {
-    PROCEED,
-    CONFLICT,
-    CONFIRM,
-}
-
 /** 端点网络分派的凭据来源（与 `WifiCredentialSource` 一一映射，net 不反向依赖 iap2）。 */
 internal enum class CarWifiHandoffSource {
     ACCESSORY,
@@ -117,7 +108,7 @@ internal class CarWifiHandoffRequest<N : Any>(
 
 /**
  * 车机热点四条凭据入网路径（静默 shell、应用专属网络 specifier、旧安全类型 legacy、手动 WLAN 指引）
- * 与手机流量优先系统 Wi-Fi 安全检查（Phase 2c-2）。
+ * 与手机流量优先失败引导（Phase 2c-2）。
  *
  * 严格保持原有锁（注入同一 `wifiHandoffGuard.lock`）、后台任务名、超时轮询边界、取消分层与全部日志模板。
  */
@@ -143,15 +134,6 @@ internal class CarWifiJoiner<N : Any, T : Any>(
     private val allowSystemFallback: (CarWifiInternetPreference) -> Boolean = { preference ->
         preference == CarWifiInternetPreference.CAR
     },
-    private val phoneModeDecision: (CarWifiInternetPreference, Boolean, Boolean, Boolean?) -> CarWifiPhoneModeDecision =
-        { preference, activeTarget, activeIdentityUnknown, saved ->
-            when {
-                preference != CarWifiInternetPreference.PHONE -> CarWifiPhoneModeDecision.PROCEED
-                activeTarget || saved == true -> CarWifiPhoneModeDecision.CONFLICT
-                activeIdentityUnknown || saved == null -> CarWifiPhoneModeDecision.CONFIRM
-                else -> CarWifiPhoneModeDecision.PROCEED
-            }
-        },
     private val bindVerifiedAndRegister: (String, N?, () -> Boolean, N?) -> Boolean,
     private val verifiedNetworkFor: (String) -> N?,
     private val reannounce: (String, Boolean, N?) -> Unit,
@@ -181,12 +163,6 @@ internal class CarWifiJoiner<N : Any, T : Any>(
 
     private val forgetPromptHandled: MutableSet<String>
         get() = state.forgetPromptHandled
-
-    private var phoneModeBlockedSsid: String?
-        get() = state.phoneModeBlockedSsid
-        set(value) {
-            state.phoneModeBlockedSsid = value
-        }
 
     private var shellFallbackCleanupSsid: String?
         get() = state.shellFallbackCleanupSsid
@@ -220,8 +196,8 @@ internal class CarWifiJoiner<N : Any, T : Any>(
      *  3. 各环节检查 [connectCancelled]——用户取消后不得继续跑（否则 phaseHint 被覆盖、
      *     ctrl 广播被重新拉起，表现为「取消不了」）。
      *  - **手机流量优先**或静默路径失败时走应用专属网络（`WifiNetworkSpecifier`）：
-     *    热点不写入系统配置、不成为系统默认网络，其它应用继续用手机流量；首次加入会弹系统确认框。
-     * 全失败时回退「系统 WLAN 手动加入」指引（密码可经「去连接」复制）。
+     *    应用不主动保存热点或将其设为系统默认；首次加入会弹系统确认框。
+     * 全失败时提示重试或检查系统 WLAN；车机网络模式可手动加入。
      */
     fun autoJoinCarWifi(
         wifi: Iap2SenderSession.WifiConfiguration,
@@ -261,15 +237,9 @@ internal class CarWifiJoiner<N : Any, T : Any>(
                     return false
                 }
             }
-            // 2) 回退：应用专属网络（不影响 4G/5G、不会保存为系统网络）
+            // 2) 回退：应用专属网络（不主动保存为系统网络）
             if (shellReady && shellWifiDisabled() && !waitForWifiEnabled(isCancelled = cancelled)) return false
             if (cancelled()) return false
-            if (
-                internetNetwork == CarWifiInternetPreference.PHONE &&
-                !ensurePhoneModeSystemWifiSafe(wifi, shellReady, isCancelled = cancelled)
-            ) {
-                return false
-            }
             if (internetNetwork == CarWifiInternetPreference.PHONE && shellReady) {
                 appendLog("NETWORK: 手机流量优先——跳过系统级存储与 connect-network 兜底")
             }
@@ -322,9 +292,6 @@ internal class CarWifiJoiner<N : Any, T : Any>(
     ): CarWifiLink.JoinResult<N> {
         val internetNetwork = preferredInternetNetwork()
         if (!useSystemWifi(internetNetwork, shellReady)) {
-            if (!ensurePhoneModeSystemWifiSafe(wifi, shellReady, isCancelled, awaitLatchFn)) {
-                return CarWifiLink.JoinResult.Unavailable
-            }
             return joinCarWifiSpecifier(
                 wifi,
                 allowExistingSystemWifi = allowExistingSystemWifi(internetNetwork),
@@ -348,27 +315,6 @@ internal class CarWifiJoiner<N : Any, T : Any>(
     }
 
     private fun preferredInternetNetwork(): CarWifiInternetPreference = readPreference()
-
-    /**
-     * Phone mode promises that the car hotspot stays private to this app. A saved or
-     * globally connected matching SSID breaks that promise, so the join must stop
-     * instead of silently continuing over the system-wide route.
-     */
-    private fun phoneModeSystemWifiDecision(
-        wifi: Iap2SenderSession.WifiConfiguration,
-        shellReady: Boolean,
-    ): CarWifiPhoneModeDecision {
-        val network = preferredInternetNetwork()
-        if (network != CarWifiInternetPreference.PHONE) return CarWifiPhoneModeDecision.PROCEED
-        val systemWifi = wifiConnector?.systemActiveWifiState(wifi.ssid)
-        val saved = if (shellReady) savedNetworkIds(wifi.ssid)?.isNotEmpty() else null
-        return phoneModeDecision(
-            network,
-            systemWifi == CarWifiLink.SystemWifiState.TARGET,
-            systemWifi == CarWifiLink.SystemWifiState.UNKNOWN,
-            saved,
-        )
-    }
 
     /**
      * 静默加入车机热点（**两步式，全程 0 弹窗**）。
@@ -829,16 +775,18 @@ internal class CarWifiJoiner<N : Any, T : Any>(
         awaitLatchFn: (CountDownLatch, Long) -> Boolean = awaitLatch,
     ) {
         if (isCancelled()) return
-        if (preferredInternetNetwork() == CarWifiInternetPreference.PHONE && phoneModeBlockedSsid == wifi.ssid) {
-            phoneModeBlockedSsid = null
-            return
-        }
+        val phoneMode = preferredInternetNetwork() == CarWifiInternetPreference.PHONE
+        val systemOnTarget =
+            phoneMode &&
+                (liveWifiSsid() == wifi.ssid || wifiConnector?.systemActiveWifiState(wifi.ssid) == CarWifiLink.SystemWifiState.TARGET)
+        if (isCancelled()) return
+        if (systemOnTarget) appendLog("NETWORK: phone-private-join-failed systemOnCar=true")
         val choice =
             askWifiJoinChoice(
                 CarWifiDialogPrompt(
                     title = t(R.string.sc_join_failed_title),
                     message =
-                        t(R.string.sc_join_failed_body, wifi.ssid),
+                        t(if (phoneMode) R.string.sc_phone_join_failed_body else R.string.sc_join_failed_body, wifi.ssid),
                     positive = t(R.string.sc_retry),
                     negative = t(R.string.sc_open_wifi_settings),
                 ),
@@ -854,84 +802,27 @@ internal class CarWifiJoiner<N : Any, T : Any>(
                         if (preferredInternetNetwork() == CarWifiInternetPreference.CAR) {
                             legacyJoinCarWifi(wifi, shellReady, isCancelled, sleepFn, awaitLatchFn)
                         } else {
-                            appendLog("NETWORK: 手机流量优先——无法使用应用专属网络，转手动 WLAN 指引")
-                            manualJoinCarWifi(wifi, isCancelled, sleepFn, awaitLatchFn)
+                            ui.phase(t(R.string.sc_phone_join_failed_retry))
                         }
                     CarWifiLink.JoinResult.Unavailable -> {
-                        if (preferredInternetNetwork() == CarWifiInternetPreference.PHONE && phoneModeBlockedSsid == wifi.ssid) {
-                            phoneModeBlockedSsid = null
-                            return
-                        }
-                        ui.phase(t(R.string.sc_join_failed_manual))
+                        ui.phase(t(if (phoneMode) R.string.sc_phone_join_failed_retry else R.string.sc_join_failed_manual))
                         appendLog("WIFI: 重试仍未加入 \"${wifi.ssid}\"——请到系统 WLAN 手动连接")
                     }
                 }
             }
 
-            false -> manualJoinCarWifi(wifi, isCancelled, sleepFn, awaitLatchFn)
+            false ->
+                if (phoneMode) {
+                    openWlanSettings()
+                } else {
+                    manualJoinCarWifi(wifi, isCancelled, sleepFn, awaitLatchFn)
+                }
 
             null -> {
                 ui.phase(t(R.string.sc_join_failed_retry))
                 appendLog("WIFI: 弹窗无人应答——自动加入中止")
             }
         }
-    }
-
-    fun ensurePhoneModeSystemWifiSafe(
-        wifi: Iap2SenderSession.WifiConfiguration,
-        shellReady: Boolean,
-        isCancelled: () -> Boolean = { connectCancelled },
-        awaitLatchFn: (CountDownLatch, Long) -> Boolean = awaitLatch,
-    ): Boolean {
-        if (isCancelled()) return false
-        when (phoneModeSystemWifiDecision(wifi, shellReady)) {
-            CarWifiPhoneModeDecision.PROCEED -> {
-                phoneModeBlockedSsid = null
-                return true
-            }
-
-            CarWifiPhoneModeDecision.CONFLICT -> {
-                val choice =
-                    askWifiJoinChoice(
-                        CarWifiDialogPrompt(
-                            title = t(R.string.sc_phone_mode_wifi_title),
-                            message = t(R.string.sc_phone_mode_wifi_body, wifi.ssid),
-                            positive = t(R.string.sc_open_wifi_settings),
-                            negative = t(R.string.sc_cancel),
-                        ),
-                        isCancelled = isCancelled,
-                        awaitLatch = awaitLatchFn,
-                    )
-                if (isCancelled()) return false
-                if (choice == true) openWlanSettings()
-            }
-
-            CarWifiPhoneModeDecision.CONFIRM -> {
-                val choice =
-                    askWifiJoinChoice(
-                        CarWifiDialogPrompt(
-                            title = t(R.string.sc_phone_mode_wifi_unknown_title),
-                            message = t(R.string.sc_phone_mode_wifi_unknown_body, wifi.ssid),
-                            positive = t(R.string.sc_phone_mode_wifi_confirm),
-                            negative = t(R.string.sc_open_wifi_settings),
-                        ),
-                        isCancelled = isCancelled,
-                        awaitLatch = awaitLatchFn,
-                    )
-                if (isCancelled()) return false
-                if (choice == true) {
-                    appendLog("NETWORK: 系统 WLAN 连接或保存状态不可确认；用户确认无冲突，继续手机流量优先")
-                    phoneModeBlockedSsid = null
-                    return true
-                }
-                if (choice == false) openWlanSettings()
-            }
-        }
-        phoneModeBlockedSsid = wifi.ssid
-        ui.phase(t(R.string.sc_phone_mode_wifi_blocked, wifi.ssid))
-        ui.hint { t(R.string.sc_phone_mode_wifi_blocked_hint, wifi.ssid) }
-        appendLog("NETWORK: 手机流量优先需要先清除系统 WLAN 热点 \"${wifi.ssid}\"——本轮已停止")
-        return false
     }
 
     /** 手动兜底：密码进剪贴板 + 跳 WLAN 设置，轮询用户是否连上。 */

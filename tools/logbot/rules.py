@@ -146,6 +146,13 @@ LOG_PATTERNS = [
         exclude=re.compile(r"\bBT-DIAG\b"),
     ),
     LogPattern(
+        "phone_hotspot_conflict",
+        "warn",
+        re.compile(r"NETWORK: phone-private-join-failed systemOnCar=true"),
+        "手机流量优先的应用专属入网失败，同时观察到系统已经连接车机热点。",
+        "在系统 WLAN 检查该热点，可手动忘记后重试，或改用「优先使用车机网络」再连接。",
+    ),
+    LogPattern(
         "video_eof",
         "warn",
         re.compile(r"VIDEO: 车机关闭了屏幕数据口"),
