@@ -16,6 +16,19 @@ class CarLifeHardKeyAndVideoRequestTest {
     }
 
     @Test
+    fun directionsAndConfirmMapToCarLifeSelectorKeys() {
+        assertEquals(6, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_NAVIGATE_NEXT))
+        assertEquals(7, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_NAVIGATE_PREVIOUS))
+        assertEquals(20, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_CENTER))
+        assertEquals(21, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_LEFT))
+        assertEquals(22, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_RIGHT))
+        assertEquals(23, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_UP))
+        assertEquals(24, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_DPAD_DOWN))
+        assertEquals(14, CarLifeProtocol.navigationHardKeyFor(KeyEvent.KEYCODE_BACK))
+        assertArrayEquals(byteArrayOf(0x08, 0x17), CarLifeProtocol.hardKeyPayload(23))
+    }
+
+    @Test
     fun hardKeyIsProtobufFieldOne() {
         assertArrayEquals(byteArrayOf(0x08, 0x10), CarLifeProtocol.hardKeyPayload(16))
         assertArrayEquals(byteArrayOf(0x08, 0x0e), CarLifeProtocol.hardKeyPayload(CarLifeProtocol.HARD_KEY_BACK))
@@ -53,5 +66,28 @@ class CarLifeHardKeyAndVideoRequestTest {
         )
         // 小于上限的面板不受影响。
         assertEquals(1280 to 720, CarLifeProtocol.videoRequestFor(1280, 720, 1920))
+    }
+
+    /**
+     * issue #127：声明 `DISABLE_RESOLUTION_OPTION=1` 时按车机 displays[0] 精确请求，
+     * 不再被 1920 长边上限压缩；宽高按 H.264 偶数对齐。
+     */
+    @Test
+    fun exactVehicleRequestKeepsTheCarScreenGeometryBeyondThe1920Cap() {
+        assertEquals(2560 to 1200, CarLifeProtocol.vehicleResolutionRequestFor(2560, 1200))
+        assertEquals(2560 to 1440, CarLifeProtocol.vehicleResolutionRequestFor(2560, 1440))
+        assertEquals(1920 to 1080, CarLifeProtocol.vehicleResolutionRequestFor(1920, 1080))
+        assertEquals(2560 to 1200, CarLifeProtocol.vehicleResolutionRequestFor(2561, 1201))
+    }
+
+    @Test
+    fun exactVehicleRequestRejectsInvalidOrOversizedGeometry() {
+        listOf(0 to 1200, 2560 to 0, -2560 to 1200, 4097 to 1200, 2560 to 4097).forEach { (width, height) ->
+            assertNull("$width x $height 应被拒绝", CarLifeProtocol.vehicleResolutionRequestFor(width, height))
+        }
+        // 单边在 4K 内，但像素总量超过预算（4096×2160 = 8,847,360 > 8,294,400）。
+        assertNull(CarLifeProtocol.vehicleResolutionRequestFor(4096, 2160))
+        // 预算边界本身可用（3840×2160 = 8,294,400）。
+        assertEquals(3840 to 2160, CarLifeProtocol.vehicleResolutionRequestFor(3840, 2160))
     }
 }

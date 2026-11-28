@@ -1,5 +1,6 @@
 package com.mcarplay.app.iap2
 
+import com.mcarplay.app.compat.ReceiverFingerprint
 import com.mcarplay.app.diagnostics.ConnectionMilestone
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.transport.InMemoryStreamPair
@@ -19,6 +20,55 @@ import java.util.concurrent.atomic.AtomicReference
  * 验证 Phase 1 全序列（识别→MFi 跳过→HID→WiFi 配置→CarPlay 启动→通知）。
  */
 class Iap2SenderSessionTest {
+    @Test
+    fun repeatedMfiLinkDropsTryEachAlternateThenReturnToTheSuccessfulLength() {
+        val binding = "mfi-disconnect-test"
+        val identity =
+            checkNotNull(
+                ReceiverFingerprint.handshake(
+                    binding,
+                    ReceiverProfile.Signals(
+                        name = "MockCarPlay",
+                        model = "MU-1",
+                        manufacturer = "Mock Manufacturer",
+                        firmwareVersion = "test-1.0",
+                    ),
+                ),
+            )
+        MfiLengthMemory.recordSuccess(null, identity, 32)
+
+        assertMfiLinkDrop(binding, 32)
+        assertEquals(MfiLengthMemory.Entry(succeeded = 32, successDrops = 1), MfiLengthMemory.load(null, identity))
+        assertMfiLinkDrop(binding, 32)
+        assertMfiLinkDrop(binding, 20)
+        assertMfiLinkDrop(binding, 16)
+        assertMfiLinkDrop(binding, 32)
+    }
+
+    private fun assertMfiLinkDrop(
+        binding: String,
+        length: Int,
+    ) {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-mfi")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-mfi")
+        val accessory = MockAccessory(accessoryChannel, closeAfterMfiChallenge = true)
+        val worker = Thread(accessory::run, "mock-accessory-mfi").apply { isDaemon = true }
+        worker.start()
+        try {
+            val failure =
+                runCatching {
+                    Iap2SenderSession(phoneChannel, log = {}, receiverBinding = binding).run(timeoutMillis = 5_000L)
+                }.exceptionOrNull()
+            worker.join(1_000)
+            assertTrue(failure?.message.orEmpty().contains("${length}B MFi 挑战等待应答时断开"))
+            assertEquals(listOf(length), accessory.mfiChallengeSizes)
+        } finally {
+            phoneChannel.close()
+            accessoryChannel.close()
+        }
+    }
+
     @Test
     fun fullBringUpAgainstMockAccessory() {
         val pair = InMemoryStreamPair()
@@ -88,6 +138,40 @@ class Iap2SenderSessionTest {
         assertFalse("iAP2 结束尚未经过 AirPlay 配对", milestones.contains(ConnectionMilestone.PAIR_VERIFY))
         assertFalse(milestones.contains(ConnectionMilestone.RECORD))
         assertFalse(milestones.contains(ConnectionMilestone.FIRST_VIDEO))
+    }
+
+    @Test
+    fun completeCredentialsStillReachHandoffWhenBluetoothClosesBeforeStartSession() {
+        val pair = InMemoryStreamPair()
+        val phone = Iap2LinkChannel(pair.sideA, name = "phone-wifi-handoff")
+        val peer = Iap2LinkChannel(pair.sideB, name = "car-wifi-handoff")
+        val wifi = Iap2SenderSession.WifiConfiguration("Synthetic-Car-AP", "synthetic-password", 48, 2)
+        val accessory = MockAccessory(peer, shape = MockAccessory.Shape.CHERY, wifiConfiguration = wifi)
+        val worker =
+            Thread({ runCatching(accessory::run) }, "accessory-wifi-handoff").apply {
+                isDaemon = true
+                start()
+            }
+        try {
+            val endpoint =
+                Iap2SenderSession(
+                    phone,
+                    log = {},
+                    onWifiCredentials = {
+                        assertEquals(wifi, it)
+                        peer.close()
+                        assertTrue(phone.awaitTerminated(2_000))
+                    },
+                ).run(timeoutMillis = 5_000)
+
+            assertEquals(wifi, endpoint.accessoryWifiOrNull())
+            assertEquals(0, endpoint.airPlayPort)
+            assertFalse(phone.isAlive)
+        } finally {
+            phone.close()
+            peer.close()
+            worker.join(2_000)
+        }
     }
 
     /** TCP 7000 是该车日志的观测值，发送端仍须保留 0x4301 声明的地址和动态端口。 */
@@ -1220,6 +1304,7 @@ class Iap2SenderSessionTest {
          * 本轮不再重发。仅与 [Shape.BMW_ID9] 搭配使用。
          */
         private val startSessionDuringHidWait: Boolean = false,
+        private val closeAfterMfiChallenge: Boolean = false,
     ) {
         private val parser = Iap2Csm.Parser()
         private val pending = ArrayDeque<Iap2Csm.Frame>()
@@ -1309,6 +1394,10 @@ class Iap2SenderSessionTest {
                     .parseParams(challenge.body)
                     .single { it.id == 0 }
                     .value.size
+            if (closeAfterMfiChallenge) {
+                channel.close()
+                return
+            }
             send(Iap2MessageIds.MFI_RESPONSE, Iap2Csm.param(0, ByteArray(70) { (it * 7).toByte() }))
             expect(Iap2MessageIds.MFI_AUTHENTICATION_SUCCEEDED)
 

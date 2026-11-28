@@ -1,11 +1,112 @@
 # mcarplay：CarWith 转无线 CarPlay 实施计划
 
-更新：2026-11-10。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
+更新：2026-11-27。目标是在小米手机上取得 CarWith 的真实画面、声音和触控，再由 mcarplay 充当 CarPlay 手机端，连接支持无线 CarPlay 的车机。
 
 首版完成范围为：手机内手动发起连接、CarWith 画面、车机扬声器声音、车机触控回传。自动重连、车机麦克风、通话和语音上行不作为首版承诺。未在真实车机验证前，不声明任何车型“已适配”。
 
 ## 当前基线与结论
 
+- **11 月 28 日奔驰 MB_E（#117，待实车复测）：** 恢复手动预设的 H.264 专用协商、回原车主页后重建主屏和返回键映射，
+  沿用会话单次 RECORD。test.8 报告中 CarWith 回报 1624×1278，实际 SPS 为 1728×1920，车主未见画面。
+  出画、重进和声音仍待同车复测。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+- **11 月 27 日蓝牙拨号与回连等待（待实车复测）：** 入站或出站成功保存的 iAP2 配对记录均可启用 11 秒拨号超时，自动模式与指定目标一致。
+  配对记录不豁免快速失败后的回连等待；等待期间每 60 秒放行一次探测。自动候选在原 SDP 筛选后优先 ACL 在线设备，
+  均未在线时保持原顺序；没有应用内配对完成记录的候选仍使用系统拨号超时。单通道门闸与迟到结果隔离保持不变。
+
+- **11 月 26–27 日会话编排层重构 Phase 3b（`dev` @ `9ac1b4c` / #135，对照 `main` @ `df4c81d` 完成 T2 实车与台架验收）：**
+  本地完整门禁通过：standard JVM 单测 1,859 项、remote bridge 单测 25 项、Python 工具 87 项、Node debug-bridge 20 项，`spotlessCheck`、`lintStandardDebug`、`assembleStandardDebug` 全部 0 失败 / 0 错误 / 0 跳过。
+  使用同签名构建（`main` `b3479555` vs `dev` `2b57844b`）在 Xiaomi `2509FPN0BC`（Android 17 / HyperOS `V816` / CarWith `4.0.23-20261016` / CarLife `8.8.5`）完成跨接收端回归（报告脱敏归档在仓库外）：
+  - **Phase 3 双判门槛通过：** 全部 16 份 `dev` 候选报告（DiPlay S1–S5、WinPlay S1–S5、艾瑞泽 8 S1–S6）全局检索 `SCOPE_MISMATCH` 为 **0 条**，满足进入 Phase 3c 删除旧归属判断的前提；
+  - **艾瑞泽 8（实车 `CHERY / Tiggo / 320.17.7`）：** `main` 与 `dev` 的 S1–S6 全部通过；`S1`/`S2`/`S3` 经 `tools/compare_diagnostics.py` 对比时间线 `tl_fails=0`；S1 手动断开后静置观察车机 ≥ 60 s 未崩溃，S4 仅视频推流中动态开声音保持单次 `RECORD` 未拆链，S6 连续三次切回原车桌面并重进恢复正常（重进等待新 IDR 时偶有几秒黑屏、偶发声音卡顿）；手动断开后仍需在车机端断/重连蓝牙再起；
+  - **WinPlay（`1.2.5 / Roylyl`）与 DiPlay（`vivo Pad Air`）：** `main` S1–S6、`dev` S1–S5 通过（桌面端 S6 复现已知无 `requestUI` / Issue #51 行为）；WinPlay 上还观察到 `dev`（#127）设 `3000x2000` 时 CarWith 回 `VIDEO_INIT_DONE 3000x2000@30` 但实际 SPS 回退为 `1920x720`，设 `1920x1080` 正常；
+  - **边界与未测项：** 30 分钟持续推流与空端点晚到 `0x4301` 本轮未测；MacPlay `1.2.4` 仅跑 `main` S1（通过）及 S2（复现 `[cp-sock]` 拒连触发 8 s 断路器、错开 12 s 反连窗口），后续跳过。详见 `docs/CARWITH-ENTRY-FINDINGS.md`。
+
+- **11 月 25 日会话编排层重构 Phase 3a（基线 `dev` @ `9772b7f`，已合入 2h / #132，零行为变化，无设备或实车验证）：**
+  补全 `session/AttemptScope` 契约（`AttemptCancelled`、`cancelReason`/`cancel`/`checkActive`/`own`/`await`/`sleep`），
+  新增 `session/RealAttemptScope`（单调取消、独立 `supersede`、锁外 LIFO 清理、无中断污染 `sleep`、Per-Waiter 叶锁 `await`）、
+  `session/DualCheckAttemptScope`（权威返回恒等于 `LegacyAttemptScope`，分歧去重记录 `SESSION: SCOPE_MISMATCH`）与
+  `session/AttemptRegistry`（活跃轮次与对象身份 `client -> scope` 绑定）。在 `SessionController` 的 7 处生命周期点接入
+  （`onSenderLinkClosed`、`startConnection`、`disconnect` 两点、`reconnectOnStreamingInvite`、`onCarPlayEndpoint` 构造/空端点摘除与两次 `bindClient`），
+  `retireSession()` 零改动防配对自杀；引擎包生产代码零改动，`ArchitectureRulesTest` 允许清单、`LogContractTest`、
+  `EndAttemptTraceTest`、`SessionUiPort` 45/10/2/1/1 与 `app/lint-baseline.xml` 保持不变。未提前迁移阻塞等待（3b）或删除旧归属判断（3c）；
+  新增 `RealAttemptScopeTest`、`DualCheckAttemptScopeTest`、`AttemptRegistryTest`（B-5/B-7）、
+  `AttemptScopeConcurrencyIntegrationTest`（锁序与中断位压测）与 `Phase3aSourceContractTest`。完整门禁与测试计数见 PR，
+  不以离线测试宣称任何车型兼容性，仍待 T1/T2 实车确认零 `SCOPE_MISMATCH`。
+
+- **11 月 25 日会话编排层重构 Phase 2h（已合入 `dev` @ `9772b7f` / #132，无设备或实车验证）：**
+  完成 Phase 2 收官：抽取 `session/SessionLog`（接管日志缓冲、NUL 清洗、时间戳格式化、40k→20k 截断、增量监听与快照，
+  控制器保留 `logListener`/`logEnabled`/`appendLog`/`logText`/`clearLog` 薄门面，`LogContractTest` 零改动通过）与
+  `service/ScreenPowerController`（接管物理屏启动恢复、推流中断电、偏好切换与 `retireSession`/B-13 `VideoSender.onEnded`/
+  `disconnect` 三路径恢复策略，私有锁串行化与日志文案逐字保持）；消除 3.1 节与 `ArchitectureRulesTest` 允许清单中的
+  4 处引擎→上层反向依赖（`CarLifeDiagnostics` 改为注入 `CarLifeDiagnosticsHost`、`ExternalHuController` 改为注入 `log`、
+  `BtSnoopActivity` 迁入 `ui/` 并同步 Manifest 与 `MainActivity` 入口），允许清单缩减至 3.1 节明确保留的唯一静态广播入口
+  `bt/CarBluetoothReceiver.kt -> com.mcarplay.app.service`。未提前做 Phase 1c 统一 `endAttempt` 或 Phase 3 `AttemptScope`，
+  `SessionUiPort` 45/10/2/1/1 计数不变；新增 `SessionLogTest`、`ScreenPowerControllerTest`（含 B-13 与三路径恢复）及
+  `Phase2hSourceContractTest`。完整门禁与测试计数见 PR，不以离线测试宣称任何车型兼容性。
+
+- **11 月 25 日会话编排层重构 Phase 2g-2（已合入 `dev` @ `ccd474e` / #131，无设备或实车验证）：**
+  在已合入的 2g-1 之上把发送端槽、`newScreenSender` 工厂与主屏流重建闭包并入 `session/StreamPipeline`；组件持有
+  `@Volatile sender`、`ScreenSenderPlan`/`ScreenSenderHooks` 与 `recovery`。恢复闭包原 4 处 `synchronized(this)`
+  （`this` = 控制器单例）改经注入的 `CarLifeStreamPorts.withControllerLock`（生产绑定
+  `synchronized(this@SessionController)`），组件内无裸 `synchronized(this)`。控制器把 `videoSender` 降为组件槽的
+  计算属性门面，`readRecovery()` 只保留三态→`RecoveryOutcome` 映射，`RoundRetirement.clearRecovery()` 委托组件；
+  尺寸/几何/fps、`reportPanelExperiment`、`record()` 失败分支（含 `ui.*`）、S3 `VideoEndedHandling` 与音频仍留在控制器，
+  `SessionUiPort` 45/10/2/1/1 计数不变。既有 `EndAttemptTraceTest`（2 测）与 `ScreenOwnershipSourceContractTest`（1 测）
+  的扫描目标同步改到组件，断言逐字保留、未删除或放宽；新增 J/I/S JVM 测试覆盖恢复三态、原子发布/回滚与旧源迟到隔离。
+  完整门禁与测试计数见 PR，不以离线测试宣称任何车型兼容性。
+
+- **11 月 25 日会话编排层重构 Phase 2g-1（2026-11-25，基线 `dev` @ `a5b96d2`，已合入 2f / #128，无设备或实车验证）：**
+  把正式 CarLife 源的构造与事件路由（`onAccessUnit`/`onEnded`/`onAudioEvent`/`onReturnToCar`）、
+  `CarLifeSessionRegistry` 租约与输出槽（`CarLifeOutput`）抽到 `session/StreamPipeline`；组件持有
+  `registry`/`formal`/`diagnostic`/`output`，租约仍用同一 `synchronized(registry)` 监视器，日志、诊断时间线、当前 client、
+  音频桥与模式重申经中性 `CarLifeStreamPorts` 注入，组件不反向依赖编排层/界面层。控制器保留
+  `currentCarLifeSession`/`isFormalCarLifeActive`/`runningDiagnosticCarLifeSession`/`claimCarLifeSession`/
+  `releaseCarLifeSession`/`stopFormalCarLife` 薄门面及既有 `currentTouchTarget` 读取；`videoSender`、`newScreenSender`、
+  `screenStreamRecovery`、尺寸/几何/fps 计算与音频桥仍留在控制器（2g-2）。B-18 旧源迟到 `onEnded` 只记旧会话结束并
+  释放自身租约，绝不停止新一轮发送端；入流门控、日志文案与时间线模板逐字保持。新增 J/I/S JVM 测试覆盖租约精确性、
+  输出发布/清理、门控重置和旧源隔离；完整门禁与测试计数见 PR，不以离线测试宣称任何车型兼容性。
+
+- **11 月 25 日会话编排层重构 Phase 2f（本 PR，基线 `dev` @ `15397d2`，无设备或实车验证）：**
+  在已合入的 2e（#125）之上把 `ModesAction` 合并队列、`scheduleModesReclaim` 绝对时刻重申、拿回主屏 3 秒检查、
+  回屏策略动作与推流中邀请防抖抽取到 `airplay/ScreenOwnership`；组件与控制器同寿命，客户端身份仍用 `===`，
+  窄端口以中性名定义在 `airplay/` 侧，不反向依赖 `SessionController`/`session/`/`service/`/UI/settings。控制器保留
+  `enqueueModesAssert`/`scheduleModesReclaim` 薄委托、显式 `synchronized(this@SessionController)` 的恢复失败与策略断开
+  出口，以及 `screenStreamRecovery` 闭包和 `reconnectOnStreamingInvite` 本体（视频管线留待 2g）；新连接只在
+  `!alreadyRunning` 分支做两个精确 reset。三布尔 OR、首条 reason/generation/takeBackRetried、让出 200ms、恢复三态、
+  3 秒检查、邀请 15s 防抖与 burst 绝对时刻均逐点保持。新增 J/S/I JVM 测试覆盖队列轨迹、策略动作、邀请防抖与
+  B-11/B-17；完整门禁与测试计数见 PR，不以离线测试宣称任何车型兼容性。
+
+- **11 月 25 日会话编排层重构 Phase 2e（本 PR，基线 `dev` @ `d61096f`，无设备或实车验证）：**
+  回屏策略中性化、不改行为：`PassatReturnStrategy`/`PassatReturnPolicy` 改名为 `ScreenReturnStrategy`/`ScreenReturnPolicy`
+  （枚举顺序、key、默认值与失败判据不变），有效策略收敛到 `ReceiverCompatibility.Policy.screenReturn`（默认 OFF），
+  手动大众资格与惰性偏好读取由 `ReceiverCompatibility.withScreenReturnPreference` 承担；`CompatibilityPrefs` 暴露
+  `screenReturnStrategy`/`setScreenReturnStrategy`，持久化键 `compat_passat_return_strategy` 与 `apply()` 语义不变；
+  `DisplayPanelFragment` 只改类型/API 引用，UI、文案与按钮顺序未动。`SessionController` 保留 3 秒检查、失败计数、
+  断开门禁锁与 `PASSAT:` 日志，在原时点动态解析；队列、重申、恢复与邀请代码未搬移（留待 2f）。
+  新增/扩充 JVM 测试覆盖九预设 × 四策略资格、惰性零读取、`takeBackFailed` 负值、重试/断开矩阵与旧持久化键往返；
+  完整门禁与测试计数见 PR。不以离线测试宣称任何车型兼容性。
+
+- **11 月 24 日会话编排层重构 Phase 2d（`dev` @ `fc9f489` / #122，无设备或实车验证）：**
+  合并实现 2d-A `audio/AudioChannelStarter` 启动、候选、动态补启与归还重试控制流，及 2d-B `AudioChannelState` 三个独立
+  volatile 槽。原控制器同步门面、同一 monitor、单例 CAS gate、gate 外 RECORD、初始 `skipRecordAfterInitialAudioSetup`、
+  真实客户端引用判断及 sender/bridge 清理边界均保留；共享状态发布/读取/清理顺序不变，清理不清 receiverKey。
+  归因继续委托既有 `AudioTeardown`，提示留原 UI 装配；新增 J01–J26、S01–S03 及 I01/I03 JVM 组合回归。
+  JDK 21 完整门禁通过：standard 1,644 项 + remote bridge 25 项，均 0 失败/0 错误/0 跳过；独立评审见本 PR。
+  不以离线测试宣称车型兼容性，设备报告对比仍待验证。
+
+- **11 月 24 日会话编排层重构 Phase 2c（`agy/phase2c*-car-wifi-joiner-20261124`，仅离线验证，无实车验证）：**
+  按 `docs/ARCHITECTURE-REFACTOR.md` 的 2c 拆分完成 `net/CarWifiJoiner`：`CarWifiLink`/`CarWifiState`、四条凭据入网路径和端点交接的
+  八个网络动作/等待已迁入，`SessionController` 保留端点归属、配对/推流续体与收尾。PR #116 的两条 P3（删除无调用点的
+  `bindVerifiedCarWifi`、钉住 `InternetNetworkPolicy` 生产适配器接线）已处理。完整 JVM 门禁通过，standard/remote 均 0 失败/0 错误/0 跳过；
+  未做设备或实车回归，不能据此声称任何车型兼容性。
+
+- **11 月 22 日已配对的蓝牙 iAP2 握手（待实车复测）：** 手机主动拨通和车机回连均进入响应方模式。
+  手机收到探测标记后回标记，收到车机 SYN 后回 SYN+ACK，确认应答后进入识别。
+  应用观察到新配对时，首次成功交付蓝牙会话前沿用原时序。见 [设备证据](docs/CARWITH-ENTRY-FINDINGS.md#2026-11-22headunit-1-首次上车在蓝牙握手前断链手机重新配对后恢复)。
+
+- **11 月 21 日熄火后重连（待实车复测）：** 蓝牙监听跨行程保留时，回车握手使用新尝试，防止拨号失败后的 ACL 断开误停监听。车机先回连时，手机关闭随后拨通的出站连接，由入站链路继续握手。
+  HeadUnit-1 首次上车正常，回车后 Wi-Fi iAP2 身份识别包未获确认；双向蓝牙握手重叠与黑屏的关系仍待验证。见 [设备证据](docs/CARWITH-ENTRY-FINDINGS.md#2026-11-21熄火后回车蓝牙监听误停与-wi-fi-iap2-身份识别超时)。
 - **11 月 21 日 issue #62 实车反馈：** 奔驰 MB_E-P-4 的 `v0.1.7-test.7` 两轮仅视频连接均持续推流，
   其中第二轮车主确认 H.264 画面与触控正常。首轮未显示仍待定位。开启声音断画面的反馈待新版日志验证，
   本地先为手动 MB_E 预设启用单次 RECORD，依据是同车机旧日志在音频加入后的补发 RECORD 附近拆链。

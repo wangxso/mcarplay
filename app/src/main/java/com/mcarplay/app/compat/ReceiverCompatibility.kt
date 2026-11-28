@@ -1,6 +1,8 @@
 package com.mcarplay.app.compat
 
+import com.mcarplay.app.iap2.Iap2LinkEngine
 import com.mcarplay.app.iap2.ReceiverProfile
+import com.mcarplay.app.net.AirPlayFeatures
 import java.security.MessageDigest
 
 /** 协议事实 → 可解释策略。接收端例外只在这里登记；本轮状态通过参数传入，不跨会话缓存。 */
@@ -25,8 +27,9 @@ object ReceiverCompatibility {
         val rules: List<String>,
         /**
          * 会话 SETUP 后像 iPhone 一样发 `disableBluetooth`：车机关闭自身蓝牙，会话只走 Wi-Fi。
-         * 2026-11-02 艾瑞泽 8 车机日志：真 iPhone 每次会话开始约 0.1–0.6 s 都发；不发时车机全程保留
-         * 蓝牙 iAP2，mcarplay 断开后 20 s 原厂 `_PerformPeriodTasks` 崩溃。只登记核对过的车机。
+         * 2026-11-02 艾瑞泽 8 车机日志：真 iPhone 每次会话开始约 0.1–0.6 s 都发，但已排除与断开后
+         * 20 s 原厂 `_PerformPeriodTasks` 崩溃的因果关系；且不主动断开直接熄火下车时，车机休眠前
+         * 未走完 `setBtEnable` 会导致下次上车蓝牙保持关闭。奇瑞默认关闭，仅用户显式打开对应开关时发送。
          */
         val releaseBluetoothAfterSetup: Boolean = false,
         /**
@@ -46,28 +49,19 @@ object ReceiverCompatibility {
          */
         val sendAppleClientHeaders: Boolean = false,
         /**
-         * 按 iPhone 的配对与认证顺序：pair-setup/pair-verify 带 `X-Apple-HKP: 0`（车机对 iPhone 记 `pair-setup HK, type 0`，
-         * 对 mcarplay 的 `2` 记 `type 2`），pair-verify 后、SETUP 前发 `POST /auth-setup`（车机对 iPhone 记 `MFiSAP_Exchange`，
-         * 对 mcarplay 从未出现）。2026-11-02 艾瑞泽 8 车机日志。
+         * 艾瑞泽 8 兼容顺序：pair-setup/pair-verify 优先使用 `X-Apple-HKP: 0`，初始 SETUP 前尝试 MFi-SAP。
+         * 2026-11-02 艾瑞泽 8 车机日志。
          */
         val iphoneAuthSequence: Boolean = false,
+        /** 在加密会话的初始 SETUP 前请求 /auth-setup。 */
+        val authSetupBeforeSession: Boolean = false,
         /**
          * 蓝牙与网络隧道 iAP2 的 MFi 挑战都固定为该长度、只发一次、不学习（null = 按记忆轮换）。艾瑞泽 8 为 MFi Auth 3.0 芯片
          * （32 字节摘要），真 iPhone 每路认证一次 0.45 s 通过；mcarplay 发 20/16B 时车机芯片挂起（I2C `error -110`、认证线程
          * `sem_wait` 无返回），后续挑战排队，会话结束仍有认证挂起；长度记忆还曾把 32B 误记为被拒（2026-11-02 车机日志）。
          */
         val pinnedMfiChallengeLength: Int? = null,
-        /**
-         * 对已取得日志证据的车机栈，同一会话只发送一次 RECORD，避免重复启动遗留定时器或触发拆链。
-         * 自动策略覆盖艾瑞泽 8 和奔驰 MB_D-PP-3/4 的 AirPlay 320.17.7，手动 MB_E 预设也启用（issue #62）。
-         */
-        val singleRecordPerSession: Boolean = false,
-        /** ORA 03 时序验证：初始音频加入时沿用首个 RECORD，手动补启音频仍可激活。 */
-        val skipRecordAfterInitialAudioSetup: Boolean = false,
-        /**
-         * 连接等待超过 30 s 时显示艾瑞泽 8 专属提示（该车机此时会自行重置并重新发起）。只影响界面文案，
-         * 与 [singleRecordPerSession] 同一份 CHERY/Tiggo/320.17.7 身份判定；手动车型不改变它（车还是那台车）。
-         */
+        /** 等待超过 30 s 时显示 CHERY/Tiggo/320.17.7 的车机重置提示。 */
         val arrizo8ConnectWindowHint: Boolean = false,
         /**
          * 推流中收到车机 ctrl 邀请（`GET /ctrl-int/1/connect`）时退役当前会话并按邀请重连。大众 Cinemo 栈车机
@@ -88,22 +82,18 @@ object ReceiverCompatibility {
          */
         val usePanelVideoGeometry: Boolean = false,
         /**
-         * 在 CarWith 的 `0x18052` 功能清单里声明 `DISABLE_RESOLUTION_OPTION=1`，让随后 `0x18007`
-         * 的宽高按车机 `/info` 显示几何生效，而不是被 CarWith 映射回自己的分辨率档位。
+         * 出画协商策略：声明 `DISABLE_RESOLUTION_OPTION=1` 时，CarWith 的 `0x18007` 宽高按车机
+         * `/info displays[0]` 几何生效，而不是被映射回 CarWith 自己的分辨率档位。
          *
-         * WinPlay 台架默认启用（用于验证实际 CarWith 返回尺寸）；奔驰 MB_E-P 手动预设也启用。
-         * 其它接收端保持关闭，避免一次改动同时影响所有车型。
+         * issue #127：车机主屏几何超过默认 1920 长边上限（如 2560x1200）时，压小后的请求
+         * 可能不被采纳，CarWith 回退到自己的档位后车机不出画。因此自动判定对**所有接收端**
+         * 都打开本策略，但**是否真的声明**由流程按本轮 `/info` 几何再门控（见
+         * `CarWithVideoNegotiation`）：只有 displays[0] 给出合法几何时才声明并精确请求，
+         * 几何缺失/非法时回退 1920 长边请求且不声明该 key。手动「通用」预设会显式关闭。
+         *
+         * 本字段只表达策略，不直接决定帧尺寸；不要按车型名在流程代码里分支。
          */
         val preferVehicleResolution: Boolean = false,
-        /**
-         * 先 RECORD 激活会话，再发 `modesChanged` 资源声明，最后建主屏流。
-         *
-         * HyperCar 0.1.0.588 在同车机 `MB_E-P-4 / 480.7.4` 的成功轮（2026-11-18 06:32:13）
-         * 使用该顺序：RECORD 200 → 资源声明 → 屏幕 SETUP 200 → 首帧。mcarplay 的通用顺序是
-         * 资源声明 → 屏幕 SETUP → RECORD；两者都能拿到 200，但 MBUX 可能只在 RECORD 之后
-         * 才把屏幕流接入显示管线。只对手动 `MERCEDES_MB_E` 开启，其它接收端保持已验证顺序。
-         */
-        val recordBeforeScreenSetup: Boolean = false,
         /**
          * SETUP `/setup`、屏幕 SETUP `/`、RECORD `/`、TEARDOWN `/` 共用一个绝对会话 URI
          * （`rtsp://<host>/<sessionId>`），而不是相对路径。
@@ -141,6 +131,44 @@ object ReceiverCompatibility {
          */
         val skipScreenHidArming: Boolean = false,
         val rebuildScreenOnResourceReturn: Boolean = false,
+        /**
+         * 回屏策略（原帕萨特「回主界面再进」实验）。只由用户在主页「车型适配」**手动**选择大众时经
+         * [withScreenReturnPreference] 读取偏好叠加；[VehiclePreset.AUTO] 自动识别到大众也不启用。
+         * 默认 [ScreenReturnStrategy.OFF]（2026-11-05：三种做法都没有实车证据，见 docs/CARWITH-ENTRY-FINDINGS.md）。
+         */
+        val screenReturn: ScreenReturnStrategy = ScreenReturnStrategy.OFF,
+        /** 手动车型实验覆盖的首个 iAP2 SYN 发送窗口；协议默认值为 4。 */
+        val iap2InitialMaxOutgoing: Int = Iap2LinkEngine.DEFAULT_MAX_OUTGOING,
+        /** 手动实验预设要求先等到对端 marker 时，是否暂缓发起本方 SYN。 */
+        val waitForIap2PeerMarker: Boolean = false,
+        /**
+         * 车机在初始 AirPlay SETUP 写出后主动关闭蓝牙，并用已建立的 AirPlay TCP 继续会话。
+         *
+         * 2023 款传祺 GS3 的首轮实车日志中，RFCOMM 比 `SETUP 200` 早约 110 ms 关闭；
+         * 仅等待 [com.mcarplay.app.airplay.AirPlayClient.sessionSetupAccepted] 会错过交接窗口。
+         * 只允许手动 GS3 预设启用，其它接收端继续按原蓝牙断开策略收尾。
+         */
+        val keepNetworkSessionDuringSetupHandoffOnBluetoothLoss: Boolean = false,
+        /**
+         * 用户明确发起连接时，是否允许在初始 `/info` 车机持有主屏且约束不高于 userInitiated 时
+         * 由手机接管主屏。
+         *
+         * 2023 款传祺 GS3 影速偶发白屏（2026-11-26 报告 `36a2e771`）：CarWith 持续出帧、音频始终
+         * 正常，但 `/info modes` 以 500/500 把主屏交给车机，[com.mcarplay.app.video.ScreenOutputGate]
+         * 因主屏不归手机连续跳过 3016 / 2796 帧。车机之后发 `requestUI` 时现有请求路径能正常恢复，
+         * 故此开关只在用户点击连接后的首轮协商补一次同语义的主屏接管，且始终不接管主音频。
+         * 自动重连、CarWith 主动返回车机和 501/1000 约束保持原行为。
+         */
+        val claimScreenOnExplicitStart: Boolean = false,
+        /**
+         * 会话建立后主动请求车机切到 CarPlay UI。
+         *
+         * Bicv MICA3A01 的 `/info` 把主屏的 `initialPermanentEntity` 固定报为车机（resourceID=1），
+         * 且不主动发 `requestUI`。按 VW 的“车机 userInitiated 持有”处理会让屏幕门控一直暂停；
+         * 这份证据链路全通、主屏 SETUP/RECORD 都成功，因此只对该已登记身份先发 requestUI，
+         * 再按用户点图标的同一条资源拿回路径声明主屏归手机。未实车回归前不影响其他车机。
+         */
+        val autoRequestCarplayUi: Boolean = false,
     )
 
     data class PairingFallback(
@@ -153,20 +181,34 @@ object ReceiverCompatibility {
         mediaCapabilities: String = "",
         receiverInstance: String? = null,
         preset: VehiclePreset = VehiclePresetRuntime.current,
-        airPlayFirmware: String? = null,
-    ): Policy = applyPreset(resolveDetected(signals, mediaCapabilities, receiverInstance, airPlayFirmware), preset, signals)
+        cheryDisableBluetooth: Boolean = CompatibilityPrefs.cheryDisableBluetoothRuntime,
+    ): Policy {
+        val policy =
+            applyPreset(
+                resolveDetected(signals, mediaCapabilities, receiverInstance, cheryDisableBluetooth),
+                preset,
+                signals,
+                cheryDisableBluetooth,
+            )
+        val features = signals.features ?: 0L
+        val unifiedMfi = features and AirPlayFeatures.UNIFIED_PAIRING_AND_MFI != 0L
+        val standaloneMfi = !unifiedMfi && features and AirPlayFeatures.MFI_SAP != 0L
+        return policy.copy(
+            authSetupBeforeSession = !unifiedMfi && (standaloneMfi || policy.iphoneAuthSequence),
+            rules = if (standaloneMfi) policy.rules + "protocol.mfi-sap-auth-setup" else policy.rules,
+        )
+    }
 
     /**
      * 用户在主页手动选择车型后，在自动判定结果之上叠加该车型的适配开关（[VehiclePreset.AUTO] 不改动）。
      *
-     * [signals] 只用于**冲突守卫**：手动预设是为「自动判定认不出」准备的，不能把例外套到另一台
-     * 已知厂牌的车机上。例如选了奔驰 MB_D-PP 预设但车机自报 `CHERY`，则保持原策略并只记录规则，
-     * 不启用单次 RECORD。
+     * [signals] 用于奔驰尺寸预设的厂商匹配。
      */
     fun applyPreset(
         policy: Policy,
         preset: VehiclePreset,
         signals: ReceiverProfile.Signals,
+        cheryDisableBluetooth: Boolean = CompatibilityPrefs.cheryDisableBluetoothRuntime,
     ): Policy =
         when (preset) {
             VehiclePreset.AUTO -> policy
@@ -182,8 +224,6 @@ object ReceiverCompatibility {
                     sendAppleClientHeaders = false,
                     iphoneAuthSequence = false,
                     pinnedMfiChallengeLength = null,
-                    singleRecordPerSession = false,
-                    skipRecordAfterInitialAudioSetup = false,
                     reconnectOnStreamingInvite = false,
                     usePanelVideoGeometry = false,
                     preferVehicleResolution = false,
@@ -191,17 +231,29 @@ object ReceiverCompatibility {
                     repeatScreenModesDeclaration = false,
                     skipScreenHidArming = false,
                     rebuildScreenOnResourceReturn = false,
+                    iap2InitialMaxOutgoing = Iap2LinkEngine.DEFAULT_MAX_OUTGOING,
+                    waitForIap2PeerMarker = false,
+                    keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = false,
+                    claimScreenOnExplicitStart = false,
+                    autoRequestCarplayUi = false,
                     rules = policy.rules + "manual.generic",
                 )
             VehiclePreset.CHERY ->
                 policy.copy(
-                    releaseBluetoothAfterSetup = true,
+                    releaseBluetoothAfterSetup = cheryDisableBluetooth,
                     reportWifiMacInSetup = true,
                     skipIapTunnel = true,
                     sendAppleClientHeaders = true,
                     iphoneAuthSequence = true,
                     pinnedMfiChallengeLength = 32,
-                    rules = policy.rules + "manual.chery",
+                    rules =
+                        policy.rules +
+                            buildList {
+                                if (cheryDisableBluetooth && "chery.disable-bluetooth" !in policy.rules) {
+                                    add("chery.disable-bluetooth")
+                                }
+                                add("manual.chery")
+                            },
                 )
             VehiclePreset.VOLKSWAGEN ->
                 policy.copy(reconnectOnStreamingInvite = true, rules = policy.rules + "manual.volkswagen")
@@ -221,21 +273,21 @@ object ReceiverCompatibility {
                     linkGeneration = ReceiverProfile.LinkGeneration.CLASSIC_MIB3,
                     rules = policy.rules + "manual.classic-mib3",
                 )
-            // 奔驰 MB_D-PP（issue #55）：只登记单次 RECORD；不附带 Chery 的蓝牙/MFi 例外。
-            // 身份为空 = 自动判定拿不到型号/厂商，正是手动预设的用途；已知是别家车机则拒绝套用。
-            VehiclePreset.MERCEDES_MB_DPP ->
-                if (manualMercedesAllowed(signals)) {
-                    policy.copy(
-                        singleRecordPerSession = true,
-                        rules = policy.rules + "manual.mercedes-mb-dpp",
-                    )
-                } else {
-                    policy.copy(rules = policy.rules + "manual.mercedes-mb-dpp-blocked")
-                }
-            // 奔驰 MB_E-P / 2025 GLC（issue #62）：CarWith 尺寸协商已完成；当前实车日志显示 20B
-            // 隧道挑战被静默 6s，32B 才在约 0.44s 内应答。HyperCar 对同一车机直接发 32B，
-            // RECORD 后约 0.5s 完成认证并随后收到 StartHID。固定 32B，避免错过 MBUX 激活窗口。
-            // 仍保持 displays[0] 的 1624x1278 与 DISABLE_RESOLUTION_OPTION=1。
+            // 2023 款传祺 GS3 影速：先等车机 marker，再用 0x7F 窗口发起 iAP2。
+            VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW ->
+                policy.copy(
+                    iap2InitialMaxOutgoing = Iap2LinkEngine.MAX_OUTGOING_LIMIT,
+                    waitForIap2PeerMarker = true,
+                    keepNetworkSessionDuringSetupHandoffOnBluetoothLoss = true,
+                    claimScreenOnExplicitStart = true,
+                    rules =
+                        policy.rules +
+                            listOf(
+                                "manual.trumpchi-gs3.iap2-marker-first",
+                                "manual.trumpchi-gs3.explicit-start-screen-claim",
+                            ),
+                )
+            // 奔驰 MB_E-P / 2025 GLC（issue #62）：按同车机成功记录约束视频能力、资源声明和隧道时序。
             // 已知是别家车机时拒绝套用，避免把实验开关带到其它接收端上。
             VehiclePreset.MERCEDES_MB_E ->
                 if (manualMercedesAllowed(signals)) {
@@ -243,8 +295,6 @@ object ReceiverCompatibility {
                         usePanelVideoGeometry = false,
                         preferVehicleResolution = true,
                         pinnedMfiChallengeLength = 32,
-                        recordBeforeScreenSetup = true,
-                        singleRecordPerSession = true,
                         absoluteSessionUri = true,
                         offerMainBufferedAudio = false,
                         offerHevc = false,
@@ -255,8 +305,6 @@ object ReceiverCompatibility {
                         rules =
                             policy.rules + "manual.mercedes-mb-e.vehicle-resolution" +
                                 "manual.mercedes-mb-e.mfi-32" +
-                                "manual.mercedes-mb-e.record-first" +
-                                "manual.mercedes-mb-e.single-record" +
                                 "manual.mercedes-mb-e.absolute-session-uri" +
                                 "manual.mercedes-mb-e.no-iap-tunnel" +
                                 "manual.mercedes-mb-e.no-main-buffered" +
@@ -269,6 +317,28 @@ object ReceiverCompatibility {
                     policy.copy(rules = policy.rules + "manual.mercedes-mb-e-blocked")
                 }
         }
+
+    /**
+     * 把用户回屏偏好叠加到 [policy] 的 [Policy.screenReturn]：只有主页「车型适配」**手动**选择
+     * [VehiclePreset.VOLKSWAGEN] 时才调用 [readPreference]，其它选择（含 [VehiclePreset.AUTO]，
+     * 即使自动识别到 `VWxxxx`）一律 [ScreenReturnStrategy.OFF]，且不触碰偏好读取。
+     *
+     * 资格只取自 [preset] 这一次读取，不从 [policy] 的 family、rules、邀请重连或制造商推导。
+     * [readPreference] 在调用本函数时求值，调用方负责在原动态读取时点调用，不能提前缓存。
+     */
+    fun withScreenReturnPreference(
+        policy: Policy,
+        preset: VehiclePreset,
+        readPreference: () -> ScreenReturnStrategy,
+    ): Policy =
+        policy.copy(
+            screenReturn =
+                if (preset == VehiclePreset.VOLKSWAGEN) {
+                    readPreference()
+                } else {
+                    ScreenReturnStrategy.OFF
+                },
+        )
 
     /** 手动奔驰预设的冲突守卫：厂商未知时放行，已知时必须自报 Mercedes-Benz。 */
     private fun manualMercedesAllowed(signals: ReceiverProfile.Signals): Boolean {
@@ -298,13 +368,46 @@ object ReceiverCompatibility {
         model: String?,
         firmware: String?,
         sourceVersion: String?,
-    ): Boolean = normalize(model) == "ora es11" && normalize(firmware) == "n220346.2" && sourceVersion == "365.10.2"
+    ): Boolean = normalize(model) == "ora es11" && normalize(firmware) == "n220346.2" && normalize(sourceVersion) == "365.10.2"
+
+    internal enum class ReceiverIdentity { EXPECTED, GENERIC, OTHER }
+
+    /** ORA 03, November 2026: one known firmware can advertise a generic identity after a failed handoff. */
+    internal fun classifyReceiverIdentity(
+        manufacturer: String?,
+        model: String?,
+        firmware: String?,
+        sourceVersion: String?,
+    ): ReceiverIdentity =
+        when {
+            normalize(manufacturer) == "gwm" && isOra03Receiver(model, firmware, sourceVersion) -> ReceiverIdentity.EXPECTED
+            normalize(manufacturer) == "oem" &&
+                normalize(model) == "oem model" &&
+                normalize(firmware) == "0.0.1" &&
+                normalize(sourceVersion) == "365.10.2" -> ReceiverIdentity.GENERIC
+            else -> ReceiverIdentity.OTHER
+        }
+
+    internal data class ReceiverIdentityDecision(
+        val showWarning: Boolean,
+        val rememberExpected: Boolean,
+    )
+
+    /** A missing or different identity clears the current warning, not the remembered confirmation. */
+    internal fun receiverIdentityDecision(
+        known: Boolean,
+        identity: ReceiverIdentity?,
+    ): ReceiverIdentityDecision =
+        ReceiverIdentityDecision(
+            showWarning = known && identity == ReceiverIdentity.GENERIC,
+            rememberExpected = !known && identity == ReceiverIdentity.EXPECTED,
+        )
 
     private fun resolveDetected(
         signals: ReceiverProfile.Signals,
         mediaCapabilities: String,
         receiverInstance: String?,
-        airPlayFirmware: String?,
+        cheryDisableBluetooth: Boolean,
     ): Policy {
         val profile = ReceiverProfile.classify(signals)
         val generation = ReceiverProfile.linkGenerationOf(signals)
@@ -334,23 +437,17 @@ object ReceiverCompatibility {
         // DiPlay v0.2.21 自报 firmware=0.1.0（并非应用版本）。同时核对 EA 与名称，
         // 避免把 CARLINKIT 认证证书或单个显示名当成 DiPlay 软件身份。
         val diPlayWire010 = diPlay && normalize(signals.firmwareVersion) == "0.1.0"
-        // 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 会话期间车机蓝牙关闭（2026-11-02 车机日志）
-        val cheryReleasesBluetooth = normalize(signals.manufacturer) == "chery"
-        // 只登记已取得原厂库和崩溃证据的协议身份；srcvers 是 AirPlay 栈版本，不等于整车固件。
-        val cherySingleRecord =
-            cheryReleasesBluetooth && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
-        // 奔驰 MB_D-PP-3/4（issue #55 车主报告：iAP2 自报 Mercedes-Benz / MB_D-PP-3，/info 为 MB_D-PP-4）：
-        // 音频 SETUP 后补发 RECORD，16–559 ms 内屏幕口 EOF/reset；同一报告里不补发 RECORD 的视频会话正常。
-        // 只登记报告实际出现的型号与 AirPlay 栈版本，不把其他 320.17.7 接收端一并纳入。
-        val mercedesSingleRecord =
-            normalize(signals.manufacturer) == "mercedes-benz" &&
-                normalize(signals.model) in MERCEDES_D_PP_MODELS &&
-                normalize(signals.srcvers) == "320.17.7"
-        // ORA 03 重连时音频 SETUP 后立即补发 RECORD，约 6 s 后车机拆链。
-        // 同一车机较晚手动开启音频时补发 RECORD 有成功记录，故只调整初始连接。
-        val oraSkipInitialAudioRecord =
-            normalize(signals.manufacturer) == "gwm" &&
-                isOra03Receiver(signals.model, airPlayFirmware, signals.srcvers)
+        // 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 会话期间会发 disableBluetooth 关闭车机蓝牙，
+        // 但直接熄火下车时车机可能来不及 setBtEnable，导致下次上车蓝牙保持关闭；默认不发，仅开关打开时启用。
+        val chery = normalize(signals.manufacturer) == "chery"
+        val cheryReleasesBluetooth = chery && cheryDisableBluetooth
+        val arrizo8ConnectWindowHint =
+            chery && normalize(signals.model) == "tiggo" && normalize(signals.srcvers) == "320.17.7"
+        val bicvGseEv3 =
+            normalize(signals.manufacturer) == "bicv" &&
+                normalize(signals.model) == "gse,ev3,suv" &&
+                normalize(signals.srcvers) == "475.8.3" &&
+                normalize(signals.firmwareVersion) == "mica3a01"
         // 大众车机型号自报 VWxxxx（ID7 VW4131、帕萨特 2025 VW4211），厂商字段并不统一（帕萨特报 Toppower）
         val vwStreamingInvite = VW_MODEL.matches(normalize(signals.model))
         val rules =
@@ -362,16 +459,14 @@ object ReceiverCompatibility {
                 if (winPlay && !winPlayHandoff) add("winplay.unverified-firmware")
                 if (diPlay && !diPlayWire010) add("diplay.unverified-firmware")
                 if (cheryReleasesBluetooth) add("chery.disable-bluetooth")
-                if (cheryReleasesBluetooth) add("chery.real-wifi-mac")
-                if (cheryReleasesBluetooth) add("chery.no-iap-tunnel")
-                if (cheryReleasesBluetooth) add("chery.apple-client-headers")
-                if (cheryReleasesBluetooth) add("chery.iphone-auth-sequence")
-                if (cheryReleasesBluetooth) add("chery.mfi-32-only")
-                if (cherySingleRecord) add("chery.tiggo.320.17.7.single-record")
-                if (mercedesSingleRecord) add("mercedes.mb_d-pp.320.17.7.single-record")
-                if (oraSkipInitialAudioRecord) add("ora.n220346.2.no-initial-audio-record")
+                if (chery) add("chery.real-wifi-mac")
+                if (chery) add("chery.no-iap-tunnel")
+                if (chery) add("chery.apple-client-headers")
+                if (chery) add("chery.iphone-auth-sequence")
+                if (chery) add("chery.mfi-32-only")
                 if (vwStreamingInvite) add("vw.streaming-invite-reconnect")
                 if (winPlay) add("winplay.vehicle-resolution")
+                if (bicvGseEv3) add("bicv.gse-ev3.475.8.3.auto-request-ui")
             }
         return Policy(
             family = family,
@@ -383,16 +478,18 @@ object ReceiverCompatibility {
             memoryKey = memoryKey(signals, mediaCapabilities, receiverInstance),
             rules = rules,
             releaseBluetoothAfterSetup = cheryReleasesBluetooth,
-            reportWifiMacInSetup = cheryReleasesBluetooth,
-            skipIapTunnel = cheryReleasesBluetooth,
-            sendAppleClientHeaders = cheryReleasesBluetooth,
-            iphoneAuthSequence = cheryReleasesBluetooth,
-            pinnedMfiChallengeLength = if (cheryReleasesBluetooth) 32 else null,
-            singleRecordPerSession = cherySingleRecord || mercedesSingleRecord,
-            skipRecordAfterInitialAudioSetup = oraSkipInitialAudioRecord,
-            arrizo8ConnectWindowHint = cherySingleRecord,
+            reportWifiMacInSetup = chery,
+            skipIapTunnel = chery,
+            sendAppleClientHeaders = chery,
+            iphoneAuthSequence = chery,
+            pinnedMfiChallengeLength = if (chery) 32 else null,
+            arrizo8ConnectWindowHint = arrizo8ConnectWindowHint,
             reconnectOnStreamingInvite = vwStreamingInvite,
-            preferVehicleResolution = winPlay,
+            // issue #127：出画协商不再限定 WinPlay/奔驰例外。任何接收端都可能出现主屏几何
+            // 超出默认 1920 长边上限（2560x1200 等），统一打开策略；实际是否声明由流程按
+            // 本轮 /info displays[0] 的合法几何门控（CarWithVideoNegotiation）。
+            preferVehicleResolution = true,
+            autoRequestCarplayUi = bicvGseEv3,
         )
     }
 
@@ -402,8 +499,14 @@ object ReceiverCompatibility {
         networkHandoffReady: Boolean,
         /** 本会话已请求车机关蓝牙（disableBluetooth）：随后的蓝牙断开是预期结果，不收会话。 */
         bluetoothReleased: Boolean = false,
+        /** GS3 初始 SETUP 已写出但应答尚未返回时，车机可能先关闭蓝牙。 */
+        setupHandoffStarted: Boolean = false,
     ): BluetoothLossAction =
-        if (bluetoothReleased || videoRunning || (policy.bluetoothRole == BluetoothRole.NETWORK_HANDOFF && networkHandoffReady)) {
+        if (bluetoothReleased ||
+            videoRunning ||
+            (policy.bluetoothRole == BluetoothRole.NETWORK_HANDOFF && networkHandoffReady) ||
+            (policy.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss && setupHandoffStarted)
+        ) {
             BluetoothLossAction.KEEP_NETWORK_SESSION
         } else {
             BluetoothLossAction.END_SESSION
@@ -467,9 +570,6 @@ object ReceiverCompatibility {
     private val WINPLAY_HANDOFF_FIRMWARE = setOf("1.2.4", "1.2.5")
 
     private val VW_MODEL = Regex("vw\\d{4}")
-
-    /** issue #55 报告中同一台奔驰的 iAP2（MB_D-PP-3）与 `/info`（MB_D-PP-4）自报型号。 */
-    private val MERCEDES_D_PP_MODELS = setOf("mb_d-pp-3", "mb_d-pp-4")
 
     private fun normalize(value: String?): String = value.orEmpty().trim().lowercase(java.util.Locale.ROOT)
 }

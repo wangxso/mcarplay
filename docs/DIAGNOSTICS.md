@@ -270,7 +270,8 @@ The offline tool summarizes the last five retained attempts. `python3 tools/comp
 compares two reports of the same scenario (timeline order and normalised log lines per tag) and exits non-zero on a difference;
 see `docs/ARCHITECTURE-REFACTOR.md` section 6. The QQ bot in
 [`tools/logbot/`](../tools/logbot/README.md) builds a user-facing diagnosis on top of it;
-update its `rules.py` when adding a `DiagnosticCode`. Correlate `process`,
+update its `rules.py` when adding a `DiagnosticCode`. Its network-timeout rule excludes
+`BT-DIAG` lines so RFCOMM dial timeouts do not produce hotspot advice. Correlate `process`,
 `attempt`, `stage`, `elapsedMs`, `code` and counters with logs and user observations.
 `track` separates CarPlay attempts (`carplay`) from CarWith self-tests (`self_test`);
 the two never supersede each other. Showing a permission dialog is not recorded;
@@ -371,8 +372,10 @@ does not prove that attempt created the failing thread. Inspect the stack and ti
 “收到源数据”“已发送”“接收端显示/有声”是不同证据层级；分享前仍需检查自由文本中的隐私。
 
 
-目标蓝牙 SDP 摘要中的“接收端 iAP2(…caff) 服务”仅表示该出站 RFCOMM UUID 是否存在，
-不代表无线 CarPlay 的完整能力判定。未声明它的车机仍可能主动回连手机 `…cafe` 服务；
+每个拨号循环轮次内，每台目标设备在实际发起 RFCOMM 拨号后记录一次 SDP 缓存摘要，拨号失败或超时也会记录；门闸拒绝而未拨号时不记录。
+摘要标记由该轮次工作线程独占，旧轮次迟到返回不会占用新轮次标记。运行中的 `start()` 只唤醒原循环，不重置摘要标记。
+摘要中的“接收端 iAP2(…caff) 服务=有”仅表示系统缓存中包含该 UUID；缓存为空或未发现它时，服务是否存在仍未确定。
+缓存摘要不代表无线 CarPlay 的完整能力判定。未声明它的车机仍可能主动回连手机 `…cafe` 服务；
 例如 2026-10-31 奇瑞实测。手机正常连接期间同时公告 CarPlay 能力 UUID，停止监听时一并撤销。
 
 连接/源端排查包使用上面的构建命令，版本为 `0.1.3-rd-diag3-debug`，沿用 remote 调试桥。

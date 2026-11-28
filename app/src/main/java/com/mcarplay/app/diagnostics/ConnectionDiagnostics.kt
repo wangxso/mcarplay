@@ -8,7 +8,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-object ConnectionDiagnostics {
+internal object ConnectionDiagnostics {
     val processId: String = UUID.randomUUID().toString().take(8)
     private var journal: RotatingTextFile? = null
     private var context: Context? = null

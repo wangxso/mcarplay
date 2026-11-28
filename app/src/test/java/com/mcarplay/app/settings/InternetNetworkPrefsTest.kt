@@ -7,10 +7,11 @@ import org.junit.Test
 
 class InternetNetworkPrefsTest {
     @Test
-    fun missingOrUnknownValueUsesExistingCarBehaviour() {
-        assertEquals(InternetNetwork.CAR, InternetNetworkPrefs.parse(null))
-        assertEquals(InternetNetwork.CAR, InternetNetworkPrefs.parse(""))
-        assertEquals(InternetNetwork.CAR, InternetNetworkPrefs.parse("unexpected"))
+    fun missingOrUnknownValueDefaultsToPhone() {
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.DEFAULT)
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.parse(null))
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.parse(""))
+        assertEquals(InternetNetwork.PHONE, InternetNetworkPrefs.parse("unexpected"))
     }
 
     @Test
@@ -32,5 +33,63 @@ class InternetNetworkPrefsTest {
         assertFalse(InternetNetworkPolicy.allowSystemFallback(InternetNetwork.PHONE))
         assertTrue(InternetNetworkPolicy.allowExistingSystemWifi(InternetNetwork.CAR))
         assertTrue(InternetNetworkPolicy.allowSystemFallback(InternetNetwork.CAR))
+    }
+
+    @Test
+    fun phoneModeStopsForKnownOrSavedSystemWifiAndConfirmsUnknownIdentity() {
+        assertEquals(
+            PhoneModeSystemWifiDecision.CONFLICT,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = true,
+                activeIdentityUnknown = false,
+                saved = false,
+            ),
+        )
+        assertEquals(
+            PhoneModeSystemWifiDecision.CONFLICT,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = false,
+                activeIdentityUnknown = false,
+                saved = true,
+            ),
+        )
+        assertEquals(
+            PhoneModeSystemWifiDecision.CONFIRM,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = false,
+                activeIdentityUnknown = true,
+                saved = false,
+            ),
+        )
+        assertEquals(
+            PhoneModeSystemWifiDecision.CONFIRM,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = false,
+                activeIdentityUnknown = false,
+                saved = null,
+            ),
+        )
+        assertEquals(
+            PhoneModeSystemWifiDecision.PROCEED,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.PHONE,
+                activeTarget = false,
+                activeIdentityUnknown = false,
+                saved = false,
+            ),
+        )
+        assertEquals(
+            PhoneModeSystemWifiDecision.PROCEED,
+            InternetNetworkPolicy.phoneModeSystemWifiDecision(
+                InternetNetwork.CAR,
+                activeTarget = true,
+                activeIdentityUnknown = true,
+                saved = true,
+            ),
+        )
     }
 }

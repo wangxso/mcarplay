@@ -15,6 +15,7 @@ internal val AUTO_RECONNECT_FAILURE_CODES =
         DiagnosticCode.VIDEO_CLOSED,
         DiagnosticCode.WIFI_LOST,
         DiagnosticCode.WIFI_JOIN_FAILED,
+        DiagnosticCode.AIRPLAY_CONNECT_FAILED,
         DiagnosticCode.PAIRING_FAILED,
         DiagnosticCode.SETUP_FAILED,
         DiagnosticCode.CONNECTION_INCOMPLETE,

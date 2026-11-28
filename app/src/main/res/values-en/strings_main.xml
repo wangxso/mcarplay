@@ -93,6 +93,6 @@
     <string name="vehicle_preset_winplay">WinPlay receiver</string>
     <string name="vehicle_preset_diplay">DiPlay receiver (BYD etc.)</string>
     <string name="vehicle_preset_classic_mib3">Audi classic MIB3</string>
-    <string name="vehicle_preset_mercedes_mb_dpp">Mercedes-Benz MB_D-PP (AirPlay 320.17.7)</string>
+    <string name="vehicle_preset_trumpchi_gs3_iap2_window">GAC Trumpchi GS3 (Bluetooth probe before sync, experimental)</string>
     <string name="vehicle_preset_mercedes_mb_e">Mercedes-Benz MB_E-P / GLC (experimental: vehicle display size, unverified)</string>
 </resources>

@@ -48,6 +48,13 @@
     <string name="sc_saved_body">\"%1$s\" is saved in the system. Keeping it makes the phone join it automatically when in range, and if it has no internet the phone may lose mobile data.\n\nForget only stops automatic joining and does not affect this session; if the car hotspot provides internet, choose Keep.</string>
     <string name="sc_saved_forget">Forget</string>
     <string name="sc_saved_keep">Keep</string>
+    <string name="sc_phone_mode_wifi_title">Phone data priority needs a system-free hotspot</string>
+    <string name="sc_phone_mode_wifi_body">\"%1$s\" is saved or connected system-wide. Continuing could leave other apps on this hotspot without internet.\n\nForget the hotspot in Wi-Fi settings, or switch to \"Prefer car network\", then reconnect.</string>
+    <string name="sc_phone_mode_wifi_unknown_title">Cannot confirm system Wi-Fi state</string>
+    <string name="sc_phone_mode_wifi_unknown_body">This app cannot fully read the system Wi-Fi connection or saved-network state. Confirm that the system is not connected to or saving car hotspot \"%1$s\"; if unsure, open Wi-Fi settings.</string>
+    <string name="sc_phone_mode_wifi_confirm">No conflict; continue</string>
+    <string name="sc_phone_mode_wifi_blocked">Phone data priority paused: make sure system Wi-Fi is not connected to or saving hotspot %1$s</string>
+    <string name="sc_phone_mode_wifi_blocked_hint">Make sure system Wi-Fi is not connected to or saving \"%1$s\", or switch to Prefer car network</string>
     <string name="sc_wifi_off_title">Wi-Fi is off</string>
     <string name="sc_wifi_off_body">Joining the car hotspot needs Wi-Fi on. Open Wi-Fi settings?</string>
     <string name="sc_open_wifi_settings">Open Wi-Fi settings</string>

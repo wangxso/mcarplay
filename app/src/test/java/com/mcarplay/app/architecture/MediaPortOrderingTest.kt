@@ -13,7 +13,7 @@ class MediaPortOrderingTest {
     fun screenDataPortIsConnectedBeforeTheOptionalIapTunnel() {
         val code = SourceTree.scan("SessionController.kt").code
         val screen = code.indexOf("val screen = client.runScreenStream")
-        val dataPort = code.indexOf("videoSender?.openDataPort()", screen)
+        val dataPort = code.indexOf("sessionVideoSender.openDataPort()", screen)
         val tunnel = code.indexOf("client.runIapTunnel(sessionKey)", screen)
         assertTrue("找不到主屏 SETUP", screen >= 0)
         assertTrue("找不到主屏 dataPort 连接", dataPort > screen)
@@ -33,7 +33,7 @@ class MediaPortOrderingTest {
         val code = SourceTree.scan("SessionController.kt").code
         val anchor = code.indexOf("val screenPolicy = client.receiverCompatibility()")
         val screen = code.indexOf("val screen = client.runScreenStream", anchor)
-        val firstModes = code.indexOf("client.assertModes()", anchor)
+        val firstModes = code.indexOf("client.assertModes(acknowledgeInitialScreenClaim = true)", anchor)
         val secondModes = code.indexOf("client.assertModes()", firstModes + 1)
         val repeatGuard = code.indexOf("if (screenPolicy.repeatScreenModesDeclaration)", anchor)
         val hidGuard = code.indexOf("if (!screenPolicy.skipScreenHidArming)", anchor)

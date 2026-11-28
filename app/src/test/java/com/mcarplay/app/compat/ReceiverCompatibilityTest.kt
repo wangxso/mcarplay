@@ -1,5 +1,6 @@
 package com.mcarplay.app.compat
 
+import com.mcarplay.app.iap2.Iap2LinkEngine
 import com.mcarplay.app.iap2.ReceiverProfile
 import com.mcarplay.app.net.AirPlayFeatures
 import org.junit.Assert.assertEquals
@@ -57,6 +58,28 @@ class ReceiverCompatibilityTest {
         assertFalse(ReceiverCompatibility.resolve(mib3).allowBluetoothRetireRetry)
     }
 
+    /** issue #127：出画协商对所有接收端自动启用，只有手动「通用」预设关闭。 */
+    @Test
+    fun vehicleResolutionIsAutomaticForEveryReceiverExceptTheGenericPreset() {
+        listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals(), ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo"))
+            .forEach { signals ->
+                assertTrue(
+                    "${signals.model}/${signals.manufacturer} 应走通用出画协商",
+                    ReceiverCompatibility.resolve(signals).preferVehicleResolution,
+                )
+                assertFalse(
+                    "手动通用应关闭出画协商",
+                    ReceiverCompatibility.resolve(signals, preset = VehiclePreset.GENERIC).preferVehicleResolution,
+                )
+            }
+        assertTrue(
+            ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.MERCEDES_MB_E).preferVehicleResolution,
+        )
+        assertTrue(
+            ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.WINPLAY).preferVehicleResolution,
+        )
+    }
+
     @Test
     fun namesAndUnverifiedVersionsCannotEnableDestructiveExceptions() {
         val spoofed = ReceiverCompatibility.resolve(diPlay.copy(externalAccessoryProtocols = emptySet()))
@@ -97,6 +120,7 @@ class ReceiverCompatibilityTest {
         ) = ReceiverCompatibility.prefersOra03DirectDiscovery(signals, model, firmware, sourceVersion, preset)
 
         assertTrue(prefersDirect())
+        assertTrue(prefersDirect(sourceVersion = " 365.10.2 "))
         assertFalse(prefersDirect(signals = ora.copy(manufacturer = null)))
         assertFalse(prefersDirect(signals = ora.copy(model = "Other")))
         assertFalse(prefersDirect(signals = ora.copy(sendIds = ora.sendIds.orEmpty() + 0x4301)))
@@ -108,36 +132,55 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
-    fun ora03SkipsOnlyTheRecordAfterInitialAudioSetupOnTheObservedFirmware() {
-        val ora =
-            ReceiverProfile.Signals(
-                model = "ORA ES11",
-                manufacturer = "GWM",
-                srcvers = "365.10.2",
-            )
-        val policy = ReceiverCompatibility.resolve(ora, preset = VehiclePreset.AUTO, airPlayFirmware = "N220346.2")
-        assertTrue(policy.skipRecordAfterInitialAudioSetup)
-        assertFalse(policy.singleRecordPerSession)
-        assertFalse(ReceiverCompatibility.resolve(ora, preset = VehiclePreset.AUTO).skipRecordAfterInitialAudioSetup)
-        assertFalse(
-            ReceiverCompatibility.resolve(ora, preset = VehiclePreset.AUTO, airPlayFirmware = "0.0.1").skipRecordAfterInitialAudioSetup,
-        )
-        assertFalse(
-            ReceiverCompatibility
-                .resolve(ora, preset = VehiclePreset.GENERIC, airPlayFirmware = "N220346.2")
-                .skipRecordAfterInitialAudioSetup,
-        )
-        listOf(
-            ora.copy(model = "OEM MODEL"),
-            ora.copy(manufacturer = null),
-            ora.copy(srcvers = "365.10.3"),
-        ).forEach {
-            assertFalse(
-                ReceiverCompatibility
-                    .resolve(it, preset = VehiclePreset.AUTO, airPlayFirmware = "N220346.2")
-                    .skipRecordAfterInitialAudioSetup,
-            )
-        }
+    fun ora03IdentityRecognizesOnlyTheObservedVehicleAndGenericSignatures() {
+        val expected = ReceiverCompatibility.ReceiverIdentity.EXPECTED
+        val generic = ReceiverCompatibility.ReceiverIdentity.GENERIC
+        val other = ReceiverCompatibility.ReceiverIdentity.OTHER
+        assertEquals(expected, ReceiverCompatibility.classifyReceiverIdentity("GWM", "ORA ES11", "N220346.2", "365.10.2"))
+        assertEquals(expected, ReceiverCompatibility.classifyReceiverIdentity("GWM", "ORA ES11", "N220346.2", " 365.10.2 "))
+        assertEquals(generic, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", "0.0.1", "365.10.2"))
+        assertEquals(generic, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", "0.0.1", " 365.10.2 "))
+        assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", "0.0.1", "365.10.3"))
+        assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity("OEM", "OEM MODEL", null, "365.10.2"))
+        assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity("OEM", "Other", "0.0.1", "365.10.2"))
+        assertEquals(other, ReceiverCompatibility.classifyReceiverIdentity(null, "OEM MODEL", "0.0.1", "365.10.2"))
+    }
+
+    @Test
+    fun genericIdentityWarnsOnlyAfterConfirmationAndClearsOnNewEvidence() {
+        val expected = ReceiverCompatibility.ReceiverIdentity.EXPECTED
+        val generic = ReceiverCompatibility.ReceiverIdentity.GENERIC
+        val other = ReceiverCompatibility.ReceiverIdentity.OTHER
+        var known = false
+
+        fun observe(identity: ReceiverCompatibility.ReceiverIdentity?): ReceiverCompatibility.ReceiverIdentityDecision =
+            ReceiverCompatibility.receiverIdentityDecision(known, identity).also { known = known || it.rememberExpected }
+
+        assertFalse(observe(generic).showWarning)
+        assertFalse(known)
+        val confirmation = observe(expected)
+        assertTrue(confirmation.rememberExpected)
+        assertFalse(confirmation.showWarning)
+        assertTrue(observe(generic).showWarning)
+        assertFalse(observe(expected).showWarning)
+        assertTrue(observe(generic).showWarning)
+        assertFalse(observe(other).showWarning)
+        assertTrue(observe(generic).showWarning)
+        assertFalse(observe(null).showWarning)
+        assertTrue(known)
+    }
+
+    @Test
+    fun genericPresetStillUsesAdvertisedStandaloneMfiAuthSetup() {
+        val standaloneMfi = AirPlayFeatures.HK_PAIRING_AND_ENCRYPT or AirPlayFeatures.MFI_SAP
+        val receiver = ReceiverProfile.Signals(features = standaloneMfi)
+        val generic = ReceiverCompatibility.resolve(receiver, preset = VehiclePreset.GENERIC)
+        assertTrue(generic.authSetupBeforeSession)
+        assertFalse(generic.iphoneAuthSequence)
+        assertTrue(generic.rules.contains("protocol.mfi-sap-auth-setup"))
+
+        val unified = receiver.copy(features = standaloneMfi or AirPlayFeatures.UNIFIED_PAIRING_AND_MFI)
+        assertFalse(ReceiverCompatibility.resolve(unified, preset = VehiclePreset.CHERY).authSetupBeforeSession)
     }
 
     @Test
@@ -165,26 +208,32 @@ class ReceiverCompatibilityTest {
         )
     }
 
-    /** 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：真 iPhone 每次会话都请车机关蓝牙（2026-11-02）。 */
+    /** 艾瑞泽 8（iAP2 自报 Cloudrive / Tiggo / CHERY）：奇瑞其余适配默认生效，disableBluetooth 默认关、仅开关打开时启用。 */
     @Test
     fun onlyCheryReleasesBluetoothAfterSetup() {
         val chery = ReceiverProfile.Signals(name = "Cloudrive", model = "Tiggo", manufacturer = "CHERY")
-        val policy = ReceiverCompatibility.resolve(chery)
-        assertTrue(policy.releaseBluetoothAfterSetup)
-        assertTrue("chery.disable-bluetooth" in policy.rules)
-        assertTrue(policy.reportWifiMacInSetup)
-        assertTrue("chery.real-wifi-mac" in policy.rules)
-        assertTrue(policy.skipIapTunnel)
-        assertTrue("chery.no-iap-tunnel" in policy.rules)
-        assertTrue(policy.sendAppleClientHeaders)
-        assertTrue("chery.apple-client-headers" in policy.rules)
-        assertTrue(policy.iphoneAuthSequence)
-        assertTrue("chery.iphone-auth-sequence" in policy.rules)
-        assertEquals(32, policy.pinnedMfiChallengeLength)
-        assertTrue("chery.mfi-32-only" in policy.rules)
+        val defaultPolicy = ReceiverCompatibility.resolve(chery)
+        assertFalse(defaultPolicy.releaseBluetoothAfterSetup)
+        assertFalse("chery.disable-bluetooth" in defaultPolicy.rules)
+        assertTrue(defaultPolicy.reportWifiMacInSetup)
+        assertTrue("chery.real-wifi-mac" in defaultPolicy.rules)
+        assertTrue(defaultPolicy.skipIapTunnel)
+        assertTrue("chery.no-iap-tunnel" in defaultPolicy.rules)
+        assertTrue(defaultPolicy.sendAppleClientHeaders)
+        assertTrue("chery.apple-client-headers" in defaultPolicy.rules)
+        assertTrue(defaultPolicy.iphoneAuthSequence)
+        assertTrue("chery.iphone-auth-sequence" in defaultPolicy.rules)
+        assertEquals(32, defaultPolicy.pinnedMfiChallengeLength)
+        assertTrue("chery.mfi-32-only" in defaultPolicy.rules)
+
+        val optInPolicy = ReceiverCompatibility.resolve(chery, cheryDisableBluetooth = true)
+        assertTrue(optInPolicy.releaseBluetoothAfterSetup)
+        assertTrue("chery.disable-bluetooth" in optInPolicy.rules)
+
         listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals(), ReceiverProfile.Signals(name = "CHERY")).forEach { signals ->
-            val other = ReceiverCompatibility.resolve(signals)
+            val other = ReceiverCompatibility.resolve(signals, cheryDisableBluetooth = true)
             assertFalse(other.releaseBluetoothAfterSetup)
+            assertFalse("chery.disable-bluetooth" in other.rules)
             assertFalse(other.reportWifiMacInSetup)
             assertFalse(other.skipIapTunnel)
             assertFalse(other.sendAppleClientHeaders)
@@ -207,79 +256,58 @@ class ReceiverCompatibilityTest {
     }
 
     @Test
-    fun singleRecordIsLimitedToTheObservedCheryStack() {
-        val observed = ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo", srcvers = "320.17.7")
+    fun gs3PresetUsesMarkerFirstAndKeepsNetworkSessionDuringSetupHandoff() {
+        val gs3 = ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW)
+        assertEquals(Iap2LinkEngine.MAX_OUTGOING_LIMIT, gs3.iap2InitialMaxOutgoing)
+        assertTrue(gs3.waitForIap2PeerMarker)
+        assertTrue(gs3.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss)
+        assertTrue(gs3.claimScreenOnExplicitStart)
+        assertTrue("manual.trumpchi-gs3.iap2-marker-first" in gs3.rules)
+        assertTrue("manual.trumpchi-gs3.explicit-start-screen-claim" in gs3.rules)
+        assertEquals(
+            ReceiverCompatibility.BluetoothLossAction.END_SESSION,
+            ReceiverCompatibility.bluetoothLossAction(gs3, videoRunning = false, networkHandoffReady = false),
+        )
+        assertEquals(
+            ReceiverCompatibility.BluetoothLossAction.KEEP_NETWORK_SESSION,
+            ReceiverCompatibility.bluetoothLossAction(
+                gs3,
+                videoRunning = false,
+                networkHandoffReady = false,
+                setupHandoffStarted = true,
+            ),
+        )
+
+        listOf(VehiclePreset.AUTO, VehiclePreset.GENERIC).forEach { preset ->
+            val policy = ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = preset)
+            assertEquals(Iap2LinkEngine.DEFAULT_MAX_OUTGOING, policy.iap2InitialMaxOutgoing)
+            assertFalse(policy.waitForIap2PeerMarker)
+            assertFalse(policy.keepNetworkSessionDuringSetupHandoffOnBluetoothLoss)
+            assertFalse(policy.claimScreenOnExplicitStart)
+            assertEquals(
+                preset.name,
+                ReceiverCompatibility.BluetoothLossAction.END_SESSION,
+                ReceiverCompatibility.bluetoothLossAction(
+                    policy,
+                    videoRunning = false,
+                    networkHandoffReady = false,
+                    setupHandoffStarted = true,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun arrizo8HintMatchesTheObservedCheryIdentity() {
+        val observed = ReceiverProfile.Signals(manufacturer = " chery ", model = "TIGGO ", srcvers = " 320.17.7")
         val policy = ReceiverCompatibility.resolve(observed)
-        assertTrue(policy.singleRecordPerSession)
-        assertTrue("chery.tiggo.320.17.7.single-record" in policy.rules)
+        assertTrue(policy.arrizo8ConnectWindowHint)
         listOf(
             observed.copy(manufacturer = "OTHER"),
             observed.copy(model = "OTHER"),
             observed.copy(srcvers = "320.17.8"),
             observed.copy(srcvers = null),
-            mib3,
-        ).forEach { assertFalse(ReceiverCompatibility.resolve(it).singleRecordPerSession) }
-    }
-
-    @Test
-    fun mercedesSingleRecordIsLimitedToTheReportedIdentity() {
-        // issue #55：iAP2 自报 model=MB_D-PP-3，`/info` 为 MB_D-PP-4，srcvers 均为 320.17.7。
-        val iap2 = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_D-PP-3", srcvers = "320.17.7")
-        val info = iap2.copy(model = "MB_D-PP-4")
-        for (observed in listOf(iap2, info, iap2.copy(manufacturer = " mercedes-benz ", model = " mb_d-pp-4 "))) {
-            val policy = ReceiverCompatibility.resolve(observed)
-            assertTrue("${observed.model} 应命中单次 RECORD", policy.singleRecordPerSession)
-            assertTrue("mercedes.mb_d-pp.320.17.7.single-record" in policy.rules)
-            assertFalse("单次 RECORD 不应扩大到其他 Chery 专属规则", policy.arrizo8ConnectWindowHint)
-        }
-        listOf(
-            iap2.copy(manufacturer = "OTHER"),
-            iap2.copy(model = "MB_D-PP-5"),
-            iap2.copy(srcvers = "320.17.8"),
-            iap2.copy(srcvers = null),
-            iap2.copy(manufacturer = null),
-            ReceiverProfile.Signals(model = "VW4131", manufacturer = "Volkswagen", srcvers = "320.17.7"),
-        ).forEach {
-            assertFalse(
-                "${it.manufacturer}/${it.model}/${it.srcvers} 不应命中奔驰单次 RECORD",
-                ReceiverCompatibility.resolve(it).singleRecordPerSession,
-            )
-        }
-        // 手动选择「通用」关闭全部按车机登记的例外（与艾瑞泽 8 一致）。
-        assertFalse(ReceiverCompatibility.resolve(iap2, preset = VehiclePreset.GENERIC).singleRecordPerSession)
-    }
-
-    @Test
-    fun manualMercedesPresetIsGuardedByReportedManufacturer() {
-        // 手动预设只补「自动判定认不出」的部分，不能改写别家车机，也不能伪造 BMW 例外。
-        val cheryOther = ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo", srcvers = "320.18.1")
-        val blocked = ReceiverCompatibility.resolve(cheryOther, preset = VehiclePreset.MERCEDES_MB_DPP)
-        assertFalse("手动奔驰预设不得套到奇瑞", blocked.singleRecordPerSession)
-        assertTrue("manual.mercedes-mb-dpp-blocked" in blocked.rules)
-        // 预设是叠加而非覆盖：已被自动规则命中的奇瑞仍保留自己的单次 RECORD。
-        val cheryObserved = cheryOther.copy(srcvers = "320.17.7")
-        assertTrue(ReceiverCompatibility.resolve(cheryObserved, preset = VehiclePreset.MERCEDES_MB_DPP).singleRecordPerSession)
-        // 身份为空是手动预设的正当用途：允许补上单次 RECORD。
-        val blank = ReceiverCompatibility.resolve(ReceiverProfile.Signals(), preset = VehiclePreset.MERCEDES_MB_DPP)
-        assertTrue(blank.singleRecordPerSession)
-        // 已知 Mercedes-Benz 但型号/固件未登记时由手动预设补齐；不能顺带启用 Chery 的蓝牙/MFi 规则。
-        val unrecognized = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_D-PP-9", srcvers = "320.18.1")
-        val manual = ReceiverCompatibility.resolve(unrecognized, preset = VehiclePreset.MERCEDES_MB_DPP)
-        assertTrue("manual.mercedes-mb-dpp" in manual.rules)
-        assertFalse(manual.releaseBluetoothAfterSetup)
-        assertNull(manual.pinnedMfiChallengeLength)
-        // 自动规则本身仍只认报告过的型号与 320.17.7；手动预设不会把自动规则扩到品牌。
-        assertFalse(ReceiverCompatibility.resolve(unrecognized, preset = VehiclePreset.AUTO).singleRecordPerSession)
-    }
-
-    @Test
-    fun arrizo8HintSharesTheCheryIdentityNormalization() {
-        // 自报值带空格/大小写差异时，单 RECORD 与 30 s 提示必须同进同退。
-        val observed = ReceiverProfile.Signals(manufacturer = " chery ", model = "TIGGO ", srcvers = " 320.17.7")
-        val policy = ReceiverCompatibility.resolve(observed)
-        assertTrue(policy.arrizo8ConnectWindowHint)
-        assertEquals(policy.singleRecordPerSession, policy.arrizo8ConnectWindowHint)
-        assertFalse(ReceiverCompatibility.resolve(observed.copy(srcvers = "320.17.8")).arrizo8ConnectWindowHint)
+        ).forEach { assertFalse(ReceiverCompatibility.resolve(it).arrizo8ConnectWindowHint) }
         assertTrue(
             "手动车型只改适配开关，不改车型提示",
             ReceiverCompatibility.resolve(observed, preset = VehiclePreset.GENERIC).arrizo8ConnectWindowHint,
@@ -350,6 +378,8 @@ class ReceiverCompatibilityTest {
         assertFalse(text.contains("private-hotspot"))
         assertFalse(text.contains("AA:BB:CC:DD:EE:FF"))
         assertTrue(text.contains("protocol.pair_and_encrypt"))
+        // issue #127：支持报告里应能直接看到出画协商策略是否开启。
+        assertTrue("诊断行应包含 vehicleResolution=true", text.contains("vehicleResolution=true"))
     }
 
     private fun failedPairing(
@@ -393,5 +423,139 @@ class ReceiverCompatibilityTest {
         assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals(model = "VW")).reconnectOnStreamingInvite)
         assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals(model = "VW41310")).reconnectOnStreamingInvite)
         assertFalse(ReceiverCompatibility.resolve(ReceiverProfile.Signals()).reconnectOnStreamingInvite)
+    }
+
+    // ---- Phase 2e：回屏策略只由「手动大众 + 保存值 + context 可用」决定 ----
+
+    @Test
+    fun screenReturnMatrixCoversAllNinePresetsWithLazyPreferenceRead() {
+        assertEquals(
+            "车型预设清单变化必须同步更新回屏资格矩阵",
+            setOf(
+                VehiclePreset.AUTO,
+                VehiclePreset.GENERIC,
+                VehiclePreset.CHERY,
+                VehiclePreset.VOLKSWAGEN,
+                VehiclePreset.WINPLAY,
+                VehiclePreset.DIPLAY,
+                VehiclePreset.CLASSIC_MIB3,
+                VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW,
+                VehiclePreset.MERCEDES_MB_E,
+            ),
+            VehiclePreset.entries.toSet(),
+        )
+        val base = ReceiverCompatibility.resolve(ReceiverProfile.Signals())
+        VehiclePreset.entries.forEach { preset ->
+            var reads = 0
+            val overlaid =
+                ReceiverCompatibility.withScreenReturnPreference(base, preset) {
+                    reads++
+                    ScreenReturnStrategy.DISCONNECT_AFTER_FAILURES
+                }
+            if (preset == VehiclePreset.VOLKSWAGEN) {
+                assertEquals("手动大众必须采用保存值", ScreenReturnStrategy.DISCONNECT_AFTER_FAILURES, overlaid.screenReturn)
+                assertEquals("手动大众只读一次偏好", 1, reads)
+            } else {
+                assertEquals("$preset 必须为 OFF", ScreenReturnStrategy.OFF, overlaid.screenReturn)
+                assertEquals("$preset 不得调用惰性偏好读取", 0, reads)
+            }
+        }
+        // context 不可用时 Controller 的回调直接返回 OFF，兼容层不额外读 prefs。
+        val noContext = ReceiverCompatibility.withScreenReturnPreference(base, VehiclePreset.VOLKSWAGEN) { ScreenReturnStrategy.OFF }
+        assertEquals(ScreenReturnStrategy.OFF, noContext.screenReturn)
+    }
+
+    @Test
+    fun screenReturnIgnoresDetectedManufacturerAndAutoMode() {
+        val observed =
+            listOf(
+                ReceiverProfile.Signals(),
+                ReceiverProfile.Signals(model = "Tiggo", manufacturer = "CHERY"),
+                ReceiverProfile.Signals(model = "VW4131", manufacturer = "Volkswagen"),
+                ReceiverProfile.Signals(model = "VW4211", manufacturer = "Toppower"),
+            )
+        observed.forEach { signals ->
+            // 自动模式即使自报 VWxxxx，也不启用回屏策略，且不读取偏好。
+            val auto = ReceiverCompatibility.resolve(signals, preset = VehiclePreset.AUTO)
+            var reads = 0
+            val overlaid =
+                ReceiverCompatibility.withScreenReturnPreference(auto, VehiclePreset.AUTO) {
+                    reads++
+                    ScreenReturnStrategy.REBUILD_RETRY
+                }
+            assertEquals(ScreenReturnStrategy.OFF, overlaid.screenReturn)
+            assertEquals(0, reads)
+            // 邀请重连资格保持自动规则，与回屏偏好分开。
+            assertEquals(signals.model?.startsWith("VW") == true, auto.reconnectOnStreamingInvite)
+        }
+        // 手动大众即使信号明确是别家车机，回屏仍按用户选择执行。
+        val chery = ReceiverProfile.Signals(model = "Tiggo", manufacturer = "CHERY")
+        val manual = ReceiverCompatibility.resolve(chery, preset = VehiclePreset.VOLKSWAGEN)
+        val overlaid =
+            ReceiverCompatibility.withScreenReturnPreference(manual, VehiclePreset.VOLKSWAGEN) {
+                ScreenReturnStrategy.REBUILD_RETRY
+            }
+        assertEquals(ScreenReturnStrategy.REBUILD_RETRY, overlaid.screenReturn)
+        assertTrue(manual.reconnectOnStreamingInvite)
+        assertTrue("manual.volkswagen" in manual.rules)
+    }
+
+    @Test
+    fun screenReturnOverlayLeavesEveryOtherPolicyFieldAlone() {
+        val signalsList =
+            listOf(winPlay, diPlay, mib3, ReceiverProfile.Signals(), ReceiverProfile.Signals(manufacturer = "CHERY", model = "Tiggo"))
+        VehiclePreset.entries.forEach { preset ->
+            signalsList.forEach { signals ->
+                val base = ReceiverCompatibility.resolve(signals, preset = preset)
+                assertEquals("base policy 默认不回屏", ScreenReturnStrategy.OFF, base.screenReturn)
+                val overlaid =
+                    ReceiverCompatibility.withScreenReturnPreference(base, preset) {
+                        ScreenReturnStrategy.REBUILD_RETRY
+                    }
+                val expected =
+                    base.copy(
+                        screenReturn =
+                            if (preset == VehiclePreset.VOLKSWAGEN) {
+                                ScreenReturnStrategy.REBUILD_RETRY
+                            } else {
+                                ScreenReturnStrategy.OFF
+                            },
+                    )
+                assertEquals("preset=$preset signals=${signals.model}", expected, overlaid)
+                assertEquals(base.rules, overlaid.rules)
+                assertEquals(base.memoryKey, overlaid.memoryKey)
+                assertEquals(base.reconnectOnStreamingInvite, overlaid.reconnectOnStreamingInvite)
+                assertEquals(ReceiverCompatibility.describe(base), ReceiverCompatibility.describe(overlaid))
+                assertFalse("describe 不得追加回屏字段", ReceiverCompatibility.describe(overlaid).contains("screenReturn"))
+            }
+        }
+    }
+
+    @Test
+    fun autoRequestCarplayUiIsLimitedToObservedBicvMicaReceiver() {
+        val bicv =
+            ReceiverProfile.Signals(
+                manufacturer = "Bicv",
+                model = "GSE,EV3,SUV",
+                srcvers = "475.8.3",
+                firmwareVersion = "MICA3A01",
+            )
+        val policy = ReceiverCompatibility.resolve(bicv)
+
+        assertTrue(policy.autoRequestCarplayUi)
+        assertTrue(policy.rules.contains("bicv.gse-ev3.475.8.3.auto-request-ui"))
+
+        for (signals in listOf(
+            bicv.copy(srcvers = "475.8.4"),
+            bicv.copy(model = "GSE,EV3"),
+            bicv.copy(manufacturer = "other"),
+            bicv.copy(firmwareVersion = "MICA3A02"),
+            winPlay,
+        )) {
+            val other = ReceiverCompatibility.resolve(signals)
+            assertFalse(other.autoRequestCarplayUi)
+            assertFalse(other.rules.contains("bicv.gse-ev3.475.8.3.auto-request-ui"))
+        }
+        assertFalse(ReceiverCompatibility.resolve(bicv, preset = VehiclePreset.GENERIC).autoRequestCarplayUi)
     }
 }

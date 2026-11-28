@@ -59,7 +59,8 @@ class VideoSender(
      * frames from the local Surface path.
      */
     private val externalVideoSource: ExternalVideoSource? = null,
-    private val onExternalFrameSent: ((Int) -> Unit)? = null,
+    /** Plain payload bytes of a successfully sent frame, from passthrough or an encoder. */
+    private val onVideoFrameSent: ((Int) -> Unit)? = null,
     /** 车机 /info displays[0].maxFPS（0 = 未知）；只约束转码时的编码帧率。 */
     private val receiverMaxFps: Int = 0,
     /**
@@ -141,8 +142,8 @@ class VideoSender(
     var lastReceiverRequestIdrGapMs: Long? = null
         private set
 
-    /** 透传线程与转码编码线程都会在退出时收尾：onEnded 只通知一次。 */
-    private val endedNotified = AtomicBoolean(false)
+    /** 透传线程与转码编码线程都会在退出时收尾：每个 sender 实例只通知一次。 */
+    private val endNotification = VideoEndNotification()
 
     /** 透传线程与转码编码线程可能同时写数据口：所有网络写入串行。 */
     private val writeLock = Any()
@@ -589,8 +590,7 @@ class VideoSender(
     }
 
     /**
-     * 屏幕数据口是单向的（手机 → 车机），但车机若回传数据或主动关闭，透传线程只能等到写失败才知道。
-     * 单独读一遍：记下回传的字节与车机关闭时刻（帕萨特无画面时，用来区分「车机收了但解不出」与「车机已断」）。
+     * 屏幕数据口是单向的（手机 → 车机）。车机关闭数据口时关闭本端 socket，唤醒可能阻塞的发送线程。
      */
     private fun startInboundMonitor(client: Socket) {
         Thread({
@@ -605,7 +605,10 @@ class VideoSender(
                             continue
                         }
                     if (count < 0) {
-                        if (socket === client) log("VIDEO: 车机关闭了屏幕数据口（EOF，此前回传 ${inboundBytes.get()}B，已发 $framesSent 帧）")
+                        if (socket === client) {
+                            log("VIDEO: 车机关闭了屏幕数据口（EOF，此前回传 ${inboundBytes.get()}B，已发 $framesSent 帧）")
+                            if (!quiescing.get()) client.close()
+                        }
                         return@Thread
                     }
                     val total = inboundBytes.addAndGet(count.toLong())
@@ -1221,9 +1224,10 @@ class VideoSender(
     }
 
     private fun drainExternalVideo() {
-        val output = socket?.getOutputStream() ?: return
         try {
-            while (running.get()) {
+            val client = socket ?: return
+            val output = client.getOutputStream()
+            while (running.get() && !client.isClosed) {
                 val entry = externalQueue.poll(250)
                 // 转码中：帧改喂解码器，数据口（含 keepAlive）由编码线程独占
                 val pipeline = transcoder
@@ -1288,14 +1292,13 @@ class VideoSender(
                     lastStreamStatsLogAt = now
                     log("VIDEO: 透传码流统计（第 $framesSent 帧）${streamStats.summary()}")
                 }
-                runCatching { onExternalFrameSent?.invoke(packed.size) }
+                runCatching { onVideoFrameSent?.invoke(packed.size) }
                 maybeSendKeepAlive(output)
             }
         } catch (error: Exception) {
             log("VIDEO: 外部视频推流中止 - ${error.message}")
         } finally {
-            stop()
-            if (endedNotified.compareAndSet(false, true)) runCatching { onEnded?.invoke() }
+            endNotification.afterDrain(stop = { stop() }, notify = { onEnded?.invoke() })
         }
     }
 
@@ -1408,10 +1411,11 @@ class VideoSender(
 
     private fun drainEncoder() {
         val codec = encoder ?: return
-        val output = socket?.getOutputStream() ?: return
         val bufferInfo = MediaCodec.BufferInfo()
         try {
-            while (running.get()) {
+            val client = socket ?: return
+            val output = client.getOutputStream()
+            while (running.get() && !client.isClosed) {
                 val index =
                     try {
                         codec.dequeueOutputBuffer(bufferInfo, 10_000)
@@ -1452,10 +1456,9 @@ class VideoSender(
                                 } else {
                                     0
                                 }
-                            // 转码输出顶替了 CarWith 透传：诊断时间线的帧数 / 字节 / 时间戳照常更新，
-                            // 否则 5 s 后会误报视频停滞（2026-11-01 审查）
+                            // 本地编码或 CarWith 转码写出成功后都更新诊断；被丢弃的帧不计入。
+                            if (sent > 0) runCatching { onVideoFrameSent?.invoke(sent) }
                             if (sent > 0 && externalVideoSource != null) {
-                                runCatching { onExternalFrameSent?.invoke(sent) }
                                 val now = android.os.SystemClock.uptimeMillis()
                                 streamStats.onTranscodedFrameSent(keyFrame, now)
                                 if (now - lastStreamStatsLogAt >= STREAM_STATS_INTERVAL_MS) {
@@ -1477,9 +1480,8 @@ class VideoSender(
             // 后台线程未捕获异常会杀死整个进程（曾导致锁屏后 app 消失）
             log("VIDEO: 推流中止 - ${error.message}（等待接收端恢复后重连）")
         } finally {
-            stop()
             // 会话真实结束信号（静默降噪解除 / 状态收尾）
-            if (endedNotified.compareAndSet(false, true)) runCatching { onEnded?.invoke() }
+            endNotification.afterDrain(stop = { stop() }, notify = { onEnded?.invoke() })
         }
     }
 

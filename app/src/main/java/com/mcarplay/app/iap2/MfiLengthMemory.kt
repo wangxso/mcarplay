@@ -11,13 +11,15 @@ import android.content.Context
  *  - Audi MMI 6318：20B 秒答，32B 曾 0.4 秒拆链；
  *  - Audi MMI 3315：20B 静默，**32B** 才应答。
  * 所以既不能全局写死某一档，也不能只靠进程内记忆（App 重启即丢，每次重连都重付
- * 6 秒）。这里按「车机身份（model + manufacturer）」持久化三件事：
+ * 6 秒）。这里按「车机身份（model + manufacturer）」持久化：
  *
  *  - [Entry.succeeded]：最近一次**成功拿到签名**的长度 → 下次直接首选，省掉试探；
- *  - [Entry.silent]：窗口内无应答的长度 → 排到后面（但仍保留为兜底，车机固件可能变）；
- *  - [Entry.rejected]：0xAA04 明确拒绝或**导致拆链**的长度 → 排到最后。
+ *  - [Entry.silent]：尚未拿到签名，且等待超时或链路断开的长度 → 排到后面；
+ *  - [Entry.rejected]：0xAA04 明确拒绝的长度 → 排到最后。
+ *  - [Entry.successDrops]：成功档位在等待签名时的连续断链次数。
+ *  - [Entry.triedAlternates]：两次连续断链后，已在新连接上优先试过的其他档位。
  *
- * 排序规则见 [orderAttempts]（纯函数，便于单测）：成功档位永远第一；其余沿用
+ * 排序规则见 [orderAttempts]：成功档位优先，连续断链后每条新连接先试一个未试过的档位，随后回试成功档位。其余沿用
  * 调用方给的基线顺序（真车 20B 优先 / 测试台 32B 优先），最后才是 silent 与
  * rejected。若基线里所有档位都被判过 rejected，则全部照常尝试，避免永久卡死。
  */
@@ -27,14 +29,21 @@ object MfiLengthMemory {
         val succeeded: Int? = null,
         val silent: Set<Int> = emptySet(),
         val rejected: Set<Int> = emptySet(),
+        val successDrops: Int = 0,
+        val triedAlternates: Set<Int> = emptySet(),
     ) {
         val isEmpty: Boolean get() = succeeded == null && silent.isEmpty() && rejected.isEmpty()
+
+        internal val demoted: Boolean get() = successDrops >= DROP_LIMIT
     }
 
     private const val FILE = "mfi_length_memory"
     private const val KEY_OK = "ok_"
     private const val KEY_SILENT = "silent_"
     private const val KEY_REJECTED = "rejected_"
+    private const val KEY_SUCCESS_DROPS = "success_drops_"
+    private const val KEY_TRIED_ALTERNATES = "tried_alternates_"
+    private const val DROP_LIMIT = 2
 
     /** 车机身份 → 存储键。只用稳定字段，避免蓝牙名里的可变后缀影响命中。 */
     fun receiverKey(identityText: String): String =
@@ -60,8 +69,32 @@ object MfiLengthMemory {
             succeeded = ok,
             silent = readLengths(prefs.getString(KEY_SILENT + key, null)),
             rejected = readLengths(prefs.getString(KEY_REJECTED + key, null)),
+            successDrops = if (ok == null) 0 else prefs.getInt(KEY_SUCCESS_DROPS + key, 0),
+            triedAlternates = if (ok == null) emptySet() else readLengths(prefs.getString(KEY_TRIED_ALTERNATES + key, null)),
         )
     }
+
+    /** 为一条新链路选档，并推进连续断链后的回试顺序。 */
+    internal fun beginAttempts(
+        context: Context?,
+        identityText: String,
+        baseline: List<Int>,
+    ): Pair<Entry, List<Int>> =
+        synchronized(memory) {
+            val entry = load(context, identityText)
+            val order = orderAttempts(baseline, entry)
+            if (!entry.demoted) return@synchronized entry to order
+
+            val first = order.first()
+            val next =
+                if (first == entry.succeeded) {
+                    entry.copy(successDrops = 0, triedAlternates = emptySet())
+                } else {
+                    entry.copy(triedAlternates = entry.triedAlternates + first)
+                }
+            save(context, receiverKey(identityText), next)
+            next to order
+        }
 
     fun recordSuccess(
         context: Context?,
@@ -80,10 +113,24 @@ object MfiLengthMemory {
         length: Int,
     ) {
         update(context, identityText) { entry ->
-            if (entry.succeeded == length) {
-                entry
-            } else {
-                entry.copy(silent = entry.silent + length, rejected = entry.rejected - length)
+            when {
+                entry.succeeded == length && !entry.demoted -> entry.copy(successDrops = 0)
+                entry.succeeded == length || length in entry.rejected -> entry
+                else -> entry.copy(silent = entry.silent + length)
+            }
+        }
+    }
+
+    fun recordLinkDrop(
+        context: Context?,
+        identityText: String,
+        length: Int,
+    ) {
+        update(context, identityText) { entry ->
+            when {
+                length in entry.rejected -> entry
+                entry.succeeded == length -> entry.copy(successDrops = minOf(DROP_LIMIT, entry.successDrops + 1))
+                else -> entry.copy(silent = entry.silent + length)
             }
         }
     }
@@ -94,31 +141,12 @@ object MfiLengthMemory {
         length: Int,
     ) {
         update(context, identityText) { entry ->
-            if (entry.succeeded == length) {
-                entry
-            } else {
-                entry.copy(rejected = entry.rejected + length, silent = entry.silent - length)
-            }
-        }
-    }
-
-    /**
-     * 硬拒绝：链路在该长度的挑战期间被对端直接断开（区别于 0xAA04 拒绝字/静默）。
-     * 这是强证据——即使长度等于已记「成功」也必须推翻：MFi 应答存在归属歧义
-     * （上一档超窗后才到的迟到应答会被记到当前档头上，2026-10-24 DiPlay 实测：
-     * 32B 迟到应答记成 20B 成功，之后每轮 20B 被断链、永久锁死）。
-     */
-    fun recordHardRejected(
-        context: Context?,
-        identityText: String,
-        length: Int,
-    ) {
-        update(context, identityText) { entry ->
-            val succeeded = if (entry.succeeded == length) null else entry.succeeded
-            Entry(
-                succeeded = succeeded,
-                silent = (entry.silent - length),
+            entry.copy(
+                succeeded = entry.succeeded?.takeUnless { it == length },
                 rejected = entry.rejected + length,
+                silent = entry.silent - length,
+                successDrops = if (entry.succeeded == length) 0 else entry.successDrops,
+                triedAlternates = if (entry.succeeded == length) emptySet() else entry.triedAlternates,
             )
         }
     }
@@ -130,7 +158,7 @@ object MfiLengthMemory {
     const val KNOWN_GOOD_WINDOW_MS = 40_000L
 
     /**
-     * 本次挑战的等待窗口（纯函数）：记忆里的成功长度等足 [KNOWN_GOOD_WINDOW_MS]；
+     * 本次挑战的等待窗口（纯函数）：仍优先的成功长度等足 [KNOWN_GOOD_WINDOW_MS]；
      * 静默过的长度缩到 [silentRetryWindow]；其余用调用方给的基础窗口。
      */
     fun challengeWindow(
@@ -140,7 +168,7 @@ object MfiLengthMemory {
         silentRetryWindow: Long,
     ): Long =
         when {
-            length == entry.succeeded && length !in entry.rejected -> maxOf(baseWindow, KNOWN_GOOD_WINDOW_MS)
+            length == entry.succeeded && length !in entry.rejected && !entry.demoted -> maxOf(baseWindow, KNOWN_GOOD_WINDOW_MS)
             length in entry.silent -> minOf(baseWindow, silentRetryWindow)
             else -> baseWindow
         }
@@ -152,6 +180,7 @@ object MfiLengthMemory {
         } else {
             buildList {
                 entry.succeeded?.let { add("成功=${it}B") }
+                if (entry.successDrops > 0) add("成功档断链=${entry.successDrops}次")
                 if (entry.silent.isNotEmpty()) add("静默=${entry.silent.sorted().joinToString("/")}B")
                 if (entry.rejected.isNotEmpty()) add("被拒=${entry.rejected.sorted().joinToString("/")}B")
             }.joinToString("，")
@@ -168,8 +197,7 @@ object MfiLengthMemory {
         baseline: List<Int>,
         entry: Entry,
     ): List<Int> {
-        // 「成功但又被硬拒绝」= 记忆矛盾（迟到应答误记），不能继续享受第一名——
-        // 降级为普通档参与排序（排在被拒档之前）
+        // 兼容记忆中同时标为成功与被拒的档位，以拒绝为准。
         val succeeded = entry.succeeded?.takeIf { it !in entry.rejected }
         val rest = baseline.filter { it != succeeded }
         // 只有「还存在没被判死的档位」时才把 rejected 排到最后；
@@ -180,7 +208,10 @@ object MfiLengthMemory {
         val normal = rest.filter { it !in silent && it !in rejected }
         val silentOrdered = rest.filter { it in silent }
         val rejectedOrdered = rest.filter { it in rejected }
-        return (listOfNotNull(succeeded) + normal + silentOrdered + rejectedOrdered).distinct()
+        val others = normal + silentOrdered + rejectedOrdered
+        val remembered = listOfNotNull(succeeded)
+        val alternates = if (entry.demoted && succeeded != null) others.filter { it !in entry.triedAlternates } else emptyList()
+        return (alternates + remembered + others).distinct()
     }
 
     // ---- 内部 ----
@@ -196,18 +227,29 @@ object MfiLengthMemory {
     ) {
         val key = receiverKey(identityText)
         synchronized(memory) {
-            val current = load(context, identityText)
-            val next = transform(current)
-            memory[key] = next
-            val prefs = prefs(context) ?: return
-            prefs
-                .edit()
-                .apply {
-                    if (next.succeeded != null) putInt(KEY_OK + key, next.succeeded) else remove(KEY_OK + key)
-                    putString(KEY_SILENT + key, next.silent.sorted().joinToString(","))
-                    putString(KEY_REJECTED + key, next.rejected.sorted().joinToString(","))
-                }.apply()
+            save(context, key, transform(load(context, identityText)))
         }
+    }
+
+    private fun save(
+        context: Context?,
+        key: String,
+        entry: Entry,
+    ) {
+        memory[key] = entry
+        prefs(context)
+            ?.edit()
+            ?.apply {
+                if (entry.succeeded != null) putInt(KEY_OK + key, entry.succeeded) else remove(KEY_OK + key)
+                putString(KEY_SILENT + key, entry.silent.sorted().joinToString(","))
+                putString(KEY_REJECTED + key, entry.rejected.sorted().joinToString(","))
+                if (entry.successDrops > 0) putInt(KEY_SUCCESS_DROPS + key, entry.successDrops) else remove(KEY_SUCCESS_DROPS + key)
+                if (entry.triedAlternates.isNotEmpty()) {
+                    putString(KEY_TRIED_ALTERNATES + key, entry.triedAlternates.sorted().joinToString(","))
+                } else {
+                    remove(KEY_TRIED_ALTERNATES + key)
+                }
+            }?.apply()
     }
 
     private fun readLengths(raw: String?): Set<Int> =

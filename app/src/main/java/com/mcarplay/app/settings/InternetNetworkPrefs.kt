@@ -10,17 +10,23 @@ enum class InternetNetwork(
     CAR("car"),
 }
 
+enum class PhoneModeSystemWifiDecision {
+    PROCEED,
+    CONFLICT,
+    CONFIRM,
+}
+
 /**
  * Internet routing preference for the next connection.
  *
- * `CAR` keeps the existing system-level Wi-Fi join, so Android may use the car
- * hotspot as its default network. `PHONE` forces the app-private Wi-Fi path:
- * the hotspot remains local to mcarplay and other apps keep using mobile data
- * (or any other system default network). It cannot change routing of an
+ * `PHONE` (default) forces the app-private Wi-Fi path: the hotspot remains local
+ * to mcarplay and other apps keep using mobile data (or any other system default
+ * network). `CAR` keeps the system-level Wi-Fi join, so Android may use the car
+ * hotspot as its default network. It cannot change routing of an
  * already-established session, hence "next connection".
  */
 object InternetNetworkPrefs {
-    val DEFAULT = InternetNetwork.CAR
+    val DEFAULT = InternetNetwork.PHONE
 
     private const val PREFS_NAME = "settings"
     private const val KEY_NETWORK = "internet_network"
@@ -59,4 +65,22 @@ object InternetNetworkPolicy {
 
     /** Phone mode must not use connect-network fallbacks that save the hotspot system-wide. */
     fun allowSystemFallback(network: InternetNetwork): Boolean = network == InternetNetwork.CAR
+
+    /**
+     * Phone mode cannot preserve mobile-data routing if Android already owns the same
+     * hotspot globally. If a system Wi-Fi is active but its SSID cannot be read, the
+     * caller must ask the user instead of assuming the route is safe.
+     */
+    fun phoneModeSystemWifiDecision(
+        network: InternetNetwork,
+        activeTarget: Boolean,
+        activeIdentityUnknown: Boolean,
+        saved: Boolean?,
+    ): PhoneModeSystemWifiDecision =
+        when {
+            network != InternetNetwork.PHONE -> PhoneModeSystemWifiDecision.PROCEED
+            activeTarget || saved == true -> PhoneModeSystemWifiDecision.CONFLICT
+            activeIdentityUnknown || saved == null -> PhoneModeSystemWifiDecision.CONFIRM
+            else -> PhoneModeSystemWifiDecision.PROCEED
+        }
 }

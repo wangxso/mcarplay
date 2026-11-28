@@ -143,6 +143,7 @@ LOG_PATTERNS = [
         "出现网络超时。",
         "检查车机热点信号和手机是否在省电模式下限制了网络。",
         min_count=2,
+        exclude=re.compile(r"\bBT-DIAG\b"),
     ),
     LogPattern(
         "video_eof",

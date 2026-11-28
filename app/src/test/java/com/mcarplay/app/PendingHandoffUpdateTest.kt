@@ -23,6 +23,86 @@ class PendingHandoffUpdateTest {
     }
 
     @Test
+    fun cleanupTakesMatchingEndpointAndAlwaysReleasesHandoffAtomically() {
+        val active = AtomicBoolean(true)
+        val pending = PendingHandoffUpdate<String>({ active.get() })
+        assertTrue(pending.routeIfActive("late") { false })
+
+        val taken = pending.takeIfAndRelease({ it == "late" }) { active.set(false) }
+
+        assertEquals("late", taken)
+        assertFalse(active.get())
+        assertFalse(pending.routeIfActive("arrived after release") { false })
+        assertNull(pending.take())
+    }
+
+    @Test
+    fun claimCleanupRunsBeforeAnotherEndpointCanObserveTheReleasedHandoff() {
+        val active = AtomicBoolean(true)
+        val pending = PendingHandoffUpdate<String>({ active.get() })
+        val afterReleaseEntered = CountDownLatch(1)
+        val finishAfterRelease = CountDownLatch(1)
+        val routeStarted = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val cleanup =
+                executor.submit<String?> {
+                    pending.takeIfAndRelease(
+                        matches = { false },
+                        release = { active.set(false) },
+                        afterRelease = {
+                            afterReleaseEntered.countDown()
+                            check(finishAfterRelease.await(5, TimeUnit.SECONDS))
+                        },
+                    )
+                }
+            assertTrue(afterReleaseEntered.await(5, TimeUnit.SECONDS))
+            val route =
+                executor.submit<Boolean> {
+                    routeStarted.countDown()
+                    pending.routeIfActive("late") { false }
+                }
+            assertTrue(routeStarted.await(5, TimeUnit.SECONDS))
+            Thread.sleep(50)
+            assertFalse("The pending lock must stay held through afterRelease", route.isDone)
+
+            finishAfterRelease.countDown()
+            assertNull(cleanup.get(5, TimeUnit.SECONDS))
+            assertFalse(route.get(5, TimeUnit.SECONDS))
+            assertNull(pending.take())
+        } finally {
+            finishAfterRelease.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun beforeReleaseCanRetainTheCandidateWhileTheHandoffIsStillBusy() {
+        val active = AtomicBoolean(true)
+        val pending = PendingHandoffUpdate<String>({ active.get() })
+        val events = mutableListOf<String>()
+        assertTrue(pending.routeIfActive("late") { false })
+
+        val taken =
+            pending.takeIfAndRelease(
+                matches = { it == "late" },
+                release = {
+                    events += "release:${active.get()}"
+                    active.set(false)
+                },
+                beforeRelease = {
+                    events += "before:${active.get()}:$it"
+                },
+                afterRelease = {
+                    events += "after:${active.get()}:$it"
+                },
+            )
+
+        assertEquals("late", taken)
+        assertEquals(listOf("before:true:late", "release:true", "after:false:late"), events)
+    }
+
+    @Test
     fun endpointArrivingDuringReleaseStartsAfterOwnershipWasReleased() {
         val active = AtomicBoolean(true)
         val pending = PendingHandoffUpdate<String>({ active.get() })
@@ -68,6 +148,19 @@ class PendingHandoffUpdateTest {
     }
 
     @Test
+    fun retainIfEvaluatesDynamicPredicateOnlyOncePerEntry() {
+        val pending = PendingHandoffUpdate<String>({ true })
+        assertTrue(pending.routeIfActive("late") { false })
+        var evaluations = 0
+
+        val removed = pending.retainIf { ++evaluations == 2 }
+
+        assertEquals(1, evaluations)
+        assertEquals(listOf("late"), removed)
+        assertNull(pending.take())
+    }
+
+    @Test
     fun successiveUpdatesCanPreservePreviouslyReceivedInformation() {
         val pending = PendingHandoffUpdate<Pair<String?, String?>>({ true })
         val merge = { previous: Pair<String?, String?>, latest: Pair<String?, String?> ->
@@ -76,6 +169,19 @@ class PendingHandoffUpdateTest {
         assertTrue(pending.routeIfActive("wifi credentials" to null, merge) { false })
         assertTrue(pending.routeIfActive(null to "airplay address", merge) { false })
         assertEquals("wifi credentials" to "airplay address", pending.take())
+    }
+
+    @Test
+    fun mergeOrPutAppliesTheCallersOrderingWhenCallbacksArriveOutOfOrder() {
+        val pending = PendingHandoffUpdate<Pair<Int, String>>({ true })
+        val keepNewest = { previous: Pair<Int, String>, latest: Pair<Int, String> ->
+            if (previous.first >= latest.first) previous else latest
+        }
+
+        pending.mergeOrPut(2 to "new", keepNewest)
+        pending.mergeOrPut(1 to "old", keepNewest)
+
+        assertEquals(2 to "new", pending.take())
     }
 
     private data class Observation(

@@ -93,6 +93,6 @@
     <string name="vehicle_preset_winplay">WinPlay 接收端</string>
     <string name="vehicle_preset_diplay">DiPlay 接收端（比亚迪等）</string>
     <string name="vehicle_preset_classic_mib3">奥迪经典 MIB3</string>
-    <string name="vehicle_preset_mercedes_mb_dpp">奔驰 MB_D-PP（AirPlay 320.17.7）</string>
+    <string name="vehicle_preset_trumpchi_gs3_iap2_window">传祺 GS3 影速（蓝牙先探测再同步，实验）</string>
     <string name="vehicle_preset_mercedes_mb_e">奔驰 MB_E-P / GLC（实验：按车机显示尺寸，未验证）</string>
 </resources>

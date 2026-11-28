@@ -1,5 +1,6 @@
 package com.mcarplay.app.bt
 
+import android.bluetooth.BluetoothDevice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -34,6 +35,27 @@ class InboundWaitPolicyTest {
         assertTrue(policy.skipOutbound(ADDRESS))
         // 已在等待：再次失败不重复提示
         assertFalse(policy.failed(ADDRESS, arrizo, "READ_FAILED", 50))
+    }
+
+    @Test
+    fun completedPairingStillWaitsAfterFastFailure() {
+        var completed = false
+        val pairings = Iap2Pairings({ completed }) { _, done -> completed = done }
+        pairings.attempt(ADDRESS, BluetoothDevice.BOND_BONDED).complete()
+        assertTrue(pairings.canRespond(ADDRESS, BluetoothDevice.BOND_BONDED))
+
+        assertTrue(policy.failed(ADDRESS, arrizo, "READ_FAILED", 43))
+        assertTrue(policy.skipOutbound(ADDRESS))
+        now += InboundWaitPolicy.PROBE_INTERVAL_MILLIS
+        assertFalse(policy.skipOutbound(ADDRESS))
+        assertTrue(policy.skipOutbound(ADDRESS))
+    }
+
+    @Test
+    fun dialTimeoutDoesNotSwitchToWaiting() {
+        repeat(5) { assertFalse(policy.failed(ADDRESS, arrizo, "TIMED_OUT", 11_000)) }
+        assertFalse(policy.isWaiting(ADDRESS))
+        assertFalse(policy.skipOutbound(ADDRESS))
     }
 
     @Test

@@ -1,12 +1,32 @@
 package com.mcarplay.app.transport
 
 import com.mcarplay.app.iap2.Iap2LinkEngine
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class Iap2LinkChannelRestartTest {
+    @Test(timeout = 5_000)
+    fun bluetoothResponderClosesWhenPeerLeavesBeforeSyn() {
+        val pair = InMemoryStreamPair()
+        Iap2LinkChannel(pair.sideA, role = Iap2LinkChannel.Role.RESPONDER).use { phone ->
+            val marker = Iap2LinkEngine.MARKER
+            pair.sideB.write(marker)
+            val reply = ByteArray(128)
+            val size = pair.sideB.read(reply)
+            assertEquals(marker.size, size)
+            assertArrayEquals(marker, reply.copyOf(size))
+            assertFalse(phone.awaitReady(0))
+
+            pair.sideB.close()
+            assertTrue(phone.awaitTerminated(1_000))
+            assertFalse(phone.awaitReady(0))
+        }
+    }
+
     @Test
     fun newSynClosesTheChannelAndSurfacesTheRestartReason() {
         val pair = InMemoryStreamPair()

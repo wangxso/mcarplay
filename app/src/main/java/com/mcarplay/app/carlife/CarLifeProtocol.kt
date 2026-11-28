@@ -57,10 +57,8 @@ object CarLifeProtocol {
 
     /** CarlifeCarHardKeyCode{int32 keycode=1}，与触摸同走 9340 通道。 */
     const val TOUCH_CAR_HARD_KEY_CODE = 0x68008
-    const val HARD_KEY_BACK = 14
 
     // 百度 CarLife 车机端（MyMediaButtonReceiver）实际发送的值：媒体上一首 → 15、下一首 → 16。
-    // 其他键值各参考资料互相矛盾（旋钮/确认等），未经实机核对前不发送。
     const val HARD_KEY_SEEK_SUB = 15
     const val HARD_KEY_SEEK_ADD = 16
 
@@ -68,6 +66,17 @@ object CarLifeProtocol {
     // 与上一首/下一首（15/16）不同。自动起播用 31，避免切歌。
     const val HARD_KEY_MEDIA_START = 31
     const val HARD_KEY_MEDIA_STOP = 32
+    const val HARD_KEY_VR_START = 33
+
+    // CarLife 触摸通道的旋钮、返回和选择器按键。
+    const val HARD_KEY_KNOB_CLOCKWISE = 6
+    const val HARD_KEY_KNOB_COUNTERCLOCKWISE = 7
+    const val HARD_KEY_BACK = 14
+    const val HARD_KEY_SELECTOR_OK = 20
+    const val HARD_KEY_SELECTOR_LEFT = 21
+    const val HARD_KEY_SELECTOR_RIGHT = 22
+    const val HARD_KEY_SELECTOR_UP = 23
+    const val HARD_KEY_SELECTOR_DOWN = 24
     const val VIDEO_FRAME = 0x20001
     const val VIDEO_HEARTBEAT = 0x20002
     const val MEDIA_INIT = 196609
@@ -89,6 +98,15 @@ object CarLifeProtocol {
 
     /** `videoRequestFor` 默认的长边上限（请求尺寸，不是实际输出尺寸）。 */
     const val VIDEO_REQUEST_MAX_LONG_SIDE = 1920
+
+    /**
+     * `DISABLE_RESOLUTION_OPTION=1` 生效时，按车机 `displays[0]` 精确请求的单边上限。
+     * 取 4K 级别：远高于已知车机主屏（2560x1200/2560x1440），只挡车机自报的溢出/哨兵值。
+     */
+    const val VIDEO_REQUEST_MAX_EXACT_DIMENSION = 4_096
+
+    /** 精确请求的像素总量上限（约 3840×2160），避免畸形自报值把编码器画布撑爆。 */
+    const val VIDEO_REQUEST_MAX_EXACT_PIXELS = 8_294_400L
 
     private const val COMMAND_HEADER_SIZE = 8
     private const val VIDEO_HEADER_SIZE = 12
@@ -275,6 +293,19 @@ object CarLifeProtocol {
             else -> null
         }
 
+    fun navigationHardKeyFor(androidKeyCode: Int): Int? =
+        when (androidKeyCode) {
+            android.view.KeyEvent.KEYCODE_NAVIGATE_NEXT -> HARD_KEY_KNOB_CLOCKWISE
+            android.view.KeyEvent.KEYCODE_NAVIGATE_PREVIOUS -> HARD_KEY_KNOB_COUNTERCLOCKWISE
+            android.view.KeyEvent.KEYCODE_BACK -> HARD_KEY_BACK
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER -> HARD_KEY_SELECTOR_OK
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> HARD_KEY_SELECTOR_LEFT
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> HARD_KEY_SELECTOR_RIGHT
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> HARD_KEY_SELECTOR_UP
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> HARD_KEY_SELECTOR_DOWN
+            else -> null
+        }
+
     /**
      * 请求 CarWith 按接收端屏幕比例编码：长边不超过 [maxLongSide]，宽高取偶数。
      * CarWith 可能不采纳请求（10-27 请求 1280×720 时实际返回 1920×1140），
@@ -290,6 +321,29 @@ object CarLifeProtocol {
 
         fun even(value: Double) = ((value.toInt() / 2) * 2).coerceAtLeast(2)
         return even(displayWidth * scale) to even(displayHeight * scale)
+    }
+
+    /**
+     * 声明 `DISABLE_RESOLUTION_OPTION=1` 时，按车机 `/info displays[0]` 的**精确**几何生成请求。
+     *
+     * issue #127：车机主屏 2560x1200 会先被 [videoRequestFor] 的 1920 长边上限压成 1920x900；
+     * CarWith 不接受时回退自己的档位（实车报告 1920x1080），车机不出画。声明该 key 后不再压缩，
+     * 直接请求车机几何本身。宽高按 H.264 偶数对齐。
+     *
+     * 安全门控：宽/高必须为正且在 [2, VIDEO_REQUEST_MAX_EXACT_DIMENSION] 内，像素总量不超过
+     * [VIDEO_REQUEST_MAX_EXACT_PIXELS]。几何缺失或非法时返回 null，调用方回退 [videoRequestFor]
+     * 并**不声明**该 key（绝不把非法自报值交给编码器）。
+     */
+    fun vehicleResolutionRequestFor(
+        displayWidth: Int,
+        displayHeight: Int,
+    ): Pair<Int, Int>? {
+        if (displayWidth !in 2..VIDEO_REQUEST_MAX_EXACT_DIMENSION) return null
+        if (displayHeight !in 2..VIDEO_REQUEST_MAX_EXACT_DIMENSION) return null
+        if (displayWidth.toLong() * displayHeight.toLong() > VIDEO_REQUEST_MAX_EXACT_PIXELS) return null
+
+        fun even(value: Int) = ((value / 2) * 2).coerceAtLeast(2)
+        return even(displayWidth) to even(displayHeight)
     }
 
     fun touchPayload(

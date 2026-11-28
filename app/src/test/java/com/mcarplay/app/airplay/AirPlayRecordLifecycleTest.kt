@@ -133,6 +133,48 @@ class AirPlayRecordLifecycleTest {
     }
 
     @Test
+    fun receiverCloseWakesConcurrentRequestsAndDoesNotBreakTheNextConnection() {
+        Peer().use { peer ->
+            peer.reply = {}
+            val client = client(peer.port, chery = false)
+            val executor = Executors.newFixedThreadPool(8)
+            val firstSuccess = CountDownLatch(1)
+            try {
+                assertTrue(client.reconnect())
+                val requests =
+                    List(8) {
+                        executor.submit(
+                            Callable {
+                                client.assertModes().also { if (it) firstSuccess.countDown() }
+                            },
+                        )
+                    }
+                val received = List(8) { peer.next()!! }
+                received.first().respond(200)
+                assertTrue(firstSuccess.await(2, TimeUnit.SECONDS))
+
+                // 一个请求已完成、其余请求仍在等响应时由接收端拆链。
+                received
+                    .first()
+                    .connection.socket
+                    .close()
+                val results = requests.map { it.get(2, TimeUnit.SECONDS) }
+                assertEquals(1, results.count { it })
+                assertTrue(client.controlChannelClosed)
+
+                client.close()
+                peer.reply = { it.respond(200) }
+                assertTrue(client.reconnect())
+                assertTrue(client.record())
+                assertTrue(peer.next()!!.connection != received.first().connection)
+            } finally {
+                client.close()
+                executor.shutdownNow()
+            }
+        }
+    }
+
+    @Test
     fun observedMercedesStackSendsOnlyOneRecordPerSession() {
         // issue #55：音频 SETUP 成功后补发 RECORD，车机在 16–559 ms 内拆链。
         Peer().use { peer ->
@@ -194,7 +236,7 @@ class AirPlayRecordLifecycleTest {
     }
 
     @Test
-    fun otherReceiversRetainTheirExistingRepeatedRecordBehavior() {
+    fun unknownReceiverSendsOnlyOneRecordPerSession() {
         Peer().use { peer ->
             val client = client(peer.port, chery = false)
             try {
@@ -202,7 +244,7 @@ class AirPlayRecordLifecycleTest {
                 assertTrue(client.record())
                 assertTrue(client.record())
                 assertEquals("RECORD", peer.next()!!.method)
-                assertEquals("RECORD", peer.next()!!.method)
+                assertNull(peer.next(300))
             } finally {
                 client.close()
             }
@@ -210,13 +252,38 @@ class AirPlayRecordLifecycleTest {
     }
 
     @Test
-    fun rejectedRecordCannotBeRepeatedInTheSameSession() {
+    fun gs3PresetSendsOnlyOneRecordPerSession() {
+        // GS3 报告 5c1f76dc：首条 RECORD 成功后，音频 SETUP 后的第二条 RECORD 等待期间车机拆链。
+        val previousPreset = com.mcarplay.app.compat.VehiclePresetRuntime.current
+        com.mcarplay.app.compat.VehiclePresetRuntime.current =
+            com.mcarplay.app.compat.VehiclePreset.TRUMPCHI_GS3_IAP2_WINDOW
+        try {
+            Peer().use { peer ->
+                val client = client(peer.port, chery = false)
+                try {
+                    assertTrue(client.reconnect())
+                    assertTrue(client.record())
+                    assertTrue(client.record()) // 音频 SETUP 后或动态补启
+                    assertEquals("RECORD", peer.next()!!.method)
+                    assertNull(peer.next(300))
+                } finally {
+                    client.close()
+                }
+            }
+        } finally {
+            com.mcarplay.app.compat.VehiclePresetRuntime.current = previousPreset
+        }
+    }
+
+    @Test
+    fun rejectedRecordBlocksScreenSetupAndCannotBeRepeated() {
         Peer().use { peer ->
             peer.reply = { it.respond(500) }
             val client = client(peer.port)
             try {
                 assertTrue(client.reconnect())
                 assertFalse(client.record())
+                assertNull(client.runScreenStream(null, "display"))
                 assertFalse(client.record())
                 assertEquals("RECORD", peer.next()!!.method)
                 assertNull(peer.next(300))

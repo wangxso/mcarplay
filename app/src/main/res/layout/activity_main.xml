@@ -924,7 +924,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="@string/main_internet_network_car_desc"
+                        android:text="@string/main_internet_network_phone_desc"
                         android:textColor="@color/m3_on_var"
                         android:textSize="12sp" />
                 </LinearLayout>

@@ -8,7 +8,7 @@ import org.junit.Test
  *
  * `WifiPromptBroker` 负责让等待提前返回（见 `WifiPromptBrokerTest.awaitStopsPromptlyWhenTheRoundIsCancelled`），
  * 但它不持有 AlertDialog：等待线程退出后，屏幕上的框仍存在、点了也没有消费者。
- * 因此 `askWifiJoinChoice` 必须在提前退出时调用 `dialogDismissSink`。
+ * 因此 `askWifiJoinChoice` 必须在提前退出时通过 `SessionUiPort.dismiss` 撤框。
  *
  * 这段逻辑依赖 `Handler`/`Looper` 与单例状态，JVM 单测无法直接驱动，
  * 按仓库既有做法（`ArchitectureRulesTest`、`LogContractTest`）用源码契约钉住。
@@ -55,7 +55,7 @@ class HotspotDialogDismissTest {
         val body = askBody()
         assertTrue(
             "提前退出必须按 requestId 撤框，否则取消后界面上留着无人消费的确认框",
-            body.contains("dialogDismissSink?.invoke(requestId)"),
+            body.contains("ui.dismiss(requestId)"),
         )
         assertTrue("撤框必须放在 finally 里，异常路径也要撤", body.contains("finally"))
         assertTrue(

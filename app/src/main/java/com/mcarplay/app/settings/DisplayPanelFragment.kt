@@ -11,7 +11,7 @@ import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.AudioDuckingPrefs
 import com.mcarplay.app.bt.AutoConnectPrefs
 import com.mcarplay.app.compat.CompatibilityPrefs
-import com.mcarplay.app.compat.PassatReturnStrategy
+import com.mcarplay.app.compat.ScreenReturnStrategy
 
 /**
  * 「显示」面板：流分辨率缩放（30%–160%，下次连接起效）+ 目标帧率（30/60，
@@ -138,17 +138,25 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             CompatibilityPrefs.setAudioBaseline(ctx, enabled)
             hostToast(getString(if (enabled) R.string.sf_audio_fallback_on else R.string.sf_audio_fallback_off))
         }
+        bindToggle(
+            view.findViewById(R.id.btnCheryDisableBtOn),
+            view.findViewById(R.id.btnCheryDisableBtOff),
+            CompatibilityPrefs.cheryDisableBluetooth(ctx),
+        ) { enabled ->
+            CompatibilityPrefs.setCheryDisableBluetooth(ctx, enabled)
+            hostToast(getString(if (enabled) R.string.sf_chery_disable_bt_on else R.string.sf_chery_disable_bt_off))
+        }
 
         // 帕萨特「回主界面再进」实验策略：四选一，默认关；仅主页「车型适配」选了大众时才执行
         val passatButtons =
             listOf(
-                PassatReturnStrategy.OFF to view.findViewById<TextView>(R.id.btnPassat0),
-                PassatReturnStrategy.REBUILD_RETRY to view.findViewById<TextView>(R.id.btnPassat1),
-                PassatReturnStrategy.DISCONNECT_AFTER_FAILURES to view.findViewById<TextView>(R.id.btnPassat2),
-                PassatReturnStrategy.NO_REBUILD to view.findViewById<TextView>(R.id.btnPassat3),
+                ScreenReturnStrategy.OFF to view.findViewById<TextView>(R.id.btnPassat0),
+                ScreenReturnStrategy.REBUILD_RETRY to view.findViewById<TextView>(R.id.btnPassat1),
+                ScreenReturnStrategy.DISCONNECT_AFTER_FAILURES to view.findViewById<TextView>(R.id.btnPassat2),
+                ScreenReturnStrategy.NO_REBUILD to view.findViewById<TextView>(R.id.btnPassat3),
             )
 
-        fun refreshPassat(selected: PassatReturnStrategy) {
+        fun refreshPassat(selected: ScreenReturnStrategy) {
             passatButtons.forEach { (strategy, button) ->
                 val on = strategy == selected
                 button.setBackgroundResource(if (on) R.drawable.bg_segment_sel else R.drawable.bg_segment)
@@ -156,21 +164,21 @@ class DisplayPanelFragment : SettingsPanelFragment() {
             }
         }
 
-        var passatCurrent = CompatibilityPrefs.passatReturnStrategy(ctx)
+        var passatCurrent = CompatibilityPrefs.screenReturnStrategy(ctx)
         refreshPassat(passatCurrent)
         passatButtons.forEach { (strategy, button) ->
             button.setOnClickListener {
                 if (strategy == passatCurrent) return@setOnClickListener
                 passatCurrent = strategy
-                CompatibilityPrefs.setPassatReturnStrategy(ctx, strategy)
+                CompatibilityPrefs.setScreenReturnStrategy(ctx, strategy)
                 refreshPassat(strategy)
                 hostToast(
                     getString(
                         when (strategy) {
-                            PassatReturnStrategy.OFF -> R.string.sf_passat_off
-                            PassatReturnStrategy.REBUILD_RETRY -> R.string.sf_passat_retry
-                            PassatReturnStrategy.DISCONNECT_AFTER_FAILURES -> R.string.sf_passat_disconnect
-                            PassatReturnStrategy.NO_REBUILD -> R.string.sf_passat_norebuild
+                            ScreenReturnStrategy.OFF -> R.string.sf_passat_off
+                            ScreenReturnStrategy.REBUILD_RETRY -> R.string.sf_passat_retry
+                            ScreenReturnStrategy.DISCONNECT_AFTER_FAILURES -> R.string.sf_passat_disconnect
+                            ScreenReturnStrategy.NO_REBUILD -> R.string.sf_passat_norebuild
                         },
                     ),
                 )
@@ -205,6 +213,32 @@ class DisplayPanelFragment : SettingsPanelFragment() {
                     SessionController.applyDuckDb(db)
                     hostToast(if (db == 0) getString(R.string.sf_duck_off) else getString(R.string.sf_duck_saved, db))
                 }
+            },
+        )
+
+        val musicSeek = view.findViewById<SeekBar>(R.id.musicAttenuationSeek)
+        val musicValue = view.findViewById<TextView>(R.id.musicAttenuationValue)
+        val savedMusicDb = AudioDuckingPrefs.musicAttenuationDb(ctx)
+        musicSeek.max = -AudioDuckingPrefs.MUSIC_ATTENUATION_MIN_DB
+        musicSeek.progress = AudioDuckingPrefs.progressOfMusicAttenuationDb(savedMusicDb)
+        musicValue.text = getString(R.string.lay_duck_level_value, savedMusicDb)
+        musicSeek.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    seekBar: SeekBar?,
+                    progress: Int,
+                    fromUser: Boolean,
+                ) {
+                    if (!fromUser) return
+                    val db = AudioDuckingPrefs.musicAttenuationDbOfProgress(progress)
+                    musicValue.text = getString(R.string.lay_duck_level_value, db)
+                    AudioDuckingPrefs.setMusicAttenuationDb(ctx, db)
+                    SessionController.applyMusicAttenuationDb(db)
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
             },
         )
 

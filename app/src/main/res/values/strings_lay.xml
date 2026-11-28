@@ -18,10 +18,14 @@
     <string name="lay_plain_fallback_desc">默认关。配对失败（403 除外）但已连上接收端时，再试一次不加密的明文会话。仅当接收端始终卡在配对且确认它只支持明文时打开；下次连接起效。</string>
     <string name="lay_audio_fallback">兼容兜底：音频格式未声明时仍尝试</string>
     <string name="lay_audio_fallback_desc">默认关。接收端没有声明可用的媒体音频格式时，仍按默认 PCM 48k 尝试出声。仅当车机能播声音却总是只推视频时打开；可能出现无声或断开，下次连接起效。</string>
+    <string name="lay_chery_disable_bt">奇瑞：连接后请车机关蓝牙</string>
+    <string name="lay_chery_disable_bt_desc">默认关。仅对奇瑞车机生效：会话建立后发送 disableBluetooth，模拟 iPhone 在连接期间关闭车机蓝牙。直接熄火下车时车机可能来不及恢复蓝牙，导致下次上车蓝牙处于关闭状态；平时建议保持关闭，仅排查蓝牙冲突时打开，下次连接起效。</string>
     <string name="lay_duck_level">导航时音乐音量</string>
-    <string name="lay_duck_level_desc">导航或语音提示播报时，音乐临时压低到这个音量，播报结束后再淡回。往右拖压得更低，最左为不压低；默认 -15 dB。连接中调整立即生效。</string>
+    <string name="lay_duck_level_desc">导航或语音提示播报时，在平时音乐音量的基础上临时压低，播报结束后再淡回。往右拖压得更低，最左为不压低。默认 -15 dB。连接中调整立即生效。</string>
     <string name="lay_duck_level_value">%1$d dB</string>
     <string name="lay_duck_level_off">不压低</string>
+    <string name="lay_music_attenuation">音乐基础音量</string>
+    <string name="lay_music_attenuation_desc">如果车机音乐声音太大，可以向右拖动调低。默认 0 dB，最多降低 20 dB。连接中调整立即生效。</string>
     <string name="lay_stream_resolution">流分辨率</string>
     <string name="lay_next_connection">保存后下次连接起效</string>
     <string name="lay_target_fps">目标帧率</string>

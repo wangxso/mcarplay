@@ -1,15 +1,35 @@
 package com.mcarplay.app.bt
 
 import android.content.Context
+import com.mcarplay.app.compat.ReceiverCompatibility
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
 import com.mcarplay.app.compat.ReceiverObservation
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
+import com.mcarplay.app.transport.DuplexStream
 import com.mcarplay.app.transport.Iap2LinkChannel
 import com.mcarplay.app.util.Bg
 import com.mcarplay.app.util.DeviceIdentity
 import java.io.IOException
+
+/** 主动连接与车机回连共用当前手动车型预设得到的 iAP2 通道参数。 */
+internal fun createIap2BluetoothLinkChannel(
+    stream: DuplexStream,
+    name: String,
+    role: Iap2LinkChannel.Role,
+    log: (String) -> Unit,
+): Iap2LinkChannel {
+    val policy = ReceiverCompatibility.resolve(ReceiverProfile.Signals())
+    return Iap2LinkChannel(
+        stream,
+        name = name,
+        role = role,
+        initialMaxOutgoing = policy.iap2InitialMaxOutgoing,
+        waitForPeerMarker = policy.waitForIap2PeerMarker,
+        log = log,
+    )
+}
 
 /**
  * BT 控制会话核心流程（Server/Client 共用，此前两份近乎复制）：
@@ -106,6 +126,8 @@ internal fun Iap2LinkChannel.runSenderSession(
 /** 退役链路时，0xEA01 交给 socket 后到关闭 RFCOMM 之间的冲刷宽限。 */
 internal const val EA_STOP_FLUSH_MILLIS = 200L
 
+internal const val BT_EA_STOP_TASK_NAME = "iap2-ea-stop"
+
 /**
  * 退役一条 BT iAP2 控制链路。
  *
@@ -119,20 +141,24 @@ internal fun retireControlLink(
     eaStopReason: String?,
     closeLink: () -> Unit,
 ) {
-    if (eaStopReason == null || session == null || !session.hasEaSessionsToStop()) {
-        closeLink()
-        return
-    }
-    Bg.run("iap2-ea-stop") {
-        try {
-            if (session.stopEaSessions(eaStopReason) > 0) Thread.sleep(EA_STOP_FLUSH_MILLIS)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-        } finally {
-            closeLink()
-        }
-    }
+    val shutdown =
+        EaTimingShutdown(
+            reason = eaStopReason,
+            closeLink = closeLink,
+        )
+    shutdown.run(
+        session = session?.toEaStopSender(),
+        dispatcher = { name, task -> Bg.run(name, task) },
+        sleeper = { millis -> Thread.sleep(millis) },
+    )
 }
+
+private fun Iap2SenderSession.toEaStopSender(): EaTimingShutdown.Sender =
+    object : EaTimingShutdown.Sender {
+        override fun hasSessionsToStop(): Boolean = hasEaSessionsToStop()
+
+        override fun stop(reason: String): Int = stopEaSessions(reason)
+    }
 
 /**
  * 会话启动时解析真实蓝牙 MAC（0x4300 / 0x4E0E 用）。

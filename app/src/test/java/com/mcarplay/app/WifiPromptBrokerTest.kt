@@ -165,7 +165,7 @@ class WifiPromptBrokerTest {
         var answer: Boolean? = true
         val waiter =
             Thread {
-                answer = broker.await(owner.future, 30_000) { cancelled.get() }
+                answer = broker.await(owner.future, 30_000, isExpired = { cancelled.get() })
             }
         waiter.start()
         Thread.sleep(200)

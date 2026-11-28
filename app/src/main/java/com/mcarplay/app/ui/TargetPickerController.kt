@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.mcarplay.app.R
+import com.mcarplay.app.bt.Iap2Pairings
 import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.compat.ReceiverDetection
 import com.mcarplay.app.compat.ReceiverDetectionRuntime
@@ -357,6 +358,7 @@ class TargetPickerController(
                 false
             }
         if (ok) {
+            Iap2Pairings.current(activity).bondChanged(address, BluetoothDevice.BOND_BONDING)
             host.log("BT-PAIR: 已发起与「$name」($address) 的配对——请在系统弹窗确认")
             pickerNotice(activity.getString(R.string.ma_pairing, name))
         } else {
@@ -440,6 +442,7 @@ class TargetPickerController(
                 return
             }
         if (address != pendingBondAddress) return
+        Iap2Pairings.current(activity).bondChanged(address, state)
         when (state) {
             BluetoothDevice.BOND_BONDED -> {
                 pendingBondAddress = null
