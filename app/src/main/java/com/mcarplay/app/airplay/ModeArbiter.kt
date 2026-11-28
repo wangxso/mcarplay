@@ -43,6 +43,9 @@ internal class ModeArbiter {
     @get:Synchronized
     val phoneOwnsScreen: Boolean get() = resources.getValue(SCREEN).owner == Entity.CONTROLLER
 
+    @get:Synchronized
+    val screenNeedsRebuild: Boolean get() = screenRelinquished
+
     /** 主音频资源当前是否归手机；车机占用/借用时音频 SETUP 拒绝不是格式不兼容。 */
     @get:Synchronized
     val phoneOwnsAudio: Boolean get() = resources.getValue(MAIN_AUDIO).owner == Entity.CONTROLLER

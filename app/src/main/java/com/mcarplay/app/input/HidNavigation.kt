@@ -35,6 +35,44 @@ object HidNavigation {
     private val lastButtonMask = HashMap<String, Int>()
     private val lastHat = HashMap<String, Int>()
 
+    /** 读取 MBUX 一字节控制报告中由描述符声明的 AC Back 位，支持混用 Consumer 与 Button 页。 */
+    internal fun consoleBackMask(descriptor: ByteArray): Int? {
+        var cursor = 0
+        var page = 0
+        var reportSize = 0
+        var reportCount = 0
+        var offset = 0
+        var mask: Int? = null
+        val usages = mutableListOf<Int>()
+        while (cursor < descriptor.size) {
+            val prefix = descriptor[cursor++].toInt() and 0xFF
+            val size = (prefix and 3).let { if (it == 3) 4 else it }
+            if (prefix == 0xFE || size > descriptor.size - cursor) return null
+            var value = 0
+            repeat(size) { byteIndex ->
+                value = value or ((descriptor[cursor++].toInt() and 0xFF) shl (byteIndex * 8))
+            }
+            when (prefix and 0xFC) {
+                0x04 -> page = value
+                0x08 -> usages += if (size == 4) value else (page shl 16) or value
+                0x74 -> reportSize = value
+                0x94 -> reportCount = value
+                0x84, 0xA4, 0xB4 -> return null
+                0x80 -> {
+                    if (reportSize !in 1..8 || reportCount !in 1..8 || offset + reportSize * reportCount > 8) return null
+                    if (reportSize == 1 && value and 0x07 == 0x02) {
+                        val bit = usages.indexOf((0x0C shl 16) or ConsumerKeys.USAGE_AC_BACK)
+                        if (bit in 0 until reportCount) mask = 1 shl (offset + bit)
+                    }
+                    offset += reportSize * reportCount
+                    usages.clear()
+                }
+                else -> if (prefix and 0x0C == 0) usages.clear()
+            }
+        }
+        return mask
+    }
+
     // MyKnob: 确认位及补齐、两个 8 位绝对轴、一个 8 位相对滚轮。
     private val joystickWheelDescriptor =
         (

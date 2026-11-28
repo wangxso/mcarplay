@@ -148,6 +148,32 @@ class StreamPipelineScreenTest {
     }
 
     @Test
+    fun resumesInterruptedRebuildWhenReceiverReturnsScreenAgain() {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { dataServer ->
+            val port =
+                FakeRecoveryPort().apply {
+                    screenInfo = AirPlayClient.ScreenStreamInfo(7L, dataServer.localPort, cipher())
+                    onTeardown = { phoneOwns = false }
+                }
+            prepare(port, rebuildOnResourceReturn = true)
+
+            assertEquals(ScreenRecoveryResult.ABORTED, recover())
+            assertNull(pipeline.sender)
+            assertNull(pipeline.currentOutput())
+
+            port.onTeardown = {}
+            port.phoneOwns = true
+            assertEquals(ScreenRecoveryResult.RESTORED, recover())
+            try {
+                assertSame(pipeline.sender, pipeline.currentOutput()!!.sender)
+                assertEquals(listOf("teardown", "teardown", "run", "record", "restored"), port.calls)
+            } finally {
+                pipeline.sender?.stop()
+            }
+        }
+    }
+
+    @Test
     fun failsWhenRunScreenStreamReturnsNull() {
         val port = FakeRecoveryPort().apply { screenInfo = null }
         prepare(port)
@@ -213,13 +239,14 @@ class StreamPipelineScreenTest {
         port: FakeRecoveryPort,
         originalRunning: Boolean = false,
         carLife: () -> CarLifeSession? = { session },
+        rebuildOnResourceReturn: Boolean = false,
     ): VideoSender {
         val original = sender()
         if (originalRunning) setSenderRunning(original, true)
         pipeline.claim(CarLifeSessionRegistry.Owner.FORMAL, session)
         pipeline.sender = original
         pipeline.publishOutput("a", original)
-        pipeline.installRecovery(plan(hooks), client, carLife, null, "display", "a", port)
+        pipeline.installRecovery(plan(hooks), client, carLife, null, "display", "a", port, rebuildOnResourceReturn)
         return original
     }
 

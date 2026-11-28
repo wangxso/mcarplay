@@ -21,6 +21,7 @@ class ScreenOwnershipTest {
         var currentGeneration: Long? = 1L
         var cancelled = false
         var ownsScreen = true
+        var needsScreenRebuild = false
         var releaseResult = true
         var plainResult = true
         var onAssert: ((Boolean) -> Unit)? = null
@@ -151,6 +152,8 @@ class ScreenOwnershipTest {
 
                         override fun phoneOwnsScreen(client: FakeClient) = client.ownsScreen
 
+                        override fun screenNeedsRebuild(client: FakeClient) = client.needsScreenRebuild
+
                         override fun modesDescription(client: FakeClient) = "modes(${client.name})"
 
                         override fun assertModes(
@@ -227,6 +230,31 @@ class ScreenOwnershipTest {
         assertEquals("rebuild 合并后仍执行恢复", 1, r.runtime.recoveryCalls)
         assertTrue("首条 reason 保留", r.logs.any { it.startsWith("EVENT: first → modesChanged") })
         assertFalse("合并请求不单独输出完成日志", r.logs.any { it.startsWith("EVENT: second → modesChanged") })
+    }
+
+    @Test
+    fun resourceReturnRebuildsMbEScreenWithoutRequestUi() {
+        val rig = Rig()
+        rig.runtime.receiverPolicyValue = rig.runtime.receiverPolicyValue.copy(rebuildScreenOnResourceReturn = true)
+        rig.client.needsScreenRebuild = true
+        rig.client.ownsScreen = false
+        rig.runtime.recoveryValue = {
+            rig.client.needsScreenRebuild = false
+            RecoveryOutcome.RESTORED
+        }
+
+        rig.ownership.enqueueModesAssert(rig.client, "screen borrowed", requestKeyFrame = false)
+        rig.scheduling.runNextControl()
+        assertEquals(0, rig.runtime.recoveryCalls)
+
+        rig.client.ownsScreen = true
+        rig.ownership.enqueueModesAssert(rig.client, "screen returned", requestKeyFrame = false)
+        rig.scheduling.runNextControl()
+        rig.ownership.enqueueModesAssert(rig.client, "audio changed", requestKeyFrame = false)
+        rig.scheduling.runNextControl()
+
+        assertEquals(1, rig.runtime.recoveryCalls)
+        assertEquals(List(3) { false to 1L }, rig.client.assertCalls)
     }
 
     @Test

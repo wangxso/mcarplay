@@ -25,12 +25,12 @@ enum class VehiclePreset {
     TRUMPCHI_GS3_IAP2_WINDOW,
 
     /**
-     * 奔驰 MB_E-P / 2025 GLC（issue #62，AirPlay 480.7.4）：**实验选项，尚无实车验证**。
+     * 奔驰 MB_E-P / 2025 GLC（issue #62，AirPlay 480.7.4）：**实验选项，尚无成功实车验证**。
      *
      * 保持 `displays[0]` 的车机几何，并显式打开
      * [ReceiverCompatibility.Policy.preferVehicleResolution]（CarWith `DISABLE_RESOLUTION_OPTION=1`）；
      * 不再使用 `displayPanels` 的 1728 高假设。该协商自 issue #127 起已是通用自动策略，
-     * 预设保留显式置位；文案仍须如实标注「实验」。
+     * 预设保留显式置位，并启用 H.264 主屏协商与资源归还后的主屏重建。
      */
     MERCEDES_MB_E,
     ;

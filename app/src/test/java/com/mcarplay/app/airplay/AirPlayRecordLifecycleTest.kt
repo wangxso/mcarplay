@@ -1,10 +1,14 @@
 package com.mcarplay.app.airplay
 
+import com.mcarplay.app.audio.AudioCodec
 import com.mcarplay.app.audio.AudioProfile
+import com.mcarplay.app.compat.VehiclePreset
+import com.mcarplay.app.compat.VehiclePresetRuntime
 import com.mcarplay.app.iap2.Iap2SenderSession
 import com.mcarplay.app.iap2.ReceiverProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -188,6 +192,46 @@ class AirPlayRecordLifecycleTest {
             } finally {
                 client.close()
             }
+        }
+    }
+
+    @Test
+    fun manualMercedesMbESkipsRecordAfterAudioSetup() {
+        val previous = VehiclePresetRuntime.current
+        VehiclePresetRuntime.current = VehiclePreset.MERCEDES_MB_E
+        try {
+            Peer().use { peer ->
+                peer.reply = { request ->
+                    when (request.method) {
+                        "SETUP" ->
+                            request.respond(
+                                200,
+                                BinaryPlist.encode(mapOf("streams" to listOf(mapOf("type" to 102L, "dataPort" to 6000L)))),
+                            )
+                        "GET_PARAMETER" -> request.respond(200, "volume: -20.0\r\n".toByteArray())
+                        else -> request.respond(200)
+                    }
+                }
+                val client =
+                    client(
+                        peer.port,
+                        signals = ReceiverProfile.Signals(manufacturer = "Mercedes-Benz", model = "MB_E-P-4"),
+                        sourceVersion = "480.7.4",
+                    )
+                try {
+                    assertTrue(client.reconnect())
+                    assertTrue(client.record())
+                    val audio = AudioProfile("media", 1L shl 23, 48_000, 250, streamType = 102L, codec = AudioCodec.AAC_LC)
+                    assertNotNull(client.runAudioStream(ByteArray(32), audio))
+                    assertTrue(client.record())
+                    assertEquals(listOf("RECORD", "SETUP", "GET_PARAMETER"), List(3) { peer.next()!!.method })
+                    assertNull(peer.next(300))
+                } finally {
+                    client.close()
+                }
+            }
+        } finally {
+            VehiclePresetRuntime.current = previous
         }
     }
 
