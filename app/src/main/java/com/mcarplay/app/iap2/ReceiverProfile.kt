@@ -78,7 +78,7 @@ object ReceiverProfile {
     data class Profile(
         val era: Era,
         val wifiGen: WifiGen,
-        /** 身份键（与 MfiLengthMemory/AudioProfileMemory 同源，后续 Memory 并表用）。 */
+        /** 可读身份原文，仅用于日志 slug；实际 MFi 持久化键由 [describe] 单独注入。 */
         val identityKey: String,
         /** 判定依据（可解释性：每条结论对应的信号原文）。 */
         val reasons: List<String>,
@@ -155,8 +155,18 @@ object ReceiverProfile {
             signals.manufacturer?.takeIf { it.isNotBlank() },
         ).joinToString(" ").ifBlank { "unknown" }
 
-    /** 一行可读判定（进文件日志）。 */
-    fun describe(profile: Profile): String =
-        "PROFILE: era=${profile.era} wifiGen=${profile.wifiGen} key=${MfiLengthMemory.receiverKey(profile.identityKey)}" +
+    /**
+     * 一行可读判定（进文件日志）。
+     *
+     * [mfiStorageKey] 是本轮蓝牙 MFi 实际使用的持久化键。旧 [Profile.identityKey] slug
+     * 仍保留用于对照历史日志，但主键必须与 `mfi_length_memory.xml` 中的条目字符串相等。
+     */
+    fun describe(
+        profile: Profile,
+        mfiStorageKey: String? = null,
+    ): String =
+        "PROFILE: era=${profile.era} wifiGen=${profile.wifiGen}" +
+            (mfiStorageKey?.let { " mfiKey=$it" }.orEmpty()) +
+            " slug=${MfiLengthMemory.receiverKey(profile.identityKey)}" +
             " 依据[" + profile.reasons.joinToString("；") + "]"
 }

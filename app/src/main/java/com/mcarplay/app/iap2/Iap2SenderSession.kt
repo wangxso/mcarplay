@@ -1577,8 +1577,23 @@ class Iap2SenderSession(
                         receiveIds = receives.toSet(),
                     ),
                 )
+            val mfiStorageKey =
+                if (
+                    rememberMfi &&
+                    ReceiverCompatibility.resolve(receiverSignals).pinnedMfiChallengeLength == null
+                ) {
+                    ReceiverFingerprint
+                        .handshake(
+                            receiverBinding,
+                            receiverSignals.copy(
+                                externalAccessoryProtocols = parseEaProtocols(frame).map { it.second }.toSet(),
+                            ),
+                        )?.let(MfiLengthMemory::receiverKey)
+                } else {
+                    null
+                }
             log("IAPLINK: 链路代际判定 = $linkGeneration（AirPlay 阶段据此分派 marker 策略）")
-            log(ReceiverProfile.describe(profile))
+            log(ReceiverProfile.describe(profile, mfiStorageKey))
             log(
                 "iap2 0x1d01 协议代际：请求 WiFi 配置(0x5702)=" +
                     (
