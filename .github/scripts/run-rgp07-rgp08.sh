@@ -123,6 +123,13 @@ install_apk() {
 # 之间随机漂移，同一 SHA 的其他运行和本地运行都能通过，属于模拟器进程启动抖动而非断言失败。
 # 判定标准保持不变（必须报告 OK (1 test)）；仅在崩溃且没有任何测试结论时重试一次，
 # 并在每次失败时转储 logcat，便于从 artifact 里确认原因。
+instrumentation_crashed_without_result() {
+  local output="$1"
+  [[ -s "$output" ]] || return 1
+  grep -q "shortMsg=Process crashed" "$output" || return 1
+  ! grep -qE "^(OK \(|FAILURES)" "$output"
+}
+
 run_phase() {
   local label="$1"
   local phase_class="$2"
@@ -143,9 +150,7 @@ run_phase() {
       return 0
     fi
     adb shell logcat -d -t 3000 >"${output%.txt}-attempt${attempt}.logcat.txt" 2>/dev/null || true
-    if [[ "$attempt" -eq 1 ]] &&
-      grep -q "shortMsg=Process crashed" "$output" &&
-      ! grep -qE "^(OK \(|FAILURES)" "$output"; then
+    if [[ "$attempt" -eq 1 ]] && instrumentation_crashed_without_result "$output"; then
       echo "$label: instrumentation process crashed before reporting a result; retrying once" >&2
       sleep 10
       continue
@@ -207,24 +212,36 @@ echo "=== RGP08 cross-process prefs ==="
 rgp08_start="$(date +%s)"
 rgp08_run_id="${MARKER_PREFIX}-${RGP08_RUN_ATTEMPT}"
 rgp08_marker="${rgp08_run_id}-rgp08"
-clear_package "pre-RGP08"
-adb shell am force-stop "$PACKAGE_ID"
-if run_with_timeout "$RGP08_TIMEOUT_SECONDS" \
-  adb shell am instrument \
-  -e class "$RGP08_CLASS" \
-  -e marker "$rgp08_marker" \
-  -e runId "$rgp08_run_id" \
-  -w "$INSTRUMENTATION_TARGET" | tee "$OUTPUT_DIR/rgp08/rgp08.txt"; then
-  rgp08_status=0
-else
-  rgp08_status=$?
-fi
 rgp08_ok=1
-if [[ "$rgp08_status" -eq 0 ]]; then
-  if grep -q "OK (1 test)" "$OUTPUT_DIR/rgp08/rgp08.txt"; then
-    rgp08_ok=0
+rgp08_output="$OUTPUT_DIR/rgp08/rgp08.txt"
+for rgp08_attempt in 1 2; do
+  rgp08_attempt_output="${rgp08_output%.txt}-attempt${rgp08_attempt}.txt"
+  clear_package "pre-RGP08 attempt $rgp08_attempt"
+  adb shell am force-stop "$PACKAGE_ID"
+  rgp08_status=0
+  if run_with_timeout "$RGP08_TIMEOUT_SECONDS" \
+    adb shell am instrument \
+    -e class "$RGP08_CLASS" \
+    -e marker "$rgp08_marker" \
+    -e runId "$rgp08_run_id" \
+    -w "$INSTRUMENTATION_TARGET" | tee "$rgp08_attempt_output"; then
+    rgp08_status=0
+  else
+    rgp08_status=$?
   fi
-fi
+  cp "$rgp08_attempt_output" "$rgp08_output"
+  if [[ "$rgp08_status" -eq 0 ]] && grep -q "OK (1 test)" "$rgp08_attempt_output"; then
+    rgp08_ok=0
+    break
+  fi
+  adb shell logcat -d -t 3000 >"${rgp08_attempt_output%.txt}.logcat.txt" 2>/dev/null || true
+  if [[ "$rgp08_attempt" -eq 1 ]] && instrumentation_crashed_without_result "$rgp08_attempt_output"; then
+    echo "RGP08: instrumentation process crashed before reporting a result; retrying once" >&2
+    sleep 10
+    continue
+  fi
+  break
+done
 if [[ "$rgp08_status" -ne 0 || "$rgp08_ok" -ne 0 ]]; then
   printf 'RGP08 failed incremental elapsed: %ss\n' \
     "$(( $(date +%s) - rgp08_start ))" | tee "$OUTPUT_DIR/rgp08/failed-timing.txt"
@@ -236,14 +253,14 @@ if [[ "$rgp08_status" -ne 0 || "$rgp08_ok" -ne 0 ]]; then
   echo "RGP08 did not report one passing test" >&2
   exit 1
 fi
-rgp08_output="$(sed -n 's/.*INSTRUMENTATION_STATUS: rgp08_output=\({.*}\).*/\1/p' "$OUTPUT_DIR/rgp08/rgp08.txt" | tail -1 | tr -d '\r')"
-if [[ -z "$rgp08_output" ]]; then
+rgp08_result="$(sed -n 's/.*INSTRUMENTATION_STATUS: rgp08_output=\({.*}\).*/\1/p' "$rgp08_output" | tail -1 | tr -d '\r')"
+if [[ -z "$rgp08_result" ]]; then
   echo "Missing rgp08_output status bundle" >&2
   exit 1
 fi
 rgp08_json="$OUTPUT_DIR/rgp08/rgp08.json"
 python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]), ensure_ascii=False, indent=2))' \
-  "$rgp08_output" > "$rgp08_json"
+  "$rgp08_result" > "$rgp08_json"
 python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); marker=data["marker"]; expected=sys.argv[2]; assert marker == expected, (marker, expected)' \
   "$rgp08_json" "$rgp08_marker"
 rgp08_elapsed="$(( $(date +%s) - rgp08_start ))"
